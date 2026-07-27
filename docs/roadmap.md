@@ -11,7 +11,8 @@
 - [x] PostgreSQL adapter and migration
 - [ ] PostgreSQL integration harness
 - [ ] lease epoch fencing
-- [ ] cancellation/pause/resume
+- [ ] cancellation
+- [x] pause/resume
 - [ ] rate limit and admission control
 - [ ] DLQ and Needs Attention API
 
@@ -31,4 +32,3 @@
 - [ ] audit hash chain
 - [ ] retention/partition sweeper
 - [ ] public release decision and license
-

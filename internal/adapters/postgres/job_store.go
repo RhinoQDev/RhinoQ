@@ -87,6 +87,7 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz)
 		FROM rhinoq_jobs
 		WHERE state IN ('pending', 'retry_wait') AND not_before <= $1
+		  AND NOT EXISTS (SELECT 1 FROM rhinoq_queue_controls qc WHERE qc.queue_name = rhinoq_jobs.name AND qc.paused_at IS NOT NULL)
 		ORDER BY created_at, id
 		FOR UPDATE SKIP LOCKED
 		LIMIT $2`, input.Now, input.Limit)
@@ -125,6 +126,25 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		return nil, err
 	}
 	return claimed, nil
+}
+
+func (s *JobStore) PauseQueue(ctx context.Context, name string) error {
+	if name == "" {
+		return errors.New("queue name is required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO rhinoq_queue_controls (queue_name, paused_at)
+		VALUES ($1, now())
+		ON CONFLICT (queue_name) DO UPDATE SET paused_at = now()`, name)
+	return err
+}
+
+func (s *JobStore) ResumeQueue(ctx context.Context, name string) error {
+	if name == "" {
+		return errors.New("queue name is required")
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE rhinoq_queue_controls SET paused_at = NULL WHERE queue_name = $1`, name)
+	return err
 }
 
 func (s *JobStore) RenewLease(ctx context.Context, lease ports.Lease, now time.Time, extension time.Duration) error {

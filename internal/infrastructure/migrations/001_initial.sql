@@ -22,6 +22,12 @@ CREATE INDEX IF NOT EXISTS rhinoq_jobs_lease_idx
     ON rhinoq_jobs (state, lease_until)
     WHERE state = 'leased';
 
+CREATE TABLE IF NOT EXISTS rhinoq_queue_controls (
+    queue_name text PRIMARY KEY,
+    paused_at  timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS rhinoq_effects (
     id                 text PRIMARY KEY,
     job_id             text NOT NULL REFERENCES rhinoq_jobs(id),

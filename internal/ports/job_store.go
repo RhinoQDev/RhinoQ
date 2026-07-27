@@ -42,4 +42,6 @@ type JobStore interface {
 	Complete(ctx context.Context, lease Lease, now time.Time) error
 	Fail(ctx context.Context, lease Lease, now time.Time, transition FailureTransition) error
 	RequeueExpired(ctx context.Context, now time.Time) (int, error)
+	PauseQueue(ctx context.Context, name string) error
+	ResumeQueue(ctx context.Context, name string) error
 }

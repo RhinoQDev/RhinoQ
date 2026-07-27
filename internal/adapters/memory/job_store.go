@@ -20,6 +20,7 @@ type JobStore struct {
 	nextLease uint64
 	jobs      map[job.ID]job.Record
 	byIdem    map[string]job.ID
+	paused    map[string]bool
 	clock     func() time.Time
 }
 
@@ -31,6 +32,7 @@ func NewJobStoreWithClock(clock func() time.Time) *JobStore {
 	return &JobStore{
 		jobs:   make(map[job.ID]job.Record),
 		byIdem: make(map[string]job.ID),
+		paused: make(map[string]bool),
 		clock:  clock,
 	}
 }
@@ -111,6 +113,9 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		if !claimable(record, input.Now) {
 			continue
 		}
+		if s.paused[record.Name] {
+			continue
+		}
 		s.nextLease++
 		record.State = job.Leased
 		record.Attempts++
@@ -120,6 +125,26 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		claimed = append(claimed, cloneRecord(record))
 	}
 	return claimed, nil
+}
+
+func (s *JobStore) PauseQueue(_ context.Context, name string) error {
+	if name == "" {
+		return errors.New("queue name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paused[name] = true
+	return nil
+}
+
+func (s *JobStore) ResumeQueue(_ context.Context, name string) error {
+	if name == "" {
+		return errors.New("queue name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.paused, name)
+	return nil
 }
 
 func (s *JobStore) RenewLease(_ context.Context, lease ports.Lease, now time.Time, extension time.Duration) error {
