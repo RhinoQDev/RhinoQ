@@ -112,6 +112,8 @@ Repository hiện chưa public và chưa gắn license open-source. Khi engine �
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — blueprint kỹ thuật
 - [RHINOQ.md](./RHINOQ.md) — product/architecture specification
+- [docs/](./docs/) — getting started, operations, failure semantics và feature matrix
 - [SECURITY.md](./SECURITY.md) — security policy
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) — quy tắc cộng tác
 - [GOVERNANCE.md](./GOVERNANCE.md) — quyền merge và lộ trình open-core
 - [CHANGELOG.md](./CHANGELOG.md) — lịch sử thay đổi
