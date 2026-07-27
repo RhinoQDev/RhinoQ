@@ -10,6 +10,7 @@ import (
 	"github.com/rhinoq/rhinoq/internal/adapters/postgres"
 	"github.com/rhinoq/rhinoq/internal/application/operations"
 	"github.com/rhinoq/rhinoq/internal/domain/job"
+	"github.com/rhinoq/rhinoq/internal/domain/recovery"
 	"github.com/rhinoq/rhinoq/internal/domain/retry"
 	"github.com/rhinoq/rhinoq/internal/ports"
 	"github.com/rhinoq/rhinoq/internal/runtime/worker"
@@ -23,6 +24,21 @@ type Job struct {
 }
 
 type Handler func(context.Context, Job) error
+
+var (
+	ErrReplayInvalidRequest   = recovery.ErrInvalidReplayRequest
+	ErrReplayInvalidState     = recovery.ErrReplayState
+	ErrReplayConfirmedEffect  = recovery.ErrConfirmedEffect
+	ErrReplayUncertainEffect  = recovery.ErrUncertainEffect
+	ErrReplayUnresolvedEffect = recovery.ErrUnresolvedEffect
+)
+
+const (
+	AttentionDeadJob          = "dead_job"
+	AttentionExecutionBlocked = "execution_blocked"
+	AttentionEffectUncertain  = "effect_uncertain"
+	AttentionOutcomeMismatch  = "outcome_mismatch"
+)
 
 type JobQuery struct {
 	Queue  string
@@ -42,13 +58,42 @@ type JobSummary struct {
 	CancelRequested bool
 }
 
+type AttentionItem struct {
+	Kind        string
+	JobID       string
+	Queue       string
+	JobState    string
+	ReferenceID string
+	Reason      string
+	ObservedAt  time.Time
+}
+
+type AuditRecord struct {
+	ID         string
+	JobID      string
+	Action     string
+	Actor      string
+	Reason     string
+	OccurredAt time.Time
+	PrevHash   string
+	RowHash    string
+}
+
 type Client struct {
 	store    ports.JobStore
+	recovery ports.RecoveryStore
 	handlers *worker.HandlerRegistry
 }
 
 func NewInMemory() *Client {
-	return &Client{store: memory.NewJobStore(), handlers: worker.NewHandlerRegistry()}
+	jobs := memory.NewJobStore()
+	effects := memory.NewEffectStore()
+	outcomes := memory.NewOutcomeStore()
+	recoveryStore, err := memory.NewRecoveryStore(jobs, effects, outcomes)
+	if err != nil {
+		panic(err)
+	}
+	return &Client{store: jobs, recovery: recoveryStore, handlers: worker.NewHandlerRegistry()}
 }
 
 func NewPostgres(db *sql.DB) (*Client, error) {
@@ -56,11 +101,19 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewWithStore(store), nil
+	recoveryStore, err := postgres.NewRecoveryStore(db)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{store: store, recovery: recoveryStore, handlers: worker.NewHandlerRegistry()}, nil
 }
 
 func NewWithStore(store ports.JobStore) *Client {
-	return &Client{store: store, handlers: worker.NewHandlerRegistry()}
+	client := &Client{store: store, handlers: worker.NewHandlerRegistry()}
+	if recoveryStore, ok := store.(ports.RecoveryStore); ok {
+		client.recovery = recoveryStore
+	}
+	return client
 }
 
 func (c *Client) Enqueue(ctx context.Context, name string, payload []byte, idempotencyKey string) (string, error) {
@@ -151,6 +204,67 @@ func (c *Client) JobCounts(ctx context.Context, queue string) (map[string]int64,
 	return result, nil
 }
 
+func (c *Client) ListAttention(ctx context.Context, queue string, offset, limit int) ([]AttentionItem, error) {
+	if c == nil || c.recovery == nil {
+		return nil, errors.New("rhinoq recovery store is not configured")
+	}
+	service, err := operations.NewRecovery(c.recovery)
+	if err != nil {
+		return nil, err
+	}
+	items, err := service.ListAttention(ctx, recovery.AttentionQuery{
+		Queue: queue, Offset: offset, Limit: limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AttentionItem, 0, len(items))
+	for _, item := range items {
+		result = append(result, AttentionItem{
+			Kind: string(item.Kind), JobID: item.JobID.String(), Queue: item.Queue,
+			JobState: item.JobState.String(), ReferenceID: item.ReferenceID,
+			Reason: item.Reason, ObservedAt: item.ObservedAt,
+		})
+	}
+	return result, nil
+}
+
+func (c *Client) ReplayJob(ctx context.Context, id, actor, reason string) (JobSummary, AuditRecord, error) {
+	if c == nil || c.recovery == nil {
+		return JobSummary{}, AuditRecord{}, errors.New("rhinoq recovery store is not configured")
+	}
+	service, err := operations.NewRecovery(c.recovery)
+	if err != nil {
+		return JobSummary{}, AuditRecord{}, err
+	}
+	record, audit, err := service.Replay(ctx, recovery.ReplayRequest{
+		JobID: job.ID(id), Actor: actor, Reason: reason, RequestedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		return JobSummary{}, AuditRecord{}, err
+	}
+	return summarizeJob(record), summarizeAudit(audit), nil
+}
+
+func (c *Client) AuditTrail(ctx context.Context, id string, offset, limit int) ([]AuditRecord, error) {
+	if c == nil || c.recovery == nil {
+		return nil, errors.New("rhinoq recovery store is not configured")
+	}
+	service, err := operations.NewRecovery(c.recovery)
+	if err != nil {
+		return nil, err
+	}
+	records, err := service.AuditTrail(ctx, job.ID(id), offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AuditRecord, 0, len(records))
+	for _, record := range records {
+		result = append(result, summarizeAudit(record))
+	}
+	return result, nil
+}
+
 func (c *Client) Handle(name string, handler Handler) error {
 	if c == nil || c.handlers == nil {
 		return errors.New("rhinoq client is required")
@@ -177,4 +291,21 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 	return runtime.Run(ctx)
+}
+
+func summarizeJob(record job.Record) JobSummary {
+	return JobSummary{
+		ID: record.ID.String(), Name: record.Name, State: record.State.String(),
+		Attempts: record.Attempts, CorrelationID: record.CorrelationID,
+		CreatedAt: record.CreatedAt, NotBefore: record.NotBefore,
+		CancelRequested: record.CancelRequested,
+	}
+}
+
+func summarizeAudit(record recovery.AuditRecord) AuditRecord {
+	return AuditRecord{
+		ID: record.ID, JobID: record.JobID.String(), Action: record.Action,
+		Actor: record.Actor, Reason: record.Reason, OccurredAt: record.OccurredAt,
+		PrevHash: record.PrevHash, RowHash: record.RowHash,
+	}
 }

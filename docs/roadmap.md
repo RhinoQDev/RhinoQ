@@ -15,7 +15,9 @@
 - [x] pause/resume
 - [x] global per-queue rate limit
 - [ ] admission control
-- [ ] DLQ and Needs Attention API
+- [x] DLQ and derived Needs Attention read API
+- [x] guarded manual replay with transactional audit
+- [ ] finding acknowledge/resolve/regressed lifecycle
 
 ## Milestone 1 — Developer experience
 
@@ -30,6 +32,7 @@
 
 - [ ] fault-test harness
 - [ ] benchmark harness
-- [ ] audit hash chain
+- [x] replay audit hash chain
+- [ ] signed audit checkpoints / WORM export
 - [ ] retention/partition sweeper
 - [ ] public release decision and license

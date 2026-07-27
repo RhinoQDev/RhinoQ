@@ -29,6 +29,8 @@ func ValidatePayload(payload []byte, maxBytes int) error {
 
 type ID string
 
+func (id ID) String() string { return string(id) }
+
 type Record struct {
 	ID              ID
 	Name            string

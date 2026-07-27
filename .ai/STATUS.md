@@ -5,11 +5,11 @@
 | Khu vực | Trạng thái | Ghi chú |
 |---|---:|---|
 | COMMIT | 3/5 | schema, idempotency, correlation và payload gate đã có; transactional enqueue/outbox integration thật còn thiếu |
-| RUN | 10/11 | claim, lease, heartbeat, retry+jitter, crash recovery, delayed, worker, shutdown, cancellation và global queue rate limit đã có; DLQ/fencing/admission còn thiếu |
+| RUN | 10/11 | claim, lease, heartbeat, retry+jitter, crash recovery, delayed, worker, shutdown, cancellation, DLQ và global queue rate limit đã có; fencing/admission còn thiếu |
 | VERIFY | 2/3 | Effect Ledger và Outcome Level 1 nền tảng đã có; query-cost gate còn thiếu |
-| RECOVER | 0/4 | Needs Attention, manual decision, audit và business search chưa có |
+| RECOVER | 1/4 | derived Needs Attention, guarded replay và replay audit đã có; finding lifecycle, Resume, Repair và business search chưa có |
 | DX | 0/7 | init/dev/doctor/Console/NestJS integration chưa có |
-| Infrastructure | 3/10 | config, health contract, migrations/test gates có; DB time, partitioning, retention, RBAC, audit hash chain, benchmark còn thiếu |
+| Infrastructure | 3/10 | config, health contract, migrations/test gates và replay audit chain có; DB time, partitioning, retention, RBAC, full audit coverage/signing và benchmark còn thiếu |
 
 ## Ước lượng
 
@@ -22,6 +22,6 @@ Không coi đây là progress KPI tuyệt đối; mỗi mục phải được n�
 
 1. PostgreSQL integration harness và transactional enqueue.
 2. Lease epoch fencing.
-3. DLQ, lease epoch fencing và admission control.
+3. Finding lifecycle, lease epoch fencing và admission control.
 4. Audit append-only/hash chain.
 5. Query-cost gate và benchmark harness.

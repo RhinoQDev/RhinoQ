@@ -11,6 +11,7 @@
 
 - [Runtime operations](./operations.md)
 - [Failure semantics](./failure-semantics.md)
+- [Recovery](./recovery.md)
 - [Release checklist](../.ai/RELEASE_CHECKLIST.md)
 
 ## Thiết kế

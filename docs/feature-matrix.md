@@ -12,6 +12,9 @@
 | Job cancellation | worker/job control | pending jobs cancel immediately; leased jobs use cooperative cancellation |
 | Rate limiter | global per queue | durable fixed-window limit implemented for memory and PostgreSQL |
 | Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
+| DLQ / Needs Attention | failed-job and operational views | dead/blocked/effect/outcome derived attention view implemented; finding lifecycle pending |
+| Manual replay | retry failed work | guarded dead/blocked replay with effect safety checks and transactional audit |
+| Audit trail | operational events | replay events use a per-job SHA-256 hash chain; signed checkpoints pending |
 | Flow/dependency graph | supported | intentionally not v0.1 |
 | Effect uncertainty | not external-effect aware by default | Effect Ledger implemented |
 | Business outcome | not native | Outcome contract implemented |

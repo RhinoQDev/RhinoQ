@@ -149,6 +149,8 @@ List responses intentionally exclude payloads so an operational queue view does 
 - Immediate cancellation for waiting jobs
 - Durable global fixed-window rate limiting per queue
 - Job counts, state filters, and bounded pagination
+- Derived Needs Attention view across execution, effects, and outcomes
+- Guarded dead/blocked replay with transactional hash-chained audit
 
 ### Integrity foundations
 
@@ -222,7 +224,7 @@ The next engineering priorities are:
 
 1. PostgreSQL integration and fault-test harnesses
 2. Lease epoch fencing
-3. DLQ and Needs Attention APIs
+3. Persistent finding lifecycle and safe Resume checkpoints
 4. Controlled replay with immutable audit
 5. Admission control, metrics, and tracing
 6. Stable Agent protocol and TypeScript SDK
@@ -239,6 +241,7 @@ RhinoQ does not publish throughput or latency claims without a repeatable benchm
 | [PostgreSQL](./docs/postgres.md) | persistence model and migration notes |
 | [Operations](./docs/operations.md) | shutdown, cancellation, rate limits, and inspection |
 | [Failure semantics](./docs/failure-semantics.md) | retry classes and effect uncertainty |
+| [Recovery](./docs/recovery.md) | Needs Attention, guarded replay, and audit semantics |
 | [Feature matrix](./docs/feature-matrix.md) | implementation status by capability |
 | [Roadmap](./docs/roadmap.md) | milestones and release gates |
 | [Product specification](./RHINOQ.md) | complete product and architecture specification |

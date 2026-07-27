@@ -80,3 +80,19 @@ CREATE TABLE IF NOT EXISTS rhinoq_outbox (
 CREATE INDEX IF NOT EXISTS rhinoq_outbox_pending_idx
     ON rhinoq_outbox (created_at, id)
     WHERE published_at IS NULL AND claimed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS rhinoq_audit (
+    sequence    bigserial UNIQUE,
+    id          text PRIMARY KEY,
+    job_id      text NOT NULL REFERENCES rhinoq_jobs(id),
+    action      text NOT NULL CHECK (btrim(action) <> ''),
+    actor       text NOT NULL CHECK (btrim(actor) <> ''),
+    reason      text NOT NULL CHECK (btrim(reason) <> ''),
+    occurred_at timestamptz NOT NULL,
+    prev_hash   text NOT NULL DEFAULT '' CHECK (prev_hash = '' OR length(prev_hash) = 64),
+    row_hash    text NOT NULL CHECK (length(row_hash) = 64),
+    metadata    jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS rhinoq_audit_job_timeline_idx
+    ON rhinoq_audit (job_id, sequence DESC);
