@@ -19,7 +19,10 @@ Current finding kinds:
 | `effect_uncertain` | Effect Ledger cannot prove whether an effect happened |
 | `outcome_mismatch` | declared business outcome is mismatched or unverifiable |
 
-This is currently a derived read model. Persistent finding lifecycle—acknowledge, resolve, regress, assign—is still pending.
+This is currently a derived read model. The domain state machine now defines
+acknowledge, repair, resolve, expiring suppression, and automatic regression
+semantics. Persisting those records and exposing the lifecycle through the
+application/public API is still pending.
 
 ## Guarded replay
 

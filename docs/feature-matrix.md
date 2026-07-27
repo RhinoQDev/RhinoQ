@@ -16,7 +16,7 @@
 | Stalled/poison protection | `maxStalledCount` | crash budget per job implemented; distinct-worker tracking pending |
 | Producer backpressure | not native | admission control with reserved critical budget implemented; `route` and `sample` overflow modes pending |
 | Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
-| DLQ / Needs Attention | failed-job and operational views | dead/blocked/effect/outcome derived attention view implemented; finding lifecycle pending |
+| DLQ / Needs Attention | failed-job and operational views | dead/blocked/effect/outcome derived attention view and finding domain lifecycle implemented; persistent finding store/API pending |
 | Manual replay | retry failed work | guarded dead/blocked replay with effect safety checks and transactional audit |
 | Audit trail | operational events | replay events use a per-job SHA-256 hash chain; signed checkpoints pending |
 | Flow/dependency graph | supported | intentionally not v0.1 |

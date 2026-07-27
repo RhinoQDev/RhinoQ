@@ -9,7 +9,7 @@
 - [x] lease reaper
 - [x] effect ledger/outcome foundation
 - [x] PostgreSQL adapter and migration
-- [ ] PostgreSQL integration harness
+- [x] PostgreSQL integration harness
 - [x] lease epoch fencing
 - [x] cancellation
 - [x] pause/resume
@@ -21,7 +21,7 @@
 - [x] admission control
 - [x] DLQ and derived Needs Attention read API
 - [x] guarded manual replay with transactional audit
-- [ ] finding acknowledge/resolve/regressed lifecycle
+- [ ] persistent finding acknowledge/resolve/regressed lifecycle (domain state machine implemented)
 
 ## Milestone 1 — Developer experience
 

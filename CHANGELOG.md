@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a real-PostgreSQL integration harness and CI service covering migrations,
+  storage contracts, fencing, effect uncertainty, admission, recovery, and SQL
+  enqueue behavior.
+- Added the finding lifecycle domain model with deduplication, expiring
+  suppression, operator transitions, and explicit regression after resolution.
 - Added the initial layered architecture scaffold.
 - Added AI project-memory and release-governance files under `.ai/`.
 - Added contracts, job state transitions, effect confirmation policy, ports and `EnqueueJob`.
