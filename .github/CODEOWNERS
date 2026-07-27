@@ -1,0 +1,6 @@
+# Replace these placeholders with real GitHub handles before enabling required reviews.
+* @rhinoq/maintainers
+/internal/domain/ @rhinoq/maintainers
+/internal/ports/ @rhinoq/maintainers
+/proto/ @rhinoq/maintainers
+/internal/infrastructure/migrations/ @rhinoq/maintainers

@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.go text diff=golang
+*.ts text diff=typescript
+*.md text
+*.proto text
+

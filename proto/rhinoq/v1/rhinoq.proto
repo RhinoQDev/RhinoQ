@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package rhinoq.v1;
+
+option go_package = "github.com/rhinoq/rhinoq/gen/rhinoq/v1";
+
+service RhinoQAgent {
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+}
+
+message EnqueueRequest {
+  string job_name = 1;
+  bytes payload = 2;
+  string idempotency_key = 3;
+  string correlation_id = 4;
+}
+
+message EnqueueResponse {
+  string job_id = 1;
+}

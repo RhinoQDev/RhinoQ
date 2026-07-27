@@ -1,0 +1,29 @@
+# Dependencies and builds
+node_modules/
+dist/
+bin/
+coverage/
+.gocache/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local databases and payloads
+*.db
+*.sqlite
+*.sqlite3
+tmp/
+storage/
+

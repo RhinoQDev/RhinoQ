@@ -1,0 +1,33 @@
+package unit
+
+import (
+	"testing"
+	"time"
+
+	"github.com/rhinoq/rhinoq/internal/domain/retry"
+)
+
+func TestRetryPolicyClassifiesFailures(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	policy := retry.Policy{MaxAttempts: 5, BaseDelay: time.Second, MaxDelay: 10 * time.Second}
+
+	transient := policy.Decide(retry.Transient, 2, now, 0)
+	if !transient.Retry || !transient.NextRunAt.Equal(now.Add(2*time.Second)) {
+		t.Fatalf("unexpected transient decision: %+v", transient)
+	}
+
+	permanent := policy.Decide(retry.Permanent, 1, now, 0)
+	if !permanent.Dead || permanent.Retry {
+		t.Fatalf("permanent error must be dead: %+v", permanent)
+	}
+
+	unknown := policy.Decide(retry.Unknown, 1, now, 0)
+	if !unknown.Blocked || unknown.Retry {
+		t.Fatalf("unknown error must be blocked: %+v", unknown)
+	}
+
+	rateLimited := policy.Decide(retry.RateLimited, 1, now, 30*time.Second)
+	if !rateLimited.Retry || !rateLimited.NextRunAt.Equal(now.Add(30*time.Second)) {
+		t.Fatalf("provider retry-after must be respected: %+v", rateLimited)
+	}
+}
