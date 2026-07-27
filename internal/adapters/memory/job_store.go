@@ -12,16 +12,21 @@ import (
 	"github.com/rhinoq/rhinoq/internal/ports"
 )
 
-var ErrContextCancelled = errors.New("enqueue context cancelled")
-
 type JobStore struct {
-	mu        sync.RWMutex
-	nextID    uint64
-	nextLease uint64
-	jobs      map[job.ID]job.Record
-	byIdem    map[string]job.ID
-	paused    map[string]bool
-	clock     func() time.Time
+	mu         sync.RWMutex
+	nextID     uint64
+	nextLease  uint64
+	jobs       map[job.ID]job.Record
+	byIdem     map[string]job.ID
+	paused     map[string]bool
+	rateLimits map[string]queueRateLimitState
+	clock      func() time.Time
+}
+
+type queueRateLimitState struct {
+	limit         ports.QueueRateLimit
+	windowStarted time.Time
+	count         int
 }
 
 func NewJobStore() *JobStore {
@@ -30,17 +35,18 @@ func NewJobStore() *JobStore {
 
 func NewJobStoreWithClock(clock func() time.Time) *JobStore {
 	return &JobStore{
-		jobs:   make(map[job.ID]job.Record),
-		byIdem: make(map[string]job.ID),
-		paused: make(map[string]bool),
-		clock:  clock,
+		jobs:       make(map[job.ID]job.Record),
+		byIdem:     make(map[string]job.ID),
+		paused:     make(map[string]bool),
+		rateLimits: make(map[string]queueRateLimitState),
+		clock:      clock,
 	}
 }
 
 func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports.JobID, error) {
 	select {
 	case <-ctx.Done():
-		return "", ErrContextCancelled
+		return "", ctx.Err()
 	default:
 	}
 
@@ -79,10 +85,61 @@ func (s *JobStore) Get(_ context.Context, id ports.JobID) (job.Record, bool, err
 	return record, true, nil
 }
 
+func (s *JobStore) ListJobs(_ context.Context, input ports.ListJobsInput) ([]job.Record, error) {
+	if input.Offset < 0 || input.Limit <= 0 || input.Limit > 1000 {
+		return nil, errors.New("offset must be non-negative and limit must be between 1 and 1000")
+	}
+	states := make(map[job.State]bool, len(input.States))
+	for _, state := range input.States {
+		if !state.Valid() {
+			return nil, errors.New("invalid job state filter")
+		}
+		states[state] = true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	records := make([]job.Record, 0, len(s.jobs))
+	for _, record := range s.jobs {
+		if input.Name != "" && record.Name != input.Name {
+			continue
+		}
+		if len(states) > 0 && !states[record.State] {
+			continue
+		}
+		records = append(records, cloneRecord(record))
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID > records[j].ID
+		}
+		return records[i].CreatedAt.After(records[j].CreatedAt)
+	})
+	if input.Offset >= len(records) {
+		return []job.Record{}, nil
+	}
+	end := input.Offset + input.Limit
+	if end > len(records) {
+		end = len(records)
+	}
+	return records[input.Offset:end], nil
+}
+
+func (s *JobStore) JobCounts(_ context.Context, name string) (map[job.State]int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	counts := make(map[job.State]int64)
+	for _, record := range s.jobs {
+		if name == "" || record.Name == name {
+			counts[record.State]++
+		}
+	}
+	return counts, nil
+}
+
 func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Record, error) {
 	select {
 	case <-ctx.Done():
-		return nil, ErrContextCancelled
+		return nil, ctx.Err()
 	default:
 	}
 	if input.Limit <= 0 || input.LeaseDuration <= 0 || input.Now.IsZero() {
@@ -116,6 +173,9 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		if s.paused[record.Name] {
 			continue
 		}
+		if !s.allowClaim(record.Name, input.Now) {
+			continue
+		}
 		s.nextLease++
 		record.State = job.Leased
 		record.Attempts++
@@ -125,6 +185,43 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		claimed = append(claimed, cloneRecord(record))
 	}
 	return claimed, nil
+}
+
+func (s *JobStore) SetQueueRateLimit(_ context.Context, name string, limit ports.QueueRateLimit) error {
+	if name == "" || limit.Max <= 0 || limit.Window < time.Millisecond {
+		return errors.New("queue name, positive max and a window of at least one millisecond are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rateLimits[name] = queueRateLimitState{limit: limit}
+	return nil
+}
+
+func (s *JobStore) RemoveQueueRateLimit(_ context.Context, name string) error {
+	if name == "" {
+		return errors.New("queue name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.rateLimits, name)
+	return nil
+}
+
+func (s *JobStore) QueueRateLimitTTL(_ context.Context, name string, now time.Time) (time.Duration, error) {
+	if name == "" || now.IsZero() {
+		return 0, errors.New("queue name and current time are required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, ok := s.rateLimits[name]
+	if !ok || state.count < state.limit.Max || state.windowStarted.IsZero() {
+		return 0, nil
+	}
+	ttl := state.windowStarted.Add(state.limit.Window).Sub(now)
+	if ttl < 0 {
+		return 0, nil
+	}
+	return ttl, nil
 }
 
 func (s *JobStore) PauseQueue(_ context.Context, name string) error {
@@ -256,6 +353,25 @@ func (s *JobStore) RequeueExpired(_ context.Context, now time.Time) (int, error)
 
 func claimable(record job.Record, now time.Time) bool {
 	return (record.State == job.Pending || record.State == job.RetryWait) && !record.NotBefore.After(now)
+}
+
+func (s *JobStore) allowClaim(name string, now time.Time) bool {
+	state, ok := s.rateLimits[name]
+	if !ok {
+		return true
+	}
+	if state.windowStarted.IsZero() || !now.Before(state.windowStarted.Add(state.limit.Window)) {
+		state.windowStarted = now
+		state.count = 1
+		s.rateLimits[name] = state
+		return true
+	}
+	if state.count >= state.limit.Max {
+		return false
+	}
+	state.count++
+	s.rateLimits[name] = state
+	return true
 }
 
 func cloneRecord(record job.Record) job.Record {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rhinoq/rhinoq/internal/domain/job"
@@ -71,6 +72,73 @@ func (s *JobStore) Get(ctx context.Context, id ports.JobID) (job.Record, bool, e
 	return record, err == nil, err
 }
 
+func (s *JobStore) ListJobs(ctx context.Context, input ports.ListJobsInput) ([]job.Record, error) {
+	if input.Offset < 0 || input.Limit <= 0 || input.Limit > 1000 {
+		return nil, errors.New("offset must be non-negative and limit must be between 1 and 1000")
+	}
+	args := []any{input.Name}
+	var query strings.Builder
+	query.WriteString(`
+		SELECT id, name, payload, state, attempts, COALESCE(idempotency_key, ''),
+		       COALESCE(correlation_id, ''), created_at, not_before,
+		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz), cancel_requested
+		FROM rhinoq_jobs
+		WHERE ($1 = '' OR name = $1)`)
+	if len(input.States) > 0 {
+		query.WriteString(" AND state IN (")
+		for index, state := range input.States {
+			if !state.Valid() {
+				return nil, errors.New("invalid job state filter")
+			}
+			if index > 0 {
+				query.WriteString(", ")
+			}
+			args = append(args, state.String())
+			fmt.Fprintf(&query, "$%d", len(args))
+		}
+		query.WriteString(")")
+	}
+	args = append(args, input.Limit, input.Offset)
+	fmt.Fprintf(&query, " ORDER BY created_at DESC, id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
+
+	rows, err := s.db.QueryContext(ctx, query.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := make([]job.Record, 0, input.Limit)
+	for rows.Next() {
+		record, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s *JobStore) JobCounts(ctx context.Context, name string) (map[job.State]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT state, count(*)
+		FROM rhinoq_jobs
+		WHERE ($1 = '' OR name = $1)
+		GROUP BY state`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[job.State]int64)
+	for rows.Next() {
+		var state string
+		var count int64
+		if err := rows.Scan(&state, &count); err != nil {
+			return nil, err
+		}
+		counts[job.State(state)] = count
+	}
+	return counts, rows.Err()
+}
+
 func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Record, error) {
 	if input.Limit <= 0 || input.LeaseDuration <= 0 || input.Now.IsZero() {
 		return nil, errors.New("invalid claim input")
@@ -81,26 +149,58 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	}
 	defer tx.Rollback()
 
+	candidateLimit := input.Limit
+	if candidateLimit <= 1000 {
+		candidateLimit *= 4
+	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, name, payload, state, attempts, COALESCE(idempotency_key, ''),
-		       COALESCE(correlation_id, ''), created_at, not_before,
-		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz), cancel_requested
-		FROM rhinoq_jobs
-		WHERE state IN ('pending', 'retry_wait') AND not_before <= $1
-		  AND NOT EXISTS (SELECT 1 FROM rhinoq_queue_controls qc WHERE qc.queue_name = rhinoq_jobs.name AND qc.paused_at IS NOT NULL)
-		ORDER BY created_at, id
-		FOR UPDATE SKIP LOCKED
-		LIMIT $2`, input.Now, input.Limit)
+		SELECT j.id, j.name, j.payload, j.state, j.attempts, COALESCE(j.idempotency_key, ''),
+		       COALESCE(j.correlation_id, ''), j.created_at, j.not_before,
+		       COALESCE(j.lease_id, ''), COALESCE(j.lease_until, 'epoch'::timestamptz), j.cancel_requested
+		FROM rhinoq_jobs j
+		LEFT JOIN rhinoq_queue_controls qc ON qc.queue_name = j.name
+		WHERE j.state IN ('pending', 'retry_wait') AND j.not_before <= $1
+		  AND qc.paused_at IS NULL
+		  AND (
+		      qc.rate_limit_max IS NULL
+		      OR qc.rate_window_started_at IS NULL
+		      OR qc.rate_window_started_at + (qc.rate_limit_window_ms * interval '1 millisecond') <= $1
+		      OR qc.rate_window_count < qc.rate_limit_max
+		  )
+		ORDER BY j.created_at, j.id
+		FOR UPDATE OF j SKIP LOCKED
+		LIMIT $2`, input.Now, candidateLimit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	claimed := make([]job.Record, 0, input.Limit)
+	candidates := make([]job.Record, 0, candidateLimit)
 	for rows.Next() {
 		record, err := scanJob(rows)
 		if err != nil {
 			return nil, err
+		}
+		candidates = append(candidates, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	claimed := make([]job.Record, 0, input.Limit)
+	for _, record := range candidates {
+		if len(claimed) == input.Limit {
+			break
+		}
+		allowed, err := s.allowClaimTx(ctx, tx, record.Name, input.Now)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			continue
 		}
 		leaseID, err := newID("lease")
 		if err != nil {
@@ -118,9 +218,6 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		record.LeaseID = leaseID
 		record.LeaseUntil = leaseUntil
 		claimed = append(claimed, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -145,6 +242,66 @@ func (s *JobStore) ResumeQueue(ctx context.Context, name string) error {
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE rhinoq_queue_controls SET paused_at = NULL WHERE queue_name = $1`, name)
 	return err
+}
+
+func (s *JobStore) SetQueueRateLimit(ctx context.Context, name string, limit ports.QueueRateLimit) error {
+	if name == "" || limit.Max <= 0 || limit.Window < time.Millisecond {
+		return errors.New("queue name, positive max and a window of at least one millisecond are required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO rhinoq_queue_controls
+			(queue_name, rate_limit_max, rate_limit_window_ms, rate_window_started_at, rate_window_count)
+		VALUES ($1, $2, $3, NULL, 0)
+		ON CONFLICT (queue_name) DO UPDATE
+		SET rate_limit_max = EXCLUDED.rate_limit_max,
+		    rate_limit_window_ms = EXCLUDED.rate_limit_window_ms,
+		    rate_window_started_at = NULL,
+		    rate_window_count = 0,
+		    updated_at = now()`,
+		name, limit.Max, limit.Window.Milliseconds())
+	return err
+}
+
+func (s *JobStore) RemoveQueueRateLimit(ctx context.Context, name string) error {
+	if name == "" {
+		return errors.New("queue name is required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE rhinoq_queue_controls
+		SET rate_limit_max = NULL,
+		    rate_limit_window_ms = NULL,
+		    rate_window_started_at = NULL,
+		    rate_window_count = 0,
+		    updated_at = now()
+		WHERE queue_name = $1`, name)
+	return err
+}
+
+func (s *JobStore) QueueRateLimitTTL(ctx context.Context, name string, now time.Time) (time.Duration, error) {
+	if name == "" || now.IsZero() {
+		return 0, errors.New("queue name and current time are required")
+	}
+	var max, windowMS sql.NullInt64
+	var windowStarted sql.NullTime
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT rate_limit_max, rate_limit_window_ms, rate_window_started_at, rate_window_count
+		FROM rhinoq_queue_controls WHERE queue_name = $1`, name).
+		Scan(&max, &windowMS, &windowStarted, &count)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !max.Valid || !windowMS.Valid || !windowStarted.Valid || int64(count) < max.Int64 {
+		return 0, nil
+	}
+	ttl := windowStarted.Time.Add(time.Duration(windowMS.Int64) * time.Millisecond).Sub(now)
+	if ttl < 0 {
+		return 0, nil
+	}
+	return ttl, nil
 }
 
 func (s *JobStore) RenewLease(ctx context.Context, lease ports.Lease, now time.Time, extension time.Duration) error {
@@ -242,6 +399,45 @@ func (s *JobStore) RequeueExpired(ctx context.Context, now time.Time) (int, erro
 	}
 	count, err := result.RowsAffected()
 	return int(count), err
+}
+
+func (s *JobStore) allowClaimTx(ctx context.Context, tx *sql.Tx, name string, now time.Time) (bool, error) {
+	var max, windowMS sql.NullInt64
+	var pausedAt, windowStarted sql.NullTime
+	var count int
+	err := tx.QueryRowContext(ctx, `
+		SELECT paused_at, rate_limit_max, rate_limit_window_ms, rate_window_started_at, rate_window_count
+		FROM rhinoq_queue_controls
+		WHERE queue_name = $1
+		FOR UPDATE`, name).Scan(&pausedAt, &max, &windowMS, &windowStarted, &count)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if pausedAt.Valid {
+		return false, nil
+	}
+	if !max.Valid || !windowMS.Valid {
+		return true, nil
+	}
+	window := time.Duration(windowMS.Int64) * time.Millisecond
+	if !windowStarted.Valid || !now.Before(windowStarted.Time.Add(window)) {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE rhinoq_queue_controls
+			SET rate_window_started_at = $1, rate_window_count = 1, updated_at = $1
+			WHERE queue_name = $2`, now, name)
+		return err == nil, err
+	}
+	if int64(count) >= max.Int64 {
+		return false, nil
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE rhinoq_queue_controls
+		SET rate_window_count = rate_window_count + 1, updated_at = $1
+		WHERE queue_name = $2`, now, name)
+	return err == nil, err
 }
 
 type scanner interface {

@@ -117,7 +117,8 @@ func (w *Worker) poll(ctx context.Context) error {
 	for _, record := range claimed {
 		select {
 		case <-ctx.Done():
-			break
+			wg.Wait()
+			return ctx.Err()
 		case sem <- struct{}{}:
 		}
 		wg.Add(1)

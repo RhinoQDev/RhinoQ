@@ -11,9 +11,10 @@
 - [x] PostgreSQL adapter and migration
 - [ ] PostgreSQL integration harness
 - [ ] lease epoch fencing
-- [ ] cancellation
+- [x] cancellation
 - [x] pause/resume
-- [ ] rate limit and admission control
+- [x] global per-queue rate limit
+- [ ] admission control
 - [ ] DLQ and Needs Attention API
 
 ## Milestone 1 — Developer experience

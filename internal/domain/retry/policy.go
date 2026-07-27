@@ -1,6 +1,9 @@
 package retry
 
-import "time"
+import (
+	"math/rand"
+	"time"
+)
 
 type Class string
 
@@ -17,6 +20,8 @@ type Policy struct {
 	MaxAttempts int
 	BaseDelay   time.Duration
 	MaxDelay    time.Duration
+	Jitter      float64
+	Random      func() float64
 }
 
 type Decision struct {
@@ -55,11 +60,34 @@ func (p Policy) delay(attempt int) time.Duration {
 	for i := 1; i < attempt; i++ {
 		delay *= 2
 		if p.MaxDelay > 0 && delay >= p.MaxDelay {
-			return p.MaxDelay
+			delay = p.MaxDelay
+			break
 		}
 	}
 	if p.MaxDelay > 0 && delay > p.MaxDelay {
-		return p.MaxDelay
+		delay = p.MaxDelay
 	}
-	return delay
+	return p.applyJitter(delay)
+}
+
+func (p Policy) applyJitter(delay time.Duration) time.Duration {
+	if delay <= 0 || p.Jitter <= 0 {
+		return delay
+	}
+	jitter := p.Jitter
+	if jitter > 1 {
+		jitter = 1
+	}
+	random := p.Random
+	if random == nil {
+		random = rand.Float64
+	}
+	sample := random()
+	if sample < 0 {
+		sample = 0
+	}
+	if sample > 1 {
+		sample = 1
+	}
+	return time.Duration(float64(delay) * (1 - jitter*sample))
 }

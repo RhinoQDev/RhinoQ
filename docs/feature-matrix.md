@@ -7,10 +7,11 @@
 | Lease/heartbeat | stalled job recovery | implemented |
 | Concurrency | worker concurrency | implemented with bound |
 | Delayed jobs | delayed/repeatable jobs | `not_before` claim boundary implemented |
-| Retry/backoff | retry/backoff | classification + exponential policy implemented; jitter pending |
+| Retry/backoff | fixed/exponential + jitter | classified exponential retry with bounded jitter implemented |
 | Pause/resume | supported | implemented for job-name queues |
 | Job cancellation | worker/job control | pending jobs cancel immediately; leased jobs use cooperative cancellation |
-| Rate limiter | supported | not implemented |
+| Rate limiter | global per queue | durable fixed-window limit implemented for memory and PostgreSQL |
+| Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
 | Flow/dependency graph | supported | intentionally not v0.1 |
 | Effect uncertainty | not external-effect aware by default | Effect Ledger implemented |
 | Business outcome | not native | Outcome contract implemented |

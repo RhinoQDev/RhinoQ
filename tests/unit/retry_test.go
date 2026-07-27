@@ -31,3 +31,19 @@ func TestRetryPolicyClassifiesFailures(t *testing.T) {
 		t.Fatalf("provider retry-after must be respected: %+v", rateLimited)
 	}
 }
+
+func TestRetryPolicyAppliesBoundedJitter(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	policy := retry.Policy{
+		MaxAttempts: 5,
+		BaseDelay:   time.Second,
+		MaxDelay:    10 * time.Second,
+		Jitter:      0.5,
+		Random:      func() float64 { return 1 },
+	}
+
+	decision := policy.Decide(retry.Transient, 3, now, 0)
+	if !decision.NextRunAt.Equal(now.Add(2 * time.Second)) {
+		t.Fatalf("expected 50%% jitter on four-second delay, got %s", decision.NextRunAt.Sub(now))
+	}
+}

@@ -16,6 +16,15 @@ const (
 	Blocked   State = "blocked"
 )
 
+func (s State) Valid() bool {
+	switch s {
+	case Pending, Leased, Succeeded, RetryWait, Dead, Cancelled, Blocked:
+		return true
+	default:
+		return false
+	}
+}
+
 func CanTransition(from, to State) bool {
 	transitions := map[State]map[State]bool{
 		Pending:   {Leased: true, Cancelled: true},

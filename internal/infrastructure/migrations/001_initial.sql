@@ -27,10 +27,20 @@ CREATE INDEX IF NOT EXISTS rhinoq_jobs_lease_idx
     WHERE state = 'leased';
 
 CREATE TABLE IF NOT EXISTS rhinoq_queue_controls (
-    queue_name text PRIMARY KEY,
-    paused_at  timestamptz,
-    updated_at timestamptz NOT NULL DEFAULT now()
+    queue_name             text PRIMARY KEY,
+    paused_at              timestamptz,
+    rate_limit_max         integer CHECK (rate_limit_max > 0),
+    rate_limit_window_ms   bigint CHECK (rate_limit_window_ms > 0),
+    rate_window_started_at timestamptz,
+    rate_window_count      integer NOT NULL DEFAULT 0 CHECK (rate_window_count >= 0),
+    updated_at             timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE rhinoq_queue_controls
+    ADD COLUMN IF NOT EXISTS rate_limit_max integer,
+    ADD COLUMN IF NOT EXISTS rate_limit_window_ms bigint,
+    ADD COLUMN IF NOT EXISTS rate_window_started_at timestamptz,
+    ADD COLUMN IF NOT EXISTS rate_window_count integer NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS rhinoq_effects (
     id                 text PRIMARY KEY,

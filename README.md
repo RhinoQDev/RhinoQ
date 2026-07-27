@@ -12,6 +12,8 @@ RhinoQ là một job queue durable đang được phát triển theo mô hình G
 - worker handler registry và bounded concurrency
 - heartbeat, lease reaper và graceful shutdown
 - retry classification
+- bounded retry jitter and global per-queue rate limit
+- cooperative cancellation, queue pause/resume and paginated job inspection
 - Effect Ledger
 - Outcome verification
 - PostgreSQL Job/Effect/Outcome/Outbox adapters
