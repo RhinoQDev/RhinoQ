@@ -6,10 +6,26 @@ import (
 )
 
 var (
-	ErrEmptyName    = errors.New("job name is required")
-	ErrNilPayload   = errors.New("job payload is required")
-	ErrInvalidState = errors.New("invalid initial job state")
+	ErrEmptyName       = errors.New("job name is required")
+	ErrNilPayload      = errors.New("job payload is required")
+	ErrPayloadTooLarge = errors.New("job payload exceeds configured size limit")
+	ErrInvalidState    = errors.New("invalid initial job state")
 )
+
+const DefaultMaxPayloadBytes = 1 << 20
+
+func ValidatePayload(payload []byte, maxBytes int) error {
+	if payload == nil {
+		return ErrNilPayload
+	}
+	if maxBytes <= 0 {
+		return errors.New("payload size limit must be positive")
+	}
+	if len(payload) > maxBytes {
+		return ErrPayloadTooLarge
+	}
+	return nil
+}
 
 type ID string
 
@@ -31,8 +47,8 @@ func NewRecord(id ID, name string, payload []byte, now, notBefore time.Time) (Re
 	if name == "" {
 		return Record{}, ErrEmptyName
 	}
-	if payload == nil {
-		return Record{}, ErrNilPayload
+	if err := ValidatePayload(payload, DefaultMaxPayloadBytes); err != nil {
+		return Record{}, err
 	}
 	if id == "" || now.IsZero() {
 		return Record{}, ErrInvalidState
