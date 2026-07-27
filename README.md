@@ -65,6 +65,27 @@ go test ./...
 go vet ./...
 ```
 
+## Quickstart chạy được
+
+Chạy ví dụ local với memory adapter:
+
+```bash
+go run ./examples/basic
+```
+
+Hoặc dùng public Go API:
+
+```go
+queue := rhinoq.NewInMemory()
+queue.Handle("send-welcome", func(ctx context.Context, job rhinoq.Job) error {
+    return sendWelcomeEmail(ctx, job.Payload)
+})
+queue.Enqueue(ctx, "send-welcome", payload, "welcome:user-1")
+queue.Run(ctx)
+```
+
+Quickstart này chỉ dành cho local development. Production sẽ dùng PostgreSQL adapter và protocol/Agent; memory adapter không cung cấp durability sau process restart.
+
 Kiểm tra TypeScript SDK:
 
 ```bash
