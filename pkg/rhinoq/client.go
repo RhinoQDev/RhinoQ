@@ -52,6 +52,16 @@ func (c *Client) Enqueue(ctx context.Context, name string, payload []byte, idemp
 	return string(id), err
 }
 
+func (c *Client) Cancel(ctx context.Context, id string) error {
+	if c == nil || c.store == nil {
+		return errors.New("rhinoq store is required")
+	}
+	if id == "" {
+		return errors.New("job id is required")
+	}
+	return c.store.RequestCancel(ctx, ports.JobID(id))
+}
+
 func (c *Client) Handle(name string, handler Handler) error {
 	if c == nil || c.handlers == nil {
 		return errors.New("rhinoq client is required")

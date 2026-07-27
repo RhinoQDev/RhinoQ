@@ -22,6 +22,6 @@ Không coi đây là progress KPI tuyệt đối; mỗi mục phải được n�
 
 1. PostgreSQL integration harness và transactional enqueue.
 2. Lease epoch fencing.
-3. DLQ, cancellation và pause/resume.
+3. DLQ, lease epoch fencing và admission/rate limit.
 4. Audit append-only/hash chain.
 5. Query-cost gate và benchmark harness.

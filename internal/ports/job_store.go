@@ -41,6 +41,8 @@ type JobStore interface {
 	RenewLease(ctx context.Context, lease Lease, now time.Time, extension time.Duration) error
 	Complete(ctx context.Context, lease Lease, now time.Time) error
 	Fail(ctx context.Context, lease Lease, now time.Time, transition FailureTransition) error
+	RequestCancel(ctx context.Context, id JobID) error
+	IsCancelRequested(ctx context.Context, id JobID) (bool, error)
 	RequeueExpired(ctx context.Context, now time.Time) (int, error)
 	PauseQueue(ctx context.Context, name string) error
 	ResumeQueue(ctx context.Context, name string) error

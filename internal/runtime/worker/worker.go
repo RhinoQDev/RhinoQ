@@ -144,9 +144,15 @@ func (w *Worker) runOne(parent context.Context, record job.Record) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	heartbeatErr := make(chan error, 1)
-	go w.heartbeat(ctx, cancel, lease, heartbeatErr)
+	cancelRequested := make(chan struct{}, 1)
+	go w.heartbeat(ctx, cancel, lease, heartbeatErr, cancelRequested)
 	handlerErr := handler(ctx, record)
 	cancel()
+	select {
+	case <-cancelRequested:
+		return w.store.Fail(parent, lease, w.now(), ports.FailureTransition{State: job.Cancelled, NotBefore: w.now()})
+	default:
+	}
 	select {
 	case err := <-heartbeatErr:
 		if err != nil && handlerErr == nil {
@@ -166,7 +172,7 @@ func (w *Worker) runOne(parent context.Context, record job.Record) error {
 	return w.fail(parent, lease, retry.Unknown, 0, handlerErr, record.Attempts)
 }
 
-func (w *Worker) heartbeat(ctx context.Context, cancel context.CancelFunc, lease ports.Lease, result chan<- error) {
+func (w *Worker) heartbeat(ctx context.Context, cancel context.CancelFunc, lease ports.Lease, result chan<- error, cancelRequested chan<- struct{}) {
 	ticker := time.NewTicker(w.heartbeatEvery)
 	defer ticker.Stop()
 	for {
@@ -174,6 +180,17 @@ func (w *Worker) heartbeat(ctx context.Context, cancel context.CancelFunc, lease
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			requested, err := w.store.IsCancelRequested(ctx, lease.JobID)
+			if err != nil {
+				cancel()
+				result <- err
+				return
+			}
+			if requested {
+				cancel()
+				cancelRequested <- struct{}{}
+				return
+			}
 			if err := w.store.RenewLease(ctx, lease, now, w.leaseDuration); err != nil {
 				cancel()
 				result <- err

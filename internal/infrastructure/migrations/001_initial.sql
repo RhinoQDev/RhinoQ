@@ -12,8 +12,12 @@ CREATE TABLE IF NOT EXISTS rhinoq_jobs (
     not_before         timestamptz NOT NULL DEFAULT now(),
     lease_id           text,
     lease_until        timestamptz,
+    cancel_requested   boolean NOT NULL DEFAULT false,
     CONSTRAINT rhinoq_jobs_idempotency_unique UNIQUE (name, idempotency_key)
 );
+
+ALTER TABLE rhinoq_jobs
+    ADD COLUMN IF NOT EXISTS cancel_requested boolean NOT NULL DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS rhinoq_jobs_claim_idx
     ON rhinoq_jobs (state, not_before, created_at, id);

@@ -62,7 +62,7 @@ func (s *JobStore) Get(ctx context.Context, id ports.JobID) (job.Record, bool, e
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, payload, state, attempts, COALESCE(idempotency_key, ''),
 		       COALESCE(correlation_id, ''), created_at, not_before,
-		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz)
+		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz), cancel_requested
 		FROM rhinoq_jobs WHERE id = $1`, string(id))
 	record, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -84,7 +84,7 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, payload, state, attempts, COALESCE(idempotency_key, ''),
 		       COALESCE(correlation_id, ''), created_at, not_before,
-		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz)
+		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz), cancel_requested
 		FROM rhinoq_jobs
 		WHERE state IN ('pending', 'retry_wait') AND not_before <= $1
 		  AND NOT EXISTS (SELECT 1 FROM rhinoq_queue_controls qc WHERE qc.queue_name = rhinoq_jobs.name AND qc.paused_at IS NOT NULL)
@@ -186,7 +186,7 @@ func (s *JobStore) Fail(ctx context.Context, lease ports.Lease, now time.Time, t
 	if lease.JobID == "" || lease.LeaseID == "" || now.IsZero() {
 		return ErrLeaseLost
 	}
-	if transition.State != job.RetryWait && transition.State != job.Dead && transition.State != job.Blocked {
+	if transition.State != job.RetryWait && transition.State != job.Dead && transition.State != job.Blocked && transition.State != job.Cancelled {
 		return errors.New("invalid failure state")
 	}
 	result, err := s.db.ExecContext(ctx, `
@@ -201,6 +201,32 @@ func (s *JobStore) Fail(ctx context.Context, lease ports.Lease, now time.Time, t
 		return ErrLeaseLost
 	}
 	return nil
+}
+
+func (s *JobStore) RequestCancel(ctx context.Context, id ports.JobID) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE rhinoq_jobs
+		SET state = CASE WHEN state IN ('pending', 'retry_wait', 'blocked') THEN 'cancelled' ELSE state END,
+		    cancel_requested = CASE WHEN state = 'leased' THEN true ELSE cancel_requested END,
+		    lease_id = CASE WHEN state IN ('pending', 'retry_wait', 'blocked') THEN NULL ELSE lease_id END,
+		    lease_until = CASE WHEN state IN ('pending', 'retry_wait', 'blocked') THEN NULL ELSE lease_until END
+		WHERE id = $1 AND state NOT IN ('succeeded', 'dead', 'cancelled')`, id)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *JobStore) IsCancelRequested(ctx context.Context, id ports.JobID) (bool, error) {
+	var requested bool
+	err := s.db.QueryRowContext(ctx, `SELECT cancel_requested FROM rhinoq_jobs WHERE id = $1`, id).Scan(&requested)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return requested, err
 }
 
 func (s *JobStore) RequeueExpired(ctx context.Context, now time.Time) (int, error) {
@@ -227,7 +253,7 @@ func scanJob(row scanner) (job.Record, error) {
 	var id, state string
 	if err := row.Scan(&id, &record.Name, &record.Payload, &state, &record.Attempts,
 		&record.IdempotencyKey, &record.CorrelationID, &record.CreatedAt, &record.NotBefore,
-		&record.LeaseID, &record.LeaseUntil); err != nil {
+		&record.LeaseID, &record.LeaseUntil, &record.CancelRequested); err != nil {
 		return job.Record{}, err
 	}
 	record.ID = job.ID(id)

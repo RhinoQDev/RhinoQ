@@ -189,7 +189,7 @@ func (s *JobStore) Fail(_ context.Context, lease ports.Lease, now time.Time, tra
 	if !ok || record.State != job.Leased || record.LeaseID != lease.LeaseID || !record.LeaseUntil.After(now) {
 		return errors.New("lease is not authoritative")
 	}
-	if transition.State != job.RetryWait && transition.State != job.Dead && transition.State != job.Blocked {
+	if transition.State != job.RetryWait && transition.State != job.Dead && transition.State != job.Blocked && transition.State != job.Cancelled {
 		return errors.New("invalid failure state")
 	}
 	record.State = transition.State
@@ -198,6 +198,39 @@ func (s *JobStore) Fail(_ context.Context, lease ports.Lease, now time.Time, tra
 	record.LeaseUntil = time.Time{}
 	s.jobs[job.ID(lease.JobID)] = record
 	return nil
+}
+
+func (s *JobStore) RequestCancel(_ context.Context, id ports.JobID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.jobs[job.ID(id)]
+	if !ok {
+		return errors.New("job not found")
+	}
+	switch record.State {
+	case job.Pending, job.RetryWait, job.Blocked:
+		record.State = job.Cancelled
+		record.LeaseID = ""
+		record.LeaseUntil = time.Time{}
+	case job.Leased:
+		record.CancelRequested = true
+	case job.Succeeded, job.Dead, job.Cancelled:
+		return nil
+	default:
+		return errors.New("job cannot be cancelled in current state")
+	}
+	s.jobs[job.ID(id)] = record
+	return nil
+}
+
+func (s *JobStore) IsCancelRequested(_ context.Context, id ports.JobID) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, ok := s.jobs[job.ID(id)]
+	if !ok {
+		return false, errors.New("job not found")
+	}
+	return record.CancelRequested, nil
 }
 
 func (s *JobStore) RequeueExpired(_ context.Context, now time.Time) (int, error) {

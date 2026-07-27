@@ -30,17 +30,18 @@ func ValidatePayload(payload []byte, maxBytes int) error {
 type ID string
 
 type Record struct {
-	ID             ID
-	Name           string
-	Payload        []byte
-	State          State
-	Attempts       int
-	IdempotencyKey string
-	CorrelationID  string
-	CreatedAt      time.Time
-	NotBefore      time.Time
-	LeaseID        string
-	LeaseUntil     time.Time
+	ID              ID
+	Name            string
+	Payload         []byte
+	State           State
+	Attempts        int
+	IdempotencyKey  string
+	CorrelationID   string
+	CreatedAt       time.Time
+	NotBefore       time.Time
+	LeaseID         string
+	LeaseUntil      time.Time
+	CancelRequested bool
 }
 
 func NewRecord(id ID, name string, payload []byte, now, notBefore time.Time) (Record, error) {
