@@ -10,23 +10,28 @@
 - [x] effect ledger/outcome foundation
 - [x] PostgreSQL adapter and migration
 - [ ] PostgreSQL integration harness
-- [ ] lease epoch fencing
+- [x] lease epoch fencing
 - [x] cancellation
 - [x] pause/resume
 - [x] global per-queue rate limit
-- [ ] admission control
+- [x] priority, FIFO and aging scheduling
+- [x] poison-job protection
+- [x] six-step graceful shutdown
+- [x] database time as clock authority
+- [x] admission control
 - [x] DLQ and derived Needs Attention read API
 - [x] guarded manual replay with transactional audit
 - [ ] finding acknowledge/resolve/regressed lifecycle
 
 ## Milestone 1 — Developer experience
 
-- [ ] stable protocol generation
+- [x] Agent HTTP surface with protocol negotiation (gRPC/proto generation pending)
 - [ ] runnable CLI
 - [ ] `rhinoq init` plan/apply
-- [ ] `rhinoq doctor`
+- [x] `rhinoq doctor` configuration, fencing and timing checks (runtime and database checks pending)
 - [ ] Console queue view
-- [ ] Node/NestJS SDK adapter
+- [x] single-file TypeScript Agent client
+- [ ] NestJS module
 
 ## Milestone 2 — Evidence and release
 

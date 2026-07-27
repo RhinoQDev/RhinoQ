@@ -77,12 +77,12 @@ if err != nil {
     log.Fatal(err)
 }
 
-jobID, err := queue.Enqueue(
-    ctx,
-    "generate-report",
-    []byte(`{"reportId":"report_01"}`),
-    "report:report_01",
-)
+jobID, err := queue.Enqueue(ctx, rhinoq.JobRequest{
+    Name:           "generate-report",
+    Payload:        []byte(`{"reportId":"report_01"}`),
+    IdempotencyKey: "report:report_01",
+    Priority:       10,
+})
 if err != nil {
     log.Fatal(err)
 }
@@ -105,7 +105,7 @@ if err != nil {
 }
 ```
 
-Apply the schema in [`internal/infrastructure/migrations/001_initial.sql`](./internal/infrastructure/migrations/001_initial.sql) before starting PostgreSQL-backed workers. A real-database integration harness is still a release blocker.
+Apply the migrations in [`internal/infrastructure/migrations/`](./internal/infrastructure/migrations/) in order before starting PostgreSQL-backed workers. A real-database integration harness is still a release blocker.
 
 ## Queue operations
 
@@ -114,6 +114,18 @@ Runtime controls are exposed through the same client boundary:
 ```go
 // Global fixed-window limit shared by all workers for this queue.
 err := queue.SetRateLimit(ctx, "provider-sync", 100, time.Minute)
+
+// Producer backpressure: past this budget the queue stops accepting work
+// instead of growing until the database is the outage.
+err = queue.SetAdmission(ctx, "provider-sync", rhinoq.AdmissionPolicy{
+    MaxPending:       100_000,
+    ReservedCritical: 5_000,
+    OnOverflow:       rhinoq.OverflowReject,
+})
+
+// Stop claiming a queue whose downstream is down, without touching running work.
+err = queue.Pause(ctx, "provider-sync")
+err = queue.Resume(ctx, "provider-sync")
 
 // Cooperative cancellation.
 err = queue.Cancel(ctx, jobID)
@@ -137,13 +149,18 @@ List responses intentionally exclude payloads so an operational queue view does 
 - Namespaced idempotent enqueue
 - PostgreSQL and in-memory job stores
 - Batch claim with PostgreSQL `FOR UPDATE SKIP LOCKED`
-- Lease ownership, heartbeat renewal, and expired-lease recovery
-- Bounded worker concurrency and graceful shutdown
+- Lease ownership fenced by owner and epoch, checked on every write
+- Heartbeat renewal that extends the lease and reports cancellation in one round trip
+- Bounded worker concurrency with slot-driven batch claim and prefetch
+- Six-step graceful shutdown that never releases a lease a handler may still hold
 - Delayed execution through `not_before`
 - Classified retry with exponential backoff and bounded jitter
 
 ### Runtime control
 
+- Priority with FIFO ordering inside a priority and aging against starvation
+- Producer admission control with a reserved budget for critical work
+- Poison-job protection that parks a payload which keeps taking workers down
 - Pause and resume by queue name
 - Cooperative cancellation for leased jobs
 - Immediate cancellation for waiting jobs
@@ -152,13 +169,26 @@ List responses intentionally exclude payloads so an operational queue view does 
 - Derived Needs Attention view across execution, effects, and outcomes
 - Guarded dead/blocked replay with transactional hash-chained audit
 
+### Polyglot integration
+
+- Agent HTTP surface: one process owns correctness, clients stay thin
+- Protocol handshake reporting compatible, degraded or rejected with reasons
+- Language-neutral error envelope with retry classes and a grouping fingerprint
+- `rhinoq.enqueue()` SQL function so any ORM can enqueue inside its own transaction
+- Single-file TypeScript client as the reference port
+- Separate `/health/live` and `/health/ready`, plus a dependency-free `/metrics` exporter
+
 ### Integrity foundations
 
+- `job.Effect()` opens, runs and confirms a provider call under one declared policy
+- Work an earlier attempt confirmed is skipped; work it left uncertain stops the job
 - Effect Ledger with per-effect confirmation policy
 - Explicit effect states including uncertain and confirmed
 - Outcome records separated from execution completion
 - Outbox storage and publisher runtime
 - Fail-closed handling for unknown error classes
+
+Using RhinoQ from another language needs one thin file, not a reimplementation. See the [Agent guide](./docs/agent.md).
 
 See the [feature matrix](./docs/feature-matrix.md) for implemented, partial, and planned behavior.
 
@@ -223,11 +253,11 @@ RhinoQ currently has a runnable Go core and testable memory adapter. PostgreSQL 
 The next engineering priorities are:
 
 1. PostgreSQL integration and fault-test harnesses
-2. Lease epoch fencing
-3. Persistent finding lifecycle and safe Resume checkpoints
-4. Controlled replay with immutable audit
-5. Admission control, metrics, and tracing
-6. Stable Agent protocol and TypeScript SDK
+2. Persistent finding lifecycle and safe Resume checkpoints
+3. Benchmark harness and query-cost gate
+4. Console queue view
+5. Tracing export and gRPC transport for the Agent
+6. Go and Python clients on the stable protocol
 7. Reproducible benchmark suite
 
 RhinoQ does not publish throughput or latency claims without a repeatable benchmark that records hardware, payload, durability, worker count, and workload.

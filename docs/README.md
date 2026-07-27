@@ -6,6 +6,7 @@
 - [Configuration](./configuration.md)
 - [PostgreSQL production client](./postgres.md)
 - [Architecture](./architecture.md)
+- [Agent và tích hợp đa ngôn ngữ](./agent.md)
 
 ## Vận hành
 
