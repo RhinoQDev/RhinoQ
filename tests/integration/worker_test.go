@@ -26,7 +26,7 @@ func TestWorkerCompletesClaimedJob(t *testing.T) {
 	if err := registry.Register("send-email", func(context.Context, job.Record) error { cancel(); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	w, err := worker.New(worker.Config{Store: store, Handlers: registry, RetryPolicy: retry.Policy{MaxAttempts: 3, BaseDelay: time.Second}, ClaimLimit: 1, LeaseDuration: time.Minute, PollInterval: time.Millisecond, HeartbeatEvery: 10 * time.Millisecond, Concurrency: 1, Now: func() time.Time { return now }})
+	w, err := worker.New(worker.Config{Store: store, Handlers: registry, Owner: "worker-1", RetryPolicy: retry.Policy{MaxAttempts: 3, BaseDelay: time.Second}, MaxClaimBatch: 1, LeaseDuration: time.Minute, PollInterval: time.Millisecond, HeartbeatEvery: 10 * time.Millisecond, Concurrency: 1, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}

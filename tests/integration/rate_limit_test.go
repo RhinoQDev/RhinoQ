@@ -26,13 +26,13 @@ func TestQueueRateLimitIsGlobalAcrossClaims(t *testing.T) {
 		}
 	}
 
-	first, err := store.Claim(context.Background(), ports.ClaimInput{
+	first, err := store.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1",
 		Now: now, Limit: 10, LeaseDuration: time.Minute,
 	})
 	if err != nil || len(first) != 2 {
 		t.Fatalf("first claim should consume global allowance: len=%d err=%v", len(first), err)
 	}
-	second, err := store.Claim(context.Background(), ports.ClaimInput{
+	second, err := store.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1",
 		Now: now, Limit: 10, LeaseDuration: time.Minute,
 	})
 	if err != nil || len(second) != 0 {
@@ -43,7 +43,7 @@ func TestQueueRateLimitIsGlobalAcrossClaims(t *testing.T) {
 		t.Fatalf("expected 45s rate-limit ttl, got %s err=%v", ttl, err)
 	}
 
-	afterReset, err := store.Claim(context.Background(), ports.ClaimInput{
+	afterReset, err := store.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1",
 		Now: now.Add(time.Minute), Limit: 10, LeaseDuration: time.Minute,
 	})
 	if err != nil || len(afterReset) != 1 {
@@ -66,13 +66,13 @@ func TestRemovingQueueRateLimitReleasesWaitingJobs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.Claim(context.Background(), ports.ClaimInput{Now: now, Limit: 1, LeaseDuration: time.Minute}); err != nil {
+	if _, err := store.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 	if err := control.RemoveRateLimit(context.Background(), "sync"); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := store.Claim(context.Background(), ports.ClaimInput{Now: now, Limit: 1, LeaseDuration: time.Minute})
+	claimed, err := store.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("removed limit should release waiting job: len=%d err=%v", len(claimed), err)
 	}

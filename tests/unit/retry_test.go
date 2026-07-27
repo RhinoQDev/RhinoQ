@@ -21,9 +21,15 @@ func TestRetryPolicyClassifiesFailures(t *testing.T) {
 		t.Fatalf("permanent error must be dead: %+v", permanent)
 	}
 
+	// An unclassified error gets a small number of cautious retries and is then
+	// parked for a decision rather than retried into a storm.
 	unknown := policy.Decide(retry.Unknown, 1, now, 0)
-	if !unknown.Blocked || unknown.Retry {
-		t.Fatalf("unknown error must be blocked: %+v", unknown)
+	if !unknown.Retry || unknown.Blocked {
+		t.Fatalf("first unknown error should be retried cautiously: %+v", unknown)
+	}
+	exhausted := policy.Decide(retry.Unknown, retry.UnknownMaxAttempts, now, 0)
+	if !exhausted.Blocked || exhausted.Retry {
+		t.Fatalf("unknown error must be blocked once its cautious retries run out: %+v", exhausted)
 	}
 
 	rateLimited := policy.Decide(retry.RateLimited, 1, now, 30*time.Second)

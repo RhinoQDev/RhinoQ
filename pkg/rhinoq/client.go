@@ -4,23 +4,34 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/rhinoq/rhinoq/internal/adapters/memory"
 	"github.com/rhinoq/rhinoq/internal/adapters/postgres"
 	"github.com/rhinoq/rhinoq/internal/application/operations"
+	"github.com/rhinoq/rhinoq/internal/domain/admission"
 	"github.com/rhinoq/rhinoq/internal/domain/job"
 	"github.com/rhinoq/rhinoq/internal/domain/recovery"
 	"github.com/rhinoq/rhinoq/internal/domain/retry"
 	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/rhinoq/rhinoq/internal/runtime/lease"
+	"github.com/rhinoq/rhinoq/internal/runtime/supervisor"
 	"github.com/rhinoq/rhinoq/internal/runtime/worker"
 )
 
 type Job struct {
-	ID       string
-	Name     string
-	Payload  []byte
-	Attempts int
+	ID            string
+	Name          string
+	Payload       []byte
+	Attempts      int
+	CorrelationID string
+
+	// client and lease are what let a handler record an effect under the same
+	// fencing token the runtime is holding for this execution.
+	client *Client
+	lease  ports.Lease
 }
 
 type Handler func(context.Context, Job) error
@@ -31,6 +42,27 @@ var (
 	ErrReplayConfirmedEffect  = recovery.ErrConfirmedEffect
 	ErrReplayUncertainEffect  = recovery.ErrUncertainEffect
 	ErrReplayUnresolvedEffect = recovery.ErrUnresolvedEffect
+	// ErrQueueOverCapacity reports that admission control refused an enqueue.
+	// The error value carries the queue, the budget and a retry hint.
+	ErrQueueOverCapacity = admission.ErrOverCapacity
+	// ErrLeaseLost reports that an execution no longer owns its job. A handler
+	// that sees it must stop: another worker is running the same job.
+	ErrLeaseLost = ports.ErrLeaseLost
+)
+
+// Job classes decide which share of a queue's admission budget work may use.
+const (
+	ClassCritical    = string(job.Critical)
+	ClassInteractive = string(job.Interactive)
+	ClassStandard    = string(job.Standard)
+	ClassBatch       = string(job.Batch)
+	ClassMaintenance = string(job.Maintenance)
+)
+
+// Overflow modes for admission control.
+const (
+	OverflowReject = string(admission.Reject)
+	OverflowDelay  = string(admission.Delay)
 )
 
 const (
@@ -39,6 +71,26 @@ const (
 	AttentionEffectUncertain  = "effect_uncertain"
 	AttentionOutcomeMismatch  = "outcome_mismatch"
 )
+
+// JobRequest is the single canonical way to enqueue. Everything a job needs is
+// declared here; there is no second configuration surface.
+type JobRequest struct {
+	Name    string
+	Payload []byte
+	// IdempotencyKey is scoped to the queue name: enqueueing the same key twice
+	// returns the first job instead of creating a second one.
+	IdempotencyKey string
+	// CorrelationID links this job to the business entity it acts on.
+	CorrelationID string
+	// Priority orders claiming inside a queue, from -100 to 100. Waiting jobs
+	// gain priority over time, so low priority work cannot starve.
+	Priority int
+	// Class defaults to standard. Critical work may use a queue's reserved
+	// admission budget.
+	Class string
+	// RunAfter delays the earliest run time. Zero means as soon as possible.
+	RunAfter time.Duration
+}
 
 type JobQuery struct {
 	Queue  string
@@ -51,7 +103,11 @@ type JobSummary struct {
 	ID              string
 	Name            string
 	State           string
+	Class           string
+	Priority        int
 	Attempts        int
+	CrashCount      int
+	BlockedReason   string
 	CorrelationID   string
 	CreatedAt       time.Time
 	NotBefore       time.Time
@@ -79,21 +135,130 @@ type AuditRecord struct {
 	RowHash    string
 }
 
+// AdmissionPolicy is the producer backpressure budget for one queue.
+type AdmissionPolicy struct {
+	// MaxPending is how many pending and retrying jobs the queue may hold.
+	MaxPending int
+	// ReservedCritical is the part of MaxPending only critical jobs may use.
+	ReservedCritical int
+	// OnOverflow is OverflowReject or OverflowDelay. Default is reject.
+	OnOverflow string
+	// DelayBy is how far OverflowDelay pushes the earliest run time.
+	DelayBy time.Duration
+	// RetryAfter is what a rejected producer is told to wait.
+	RetryAfter time.Duration
+}
+
+// WorkerConfig tunes one worker process. Every field has a working default.
+type WorkerConfig struct {
+	// Name identifies this worker in every lease it takes. Defaults to
+	// hostname-pid. Two workers must never share a name.
+	Name string
+	// Concurrency is how many handlers may run at once.
+	Concurrency int
+	// Prefetch multiplies the free slots when sizing a claim, so a worker is not
+	// idle for a round trip between jobs. Defaults to 1.5, maximum 3.
+	Prefetch float64
+	// MaxClaimBatch caps a single claim to protect the database.
+	MaxClaimBatch int
+	// Lease is how long a claim is valid; Heartbeat is how often it is renewed.
+	Lease     time.Duration
+	Heartbeat time.Duration
+	// PollInterval is the shortest idle wait; an idle worker backs off towards
+	// MaxPollInterval and wakes early when a rate limit window opens.
+	PollInterval    time.Duration
+	MaxPollInterval time.Duration
+	// ShutdownGrace is how long a stopping worker lets handlers finish before it
+	// cancels them; CancelGrace is how long it then waits for them to react.
+	ShutdownGrace time.Duration
+	CancelGrace   time.Duration
+	// MaxAttempts bounds retries of a failing job.
+	MaxAttempts int
+	// RetryBaseDelay and RetryMaxDelay bound exponential backoff.
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
+	// ReaperInterval is how often expired leases are swept back into the queue.
+	ReaperInterval time.Duration
+	// MaxWorkerCrashes is how many times one job may take a worker down before
+	// it is parked as a poison job instead of retried.
+	MaxWorkerCrashes int
+	// OnError observes non-fatal runtime errors instead of losing them.
+	OnError func(error)
+}
+
+func (c WorkerConfig) withDefaults() WorkerConfig {
+	if c.Name == "" {
+		host, err := os.Hostname()
+		if err != nil || host == "" {
+			host = "rhinoq-worker"
+		}
+		c.Name = fmt.Sprintf("%s-%d", host, os.Getpid())
+	}
+	if c.Concurrency <= 0 {
+		c.Concurrency = 4
+	}
+	if c.Lease <= 0 {
+		c.Lease = time.Minute
+	}
+	if c.Heartbeat <= 0 {
+		c.Heartbeat = c.Lease / 3
+	}
+	if c.PollInterval <= 0 {
+		c.PollInterval = 100 * time.Millisecond
+	}
+	if c.MaxPollInterval <= 0 {
+		c.MaxPollInterval = 2 * time.Second
+	}
+	if c.MaxAttempts <= 0 {
+		c.MaxAttempts = 3
+	}
+	if c.RetryBaseDelay <= 0 {
+		c.RetryBaseDelay = time.Second
+	}
+	if c.RetryMaxDelay <= 0 {
+		c.RetryMaxDelay = time.Minute
+	}
+	if c.ReaperInterval <= 0 {
+		c.ReaperInterval = 30 * time.Second
+	}
+	return c
+}
+
 type Client struct {
 	store    ports.JobStore
+	effects  ports.EffectStore
 	recovery ports.RecoveryStore
 	handlers *worker.HandlerRegistry
+	// retry is the policy applied to failures reported through the remote
+	// worker API, where no in-process worker owns a policy.
+	retry retry.Policy
+}
+
+// SetRetryPolicy configures how failures reported by remote workers are
+// classified into retry, dead or blocked.
+func (c *Client) SetRetryPolicy(maxAttempts int, baseDelay, maxDelay time.Duration) error {
+	if c == nil {
+		return errors.New("rhinoq client is required")
+	}
+	if maxAttempts <= 0 || baseDelay <= 0 || maxDelay < baseDelay {
+		return errors.New("retry policy needs a positive attempt limit and a max delay at or above the base delay")
+	}
+	c.retry = retry.Policy{MaxAttempts: maxAttempts, BaseDelay: baseDelay, MaxDelay: maxDelay, Jitter: 0.2}
+	return nil
 }
 
 func NewInMemory() *Client {
 	jobs := memory.NewJobStore()
-	effects := memory.NewEffectStore()
+	effects, err := memory.NewEffectStore(jobs)
+	if err != nil {
+		panic(err)
+	}
 	outcomes := memory.NewOutcomeStore()
 	recoveryStore, err := memory.NewRecoveryStore(jobs, effects, outcomes)
 	if err != nil {
 		panic(err)
 	}
-	return &Client{store: jobs, recovery: recoveryStore, handlers: worker.NewHandlerRegistry()}
+	return &Client{store: jobs, effects: effects, recovery: recoveryStore, handlers: worker.NewHandlerRegistry()}
 }
 
 func NewPostgres(db *sql.DB) (*Client, error) {
@@ -101,11 +266,18 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	effects, err := postgres.NewEffectStore(db)
+	if err != nil {
+		return nil, err
+	}
 	recoveryStore, err := postgres.NewRecoveryStore(db)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{store: store, recovery: recoveryStore, handlers: worker.NewHandlerRegistry()}, nil
+	return &Client{
+		store: store, effects: effects, recovery: recoveryStore,
+		handlers: worker.NewHandlerRegistry(),
+	}, nil
 }
 
 func NewWithStore(store ports.JobStore) *Client {
@@ -116,11 +288,24 @@ func NewWithStore(store ports.JobStore) *Client {
 	return client
 }
 
-func (c *Client) Enqueue(ctx context.Context, name string, payload []byte, idempotencyKey string) (string, error) {
+// Enqueue admits one job. It returns ErrQueueOverCapacity when the queue has an
+// admission budget and that budget is full.
+func (c *Client) Enqueue(ctx context.Context, request JobRequest) (string, error) {
 	if c == nil || c.store == nil {
 		return "", errors.New("rhinoq store is required")
 	}
-	id, err := c.store.Enqueue(ctx, ports.EnqueueInput{Name: name, Payload: payload, IdempotencyKey: idempotencyKey})
+	input := ports.EnqueueInput{
+		Name:           request.Name,
+		Payload:        request.Payload,
+		IdempotencyKey: request.IdempotencyKey,
+		CorrelationID:  request.CorrelationID,
+		Priority:       request.Priority,
+		Class:          job.Class(request.Class),
+	}
+	if request.RunAfter > 0 {
+		input.NotBefore = time.Now().UTC().Add(request.RunAfter)
+	}
+	id, err := c.store.Enqueue(ctx, input)
 	return string(id), err
 }
 
@@ -134,25 +319,68 @@ func (c *Client) Cancel(ctx context.Context, id string) error {
 	return c.store.RequestCancel(ctx, ports.JobID(id))
 }
 
-func (c *Client) SetRateLimit(ctx context.Context, queue string, max int, window time.Duration) error {
-	if c == nil || c.store == nil {
-		return errors.New("rhinoq store is required")
+// Pause stops a queue being claimed without touching jobs already running.
+func (c *Client) Pause(ctx context.Context, queue string) error {
+	control, err := c.queueControl()
+	if err != nil {
+		return err
 	}
-	return c.store.SetQueueRateLimit(ctx, queue, ports.QueueRateLimit{Max: max, Window: window})
+	return control.Pause(ctx, queue)
+}
+
+func (c *Client) Resume(ctx context.Context, queue string) error {
+	control, err := c.queueControl()
+	if err != nil {
+		return err
+	}
+	return control.Resume(ctx, queue)
+}
+
+func (c *Client) SetRateLimit(ctx context.Context, queue string, max int, window time.Duration) error {
+	control, err := c.queueControl()
+	if err != nil {
+		return err
+	}
+	return control.SetRateLimit(ctx, queue, max, window)
 }
 
 func (c *Client) RemoveRateLimit(ctx context.Context, queue string) error {
-	if c == nil || c.store == nil {
-		return errors.New("rhinoq store is required")
+	control, err := c.queueControl()
+	if err != nil {
+		return err
 	}
-	return c.store.RemoveQueueRateLimit(ctx, queue)
+	return control.RemoveRateLimit(ctx, queue)
 }
 
 func (c *Client) RateLimitTTL(ctx context.Context, queue string) (time.Duration, error) {
-	if c == nil || c.store == nil {
-		return 0, errors.New("rhinoq store is required")
+	control, err := c.queueControl()
+	if err != nil {
+		return 0, err
 	}
-	return c.store.QueueRateLimitTTL(ctx, queue, time.Now().UTC())
+	return control.RateLimitTTL(ctx, queue, time.Now().UTC())
+}
+
+// SetAdmission installs producer backpressure on a queue.
+func (c *Client) SetAdmission(ctx context.Context, queue string, policy AdmissionPolicy) error {
+	control, err := c.queueControl()
+	if err != nil {
+		return err
+	}
+	return control.SetAdmission(ctx, queue, admission.Policy{
+		MaxPending:       policy.MaxPending,
+		ReservedCritical: policy.ReservedCritical,
+		OnOverflow:       admission.Mode(policy.OnOverflow),
+		DelayBy:          policy.DelayBy,
+		RetryAfter:       policy.RetryAfter,
+	})
+}
+
+func (c *Client) RemoveAdmission(ctx context.Context, queue string) error {
+	control, err := c.queueControl()
+	if err != nil {
+		return err
+	}
+	return control.RemoveAdmission(ctx, queue)
 }
 
 func (c *Client) ListJobs(ctx context.Context, query JobQuery) ([]JobSummary, error) {
@@ -175,12 +403,7 @@ func (c *Client) ListJobs(ctx context.Context, query JobQuery) ([]JobSummary, er
 	}
 	summaries := make([]JobSummary, 0, len(records))
 	for _, record := range records {
-		summaries = append(summaries, JobSummary{
-			ID: string(record.ID), Name: record.Name, State: record.State.String(),
-			Attempts: record.Attempts, CorrelationID: record.CorrelationID,
-			CreatedAt: record.CreatedAt, NotBefore: record.NotBefore,
-			CancelRequested: record.CancelRequested,
-		})
+		summaries = append(summaries, summarizeJob(record))
 	}
 	return summaries, nil
 }
@@ -273,30 +496,71 @@ func (c *Client) Handle(name string, handler Handler) error {
 		return errors.New("rhinoq handler is required")
 	}
 	return c.handlers.Register(name, func(ctx context.Context, record job.Record) error {
-		return handler(ctx, Job{ID: string(record.ID), Name: record.Name, Payload: append([]byte(nil), record.Payload...), Attempts: record.Attempts})
+		return handler(ctx, Job{
+			ID: string(record.ID), Name: record.Name,
+			Payload: append([]byte(nil), record.Payload...), Attempts: record.Attempts,
+			CorrelationID: record.CorrelationID,
+			client:        c, lease: ports.LeaseFor(record),
+		})
 	})
 }
 
+// Run works the registered queues with default settings until the context is
+// cancelled, then shuts down gracefully. It also sweeps expired leases, so a
+// single-process deployment recovers crashed work without extra wiring.
 func (c *Client) Run(ctx context.Context) error {
+	return c.RunWorker(ctx, WorkerConfig{})
+}
+
+// RunWorker is Run with explicit settings.
+func (c *Client) RunWorker(ctx context.Context, config WorkerConfig) error {
 	if c == nil || c.store == nil || c.handlers == nil {
 		return errors.New("rhinoq client is not configured")
 	}
+	settings := config.withDefaults()
 	runtime, err := worker.New(worker.Config{
-		Store: c.store, Handlers: c.handlers,
-		RetryPolicy: retry.Policy{MaxAttempts: 3, BaseDelay: time.Second, MaxDelay: time.Minute, Jitter: 0.2},
-		ClaimLimit:  10, Concurrency: 4, LeaseDuration: time.Minute,
-		PollInterval: 10 * time.Millisecond, HeartbeatEvery: 20 * time.Second,
+		Store: c.store, Handlers: c.handlers, Owner: settings.Name,
+		RetryPolicy: retry.Policy{
+			MaxAttempts: settings.MaxAttempts, BaseDelay: settings.RetryBaseDelay,
+			MaxDelay: settings.RetryMaxDelay, Jitter: 0.2,
+		},
+		Concurrency: settings.Concurrency, PrefetchFactor: settings.Prefetch,
+		MaxClaimBatch: settings.MaxClaimBatch, LeaseDuration: settings.Lease,
+		HeartbeatEvery: settings.Heartbeat, PollInterval: settings.PollInterval,
+		MaxPollInterval: settings.MaxPollInterval, ShutdownGrace: settings.ShutdownGrace,
+		CancelGrace: settings.CancelGrace, OnError: settings.OnError,
 	})
 	if err != nil {
 		return err
 	}
-	return runtime.Run(ctx)
+	reaper, err := lease.NewReaper(lease.Config{
+		Store: c.store, Effects: c.effects, Interval: settings.ReaperInterval,
+		Protection: job.Protection{MaxWorkerCrashesPerJob: settings.MaxWorkerCrashes},
+		Now:        func() time.Time { return time.Now().UTC() },
+	})
+	if err != nil {
+		return err
+	}
+	group, err := supervisor.New(runtime, reaper)
+	if err != nil {
+		return err
+	}
+	return group.Run(ctx)
+}
+
+func (c *Client) queueControl() (*operations.QueueControl, error) {
+	if c == nil || c.store == nil {
+		return nil, errors.New("rhinoq store is required")
+	}
+	return operations.NewQueueControl(c.store)
 }
 
 func summarizeJob(record job.Record) JobSummary {
 	return JobSummary{
 		ID: record.ID.String(), Name: record.Name, State: record.State.String(),
-		Attempts: record.Attempts, CorrelationID: record.CorrelationID,
+		Class: string(record.Class), Priority: record.Priority,
+		Attempts: record.Attempts, CrashCount: record.CrashCount,
+		BlockedReason: string(record.BlockedReason), CorrelationID: record.CorrelationID,
 		CreatedAt: record.CreatedAt, NotBefore: record.NotBefore,
 		CancelRequested: record.CancelRequested,
 	}

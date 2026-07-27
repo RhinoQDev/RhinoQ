@@ -27,7 +27,7 @@ func TestCancelPendingJobCannotBeClaimed(t *testing.T) {
 	if err := cancel.Cancel(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := store.Claim(context.Background(), ports.ClaimInput{Now: now, Limit: 1, LeaseDuration: time.Minute})
+	claimed, err := store.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
 	if err != nil || len(claimed) != 0 {
 		t.Fatalf("cancelled job must not be claimed: len=%d err=%v", len(claimed), err)
 	}
@@ -53,8 +53,9 @@ func TestWorkerCooperativelyCancelsLeasedJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	w, err := worker.New(worker.Config{
-		Store: store, Handlers: registry, RetryPolicy: retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond},
-		ClaimLimit: 1, LeaseDuration: 100 * time.Millisecond, PollInterval: time.Millisecond,
+		Store: store, Handlers: registry, Owner: "worker-1",
+		RetryPolicy:   retry.Policy{MaxAttempts: 3, BaseDelay: time.Millisecond},
+		MaxClaimBatch: 1, LeaseDuration: 100 * time.Millisecond, PollInterval: time.Millisecond,
 		HeartbeatEvery: 5 * time.Millisecond, Concurrency: 1,
 	})
 	if err != nil {

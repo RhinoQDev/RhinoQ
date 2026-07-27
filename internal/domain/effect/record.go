@@ -41,6 +41,9 @@ type Record struct {
 	Irreversible   bool
 	ExternalRef    string
 	CreatedAt      time.Time
+	// LeaseEpoch is the execution that opened this effect. It is written by the
+	// store from the fencing token, never by the caller.
+	LeaseEpoch int64
 }
 
 var (

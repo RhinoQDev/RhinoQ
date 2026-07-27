@@ -56,9 +56,13 @@ func (s *RecoveryStore) ListAttention(_ context.Context, query recovery.Attentio
 				JobState: record.State, Reason: "job exhausted its execution policy", ObservedAt: record.CreatedAt,
 			})
 		case job.Blocked:
+			reason := "execution requires an operator decision"
+			if record.BlockedReason == job.BlockedPoisonJob {
+				reason = "job repeatedly took its worker down and was parked"
+			}
 			items = append(items, recovery.AttentionItem{
 				Kind: recovery.ExecutionBlocked, JobID: record.ID, Queue: record.Name,
-				JobState: record.State, Reason: "execution requires an operator decision", ObservedAt: record.CreatedAt,
+				JobState: record.State, Reason: reason, ObservedAt: record.CreatedAt,
 			})
 		}
 	}
@@ -147,11 +151,15 @@ func (s *RecoveryStore) Replay(_ context.Context, request recovery.ReplayRequest
 	}
 	audit.RowHash = recovery.HashAudit(audit.PrevHash, audit)
 
+	// A replayed job starts its crash budget again: an operator who decided the
+	// payload is safe should not have it parked again by the previous crashes.
 	record.State = job.Pending
 	record.NotBefore = request.RequestedAt
-	record.LeaseID = ""
+	record.LeaseOwner = ""
 	record.LeaseUntil = time.Time{}
 	record.CancelRequested = false
+	record.BlockedReason = ""
+	record.CrashCount = 0
 	s.jobs.jobs[record.ID] = record
 	s.audits[record.ID] = append(history, audit)
 	return cloneRecord(record), audit, nil

@@ -20,12 +20,11 @@ func TestQueueInspectionCountsFiltersAndPaginates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	claimed, err := store.Claim(ctx, ports.ClaimInput{Now: now, Limit: 1, LeaseDuration: time.Minute})
+	claimed, err := store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim fixture: len=%d err=%v", len(claimed), err)
 	}
-	lease := ports.Lease{JobID: ports.JobID(claimed[0].ID), LeaseID: claimed[0].LeaseID}
-	if err := store.Complete(ctx, lease, now); err != nil {
+	if err := store.Complete(ctx, ports.LeaseFor(claimed[0]), now); err != nil {
 		t.Fatal(err)
 	}
 

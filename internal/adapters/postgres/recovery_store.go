@@ -34,7 +34,10 @@ func (s *RecoveryStore) ListAttention(ctx context.Context, query recovery.Attent
 			FROM rhinoq_jobs j WHERE j.state = 'dead'
 			UNION ALL
 			SELECT 'execution_blocked', j.id, j.name, j.state, '',
-			       'execution requires an operator decision', j.created_at
+			       CASE j.blocked_reason
+			           WHEN 'poison_job' THEN 'job repeatedly took its worker down and was parked'
+			           ELSE 'execution requires an operator decision'
+			       END, j.created_at
 			FROM rhinoq_jobs j WHERE j.state = 'blocked'
 			UNION ALL
 			SELECT 'effect_uncertain', j.id, j.name, j.state, e.id,
@@ -77,12 +80,9 @@ func (s *RecoveryStore) Replay(ctx context.Context, request recovery.ReplayReque
 	}
 	defer tx.Rollback()
 
-	row := tx.QueryRowContext(ctx, `
-		SELECT id, name, payload, state, attempts, COALESCE(idempotency_key, ''),
-		       COALESCE(correlation_id, ''), created_at, not_before,
-		       COALESCE(lease_id, ''), COALESCE(lease_until, 'epoch'::timestamptz), cancel_requested
-		FROM rhinoq_jobs
-		WHERE id = $1
+	row := tx.QueryRowContext(ctx, `SELECT `+jobColumns+`
+		FROM rhinoq_jobs j
+		WHERE j.id = $1
 		FOR UPDATE`, request.JobID)
 	record, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -94,7 +94,7 @@ func (s *RecoveryStore) Replay(ctx context.Context, request recovery.ReplayReque
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, job_id, name, idempotency_key, state, irreversible,
-		       COALESCE(external_ref, ''), created_at
+		       COALESCE(external_ref, ''), created_at, lease_epoch
 		FROM rhinoq_effects
 		WHERE job_id = $1`, request.JobID)
 	if err != nil {
@@ -105,7 +105,7 @@ func (s *RecoveryStore) Replay(ctx context.Context, request recovery.ReplayReque
 		var item effect.Record
 		if err := rows.Scan(
 			&item.ID, &item.JobID, &item.Name, &item.IdempotencyKey,
-			&item.State, &item.Irreversible, &item.ExternalRef, &item.CreatedAt,
+			&item.State, &item.Irreversible, &item.ExternalRef, &item.CreatedAt, &item.LeaseEpoch,
 		); err != nil {
 			rows.Close()
 			return job.Record{}, recovery.AuditRecord{}, err
@@ -144,10 +144,12 @@ func (s *RecoveryStore) Replay(ctx context.Context, request recovery.ReplayReque
 	}
 	audit.RowHash = recovery.HashAudit(previous, audit)
 
+	// A replayed job starts its crash budget again: an operator who decided the
+	// payload is safe should not have it parked again by the previous crashes.
 	result, err := tx.ExecContext(ctx, `
 		UPDATE rhinoq_jobs
-		SET state = 'pending', not_before = $1, lease_id = NULL, lease_until = NULL,
-		    cancel_requested = false
+		SET state = 'pending', not_before = $1, lease_owner = NULL, lease_until = NULL,
+		    cancel_requested = false, blocked_reason = NULL, crash_count = 0
 		WHERE id = $2 AND state IN ('dead', 'blocked')`, request.RequestedAt, request.JobID)
 	if err != nil {
 		return job.Record{}, recovery.AuditRecord{}, err
@@ -172,9 +174,11 @@ func (s *RecoveryStore) Replay(ctx context.Context, request recovery.ReplayReque
 	}
 	record.State = job.Pending
 	record.NotBefore = request.RequestedAt
-	record.LeaseID = ""
+	record.LeaseOwner = ""
 	record.LeaseUntil = time.Time{}
 	record.CancelRequested = false
+	record.BlockedReason = ""
+	record.CrashCount = 0
 	return record, audit, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/rhinoq/rhinoq/internal/domain/admission"
 	"github.com/rhinoq/rhinoq/internal/ports"
 )
 
@@ -34,4 +35,14 @@ func (q *QueueControl) RemoveRateLimit(ctx context.Context, name string) error {
 
 func (q *QueueControl) RateLimitTTL(ctx context.Context, name string, now time.Time) (time.Duration, error) {
 	return q.store.QueueRateLimitTTL(ctx, name, now)
+}
+
+// SetAdmission installs producer backpressure: past this budget the queue stops
+// accepting work instead of growing until the database is the outage.
+func (q *QueueControl) SetAdmission(ctx context.Context, name string, policy admission.Policy) error {
+	return q.store.SetQueueAdmission(ctx, name, policy)
+}
+
+func (q *QueueControl) RemoveAdmission(ctx context.Context, name string) error {
+	return q.store.RemoveQueueAdmission(ctx, name)
 }

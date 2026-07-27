@@ -17,7 +17,10 @@ import (
 func TestGuardedReplayIsAuditedAndPreservesAttempts(t *testing.T) {
 	now := time.Date(2026, 7, 27, 14, 0, 0, 0, time.UTC)
 	jobs := memory.NewJobStoreWithClock(func() time.Time { return now })
-	effects := memory.NewEffectStore()
+	effects, err := memory.NewEffectStore(jobs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	outcomes := memory.NewOutcomeStore()
 	store, err := memory.NewRecoveryStore(jobs, effects, outcomes)
 	if err != nil {
@@ -42,15 +45,14 @@ func TestGuardedReplayIsAuditedAndPreservesAttempts(t *testing.T) {
 		t.Fatalf("unexpected audit history: %+v err=%v", history, err)
 	}
 
-	secondClaim, err := jobs.Claim(context.Background(), ports.ClaimInput{
+	secondClaim, err := jobs.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1",
 		Now: now.Add(time.Minute), Limit: 1, LeaseDuration: time.Minute,
 	})
 	if err != nil || len(secondClaim) != 1 {
 		t.Fatalf("claim replayed job: len=%d err=%v", len(secondClaim), err)
 	}
-	secondLease := ports.Lease{JobID: id, LeaseID: secondClaim[0].LeaseID}
-	if err := jobs.Fail(context.Background(), secondLease, now.Add(time.Minute), ports.FailureTransition{
-		State: job.Dead, NotBefore: now.Add(time.Minute),
+	if err := jobs.Fail(context.Background(), ports.LeaseFor(secondClaim[0]), now.Add(time.Minute), ports.FailureTransition{
+		State: job.Dead,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,19 +74,23 @@ func TestGuardedReplayIsAuditedAndPreservesAttempts(t *testing.T) {
 func TestNeedsAttentionCombinesExecutionEffectAndOutcomeFindings(t *testing.T) {
 	now := time.Date(2026, 7, 27, 15, 0, 0, 0, time.UTC)
 	jobs := memory.NewJobStoreWithClock(func() time.Time { return now })
-	effects := memory.NewEffectStore()
+	effects, err := memory.NewEffectStore(jobs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	outcomes := memory.NewOutcomeStore()
 	store, err := memory.NewRecoveryStore(jobs, effects, outcomes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := deadJobFixture(t, jobs, now, "media")
-
+	// The effect is opened while the job still holds its lease, which is the
+	// only moment the ledger accepts it, and only then does the job die.
+	id, lease := leasedJobFixture(t, jobs, now, "media")
 	effectRecord, err := effect.NewRecord("effect_1", id.String(), "upload", "upload:1", false, now.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := effects.BeginEffect(context.Background(), effectRecord); err != nil {
+	if _, err := effects.BeginEffect(context.Background(), lease, now.Add(time.Second), effectRecord); err != nil {
 		t.Fatal(err)
 	}
 	effectRecord, err = effectRecord.MarkUncertain()
@@ -92,6 +98,9 @@ func TestNeedsAttentionCombinesExecutionEffectAndOutcomeFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := effects.SaveEffect(context.Background(), effectRecord); err != nil {
+		t.Fatal(err)
+	}
+	if err := jobs.Fail(context.Background(), lease, now.Add(time.Second), ports.FailureTransition{State: job.Dead}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,18 +128,23 @@ func TestNeedsAttentionCombinesExecutionEffectAndOutcomeFindings(t *testing.T) {
 	}
 }
 
-func deadJobFixture(t *testing.T, jobs *memory.JobStore, now time.Time, name string) job.ID {
+func leasedJobFixture(t *testing.T, jobs *memory.JobStore, now time.Time, name string) (job.ID, ports.Lease) {
 	t.Helper()
 	id, err := jobs.Enqueue(context.Background(), ports.EnqueueInput{Name: name, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := jobs.Claim(context.Background(), ports.ClaimInput{Now: now, Limit: 1, LeaseDuration: time.Minute})
+	claimed, err := jobs.Claim(context.Background(), ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim fixture: len=%d err=%v", len(claimed), err)
 	}
-	lease := ports.Lease{JobID: id, LeaseID: claimed[0].LeaseID}
-	if err := jobs.Fail(context.Background(), lease, now, ports.FailureTransition{State: job.Dead, NotBefore: now}); err != nil {
+	return id, ports.LeaseFor(claimed[0])
+}
+
+func deadJobFixture(t *testing.T, jobs *memory.JobStore, now time.Time, name string) job.ID {
+	t.Helper()
+	id, lease := leasedJobFixture(t, jobs, now, name)
+	if err := jobs.Fail(context.Background(), lease, now, ports.FailureTransition{State: job.Dead}); err != nil {
 		t.Fatal(err)
 	}
 	return id

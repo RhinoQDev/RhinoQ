@@ -24,7 +24,7 @@ func TestPauseResumeQueueControlsClaim(t *testing.T) {
 	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "email", Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := store.Claim(ctx, ports.ClaimInput{Now: now, Limit: 1, LeaseDuration: time.Minute})
+	claimed, err := store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestPauseResumeQueueControlsClaim(t *testing.T) {
 	if err := control.Resume(ctx, "email"); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err = store.Claim(ctx, ports.ClaimInput{Now: now, Limit: 1, LeaseDuration: time.Minute})
+	claimed, err = store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("resumed queue should claim job: len=%d err=%v", len(claimed), err)
 	}
