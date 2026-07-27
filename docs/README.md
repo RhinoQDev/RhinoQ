@@ -4,6 +4,7 @@
 
 - [Getting started](./getting-started.md)
 - [Configuration](./configuration.md)
+- [PostgreSQL production client](./postgres.md)
 - [Architecture](./architecture.md)
 
 ## Vận hành
@@ -19,4 +20,3 @@
 - [Architecture decision records](../.ai/DECISIONS.md)
 
 Tài liệu phải phân biệt rõ: documented, implemented, tested và production-evidenced.
-
