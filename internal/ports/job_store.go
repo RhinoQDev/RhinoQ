@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
@@ -33,6 +34,40 @@ type ClaimInput struct {
 	Now           time.Time
 	Limit         int
 	LeaseDuration time.Duration
+	// Queues restricts claims to job names this worker can actually handle.
+	// Empty means all queues for backwards-compatible low-level callers.
+	Queues []string
+}
+
+const (
+	// MaxClaimQueues bounds one claim filter so an authenticated remote caller
+	// cannot create an unbounded SQL statement.
+	MaxClaimQueues = 256
+	// MaxClaimLimit is the largest batch any worker may lease in one database
+	// transaction. It matches the PostgreSQL candidate scan hard cap.
+	MaxClaimLimit = 1000
+)
+
+func ValidateClaimLimit(limit int) error {
+	if limit <= 0 {
+		return fmt.Errorf("claim limit must be positive")
+	}
+	if limit > MaxClaimLimit {
+		return fmt.Errorf("claim limit exceeds %d jobs", MaxClaimLimit)
+	}
+	return nil
+}
+
+func ValidateClaimQueues(queues []string) error {
+	if len(queues) > MaxClaimQueues {
+		return fmt.Errorf("claim queue filter exceeds %d names", MaxClaimQueues)
+	}
+	for _, queue := range queues {
+		if queue == "" {
+			return fmt.Errorf("claim queue names must not be empty")
+		}
+	}
+	return nil
 }
 
 // Lease is the fencing token for one execution of one job. Owner alone is not

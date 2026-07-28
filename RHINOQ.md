@@ -13,9 +13,10 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow cho background w
 - Binary lịch sử `rhinoq-agent` chỉ là HTTP Gateway tùy chọn cho worker không
   phải Go. Nó không phải AI agent, không chạy model và không cần LLM.
 - CLI chính thức là `rhinoq`, không phải `npx rhinoq`.
-- TypeScript/NestJS snippets còn lại trong tài liệu này mô tả adapter/DX có thể
-  làm sau khi protocol ổn định; chúng không phải public contract v0.1 và không
-  được dùng thay cho README, `pkg/rhinoq`, feature matrix hoặc test hiện tại.
+- Node.js SDK preview hiện có producer SQL, typed Gateway client và high-level
+  worker. Package chưa phát hành npm. Các snippet NestJS/Context API còn lại là
+  DX proposal, không được dùng thay cho README, `sdks/node`, `pkg/rhinoq`,
+  feature matrix hoặc test hiện tại.
 
 ---
 
@@ -68,7 +69,7 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow cho background w
 - Go module: `github.com/rhinoq/rhinoq`
 - Public package: `github.com/rhinoq/rhinoq/pkg/rhinoq`
 - CLI: `rhinoq`
-- Config hiện tại: typed Go config + environment; YAML/TypeScript config chưa
+- Config hiện tại: typed Go config + environment; YAML/Node config chưa
   phải public contract
 - DB schema: `rhinoq`
 
@@ -1170,7 +1171,8 @@ jobID, err := queue.Enqueue(ctx, rhinoq.JobRequest{
 | `Handle` + `JobRequest` (Go) | **canonical v0.1** |
 | `rhinoq.enqueue()` | transactional producer interface cho ORM/ngôn ngữ khác |
 | HTTP Gateway | worker protocol tùy chọn cho non-Go |
-| TypeScript/NestJS adapter | future thin adapter; không sở hữu correctness |
+| `@rhinoq/node` preview | producer SQL + Gateway client + worker lifecycle; không sở hữu correctness |
+| NestJS adapter | future framework integration |
 | YAML/code generation | chưa phải public contract |
 
 > Không có một state machine thứ hai trong SDK. Lease, retry, Effect Ledger,
@@ -1210,10 +1212,12 @@ Protected Job dùng `job.Effect(...)` với idempotency key và confirmation pol
 explicit. API chính xác nằm trong `pkg/rhinoq/effect.go`; callback return chỉ
 được confirm khi policy khai báo điều đó.
 
-### 16.3 Context API tương lai
+### 16.3 Node API hiện tại và Context API tương lai
 
-Danh sách dưới đây là DX proposal cho TypeScript adapter, chưa phải Go API hiện
-tại:
+Node preview hiện dùng `PostgresProducer`, `RhinoQClient`,
+`RhinoQWorker.handle(...)`, `job.data`, `job.signal` và `job.effect(...)`.
+Danh sách dưới đây là DX proposal cho NestJS/Context adapter, chưa phải public
+API hiện tại:
 
 ```ts
 ctx.effect.run(name, options); // options gồm confirm + execute
@@ -1263,8 +1267,11 @@ confirm: (result) => result.status === "completed";
 RhinoQ phải phân biệt rõ ba trạng thái: **Request accepted** · **Effect confirmed** · **Outcome achieved**. Callback return không tự động chứng minh cả ba.
 
 API thủ công vẫn giữ cho trường hợp effect kéo dài qua nhiều bước hoặc confirm
-đến từ webhook. Trong Go v0.1, `job.Effect(...)` là helper public hiện có;
-`ctx.effect.run()` là tên proposal cho TypeScript adapter, không phải command/API
+đến từ webhook. Trong Go v0.1, `job.Effect(...)` là helper public hiện có.
+Node preview có `job.effect(...)` với cùng confirmation policy và
+`client.confirmEffect(...)` để ghi evidence từ webhook đã được application xác
+thực;
+`ctx.effect.run()` là tên proposal cho NestJS adapter, không phải command/API
 đã phát hành.
 
 ---
@@ -1614,6 +1621,11 @@ concurrency = 20 · đang chạy = 18 · available = 2 · prefetch = 1.5 → cla
 Claim 100 job khi chỉ chạy được 10 gây bốn vấn đề: 90 job bị giữ lease · worker khác không lấy được · fairness giảm · **lease có thể hết trước khi job kịp bắt đầu xử lý** — job bị coi là orphaned dù chẳng ai crash.
 
 `prefetch_factor` mặc định 1.5, tối đa 3. Chỉ tăng khi handler rất ngắn và DB latency cao.
+
+Candidate phải được lọc theo danh sách handler đã đăng ký **trước**
+`FOR UPDATE SKIP LOCKED`. Worker chuyên `generate-report` không được lấy
+`send-email`; filter tối đa 256 job names để tránh câu SQL không giới hạn.
+Go worker và Node worker hiện đều gửi registry names khi claim.
 
 `maxClaimBatch` (mục 27) là **hard cap bảo vệ database**, không phải batch size mục tiêu:
 
@@ -2783,7 +2795,8 @@ rhinoq.enqueue(
 **Permission theo job name:** role `rhinoq_producer_payments` chỉ enqueue được job trong nhóm payment. Một service bị compromise không enqueue được job của domain khác.
 
 **Thứ tự triển khai:** 1) Go embedded API → 2) HTTP protocol ổn định → 3)
-TypeScript reference client → 4) Python/Java/.NET chỉ khi có design partner.
+Node.js preview → 4) npm/CLI release → 5) Python/Java/.NET chỉ khi có design
+partner.
 
 > Không viết nhiều SDK trước khi protocol ổn định và chưa có người cam kết
 > maintain. Chi phí tăng theo số ngôn ngữ, không theo số tính năng.

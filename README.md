@@ -9,13 +9,14 @@
 </p>
 
 <p align="center">
-  Embedded Go · PostgreSQL · durable workers · integrity Rules · operator inbox
+  Go + Node.js preview · PostgreSQL · durable workers · integrity Rules · operator inbox
 </p>
 
 <p align="center">
   <a href="https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml"><img src="https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml"><img src="https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg" alt="Security" /></a>
   <img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.22+" />
+  <img src="https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22+" />
   <img src="https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 tested" />
   <img src="https://img.shields.io/badge/status-active_development-f59e0b" alt="Active development" />
 </p>
@@ -70,7 +71,30 @@ There is no required RhinoQ server. The optional binary currently named
 `rhinoq-agent` is an authenticated HTTP gateway for non-Go workers; it is not
 an AI agent and is not part of the default setup.
 
-## Quick start
+Choose the smallest integration that fits:
+
+| Application | Start here | Additional service |
+|---|---|---:|
+| Go producer and worker | embedded Go client | No |
+| Node.js producer | `PostgresProducer` using the existing `pg` pool/transaction | No |
+| Node.js worker | `RhinoQWorker` through the optional HTTP Gateway | Yes |
+| Another language, producer only | `SELECT rhinoq.enqueue(...)` | No |
+
+Node.js support is a tested development preview. The npm package is not
+published yet, so the README does not pretend `npm install @rhinoq/node`
+already works. See the [Node.js guide](./docs/nodejs.md) for source evaluation
+and current release blockers.
+
+Current language support is explicit:
+
+| Language path | Status |
+|---|---|
+| Go | authoritative engine, embedded workers and CLI |
+| JavaScript/TypeScript on Node.js 22+ | tested producer, worker and operator preview; source package only |
+| Other languages | transactional SQL enqueue only |
+| Python, Java and .NET workers | not implemented |
+
+## Go quick start
 
 ### 1. Install
 
@@ -154,6 +178,59 @@ func main() {
 
 `NewInMemory()` is available for unit tests and examples, but it loses every
 job when the process exits. Use `NewPostgres()` for durable work.
+
+## Node.js quick start
+
+After applying the migrations and registering the job name in
+`rhinoq.job_allowlist`, reuse the application's PostgreSQL pool. A Node
+producer needs no Gateway:
+
+```ts
+import pg from 'pg';
+import { PostgresProducer } from '@rhinoq/node';
+
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+const producer = new PostgresProducer({
+  query: (text, values) => pool.query(text, values),
+});
+
+const jobId = await producer.enqueue({
+  name: 'generate-report',
+  payload: { reportId: 'report_01' },
+  idempotencyKey: 'report:report_01',
+  correlationId: 'report_01',
+});
+```
+
+Pass the current transaction client instead of the pool to commit the business
+row and job together. Only introduce the HTTP Gateway when handlers must also
+run in Node.js:
+
+```ts
+import { RhinoQClient, RhinoQWorker } from '@rhinoq/node';
+
+const client = new RhinoQClient({
+  url: process.env.RHINOQ_GATEWAY_URL!,
+  token: process.env.RHINOQ_GATEWAY_TOKEN,
+});
+const worker = new RhinoQWorker({
+  client,
+  name: `reports-${process.pid}`,
+  concurrency: 4,
+});
+
+worker.handle<{ reportId: string }>('generate-report', async (job) => {
+  await reports.generate(job.data.reportId, { signal: job.signal });
+});
+
+await worker.run({ signal: shutdown.signal });
+```
+
+The Node worker negotiates protocol compatibility, heartbeats fenced leases,
+shuts down gracefully, and sends its exact handler names with every claim. It
+will not take jobs belonging to another worker type.
 
 ## Verify business state
 
@@ -285,8 +362,10 @@ confirmed, retry, and fail-closed behavior.
 | Mode | Extra process | Best fit |
 |---|---:|---|
 | **Embedded Go** | No | Go application owns producers and workers |
-| **Transactional SQL enqueue** | No | Any ORM needs to create a job in the same business transaction |
-| **Optional HTTP gateway** | Yes | A non-Go service must run the full worker protocol |
+| **Node.js `PostgresProducer`** | No | Node producer or transactional `pg` enqueue |
+| **Transactional SQL enqueue** | No | Any ORM/language creates a job in the same business transaction |
+| **Node.js `RhinoQWorker`** | Yes | Node handlers need the full worker protocol |
+| **Optional HTTP gateway** | Yes | A future non-Go SDK needs the full worker protocol |
 
 Migration `003_sql_enqueue.sql` installs `rhinoq.enqueue()`, with producer-role
 allowlists, payload limits, schema checks, and idempotency. See the
@@ -304,6 +383,8 @@ process.
 - Poison-job parking after repeated worker crashes.
 - Partial indexes for hot pending/admission paths.
 - Durable Rule cursors; only due enabled Rules are claimed.
+- Worker claims are filtered by registered job names before PostgreSQL locks
+  candidates.
 - Database time is authoritative for leases, delays, and rate windows.
 - Payload-free bounded operational list APIs.
 
@@ -342,7 +423,10 @@ Implemented and covered by automated tests:
 - unified Needs Attention inbox;
 - guarded replay and tamper-evident replay audit;
 - direct PostgreSQL migration, diagnostics, inspection, and control CLI;
-- transactional SQL enqueue and an optional authenticated HTTP gateway.
+- transactional SQL enqueue and an optional authenticated HTTP gateway;
+- Node.js producer, worker and operator preview with queue-filtered claims,
+  typed errors, external effect confirmation, request timeouts and graceful
+  shutdown.
 
 Still required before a stable release:
 
@@ -351,6 +435,7 @@ Still required before a stable release:
 - bounded `scan` onboarding;
 - retention/partition guidance, restore tests, fault-injection evidence;
 - reproducible performance benchmarks and external production evidence;
+- tagged `@rhinoq/node` package and prebuilt cross-platform CLI binaries;
 - stable public API, upgrade policy, and security review.
 
 See the [feature matrix](./docs/feature-matrix.md) and
@@ -374,7 +459,7 @@ internal/
   infrastructure/       configuration, health, migrations
 pkg/rhinoq/             public embedded Go API
 proto/rhinoq/v1/        versioned transport contracts
-sdks/typescript/        optional HTTP gateway client
+sdks/node/              Node producer, worker and operator preview
 tests/                  unit, integration, PostgreSQL, fault, benchmark gates
 docs/                   developer and operator documentation
 .ai/                    project memory and AI workflow controls
@@ -389,6 +474,7 @@ boundary.
 | Guide | Use it for |
 |---|---|
 | [Getting started](./docs/getting-started.md) | installation, migration, first durable worker |
+| [Node.js](./docs/nodejs.md) | producer-only SQL, Node worker, errors and tuning |
 | [Configuration](./docs/configuration.md) | environment and runtime tuning |
 | [PostgreSQL](./docs/postgres.md) | schema lifecycle, pools, query costs |
 | [Operations](./docs/operations.md) | queue controls, shutdown, rate limits |
@@ -397,17 +483,18 @@ boundary.
 | [Failure semantics](./docs/failure-semantics.md) | retry and Effect Ledger decisions |
 | [Optional HTTP gateway](./docs/agent.md) | non-Go worker integration; no AI/LLM |
 | [Competitive landscape](./docs/competitive-landscape.md) | product boundaries and primary sources |
+| [Adoption review](./docs/adoption-review.md) | installability, first-run UX and remaining blockers |
 | [Product specification](./RHINOQ.md) | detailed product and architecture contract |
 
 ## Development
 
-Requirements: Go 1.22+, PostgreSQL for real-database tests, and Node.js 22+ only
-when changing the TypeScript client.
+Requirements: Go 1.22+, PostgreSQL for real-database tests, and a supported
+Node.js 22+ release when changing the Node SDK. CI tests Node.js 22 and 24.
 
 ```bash
 go test ./... -count=1
 go vet ./...
-npm --prefix sdks/typescript run typecheck
+npm --prefix sdks/node test
 ```
 
 Run the CLI from source:

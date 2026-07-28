@@ -34,7 +34,8 @@ execution platforms.
 | Metrics export | Prometheus exporters | `/metrics` text format implemented, no client library dependency |
 | Health probes | not applicable | `/health/live` and `/health/ready` implemented separately |
 | Embedded operation | application-specific | Go library and direct PostgreSQL CLI are the default; no RhinoQ server, AI agent or LLM is required |
-| Polyglot workers | Node only | optional HTTP gateway with protocol negotiation and a language-neutral error envelope implemented |
+| Node.js producer | Node ecosystem | `PostgresProducer` preview uses the application's pool/transaction and the guarded SQL enqueue function; CI covers commit and rollback through real `pg` |
+| Polyglot workers | Node only | Node worker preview adds protocol negotiation, handler-filtered claim, heartbeat, cancellation and graceful shutdown through the optional HTTP gateway |
 | Transactional enqueue from any language | not applicable | `rhinoq.enqueue()` SQL function with job allowlist implemented and executed by the PostgreSQL suite |
 | Migration/diagnostics CLI | application-specific | read-only plan/status/SQL, explicit checksum-locked apply and database-aware doctor implemented |
 | UI | separate product | not implemented |

@@ -3,6 +3,10 @@
 RhinoQ mặc định chạy **embedded trong ứng dụng Go** và lưu state ở PostgreSQL.
 Bạn không cần Agent, LLM, control plane hay một server RhinoQ riêng.
 
+Nếu application dùng Node.js, xem [Node.js integration](./nodejs.md). Producer
+Node có thể enqueue trực tiếp trong transaction PostgreSQL và không cần
+Gateway; chỉ Node worker mới cần Gateway.
+
 > RhinoQ đang ở active development. Hãy pin version trong `go.mod`, review
 > migration và chỉ dùng ở môi trường kiểm soát cho tới khi có stable release.
 

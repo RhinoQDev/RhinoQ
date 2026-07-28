@@ -16,8 +16,11 @@
 - Không đoán business rule khi chưa có bằng chứng trong repository.
 - Không đưa claim throughput, latency hoặc reliability nếu chưa có benchmark/fault evidence.
 - Không để Domain biết database, framework, provider hoặc transport.
-- Go là ngôn ngữ authoritative cho engine/runtime; TypeScript chỉ là SDK/CLI developer-facing.
+- Go là ngôn ngữ authoritative cho engine/runtime; Node.js/TypeScript chỉ là
+  producer, worker-lifecycle và operator SDK developer-facing.
 - Không đưa correctness logic của lease, retry, effect ledger hoặc job state machine vào SDK.
+- SDK đa ngôn ngữ phải gửi danh sách handler khi claim và không được thực thi
+  job name chưa đăng ký.
 - Không bypass Application để gọi store trực tiếp từ CLI, Console hoặc adapter.
 - Mọi thay đổi public contract phải cập nhật docs, test và changelog phù hợp.
 - Mọi thay đổi user-visible hoặc tính năng mới phải cập nhật `README.md` trong

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,9 @@ func (r *HandlerRegistry) Register(name string, handler Handler) error {
 	if _, exists := r.handlers[name]; exists {
 		return fmt.Errorf("handler already registered: %s", name)
 	}
+	if len(r.handlers) >= ports.MaxClaimQueues {
+		return fmt.Errorf("worker may register at most %d handler names", ports.MaxClaimQueues)
+	}
 	r.handlers[name] = handler
 	return nil
 }
@@ -53,6 +57,7 @@ func (r *HandlerRegistry) Names() []string {
 	for name := range r.handlers {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -141,6 +146,9 @@ func New(config Config) (*Worker, error) {
 	if config.Store == nil || config.Handlers == nil {
 		return nil, errors.New("worker store and handlers are required")
 	}
+	if len(config.Handlers.Names()) == 0 {
+		return nil, errors.New("worker requires at least one registered handler")
+	}
 	if config.Owner == "" {
 		return nil, errors.New("worker owner is required: it is the identity written into every lease")
 	}
@@ -161,6 +169,9 @@ func New(config Config) (*Worker, error) {
 	}
 	if config.MaxClaimBatch <= 0 {
 		config.MaxClaimBatch = DefaultMaxClaimBatch
+	}
+	if err := ports.ValidateClaimLimit(config.MaxClaimBatch); err != nil {
+		return nil, fmt.Errorf("worker max claim batch: %w", err)
 	}
 	if config.MaxPollInterval < config.PollInterval {
 		config.MaxPollInterval = config.PollInterval * 10
@@ -256,6 +267,7 @@ func (w *Worker) claim(ctx context.Context, available int) ([]job.Record, error)
 	}
 	return w.store.Claim(ctx, ports.ClaimInput{
 		Owner: w.owner, Now: w.now(), Limit: limit, LeaseDuration: w.leaseDuration,
+		Queues: w.handlers.Names(),
 	})
 }
 

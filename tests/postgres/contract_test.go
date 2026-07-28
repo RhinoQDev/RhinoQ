@@ -67,6 +67,34 @@ func TestClaimOrdersByPriorityThenFirstIn(t *testing.T) {
 	}
 }
 
+func TestClaimFiltersQueuesBeforeTakingLocks(t *testing.T) {
+	client := newClient(t)
+	emailID := enqueue(t, client, rhinoq.JobRequest{
+		Name: "send-email", Payload: []byte("{}"),
+	})
+	enqueue(t, client, rhinoq.JobRequest{
+		Name: "resize-image", Payload: []byte("{}"), Priority: 100,
+	})
+
+	claimed, err := client.ClaimJobs(context.Background(), rhinoq.ClaimRequest{
+		Worker: "email-worker", Queues: []string{"send-email"},
+		Limit: 5, LeaseFor: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 || claimed[0].Job.ID != emailID {
+		t.Fatalf("worker must only lock its registered queues: %+v", claimed)
+	}
+	counts, err := client.JobCounts(context.Background(), "resize-image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["pending"] != 1 {
+		t.Fatalf("unhandled high-priority work must stay pending: %+v", counts)
+	}
+}
+
 func TestDelayedJobWaitsForItsTime(t *testing.T) {
 	client := newClient(t)
 	enqueue(t, client, rhinoq.JobRequest{Name: "later", Payload: []byte("{}"), RunAfter: time.Hour})

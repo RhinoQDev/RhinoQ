@@ -6,8 +6,11 @@
 > **Trạng thái:** đây là DX target, không phải feature matrix. Engine hiện viết
 > bằng Go; Rule SQL có tham số, Explain gate, Findings và scheduler cursor đã
 > có. `scan`, `introspect`, typed Rule builder, Console, webhook và auto-enqueue
-> vẫn là roadmap. Ví dụ TypeScript bên dưới chỉ là nghiên cứu API cũ và không
-> phải API canonical của repo Go.
+> vẫn là roadmap. Node.js hiện có producer, worker lifecycle và operator SDK
+> preview trong `sdks/node`, nhưng chưa phát hành lên npm. Các ví dụ TypeScript
+> về typed Rule builder bên dưới vẫn chỉ là nghiên cứu API, không phải API hiện
+> có. Mọi con số thời gian trong tài liệu này là mục tiêu usability chưa được
+> đo, không phải claim của sản phẩm.
 
 ---
 
@@ -17,20 +20,26 @@ Ba chỉ số, và chỉ ba. Mọi quyết định DX trong file này phục v�
 
 | Chỉ số | Mục tiêu | Vì sao |
 | --- | --- | --- |
-| **Thời gian tới phát hiện đầu tiên** | **< 60 giây**, không cài gì | quyết định người ta có thử tiếp không |
-| **Thời gian tới rule thứ hai** | < 10 phút | **đây là vạch hoà vốn** |
-| Thời gian xử lý một finding | < 30 giây | quyết định họ có quay lại không |
+| **Thời gian tới phát hiện đầu tiên** | cần đo sau khi `scan` tồn tại; mục tiêu thử nghiệm ≤ 5 phút sau khi cài CLI | quyết định người ta có thử tiếp không |
+| **Thời gian tới rule thứ hai** | mục tiêu thử nghiệm < 10 phút, chưa kiểm chứng | kiểm tra liệu abstraction có thật sự giảm công sức lặp lại |
+| Thời gian xử lý một finding | mục tiêu thử nghiệm < 30 giây khi Console tồn tại | quyết định họ có quay lại không |
 
 ### 1.1 Vì sao rule thứ hai mới là vạch quan trọng
 
-Người tự viết cron mất 1–2 giờ cho rule đầu, và **mất đúng 1–2 giờ nữa** cho rule thứ hai — không có tính kinh tế theo quy mô. RhinoQ mất ~15 phút cho rule đầu (gồm cả setup) nhưng **10 phút cho mọi rule sau**.
+Giả thuyết cần kiểm chứng là chi phí tự viết cron tăng gần tuyến tính theo số
+rule, trong khi một Rule abstraction tốt tái sử dụng được lifecycle, evidence,
+dedup và operator workflow. Chưa có nghiên cứu usability nào chứng minh RhinoQ
+đạt các mốc thời gian cụ thể.
 
 ```
-Tự làm:   rule 1: 90'   rule 2: 90'   rule 3: 90'   → 270'
-RhinoQ:   setup: 30'    rule 1: 15'   rule 2: 10'   rule 3: 10'  → 65'
+Tự làm:   mỗi rule lặp lại query + schedule + dedup + audit + thao tác xử lý
+RhinoQ:   setup ban đầu + khai báo thêm rule trên cùng lifecycle dùng chung
 ```
 
-Vạch hoà vốn nằm giữa rule 2 và 3. **Người dùng dừng lại ở rule 1 là người dùng đã mất.** Toàn bộ thiết kế onboarding dưới đây tồn tại để đẩy họ qua vạch đó ngay trong lần chạy đầu tiên, thay vì hy vọng họ quay lại.
+Điểm hoà vốn thực tế phải được đo với người dùng thật. Toàn bộ thiết kế
+onboarding dưới đây nhằm giúp họ tạo nhiều hơn một rule trong lần đánh giá đầu
+tiên để kiểm tra giá trị tái sử dụng, thay vì mặc định giá trị đó đã được chứng
+minh.
 
 **Hệ quả trực tiếp:** `scan` phải sinh **2–3 rule cùng lúc**, không phải 1.
 
@@ -133,12 +142,12 @@ defineRule('credit-must-balance', {
 
 ---
 
-## 3. Onboarding — 60 giây đầu tiên
+## 3. Onboarding mục tiêu — roadmap, phải đo
 
-### 3.1 Bước 1: giá trị trước khi cài
+### 3.1 Bước 1: giá trị trước khi đổi queue
 
 ```
-$ npx rhinoq scan --db postgres://...
+$ rhinoq scan --db postgres://...   # planned; chưa được triển khai
 
   Quét 3 bảng có job trỏ vào
 
@@ -151,7 +160,9 @@ $ npx rhinoq scan --db postgres://...
   → rhinoq init --from-scan     sinh 2 rule từ phát hiện trên
 ```
 
-Không cài, không config, không đổi queue. Chạy được cả trên hệ thống đang dùng BullMQ hoặc pg-boss.
+Người dùng vẫn phải cài CLI và cấp kết nối PostgreSQL read-only, nhưng không
+phải đổi queue hoặc sửa application để thử bước scan. Mục tiêu là chạy được cả
+trên hệ thống đang dùng BullMQ hoặc pg-boss; khả năng này chưa được phát hành.
 
 **Ba ràng buộc bắt buộc:**
 
@@ -238,9 +249,12 @@ open → acknowledged → resolved
 - `resolved` **tự động** khi rule pass lại. Không bắt người dùng bấm
 - `suppressed` bắt buộc có lý do và hạn — hết hạn thì mở lại, tránh việc giấu vấn đề vĩnh viễn
 
-### 4.4 Xử lý trong 30 giây
+### 4.4 Mục tiêu xử lý trong 30 giây
 
-Từ Console hoặc CLI, một finding phải làm được ngay ba việc: xem timeline (mục 6), enqueue job bù, hoặc suppress kèm lý do. Không có bước trung gian, không có form nhiều trường.
+Khi Console tồn tại, usability test phải kiểm tra người dùng có thể xử lý một
+finding trong 30 giây hay không. Từ Console hoặc CLI, một finding cần làm được
+ngay ba việc: xem timeline (mục 6), enqueue job bù, hoặc suppress kèm lý do.
+Không có bước trung gian, không có form nhiều trường.
 
 ```
 $ rhinoq findings --rule order-must-provision

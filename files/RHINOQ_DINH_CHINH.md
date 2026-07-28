@@ -7,6 +7,11 @@
 > dependency workflows, rate limiting, priority và DLQ. Lợi thế của RhinoQ là
 > cách đóng gói business invariant + Finding + outside-in recovery, không phải
 > độc quyền SQL hay giả định đối thủ “không có console”.
+>
+> **Trạng thái triển khai:** Go là engine và CLI chính thức. `sdks/node` là SDK
+> preview chưa phát hành npm. `scan`, `suggest`, generated Rule builder và
+> Console chưa tồn tại. Mọi mốc thời gian trong file này là mục tiêu usability
+> cần đo với người dùng thật, không phải claim hiện tại.
 
 ---
 
@@ -28,7 +33,7 @@ Hai hệ quả sai lệch:
 ## 2. Khung đúng
 
 > **Bốn lớp COMMIT · RUN · VERIFY · RECOVER là sản phẩm.**
-> **RECOVER là cửa vào, vì nó demo được trong 30 giây.**
+> **RECOVER là cửa vào vì có tiềm năng demo ngắn; thời gian thực tế phải được đo.**
 
 Không phải: *RECOVER là sản phẩm, ba lớp kia là hạ tầng.*
 
@@ -135,7 +140,8 @@ Thay thế mục 10.2 file chiến lược. Bốn tín hiệu, không phải m�
 >
 > - COMMIT và RUN là **giá trị âm thầm** — không ai khen, nhưng thiếu là mất người. Bar: ngang pg-boss
 > - VERIFY và RECOVER là **giá trị nhìn thấy được** — RhinoQ phải đóng gói chúng tốt hơn cron/SQL/admin rời rạc
-> - **RECOVER là cửa vào** vì nó demo được trong 30 giây
+> - **RECOVER là cửa vào** vì có tiềm năng tạo bằng chứng dùng thử nhanh; chưa
+>   công bố thời gian cho tới khi có usability benchmark
 >
 > Sai lầm về thứ tự trong `RHINOQ.md` bản gốc vẫn phải sửa: differentiator lên sóng tuần 8, không phải tháng 12. Nhưng "lên sóng sớm" không có nghĩa "ba lớp kia là phụ".
 
@@ -192,7 +198,7 @@ Ba chỉ số hiện tại chỉ đo lớp RECOVER. Thêm hai:
 
 | Chỉ số | Mục tiêu | Lớp |
 | --- | --- | --- |
-| Thời gian tới job đầu tiên chạy được | **< 10 phút** từ cài CLI/Go module | COMMIT + RUN |
+| Thời gian tới job đầu tiên chạy được | mục tiêu thử nghiệm < 10 phút từ khi có binary/package phát hành; chưa đo | COMMIT + RUN |
 | Deploy không để lại job orphaned | 100%, không cần cấu hình gì | RUN |
 
 Chỉ số thứ hai đáng nói riêng: **graceful shutdown phải đúng theo mặc định**, không phải một tuỳ chọn người dùng phải bật. Đây là DX quan trọng nhất của lớp RUN, và nó vô hình — người dùng chỉ nhận ra khi nó thiếu.
@@ -212,14 +218,20 @@ Mục 3 hiện tại chỉ có một đường: `scan` → `init --from-scan`. �
 
 Thêm mục **3.5 — Đường vào bằng queue**:
 
-```
-$ npm i rhinoq && npx rhinoq init --apply
-$ rhinoq dev
-  ✓ worker · console · 0 rule
+Đường hiện có để đánh giá từ source:
 
-  Chưa có rule nào. Chạy `rhinoq suggest` để xem RhinoQ tìm được gì
-  trong database của bạn.
+```bash
+go run ./cmd/rhinoq migrate plan
+go run ./cmd/rhinoq migrate apply
+go run ./cmd/rhinoq doctor --ci
+
+npm --prefix sdks/node ci
+npm --prefix sdks/node test
 ```
+
+Mục tiêu phân phối tương lai là một binary `rhinoq` versioned và package
+`@rhinoq/node` versioned. `rhinoq dev`, `rhinoq suggest` và Console trong ví dụ
+cũ vẫn là roadmap; không được đưa chúng vào README như lệnh hiện có.
 
 Người vào bằng queue **không bị ép** viết rule. Họ có thể bắt đầu bằng
 COMMIT/RUN và tự khám phá VERIFY/RECOVER khi sẵn sàng. `rhinoq suggest` là giả

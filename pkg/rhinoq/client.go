@@ -105,39 +105,39 @@ type JobQuery struct {
 }
 
 type JobSummary struct {
-	ID              string
-	Name            string
-	State           string
-	Class           string
-	Priority        int
-	Attempts        int
-	CrashCount      int
-	BlockedReason   string
-	CorrelationID   string
-	CreatedAt       time.Time
-	NotBefore       time.Time
-	CancelRequested bool
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	State           string    `json:"state"`
+	Class           string    `json:"class"`
+	Priority        int       `json:"priority"`
+	Attempts        int       `json:"attempts"`
+	CrashCount      int       `json:"crashCount"`
+	BlockedReason   string    `json:"blockedReason,omitempty"`
+	CorrelationID   string    `json:"correlationId,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	NotBefore       time.Time `json:"notBefore"`
+	CancelRequested bool      `json:"cancelRequested"`
 }
 
 type AttentionItem struct {
-	Kind        string
-	JobID       string
-	Queue       string
-	JobState    string
-	ReferenceID string
-	Reason      string
-	ObservedAt  time.Time
+	Kind        string    `json:"kind"`
+	JobID       string    `json:"jobId,omitempty"`
+	Queue       string    `json:"queue,omitempty"`
+	JobState    string    `json:"jobState,omitempty"`
+	ReferenceID string    `json:"referenceId,omitempty"`
+	Reason      string    `json:"reason"`
+	ObservedAt  time.Time `json:"observedAt"`
 }
 
 type AuditRecord struct {
-	ID         string
-	JobID      string
-	Action     string
-	Actor      string
-	Reason     string
-	OccurredAt time.Time
-	PrevHash   string
-	RowHash    string
+	ID         string    `json:"id"`
+	JobID      string    `json:"jobId"`
+	Action     string    `json:"action"`
+	Actor      string    `json:"actor"`
+	Reason     string    `json:"reason"`
+	OccurredAt time.Time `json:"occurredAt"`
+	PrevHash   string    `json:"prevHash,omitempty"`
+	RowHash    string    `json:"rowHash"`
 }
 
 // AttemptEvent is one immutable fact in a job's execution timeline.

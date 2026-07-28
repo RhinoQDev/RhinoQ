@@ -19,6 +19,7 @@ const ProtocolVersion = "1.0"
 // Capabilities the Agent implements.
 var ServerCapabilities = []string{
 	"enqueue", "claim", "heartbeat", "fencing", "cancel", "effect", "batch-claim",
+	"queue-filter",
 }
 
 // RequiredClientCapabilities are the things an SDK must do itself. Without
@@ -28,7 +29,7 @@ var RequiredClientCapabilities = []string{"claim", "heartbeat", "fencing"}
 
 // OptionalClientCapabilities may be missing. The connection still works, but
 // the Agent says exactly what is turned off.
-var OptionalClientCapabilities = []string{"cancel", "effect", "batch-claim"}
+var OptionalClientCapabilities = []string{"cancel", "effect", "batch-claim", "queue-filter"}
 
 // Handshake is what an SDK sends when it connects.
 type Handshake struct {
@@ -138,6 +139,8 @@ func degradationEffect(disabled []string) string {
 			effects = append(effects, "external effects are not recorded, so uncertainty cannot be detected")
 		case "batch-claim":
 			effects = append(effects, "jobs are claimed one at a time")
+		case "queue-filter":
+			effects = append(effects, "the worker may receive job names it does not handle")
 		}
 	}
 	return strings.Join(effects, "; ")

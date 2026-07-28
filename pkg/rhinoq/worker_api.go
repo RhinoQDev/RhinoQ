@@ -41,6 +41,9 @@ type ClaimRequest struct {
 	Limit int `json:"limit"`
 	// LeaseFor is how long the claim is valid. Defaults to one minute.
 	LeaseFor time.Duration `json:"leaseForMs"`
+	// Queues restricts this worker to job names for which it has handlers.
+	// Empty keeps the low-level all-queues behavior for compatibility.
+	Queues []string `json:"queues,omitempty"`
 }
 
 // LeaseState is what a heartbeat learns.
@@ -117,12 +120,20 @@ func (c *Client) ClaimJobs(ctx context.Context, request ClaimRequest) ([]LeasedJ
 	if request.Limit <= 0 {
 		request.Limit = 1
 	}
+	if err := ports.ValidateClaimLimit(request.Limit); err != nil {
+		return nil, err
+	}
 	if request.LeaseFor <= 0 {
 		request.LeaseFor = time.Minute
+	}
+	request.Queues = uniqueStrings(request.Queues)
+	if err := ports.ValidateClaimQueues(request.Queues); err != nil {
+		return nil, err
 	}
 	records, err := c.store.Claim(ctx, ports.ClaimInput{
 		Owner: request.Worker, Now: time.Now().UTC(),
 		Limit: request.Limit, LeaseDuration: request.LeaseFor,
+		Queues: request.Queues,
 	})
 	if err != nil {
 		return nil, err
@@ -138,6 +149,22 @@ func (c *Client) ClaimJobs(ctx context.Context, request ClaimRequest) ([]LeasedJ
 		})
 	}
 	return leased, nil
+}
+
+func uniqueStrings(values []string) []string {
+	if len(values) < 2 {
+		return append([]string(nil), values...)
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // Heartbeat extends a lease and reports whether the job has been cancelled, in

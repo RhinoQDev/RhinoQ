@@ -2,6 +2,7 @@ package unit
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -40,5 +41,35 @@ func TestPublicClientRejectsNegativeRunAfter(t *testing.T) {
 		Name: "demo", Payload: []byte("{}"), RunAfter: -time.Second,
 	}); err == nil {
 		t.Fatal("negative run-after must be rejected instead of using ambiguous wall-clock behavior")
+	}
+}
+
+func TestPublicClientRefusesToRunWithoutHandlers(t *testing.T) {
+	client := rhinoq.NewInMemory()
+	if err := client.Run(context.Background()); err == nil {
+		t.Fatal("a worker without handlers must not claim arbitrary queues")
+	}
+}
+
+func TestPublicClientCapsRemoteClaimBatches(t *testing.T) {
+	client := rhinoq.NewInMemory()
+	if _, err := client.ClaimJobs(context.Background(), rhinoq.ClaimRequest{
+		Worker: "oversized-worker",
+		Limit:  1001,
+	}); err == nil {
+		t.Fatal("a remote worker must not create an unbounded claim transaction")
+	}
+}
+
+func TestPublicClientCapsHandlerNamesPerWorker(t *testing.T) {
+	client := rhinoq.NewInMemory()
+	handler := func(context.Context, rhinoq.Job) error { return nil }
+	for index := 0; index < 256; index++ {
+		if err := client.Handle(fmt.Sprintf("job-%03d", index), handler); err != nil {
+			t.Fatalf("register handler %d: %v", index, err)
+		}
+	}
+	if err := client.Handle("job-overflow", handler); err == nil {
+		t.Fatal("a worker must not build an unbounded queue filter")
 	}
 }

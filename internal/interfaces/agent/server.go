@@ -115,6 +115,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /v1/leases/release", s.guard(s.handleRelease))
 	mux.HandleFunc("POST /v1/effects/begin", s.guard(s.handleBeginEffect))
 	mux.HandleFunc("POST /v1/effects/resolve", s.guard(s.handleResolveEffect))
+	mux.HandleFunc("POST /v1/effects/confirm", s.guard(s.handleConfirmEffect))
 
 	// Operator surface.
 	mux.HandleFunc("GET /v1/queues/{name}/counts", s.guard(s.handleCounts))
@@ -492,9 +493,10 @@ func (s *Server) handleAttempts(w http.ResponseWriter, r *http.Request) {
 }
 
 type claimRequest struct {
-	Worker     string `json:"worker"`
-	Limit      int    `json:"limit,omitempty"`
-	LeaseForMs int64  `json:"leaseForMs,omitempty"`
+	Worker     string   `json:"worker"`
+	Limit      int      `json:"limit,omitempty"`
+	LeaseForMs int64    `json:"leaseForMs,omitempty"`
+	Queues     []string `json:"queues,omitempty"`
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
@@ -505,6 +507,7 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	jobs, err := s.client.ClaimJobs(r.Context(), rhinoq.ClaimRequest{
 		Worker: request.Worker, Limit: request.Limit,
 		LeaseFor: time.Duration(request.LeaseForMs) * time.Millisecond,
+		Queues:   request.Queues,
 	})
 	if err != nil {
 		s.fail(w, err)
@@ -588,6 +591,13 @@ type effectRequest struct {
 	Outcome   string               `json:"outcome,omitempty"`
 }
 
+type confirmEffectRequest struct {
+	JobID     string `json:"jobId"`
+	Name      string `json:"name"`
+	Key       string `json:"key"`
+	Reference string `json:"reference"`
+}
+
 func (s *Server) handleBeginEffect(w http.ResponseWriter, r *http.Request) {
 	var request effectRequest
 	if !decode(w, r, &request) {
@@ -611,6 +621,29 @@ func (s *Server) handleResolveEffect(w http.ResponseWriter, r *http.Request) {
 		outcome = rhinoq.EffectSucceeded
 	}
 	result, err := s.client.ResolveEffect(r.Context(), request.Lease, request.Effect, request.Reference, outcome)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleConfirmEffect(w http.ResponseWriter, r *http.Request) {
+	var request confirmEffectRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	if request.JobID == "" || request.Name == "" || request.Key == "" || request.Reference == "" {
+		s.fail(w, errors.New("effect confirmation requires jobId, name, key and reference"))
+		return
+	}
+	result, err := s.client.ConfirmEffect(
+		r.Context(),
+		request.JobID,
+		request.Name,
+		request.Key,
+		request.Reference,
+	)
 	if err != nil {
 		s.fail(w, err)
 		return

@@ -2,7 +2,9 @@
 
 Tài liệu này là blueprint triển khai cho RhinoQ. `RHINOQ.md` mô tả product/architecture spec; file này mô tả cách chia module, dependency, runtime và lộ trình scale để hệ thống còn dễ sửa chữa, nâng cấp.
 
-**Quyết định ngôn ngữ:** Go là authoritative engine/runtime. TypeScript là SDK, CLI developer-facing và adapter cho ứng dụng Node.js. Correctness không nằm trong SDK.
+**Quyết định ngôn ngữ:** Go là authoritative engine/runtime và cũng là nơi
+triển khai CLI chính thức. Node.js/TypeScript là SDK preview cho producer,
+worker lifecycle và operator API. Correctness không nằm trong SDK.
 
 ## 1. Nguyên tắc nền
 
@@ -257,20 +259,26 @@ effect confirmed hoặc execution complete
 
 ## 6. Ranh giới triển khai
 
-### V0.1 — Go modular monolith + TypeScript SDK
+### V0.1 — Go authoritative engine + Node.js preview
 
-Chạy một codebase và hai process:
+Có ba deployment path, không ép mọi người dùng cùng một topology:
 
-- Go Agent/Worker/Runtime
-- TypeScript SDK làm Producer client
-- PostgreSQL dùng chung
-- Console API có thể nằm trong Agent process
+- Go producer/worker dùng embedded `pkg/rhinoq` và PostgreSQL, không cần
+  Gateway;
+- Node producer dùng `PostgresProducer` trên pool/transaction hiện có, không
+  cần Gateway;
+- Node worker/operator dùng `RhinoQWorker`/`RhinoQClient` qua HTTP Gateway.
 
-Đây là cấu hình mặc định. Tách module bằng code boundary trước, chưa tách network boundary.
+Go giữ authoritative state transition, lease/fencing, retry decision và Effect
+Ledger. Node SDK chỉ điều phối wire lifecycle và không tự quyết định job state.
+Tách module bằng code boundary trước, chỉ thêm network boundary khi worker
+không viết bằng Go.
 
 ### V0.2 — Scale Go worker
 
-Scale ngang Go worker theo queue/resource class. TypeScript app chỉ gọi protocol; không chạy correctness logic trong process ứng dụng.
+Scale ngang worker theo queue/resource class. Mỗi worker gửi danh sách handler;
+PostgreSQL lọc queue trước khi khóa candidate. Node app chỉ gọi protocol hoặc
+SQL enqueue, không chạy authoritative correctness logic trong process ứng dụng.
 
 ```text
 API replicas  → PostgreSQL
@@ -289,7 +297,8 @@ Khi Console, reconciliation hoặc query history ảnh hưởng workload chính:
 
 ### V1 — SDK đa ngôn ngữ
 
-Agent đã là Go core từ v0.1. Chỉ thêm Python/Java/.NET SDK khi có nhu cầu; các SDK chỉ nói protocol, correctness vẫn nằm ở Agent authoritative service.
+Gateway đã là Go core từ v0.1. Chỉ thêm Python/Java/.NET SDK khi có nhu cầu;
+các SDK chỉ nói protocol, authoritative correctness vẫn nằm ở Go engine.
 
 ## 7. Chiến lược dữ liệu
 
@@ -342,6 +351,8 @@ Không gọi hệ thống “production-ready” nếu chưa có fault-test logs
 - Effect Ledger và Outcome contract là module lõi, nhưng chỉ bật theo job/effect cần thiết.
 - Control plane chỉ quan sát và yêu cầu action qua application command.
 - Go modular monolith là điểm bắt đầu; tách process/service là bước scale có điều kiện.
-- TypeScript SDK không được chứa job state machine, lease, retry engine hoặc Effect Ledger correctness.
+- Node SDK không được chứa job state machine, retry decision hoặc Effect Ledger
+  correctness; worker lifecycle chỉ renew/carry fencing token và báo
+  observation về Go engine.
 
 Với mô hình này, thay PostgreSQL, provider, ORM, transport, Console hoặc ngôn ngữ SDK không buộc phải viết lại Domain và Application. Đó là boundary quan trọng nhất để RhinoQ có thể scale mà vẫn sửa chữa được.

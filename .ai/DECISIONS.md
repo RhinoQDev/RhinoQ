@@ -7,15 +7,29 @@
 - **Reason:** giảm network failure và chi phí vận hành, vẫn giữ module boundary để scale sau.
 - **Rollback:** có thể tách module thành package/service mà không đổi domain contract.
 
-## ADR-0004 — Go authoritative engine, TypeScript SDK
+## ADR-0004 — Go authoritative engine, Node.js SDK
 
 - **Status:** accepted
 - **Decision:** Go sở hữu embedded client, HTTP Gateway, worker, scheduler,
-  lease, retry và correctness; TypeScript chỉ cung cấp thin client cho ứng
-  dụng Node.js cần Gateway.
+  lease, retry và correctness; Node.js SDK cung cấp producer SQL, HTTP client
+  và worker lifecycle nhưng không tự quyết định state transition.
 - **Reason:** runtime hạ tầng cần binary độc lập, concurrency, resource control và hỗ trợ đa ngôn ngữ.
 - **Constraint:** mọi giao tiếp qua versioned protocol; SDK không tự thực thi business state machine.
 - **Rollback:** giữ protocol ổn định để thay client hoặc runtime mà không đổi public contract.
+
+## ADR-0011 — Worker claim phải lọc theo handler đã đăng ký
+
+- **Status:** accepted
+- **Context:** claim toàn cục cho phép worker chuyên một job name lấy nhầm job
+  của worker khác, gây permanent failure giả và lock contention.
+- **Decision:** `ClaimInput`/HTTP claim nhận tối đa 256 queue names; memory và
+  PostgreSQL adapter lọc trước khi lease. Go và Node worker luôn gửi registry
+  names. SDK release job lạ nếu Gateway cũ không hỗ trợ filter.
+- **Consequences:** worker heterogeneous có thể dùng chung store an toàn hơn;
+  low-level caller để filter rỗng vẫn giữ hành vi all-queues tương thích.
+- **Rollback:** bỏ filter khỏi caller sẽ quay về all-queues nhưng không cần đổi
+  schema.
+- **Owner:** engine + SDK
 
 ## ADR-0002 — PostgreSQL là authoritative store mặc định
 

@@ -8,6 +8,12 @@
 > phẩm; RECOVER chỉ là cửa vào dễ demo. Các claim tuyệt đối phía dưới về đối thủ
 > được thay bằng giả thuyết cần kiểm chứng. pg-boss hiện có dashboard,
 > dependency workflows, rate limiting, priority và DLQ.
+>
+> **Trạng thái triển khai 2026-07-28:** CLI chính thức viết bằng Go. Node.js có
+> SDK preview trong `sdks/node` nhưng chưa phát hành npm. `rhinoq scan`,
+> generated Rule builder và Console vẫn thuộc roadmap. Các mốc “30 giây” trong
+> nghiên cứu này là mục tiêu usability cần đo, không phải hiệu năng đã chứng
+> minh; các lệnh `npx rhinoq` cũ không phải API được hỗ trợ.
 
 ---
 
@@ -172,12 +178,14 @@ Phản biện mạnh nhất: *"query đó tôi tự viết 50 dòng, cần gì l
 
 Đây là lý do library tồn tại. Không phải query.
 
-### 3.4 `rhinoq scan` — cửa vào, và là lead magnet
+### 3.4 `rhinoq scan` — cửa vào dự kiến, và là lead magnet cần kiểm chứng
 
-Zero-config. Không cần rule, không cần đổi queue, không cần cài gì vào app.
+Không cần rule, không cần đổi queue hoặc nhúng RhinoQ vào application. Người
+dùng vẫn phải cài CLI và cấp kết nối PostgreSQL read-only. Chức năng này chưa
+được triển khai.
 
 ```
-$ npx rhinoq scan --db postgres://...
+$ rhinoq scan --db postgres://...   # planned; chưa được triển khai
 
   Tìm thấy 3 bảng có job trỏ vào (qua correlation hoặc tên cột)
 
@@ -197,7 +205,10 @@ $ npx rhinoq scan --db postgres://...
 
 1. **Giải vấn đề "ai viết rule?"** (mục 59.1 bản gốc bỏ ngỏ). Người dùng không viết rule từ trang trắng — họ **xác nhận** rule tool đề xuất. Khác biệt giữa 5% và 60% tỷ lệ hoàn thành onboarding.
 2. **Chạy được trên hệ thống đang dùng BullMQ/pg-boss.** Bằng chứng thay cho lời hứa (nguyên tắc 7). Không cần đổi queue để thấy giá trị.
-3. **Là nội dung marketing tự chạy.** `npx rhinoq scan` ra kết quả thật về hệ thống thật trong 30 giây — đó là thứ lên được Hacker News, không phải một bài blog về kiến trúc.
+3. **Có thể trở thành nội dung marketing tự chạy.** Nếu `rhinoq scan` cho kết
+   quả hữu ích trên hệ thống thật trong một usability test ngắn, output đó có
+   sức thuyết phục hơn một bài blog về kiến trúc. Thời gian và tỷ lệ phát hiện
+   đúng phải được đo trước khi dùng làm claim.
 
 **Giới hạn phạm vi — quan trọng:** chỉ quét bảng **có job trỏ vào**. Không quét toàn bộ database. Quét 34 bảng ngẫu nhiên thì RhinoQ thành công cụ giám sát Postgres nói chung, lạc khỏi định vị và cạnh tranh với thứ nó không nên cạnh tranh.
 
@@ -351,7 +362,7 @@ Câu 4 kiểm tra giả định ở 2.4 — rằng người dùng pg-boss đang 
 
 | Kênh | Nội dung | Vì sao |
 | --- | --- | --- |
-| **`npx rhinoq scan`** | tự nó là marketing | cho kết quả thật trong 30 giây, không cần cài gì. Đây là kênh mạnh nhất |
+| **`rhinoq scan` (planned)** | có thể tự tạo bằng chứng dùng thử | chỉ trở thành kênh mạnh khi đo được thời gian hoàn thành, độ an toàn và độ hữu ích trên database thật |
 | **Trang so sánh** | *RhinoQ vs pg-boss*, *vs BullMQ* — trung thực, nói cả chỗ mình thua | người ta search đúng cụm từ này. SEO thật sự hiệu quả cho dev tool |
 | **2 bài blog về loại sự cố** | *"Your job queue can't see the work that never entered it"* · *"Job completed is not the same as work done"* | không nhắc RhinoQ ở nửa đầu bài |
 | **HN / r/node / r/PostgreSQL** | đăng bài blog, không đăng sản phẩm | "Show HN: sản phẩm mới" chết nhanh; bài kỹ thuật sống lâu |

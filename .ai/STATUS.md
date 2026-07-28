@@ -7,11 +7,11 @@ differentiator.
 | Area | Status | Evidence and remaining work |
 |---|---:|---|
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
-| RUN | 11/11 | claim, lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
+| RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
 | VERIFY | 4/5 | fenced Effect Ledger, versioned Rules, Explain gate, bounded evaluation and crash-safe periodic scheduling exist; external execution correlation and signal-first verification remain |
 | RECOVER | 5/6 | Rule observations manage persistent Findings and Needs Attention merges live Findings with execution/effect/outcome attention; the business-key timeline remains |
 | ADOPTION | 0/4 | observe-only ingestion, an existing-queue recipe, business-key verification command and no-cutover quickstart remain |
-| DX | 6/8 | embedded quickstart, direct PostgreSQL migration/doctor/operations CLI, `rhinoq explain`, optional HTTP Gateway and thin TypeScript client exist; scan, Console and framework integration remain |
+| DX | 7/9 | embedded Go quickstart, direct PostgreSQL migration/doctor/operations CLI, `rhinoq explain`, optional HTTP Gateway, and tested Node producer/worker/operator preview exist; npm/CLI releases, scan, Console and framework integration remain |
 | Infrastructure | 9/11 | configuration, health, metrics, checksum-tracked migration runner, real PostgreSQL tests, Rule budgets, audit chain, DB clock and SQL enqueue exist; fault injection, retention/partitioning, restricted Rule role and benchmark evidence remain |
 
 ## Estimates
@@ -32,6 +32,8 @@ its code, tests, documentation and evidence agree.
   implemented.
 - The optional HTTP Gateway lacks gRPC/Unix-socket transport, tenant isolation
   and HTTP-layer job RBAC.
+- The Node SDK is tested from source but has no tagged npm release; non-Go
+  adopters still need a separately distributed `rhinoq` CLI binary.
 - Needs Attention is unified, but business Findings still have no explicit
   source-system/job/queue correlation and therefore cannot be safely included
   in a queue-filtered view.

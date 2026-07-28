@@ -269,13 +269,19 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	if input.Owner == "" || input.Limit <= 0 || input.LeaseDuration <= 0 {
 		return nil, errors.New("claim requires an owner, a positive limit and a lease duration")
 	}
+	if err := ports.ValidateClaimLimit(input.Limit); err != nil {
+		return nil, err
+	}
+	if err := ports.ValidateClaimQueues(input.Queues); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 
-	candidates, err := s.lockCandidates(ctx, tx, input.Limit)
+	candidates, err := s.lockCandidates(ctx, tx, input.Limit, input.Queues)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +376,12 @@ type claimCandidate struct{ id, queue string }
 // lockCandidates over-fetches on purpose: a queue whose rate window saturates
 // mid-batch would otherwise return an empty claim and let its jobs, which sort
 // first, starve every other queue on the next poll.
-func (s *JobStore) lockCandidates(ctx context.Context, tx *sql.Tx, limit int) ([]claimCandidate, error) {
+func (s *JobStore) lockCandidates(
+	ctx context.Context,
+	tx *sql.Tx,
+	limit int,
+	queues []string,
+) ([]claimCandidate, error) {
 	candidateLimit := limit * 4
 	if candidateLimit > maxClaimCandidates {
 		candidateLimit = maxClaimCandidates
@@ -378,22 +389,38 @@ func (s *JobStore) lockCandidates(ctx context.Context, tx *sql.Tx, limit int) ([
 	if candidateLimit < limit {
 		candidateLimit = limit
 	}
-	rows, err := tx.QueryContext(ctx, `
+	var query strings.Builder
+	query.WriteString(`
 		SELECT j.id, j.name
 		FROM rhinoq_jobs j
 		LEFT JOIN rhinoq_queue_controls qc ON qc.queue_name = j.name
 		WHERE j.state IN ('pending', 'retry_wait')
 		  AND j.not_before <= now()
-		  AND qc.paused_at IS NULL
+		  AND qc.paused_at IS NULL`)
+	args := []any{candidateLimit}
+	if len(queues) > 0 {
+		query.WriteString(`
+		  AND j.name IN (`)
+		for index, queue := range queues {
+			if index > 0 {
+				query.WriteString(", ")
+			}
+			args = append(args, queue)
+			fmt.Fprintf(&query, "$%d", len(args))
+		}
+		query.WriteByte(')')
+	}
+	query.WriteString(`
 		  AND (
 		      qc.rate_limit_max IS NULL
 		      OR qc.rate_window_started_at IS NULL
 		      OR qc.rate_window_started_at + (qc.rate_limit_window_ms * interval '1 millisecond') <= now()
 		      OR qc.rate_window_count < qc.rate_limit_max
 		  )
-		ORDER BY `+effectivePrioritySQL+` DESC, j.created_at, j.id
+		ORDER BY ` + effectivePrioritySQL + ` DESC, j.created_at, j.id
 		FOR UPDATE OF j SKIP LOCKED
-		LIMIT $1`, candidateLimit)
+		LIMIT $1`)
+	rows, err := tx.QueryContext(ctx, query.String(), args...)
 	if err != nil {
 		return nil, err
 	}

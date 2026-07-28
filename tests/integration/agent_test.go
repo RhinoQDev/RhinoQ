@@ -79,6 +79,110 @@ func TestAgentRunsAJobEndToEnd(t *testing.T) {
 	}
 }
 
+func TestAgentClaimCanBeRestrictedToRegisteredQueues(t *testing.T) {
+	server := newAgentServer(t)
+	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
+		"name": "send-email", "payload": []byte("{}"),
+	}, http.StatusCreated, nil)
+	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
+		"name": "resize-image", "payload": []byte("{}"),
+	}, http.StatusCreated, nil)
+
+	var claimed struct {
+		Jobs []rhinoq.LeasedJob `json:"jobs"`
+	}
+	call(t, server, http.MethodPost, "/v1/claim", map[string]any{
+		"worker": "email-worker", "queues": []string{"send-email"},
+		"limit": 5, "leaseForMs": 60000,
+	}, http.StatusOK, &claimed)
+	if len(claimed.Jobs) != 1 || claimed.Jobs[0].Job.Name != "send-email" {
+		t.Fatalf("claim must stay inside the worker's handler set: %+v", claimed.Jobs)
+	}
+
+	var counts struct {
+		Counts map[string]int64 `json:"counts"`
+	}
+	call(t, server, http.MethodGet, "/v1/queues/resize-image/counts", nil, http.StatusOK, &counts)
+	if counts.Counts["pending"] != 1 {
+		t.Fatalf("unhandled queue must remain pending: %+v", counts.Counts)
+	}
+}
+
+func TestAgentConfirmsAnExternalSignalEffectAfterTheHandlerReturns(t *testing.T) {
+	server := newAgentServer(t)
+	var enqueued struct {
+		JobID string `json:"jobId"`
+	}
+	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
+		"name": "create-video", "payload": []byte("{}"),
+	}, http.StatusCreated, &enqueued)
+
+	var claimed struct {
+		Jobs []rhinoq.LeasedJob `json:"jobs"`
+	}
+	call(t, server, http.MethodPost, "/v1/claim", map[string]any{
+		"worker": "video-worker", "queues": []string{"create-video"},
+		"limit": 1, "leaseForMs": 60000,
+	}, http.StatusOK, &claimed)
+	if len(claimed.Jobs) != 1 {
+		t.Fatalf("expected one claimed video job, got %d", len(claimed.Jobs))
+	}
+	lease := claimed.Jobs[0].Lease
+	effect := rhinoq.EffectRequest{
+		Name: "provider-video", Key: "video:1",
+		Confirm: rhinoq.ConfirmExternalSignal,
+	}
+
+	call(t, server, http.MethodPost, "/v1/effects/begin", map[string]any{
+		"lease": lease, "effect": effect,
+	}, http.StatusOK, nil)
+	var accepted rhinoq.EffectResult
+	call(t, server, http.MethodPost, "/v1/effects/resolve", map[string]any{
+		"lease": lease, "effect": effect,
+		"reference": "request_1", "outcome": "succeeded",
+	}, http.StatusOK, &accepted)
+	if accepted.State != rhinoq.EffectPending {
+		t.Fatalf("request acceptance must not confirm an external-signal effect: %+v", accepted)
+	}
+
+	var confirmed rhinoq.EffectResult
+	call(t, server, http.MethodPost, "/v1/effects/confirm", map[string]any{
+		"jobId": enqueued.JobID, "name": effect.Name, "key": effect.Key,
+		"reference": "provider_event_1",
+	}, http.StatusOK, &confirmed)
+	if confirmed.State != rhinoq.EffectConfirmed ||
+		confirmed.ExternalRef != "provider_event_1" {
+		t.Fatalf("external evidence must confirm the pending effect: %+v", confirmed)
+	}
+}
+
+func TestAgentUsesCamelCaseJobFieldsOnTheWire(t *testing.T) {
+	server := newAgentServer(t)
+	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
+		"name": "send-email", "payload": []byte("{}"),
+	}, http.StatusCreated, nil)
+
+	status, raw := rawCall(t, server, http.MethodGet, "/v1/jobs?limit=1", nil, agentToken)
+	if status != http.StatusOK {
+		t.Fatalf("list jobs failed: %d\n%s", status, raw)
+	}
+	var response struct {
+		Jobs []map[string]any `json:"jobs"`
+	}
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Jobs) != 1 {
+		t.Fatalf("expected one job: %s", raw)
+	}
+	if _, found := response.Jobs[0]["id"]; !found {
+		t.Fatalf("Node SDK contract requires camelCase job fields: %s", raw)
+	}
+	if _, legacy := response.Jobs[0]["ID"]; legacy {
+		t.Fatalf("legacy Go field names must not leak onto HTTP: %s", raw)
+	}
+}
+
 // A second worker that presents a stale token must be refused, and the answer
 // has to be machine-readable so an SDK can stop rather than retry.
 func TestAgentRefusesStaleLeaseWithATypedError(t *testing.T) {
@@ -177,7 +281,7 @@ func TestAgentNegotiatesProtocolCapabilities(t *testing.T) {
 	var compatible agent.HandshakeResult
 	call(t, server, http.MethodPost, "/v1/handshake", map[string]any{
 		"protocolVersion": agent.ProtocolVersion,
-		"capabilities":    []string{"claim", "heartbeat", "fencing", "cancel", "effect", "batch-claim"},
+		"capabilities":    []string{"claim", "heartbeat", "fencing", "cancel", "effect", "batch-claim", "queue-filter"},
 		"payloadCodec":    "json", "language": "python",
 	}, http.StatusOK, &compatible)
 	if compatible.Result != agent.Compatible {

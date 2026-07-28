@@ -199,12 +199,27 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	if input.Owner == "" || input.Limit <= 0 || input.LeaseDuration <= 0 || input.Now.IsZero() {
 		return nil, errors.New("claim requires an owner, a positive limit, a lease duration and a current time")
 	}
+	if err := ports.ValidateClaimLimit(input.Limit); err != nil {
+		return nil, err
+	}
+	if err := ports.ValidateClaimQueues(input.Queues); err != nil {
+		return nil, err
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	allowed := make(map[string]struct{}, len(input.Queues))
+	for _, queue := range input.Queues {
+		allowed[queue] = struct{}{}
+	}
 	candidates := make([]job.Record, 0, len(s.jobs))
 	for _, record := range s.jobs {
+		if len(allowed) > 0 {
+			if _, handles := allowed[record.Name]; !handles {
+				continue
+			}
+		}
 		if claimable(record, input.Now) && !s.paused[record.Name] {
 			candidates = append(candidates, record)
 		}

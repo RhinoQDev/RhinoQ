@@ -6,7 +6,8 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow: tương quan in
 
 ## Mục tiêu hiện tại
 
-- Xây Go modular monolith trước; TypeScript chỉ là SDK/CLI developer-facing.
+- Xây Go modular monolith trước; Node.js/TypeScript chỉ là producer,
+  worker-lifecycle và operator SDK developer-facing.
 - Giữ dependency một chiều giữa contracts, domain, application, runtime, ports, adapters và infrastructure.
 - Chưa tuyên bố throughput/latency production khi chưa có benchmark tái lập.
 - PostgreSQL là authoritative store mặc định.
@@ -26,6 +27,7 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow: tương quan in
 ## Trạng thái scaffold
 
 Đã có Go engine/domain/application/ports, PostgreSQL adapter, worker runtime,
-Rule scheduler, Finding inbox và CLI vận hành trực tiếp. TypeScript chỉ là
-client cho HTTP Gateway tùy chọn. Console, scan/correlation và protocol
-generation chưa hoàn thiện.
+Rule scheduler, Finding inbox và CLI vận hành trực tiếp. Node SDK preview có
+producer SQL, typed Gateway client và high-level worker với queue-filtered
+claim. Package npm, Console, scan/correlation và protocol generation chưa hoàn
+thiện.

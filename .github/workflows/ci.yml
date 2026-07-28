@@ -60,18 +60,36 @@ jobs:
         working-directory: tests/postgres
         env:
           RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: sdks/node
+      - run: npm run build
+        working-directory: sdks/node
+      - name: Node PostgreSQL integration
+        run: node --test test/postgres.integration.test.mjs
+        working-directory: sdks/node
+        env:
+          RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable
 
-  typescript-sdk:
-    name: TypeScript SDK checks
+  node-sdk:
+    name: Node SDK checks (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - name: Show tested revision
         run: git show --no-patch --format='Testing commit %H'
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: npm install
-        working-directory: sdks/typescript
-      - run: npm run typecheck
-        working-directory: sdks/typescript
+          node-version: ${{ matrix.node-version }}
+      - run: npm ci
+        working-directory: sdks/node
+      - run: npm test
+        working-directory: sdks/node
+      - run: npm run pack:check
+        working-directory: sdks/node

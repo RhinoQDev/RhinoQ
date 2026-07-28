@@ -18,6 +18,8 @@ useful until Rules and Findings work on at least one real business subject.
 - [x] PostgreSQL adapter, migrations and real-database contract suite
 - [x] append-only execution-attempt timeline
 - [x] transactional SQL enqueue
+- [x] queue-filtered claims for heterogeneous worker processes
+- [x] Node.js producer/worker/operator SDK preview with automated tests
 
 ## v0.1 — Integrity Slice
 
@@ -54,6 +56,7 @@ requiring the application's current queue to be replaced.
 - [ ] one non-financial reference workload, such as a completed report whose
   output object is missing
 - [ ] no-cutover quickstart that produces the first finding
+- [ ] tagged npm release and prebuilt CLI binaries for Node adopters
 
 ## v0.2 — Integrity Hardening
 
@@ -75,7 +78,7 @@ requiring the application's current queue to be replaced.
 
 - [ ] Console Queues and Findings screens with correlation timeline
 - [ ] gRPC/Unix-socket gateway transport, only after real polyglot demand
-- [ ] NestJS integration
+- [ ] NestJS lifecycle integration after the framework-neutral Node SDK is validated
 - [ ] retention and partition sweeper
 - [ ] reproducible fault and benchmark suites
 - [ ] public release and license decision

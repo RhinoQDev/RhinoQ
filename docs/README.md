@@ -3,6 +3,7 @@
 ## Bắt đầu
 
 - [Getting started](./getting-started.md)
+- [Node.js integration](./nodejs.md)
 - [Configuration](./configuration.md)
 - [PostgreSQL production client](./postgres.md)
 - [Architecture](./architecture.md)
@@ -21,6 +22,7 @@
 - [Feature matrix](./feature-matrix.md)
 - [Integrity Rules](./rules.md)
 - [Competitive landscape](./competitive-landscape.md)
+- [Adoption and usability review](./adoption-review.md)
 - [Roadmap](./roadmap.md)
 - [Architecture decision records](../.ai/DECISIONS.md)
 

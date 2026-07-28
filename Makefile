@@ -1,4 +1,4 @@
-.PHONY: fmt test vet check clean db-up db-down test-postgres
+.PHONY: fmt test vet test-node check clean db-up db-down test-postgres
 
 fmt:
 	gofmt -w cmd internal tests pkg examples
@@ -9,7 +9,10 @@ test:
 vet:
 	go vet ./...
 
-check: fmt test vet
+test-node:
+	npm --prefix sdks/node test
+
+check: fmt test vet test-node
 
 # The PostgreSQL harness remains a separate module. The embedded library accepts
 # database/sql; the root module bundles pgx only for the official CLI.

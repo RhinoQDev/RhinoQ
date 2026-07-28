@@ -9,7 +9,7 @@ flowchart LR
   subgraph Interfaces
     AG["internal/interfaces/agent"]
     CLI["cmd/rhinoq-*"]
-    TS["sdks/typescript"]
+    NODE["sdks/node"]
   end
 
   PUB["pkg/rhinoq<br/>public facade"]
@@ -31,7 +31,8 @@ flowchart LR
 
   AG --> PUB
   CLI --> PUB
-  TS --> AG
+  NODE -->|"worker / operator HTTP"| AG
+  NODE -->|"producer SQL"| DB
   PUB --> APP
   PUB --> RUN
   APP --> DOM

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Added the development-preview `@rhinoq/node` SDK with a dependency-free
+  PostgreSQL producer, typed/timeout-bounded Gateway client, high-level worker,
+  explicit failure classification, operator reads/controls and Node test suite,
+  including a real `pg` transaction rollback contract.
+- Added the authenticated external-effect confirmation endpoint and Node
+  `confirmEffect` API so a verified webhook can move an `external-signal`
+  effect from pending to confirmed after the handler returns.
+- Claims can now be restricted to registered handler names. Go and Node workers
+  filter before PostgreSQL locks candidates, enforce a 1,000-job hard cap, and
+  a Node worker releases an unexpected job instead of executing the wrong
+  handler.
+- Stabilized camelCase HTTP job/attention/audit fields for non-Go SDKs and
+  added a wire-format integration test.
+- Added a dedicated Node.js guide and runnable producer/worker examples while
+  documenting that npm and prebuilt CLI releases are still pending.
 - Added the embedded migration runner and direct PostgreSQL CLI: read-only
   migration plan/status/SQL, explicit apply with checksums and advisory
   locking, database-aware `doctor`, payload-safe job inspection, queue
@@ -54,7 +69,7 @@
   transactional steps and provider idempotency while preserving the explicit
   accepted/confirmed/outcome distinction.
 - Added append-only attempt evidence for claim, release, completion, failure and
-  lease expiry, exposed through the Go facade, Agent HTTP and TypeScript client.
+  lease expiry, exposed through the Go facade, Gateway HTTP and Node client.
 - Made PostgreSQL job transitions and attempt evidence atomic, and made a
   terminal failed attempt atomically downgrade its pending effects to uncertain.
 - Fixed PostgreSQL batch claim ordering, stale-effect fence precedence, SQL

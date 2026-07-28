@@ -22,6 +22,9 @@ flowchart TB
   X --> DB
 ```
 
-Go là authoritative engine. TypeScript là developer-facing SDK. Domain không import adapter/database/framework. Xem [ARCHITECTURE.md](../ARCHITECTURE.md) để đọc dependency rule đầy đủ.
+Go là authoritative engine và CLI. Node.js/TypeScript là SDK preview cho
+producer, worker lifecycle và operator API. Domain không import
+adapter/database/framework. Xem [ARCHITECTURE.md](../ARCHITECTURE.md) để đọc
+dependency rule đầy đủ.
 
 Các sequence/state diagram bám theo implementation nằm tại [Runtime flows](./runtime-flows.md).

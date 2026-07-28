@@ -34,8 +34,9 @@ Optional RhinoQ HTTP Gateway
         PostgreSQL
 ```
 
-TypeScript client tham chiếu nằm ở
-[`sdks/typescript/src/interfaces/sdk/agent-client.ts`](../sdks/typescript/src/interfaces/sdk/agent-client.ts).
+Node.js SDK tham chiếu nằm ở [`sdks/node`](../sdks/node). SDK gồm
+`PostgresProducer` cho đường không cần Gateway, `RhinoQClient` cho wire API và
+`RhinoQWorker` cho vòng đời claim/heartbeat/shutdown.
 
 ## Khi chỉ cần transactional enqueue
 
@@ -104,7 +105,15 @@ Authorization: Bearer <token>
 
 {
   "protocolVersion": "1.0",
-  "capabilities": ["claim", "heartbeat", "fencing", "cancel", "effect"],
+  "capabilities": [
+    "claim",
+    "heartbeat",
+    "fencing",
+    "cancel",
+    "effect",
+    "batch-claim",
+    "queue-filter"
+  ],
   "payloadCodec": "json"
 }
 ```
@@ -119,6 +128,7 @@ Authorization: Bearer <token>
 
 ```text
 POST /v1/claim
+    → queues=[các handler đã đăng ký]
     → lease token {jobId, owner, epoch}
 POST /v1/leases/heartbeat
     → renew lease + observe cancellation
@@ -130,6 +140,10 @@ POST /v1/leases/fail
 
 Mọi write sau claim phải gửi đúng owner/epoch. `409 RHINOQ_LEASE_LOST` nghĩa là
 execution đã stale: worker phải dừng effect và không retry write đó.
+
+Gateway lọc `queues` trước khi PostgreSQL khóa candidate. Một worker Node chỉ
+đăng ký `generate-report` không được claim `send-email`. SDK vẫn kiểm tra lần
+hai và release job lạ thay vì chạy nhầm handler.
 
 Error do SDK gửi lên là language-neutral:
 
@@ -157,7 +171,7 @@ Error do SDK gửi lên là language-neutral:
 | Protocol | `POST /v1/handshake` |
 | Producer | `POST /v1/jobs`, `GET /v1/jobs`, cancel |
 | Worker | claim, heartbeat, complete, fail, release |
-| Effect | begin, resolve |
+| Effect | begin, resolve, external confirmation |
 | Findings | observe, list, transition, history |
 | Rules | register, list, explain, enable, disable, evaluate |
 | Operator | queue counts/pause/resume, attention, replay, audit, attempts |
@@ -171,7 +185,8 @@ restart loop.
 
 - Chưa có tenant isolation và HTTP-layer per-job-name RBAC.
 - Chưa có gRPC/Unix socket, streaming claim hoặc compression.
-- TypeScript là reference client duy nhất; chưa cam kết SDK Python/Java/.NET.
+- Node.js là SDK preview duy nhất; chưa cam kết SDK Python/Java/.NET.
+- Package `@rhinoq/node` chưa phát hành lên npm; hiện chỉ build/pack từ source.
 - HTTP Gateway không phải control plane và không thay thế database backup,
   restricted roles hay network policy.
 
