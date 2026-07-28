@@ -105,6 +105,14 @@ WHERE queue_name IS NULL;
 ALTER TABLE rhinoq.job_allowlist
     ALTER COLUMN queue_name SET NOT NULL;
 
+-- Drop the previous signature before creating the new one. Adding an argument
+-- creates an overload rather than replacing the function, and while both exist
+-- every unqualified reference to rhinoq.enqueue is ambiguous. Dropping first
+-- also removes the window in which a caller could reach the old identity path.
+DROP FUNCTION IF EXISTS rhinoq.enqueue(
+    text, jsonb, text, text, integer, text, interval, text
+);
+
 CREATE OR REPLACE FUNCTION rhinoq.enqueue(
     job_name        text,
     payload         jsonb,
@@ -197,15 +205,11 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION rhinoq.enqueue IS
+COMMENT ON FUNCTION rhinoq.enqueue(
+    text, jsonb, text, text, integer, text, interval, text, text
+) IS
     'Transactional enqueue for any language. Authorizes the invoking login and validates job name, payload size, schema, resource class, priority and group key. The execution lane comes from the allowlist, not the caller.';
 
 REVOKE ALL ON FUNCTION rhinoq.enqueue(
     text, jsonb, text, text, integer, text, interval, text, text
 ) FROM PUBLIC;
-
--- The previous eight-argument signature would otherwise stay resolvable and
--- silently write jobs without a group key through the old identity path.
-DROP FUNCTION IF EXISTS rhinoq.enqueue(
-    text, jsonb, text, text, integer, text, interval, text
-);

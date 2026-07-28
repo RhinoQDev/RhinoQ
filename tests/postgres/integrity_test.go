@@ -222,7 +222,8 @@ func TestSQLEnqueueValidatesItsCaller(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "RHINOQ_PAYLOAD_TOO_LARGE") {
 		t.Fatalf("an oversized payload must be refused, got %v", err)
 	}
-	counts, err := client.JobCounts(ctx, "settle-scan-credit")
+	// Counts are per execution lane, and the lane came from the allowlist.
+	counts, err := client.JobCounts(ctx, "settlement")
 	if err != nil {
 		t.Fatal(err)
 	}
