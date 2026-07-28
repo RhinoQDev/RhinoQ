@@ -1,6 +1,7 @@
 // The PostgreSQL integration harness is a separate module on purpose: it needs
-// a real driver, and the engine must stay dependency-free so applications can
-// choose their own.
+// a real database harness. The embedded library accepts database/sql so
+// applications still own their pool and driver; the official root CLI bundles
+// pgx separately.
 module github.com/rhinoq/rhinoq/tests/postgres
 
 go 1.22

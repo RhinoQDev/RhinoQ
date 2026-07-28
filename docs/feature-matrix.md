@@ -7,7 +7,7 @@ execution platforms.
 
 | Capability | Queue reference model | RhinoQ status |
 |---|---|---|
-| Queue persistence | Redis | PostgreSQL adapter and migrations covered by a real-database contract/integrity suite |
+| Queue persistence | Redis | PostgreSQL adapter plus checksum-tracked embedded migrations covered by a real-database contract/integrity suite |
 | Batch claim | Redis atomic operations | PostgreSQL `SKIP LOCKED`, one bulk lease statement plus one rate reservation per queue |
 | Lease/heartbeat | stalled job recovery | implemented, fenced by owner and epoch on all seven write paths |
 | Concurrency | worker concurrency | implemented; batch claim follows free slots and a prefetch factor |
@@ -22,7 +22,7 @@ execution platforms.
 | Stalled/poison protection | `maxStalledCount` | crash budget per job implemented; distinct-worker tracking pending |
 | Producer backpressure | not native | admission control with reserved critical budget implemented; `route` and `sample` overflow modes pending |
 | Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
-| DLQ / Needs Attention | failed-job and operational views | persistent finding lifecycle/store/API and append-only events implemented; derived attention view is not yet backed by the finding inbox |
+| DLQ / Needs Attention | failed-job and operational views | one bounded inbox merges execution attention and live persistent Findings; resolved/suppressed Findings are excluded |
 | Reverse reconciliation | application-specific | planned for one v0.1 business subject; not implemented |
 | Observe-only correlation | application-specific | external source/job/business-key contract pending |
 | Manual replay | retry failed work | guarded dead/blocked replay with effect safety checks and transactional audit |
@@ -33,8 +33,10 @@ execution platforms.
 | Integrity Rules | application-specific | versioned job/table SQL contract, read-only evaluator, Explain gate and fenced periodic scheduler implemented |
 | Metrics export | Prometheus exporters | `/metrics` text format implemented, no client library dependency |
 | Health probes | not applicable | `/health/live` and `/health/ready` implemented separately |
-| Polyglot workers | Node only | Agent HTTP surface with protocol negotiation and a language-neutral error envelope implemented |
+| Embedded operation | application-specific | Go library and direct PostgreSQL CLI are the default; no RhinoQ server, AI agent or LLM is required |
+| Polyglot workers | Node only | optional HTTP gateway with protocol negotiation and a language-neutral error envelope implemented |
 | Transactional enqueue from any language | not applicable | `rhinoq.enqueue()` SQL function with job allowlist implemented and executed by the PostgreSQL suite |
+| Migration/diagnostics CLI | application-specific | read-only plan/status/SQL, explicit checksum-locked apply and database-aware doctor implemented |
 | UI | separate product | not implemented |
 
 BullMQ is a mature Redis-based queue with worker, events, delayed jobs,

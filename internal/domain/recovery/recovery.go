@@ -18,6 +18,7 @@ const (
 	ExecutionBlocked AttentionKind = "execution_blocked"
 	EffectUncertain  AttentionKind = "effect_uncertain"
 	OutcomeMismatch  AttentionKind = "outcome_mismatch"
+	IntegrityFinding AttentionKind = "integrity_finding"
 )
 
 type AttentionItem struct {
@@ -35,6 +36,11 @@ type AttentionQuery struct {
 	Offset int
 	Limit  int
 }
+
+const (
+	MaxAttentionPageSize = 1000
+	MaxAttentionWindow   = 10_000
+)
 
 type ReplayRequest struct {
 	JobID       job.ID
@@ -55,7 +61,7 @@ type AuditRecord struct {
 }
 
 var (
-	ErrInvalidAttentionQuery = errors.New("attention offset must be non-negative and limit must be between 1 and 1000")
+	ErrInvalidAttentionQuery = errors.New("attention offset must be non-negative, limit must be between 1 and 1000, and offset + limit must not exceed 10000")
 	ErrInvalidReplayRequest  = errors.New("replay requires job id, actor, reason and requested time")
 	ErrReplayState           = errors.New("only dead or blocked jobs can be replayed")
 	ErrConfirmedEffect       = errors.New("replay denied: a confirmed effect requires resume")
@@ -64,7 +70,9 @@ var (
 )
 
 func ValidateAttentionQuery(query AttentionQuery) error {
-	if query.Offset < 0 || query.Limit <= 0 || query.Limit > 1000 {
+	if query.Offset < 0 || query.Limit <= 0 ||
+		query.Limit > MaxAttentionPageSize ||
+		query.Offset > MaxAttentionWindow-query.Limit {
 		return ErrInvalidAttentionQuery
 	}
 	return nil

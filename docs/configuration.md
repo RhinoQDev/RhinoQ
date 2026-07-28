@@ -18,6 +18,7 @@ Runtime config được đọc qua typed loader tại `internal/infrastructure/c
 | `RHINOQ_REAPER_INTERVAL` | `30s` | khoảng thu hồi lease hết hạn |
 | `RHINOQ_MAX_WORKER_CRASHES` | `3` | số lần một job được phép làm worker chết trước khi bị park |
 | `RHINOQ_CLAIM_LIMIT` | `10` | deprecated, chỉ còn dùng làm mặc định cho `RHINOQ_MAX_CLAIM_BATCH` |
+| `RHINOQ_DATABASE_DRIVER` | `pgx` | override driver cho CLI; application embedded vẫn tự mở `*sql.DB` |
 
 ## Ràng buộc loader từ chối
 
@@ -36,7 +37,10 @@ concurrency 20 · đang chạy 18 · slot trống 2 · prefetch 1.5 → claim 3
 
 ## Worker identity
 
-`RHINOQ_WORKER_NAME` được ghi vào `lease_owner`. Fencing dùng cặp `(lease_owner, lease_epoch)` nên hai process trùng tên vẫn phân biệt được qua epoch, nhưng log và Needs Attention sẽ khó đọc. `rhinoq doctor` cảnh báo nếu biến này rỗng.
+`RHINOQ_WORKER_NAME` được ghi vào `lease_owner`. Fencing dùng cặp
+`(lease_owner, lease_epoch)` nên stale write vẫn bị chặn nếu hai process trùng
+tên, nhưng log và Needs Attention sẽ khó đọc. `rhinoq doctor` cảnh báo nếu biến
+này rỗng.
 
 ## Kiểm tra cấu hình
 
@@ -44,3 +48,7 @@ concurrency 20 · đang chạy 18 · slot trống 2 · prefetch 1.5 → claim 3
 rhinoq doctor        # báo cáo: configuration, fencing, timing, database
 rhinoq doctor --ci   # exit code khác 0 nếu có mục FAIL
 ```
+
+`doctor` kết nối PostgreSQL thật và kiểm migration checksum/trạng thái. Nó
+không tự apply migration. `rhinoq rules run` nhận scheduler tuning qua flag để
+một thay đổi telemetry không âm thầm sửa lịch đã review.

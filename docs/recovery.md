@@ -18,9 +18,15 @@ Current finding kinds:
 | `execution_blocked` | unknown/unclassified execution requires a decision |
 | `effect_uncertain` | Effect Ledger cannot prove whether an effect happened |
 | `outcome_mismatch` | declared business outcome is mismatched or unverifiable |
+| `integrity_finding` | an enabled Rule currently observes business drift |
 
-This is currently a derived read model and is not yet the Finding inbox.
-Persistent findings now support deduplicated observation, acknowledgement,
+The bounded view now merges execution attention with live persistent Findings.
+Resolved Findings and active suppressions are excluded. A queue-filtered query
+only returns execution records because a business Finding has no safe implicit
+queue mapping. Each page is limited to 1,000 rows and the offset window to
+10,000; use the future business-key timeline rather than deep unbounded scans.
+
+Persistent findings support deduplicated observation, acknowledgement,
 resolution, expiring suppression, automatic regression and append-only events:
 
 ```go
@@ -46,8 +52,9 @@ Evidence is capped at 64 KiB and should contain a redacted fact summary or
 reference, not a payload copy or secret.
 Rule evaluation now populates this store: violations open/deduplicate Findings
 and passing observations append `passed` while auto-resolving existing drift.
-Periodic Rule scheduler cursors are now persistent and fenced. The next
-integration step is to make Needs Attention read from this inbox.
+Periodic Rule scheduler cursors are persistent and fenced. The command
+`rhinoq attention` reads this combined inbox directly from PostgreSQL without
+requiring the HTTP gateway.
 
 ## Guarded replay
 

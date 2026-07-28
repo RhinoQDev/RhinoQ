@@ -9,6 +9,8 @@
 - [ ] Có unit/contract/integration/fault test phù hợp.
 - [ ] Không có benchmark claim chưa có evidence.
 - [ ] Docs và examples khớp code.
+- [ ] Mọi thay đổi user-visible đã cập nhật `README.md`, hoặc ghi rõ lý do
+      README không bị ảnh hưởng.
 - [ ] Migration có rollback hoặc kế hoạch phục hồi.
 - [ ] `go test ./...` và `npm --prefix sdks/typescript run typecheck` đã chạy, hoặc đã ghi rõ blocker.
 - [ ] Diff không chứa secret, debug code hoặc file ngoài phạm vi.

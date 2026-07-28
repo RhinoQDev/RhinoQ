@@ -7,7 +7,7 @@
 - [PostgreSQL production client](./postgres.md)
 - [Architecture](./architecture.md)
 - [Runtime flows và ranh giới tầng](./runtime-flows.md)
-- [Agent và tích hợp đa ngôn ngữ](./agent.md)
+- [HTTP Gateway tùy chọn và tích hợp đa ngôn ngữ (không AI/LLM)](./agent.md)
 
 ## Vận hành
 

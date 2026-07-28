@@ -49,3 +49,16 @@ func TestAuditHashDetectsChangedEvidence(t *testing.T) {
 		t.Fatal("changed audit evidence must produce a different hash")
 	}
 }
+
+func TestAttentionQueryHasABoundedPaginationWindow(t *testing.T) {
+	valid := recovery.AttentionQuery{Offset: 9_000, Limit: 1_000}
+	if err := recovery.ValidateAttentionQuery(valid); err != nil {
+		t.Fatalf("last bounded page should be valid: %v", err)
+	}
+	tooDeep := recovery.AttentionQuery{Offset: 9_001, Limit: 1_000}
+	if err := recovery.ValidateAttentionQuery(tooDeep); !errors.Is(
+		err, recovery.ErrInvalidAttentionQuery,
+	) {
+		t.Fatalf("deep offset must be rejected instead of truncated: %v", err)
+	}
+}

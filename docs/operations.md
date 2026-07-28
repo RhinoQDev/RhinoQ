@@ -82,6 +82,22 @@ jobs, err := client.ListJobs(ctx, rhinoq.JobQuery{
 
 `Limit` bắt buộc nằm trong `1..1000`. Kết quả mặc định mới nhất trước; payload không nằm trong `JobSummary` để API danh sách không vô tình trở thành đường xuất dữ liệu nhạy cảm.
 
+Các thao tác phổ biến có sẵn trực tiếp qua CLI PostgreSQL, không cần chạy
+gateway:
+
+```bash
+rhinoq jobs list --queue provider-sync --states pending,blocked,dead
+rhinoq queue counts provider-sync
+rhinoq queue pause provider-sync
+rhinoq queue resume provider-sync
+rhinoq attention
+rhinoq findings list
+```
+
+List output không chứa payload; thêm `--json` khi cần machine-readable output.
+Các lệnh danh sách và inbox hỗ trợ `--limit` cùng `--offset` để phân trang có
+giới hạn.
+
 ## Khi provider trả 202
 
 Không coi request accepted là effect confirmed. Chọn confirmation policy phù hợp: external signal, verify hoặc predicate.

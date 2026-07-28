@@ -1,364 +1,435 @@
 # RhinoQ
 
 <p align="center">
-  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — a PostgreSQL job queue with business integrity" width="100%" />
+  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — PostgreSQL background jobs with business integrity" width="100%" />
 </p>
 
 <p align="center">
-  <strong>Verify business outcomes and recover inconsistencies around durable background execution.</strong>
+  <strong>Run background jobs, verify the business result, and surface drift before users do.</strong>
 </p>
 
 <p align="center">
-  PostgreSQL job queue · Go runtime · business rules and findings in progress
+  Embedded Go · PostgreSQL · durable workers · integrity Rules · operator inbox
 </p>
 
 <p align="center">
   <a href="https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml"><img src="https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml"><img src="https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg" alt="Security" /></a>
   <img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.22+" />
-  <img src="https://img.shields.io/badge/status-active_development-2563eb" alt="Active development" />
+  <img src="https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 tested" />
+  <img src="https://img.shields.io/badge/status-active_development-f59e0b" alt="Active development" />
 </p>
 
 > [!WARNING]
-> RhinoQ is under active development. The API, storage schema, and protocol are not stable yet. PostgreSQL contract tests are running in CI, but fault injection, retention, security review, and reproducible benchmark release gates are not complete.
+> RhinoQ is in active development. Public APIs, migrations, and protocols are not stable, and no production-ready release has been published. Use it for evaluation and controlled environments until the release gates are complete.
 
-## Why RhinoQ
+## What RhinoQ changes
 
-Most job queues answer an execution question:
+A queue normally tells you whether a handler returned successfully. It cannot
+know whether a report file exists, every media rendition was produced, two
+systems agree, or an account actually reached its provisioned state.
 
-> Did a worker finish this job?
-
-Business-critical background work often needs two more answers:
-
-> Did the external effect actually happen?
->
-> Did the business state reach the intended outcome?
-
-RhinoQ keeps these states separate:
+RhinoQ keeps three facts separate:
 
 ```text
 request accepted  ≠  effect confirmed  ≠  outcome achieved
 ```
 
-That distinction matters when a provider returns `202 Accepted`, a worker crashes after an external call, a retry may repeat an irreversible effect, or a handler completes while the application state remains inconsistent.
+That separation gives operators a safer answer when a provider returns
+`202 Accepted`, a worker dies after an external call, a retry could repeat an
+effect, or execution succeeds while business data remains inconsistent.
 
-RhinoQ is designed for report generation, media processing, data synchronization, account provisioning, notifications, payments, credits, inventory, and other background work where execution state alone is not enough.
+RhinoQ combines four layers:
 
-Durable execution systems already solve a large part of crash recovery through
-checkpoints, journals, reliable calls, or transactional steps. RhinoQ does not
-claim to replace them. Its narrower hypothesis is that business-outcome
-verification and reverse reconciliation should be an operable integrity layer:
-correlate the current execution system, evaluate an indexed invariant, persist
-a finding, and make investigation or repair explicit and auditable.
+| Layer | Responsibility | Examples |
+|---|---|---|
+| **COMMIT** | Record work durably | transactional enqueue, idempotency, correlation |
+| **RUN** | Execute and recover safely | claims, fenced leases, heartbeat, retries, cancellation |
+| **VERIFY** | Check declared business invariants | versioned Rules, bounded evaluation, Effect Ledger |
+| **RECOVER** | Make drift operable | Needs Attention, Findings, guarded replay, audit |
 
-## Who it is for
+RhinoQ is not an AI product. It does not need an LLM, an autonomous agent, or
+an external control plane. Rules are deterministic checks written and reviewed
+by developers.
 
-Evaluate RhinoQ when a team already has background execution but still relies
-on reconciliation cron jobs, incident SQL, or manual checks to answer questions
-such as:
+## Start with the smallest deployment
 
-- a report is marked complete, but its output object is missing;
-- media processing finished, but one required rendition was never produced;
-- a synchronization job completed, but source and destination disagree;
-- an account workflow ran, but provisioning never reached the required state.
+The default architecture is one Go application and the PostgreSQL database it
+already uses:
 
-RhinoQ remains a PostgreSQL job queue. Its `scan`/observe-only adoption path is
-planned so a team can evaluate outside-in rules against an existing BullMQ,
-pg-boss, DBOS, or custom worker before deciding whether to adopt the queue.
+```text
+┌──────────────── Go application ────────────────┐
+│ producer + handlers + RhinoQ worker/scheduler │
+└──────────────────────┬─────────────────────────┘
+                       │ database/sql
+                       ▼
+                  PostgreSQL
+```
 
-If the requirement is only a mature Redis queue, a simple Node/PostgreSQL
-queue, or a durable DAG/workflow runtime, evaluate BullMQ, pg-boss, Graphile
-Worker, DBOS, Hatchet, Restate, or Temporal first.
+There is no required RhinoQ server. The optional binary currently named
+`rhinoq-agent` is an authenticated HTTP gateway for non-Go workers; it is not
+an AI agent and is not part of the default setup.
 
-## Integrity lifecycle
+## Quick start
 
-RhinoQ organizes work into four explicit stages:
-
-| Stage | Question | RhinoQ mechanisms | Current status |
-|---|---|---|---|
-| **COMMIT** | Was the work recorded durably? | idempotency, correlation, payload validation, outbox foundation | Foundation implemented |
-| **RUN** | Can the work execute and recover safely? | claims, leases, heartbeat, retries, cancellation, rate limits | Core implemented |
-| **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, versioned job/table Rules, PostgreSQL Explain gate | Bounded evaluation and fenced periodic scheduling implemented |
-| **RECOVER** | Can an operator investigate and repair safely? | persistent findings, rule pass/regression, replay policy, audit | Rule-to-Finding lifecycle implemented; timeline pending |
-
-RhinoQ's PostgreSQL-backed queue is part of the core product, but queue parity
-is not its differentiator. It is not a message broker or a general-purpose
-workflow engine. Topic routing, fan-out, and DAG orchestration are intentionally
-outside the core product.
-
-## Quickstart
-
-The repository includes a runnable in-memory example:
+### 1. Install
 
 ```bash
-go run ./examples/basic
+go get github.com/rhinoq/rhinoq
+go get github.com/jackc/pgx/v5
+go install github.com/rhinoq/rhinoq/cmd/rhinoq@latest
 ```
 
-Using the public Go API:
+During active development, pin the exact pseudo-version written to `go.mod`
+instead of silently upgrading production builds.
+
+### 2. Configure and prepare PostgreSQL
+
+```bash
+export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app?sslmode=disable'
+
+rhinoq migrate plan
+rhinoq migrate apply
+rhinoq doctor --ci
+```
+
+`migrate plan` and `migrate status` are read-only. `migrate apply` is the
+explicit write action; it verifies immutable checksums, takes a PostgreSQL
+advisory lock, and commits one migration at a time. RhinoQ will not guess a
+baseline when it finds old untracked tables.
+
+### 3. Embed a worker
 
 ```go
-queue := rhinoq.NewInMemory()
+package main
 
-err := queue.Handle("generate-report", func(ctx context.Context, job rhinoq.Job) error {
-    return reports.Generate(ctx, job.Payload)
+import (
+    "context"
+    "database/sql"
+    "errors"
+    "log"
+    "os"
+
+    _ "github.com/jackc/pgx/v5/stdlib"
+    "github.com/rhinoq/rhinoq/pkg/rhinoq"
+)
+
+func main() {
+    ctx := context.Background()
+
+    db, err := sql.Open("pgx", os.Getenv("RHINOQ_DATABASE_URL"))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer db.Close()
+
+    queue, err := rhinoq.NewPostgres(db)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    if err := queue.Handle("generate-report", func(ctx context.Context, job rhinoq.Job) error {
+        // Decode job.Payload and call application code here.
+        return reports.Generate(ctx, job.Payload)
+    }); err != nil {
+        log.Fatal(err)
+    }
+
+    jobID, err := queue.Enqueue(ctx, rhinoq.JobRequest{
+        Name:           "generate-report",
+        Payload:        []byte(`{"reportId":"report_01"}`),
+        IdempotencyKey: "report:report_01",
+        CorrelationID:  "report_01",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    log.Printf("enqueued %s", jobID)
+
+    if err := queue.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+        log.Fatal(err)
+    }
+}
+```
+
+`NewInMemory()` is available for unit tests and examples, but it loses every
+job when the process exits. Use `NewPostgres()` for durable work.
+
+## Verify business state
+
+A table Rule is an append-only, versioned invariant. This example finds reports
+that claim to be ready but have no output object:
+
+```go
+record, err := queue.RegisterRule(ctx, rhinoq.RuleDefinition{
+    ID:          "ready-report-has-output",
+    Name:        "Ready reports have an output object",
+    Scope:       rhinoq.RuleScopeTable,
+    SubjectType: "report",
+    Query: `
+        SELECT
+            id::text AS subject_id,
+            output_key IS NULL AS violated,
+            jsonb_build_object('status', status) AS evidence
+        FROM reports
+        WHERE created_at >= $1
+          AND id::text > $2
+        ORDER BY id::text
+        LIMIT $3`,
+    BaselineAt: time.Now().Add(-24 * time.Hour),
+    Every:      10 * time.Minute,
+    MaxRows:    250,
 })
 if err != nil {
     log.Fatal(err)
 }
 
-jobID, err := queue.Enqueue(ctx, rhinoq.JobRequest{
-    Name:           "generate-report",
-    Payload:        []byte(`{"reportId":"report_01"}`),
-    IdempotencyKey: "report:report_01",
-    Priority:       10,
-})
+_, explanation, err := queue.EnableRule(ctx, record.ID)
 if err != nil {
-    log.Fatal(err)
-}
-
-log.Printf("enqueued %s", jobID)
-
-if err := queue.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-    log.Fatal(err)
+    log.Fatalf("Rule rejected by Explain gate: %v (%v)", err, explanation.Reasons)
 }
 ```
 
-`NewInMemory` is intended for local development and tests. It does not survive a process restart.
+Enabling a Rule first checks its result contract, statement timeout, row limit,
+plan cost, and large sequential scans. Evaluation runs in a read-only
+transaction. The SQL guard is not a security sandbox, so production Rules
+should use a restricted read-only database role.
 
-For PostgreSQL-backed storage:
+Run the durable scheduler inside the application:
 
 ```go
-queue, err := rhinoq.NewPostgres(db)
-if err != nil {
-    log.Fatal(err)
-}
+go func() {
+    if err := queue.RunRuleScheduler(ctx, rhinoq.RuleSchedulerConfig{
+        Owner:        "integrity-1",
+        PollInterval: time.Second,
+        Lease:        time.Minute,
+        ClaimBatch:   4,
+    }); err != nil {
+        log.Printf("Rule scheduler stopped: %v", err)
+    }
+}()
 ```
 
-Apply the migrations in [`internal/infrastructure/migrations/`](./internal/infrastructure/migrations/) in order before starting PostgreSQL-backed workers. The PostgreSQL contract and integrity suites run against a real database in CI; passing them is necessary but not sufficient evidence for production readiness.
+Or run the same scheduler as a manual process:
 
-## Queue operations
-
-Runtime controls are exposed through the same client boundary:
-
-```go
-// Global fixed-window limit shared by all workers for this queue.
-err := queue.SetRateLimit(ctx, "provider-sync", 100, time.Minute)
-
-// Producer backpressure: past this budget the queue stops accepting work
-// instead of growing until the database is the outage.
-err = queue.SetAdmission(ctx, "provider-sync", rhinoq.AdmissionPolicy{
-    MaxPending:       100_000,
-    ReservedCritical: 5_000,
-    OnOverflow:       rhinoq.OverflowReject,
-})
-
-// Stop claiming a queue whose downstream is down, without touching running work.
-err = queue.Pause(ctx, "provider-sync")
-err = queue.Resume(ctx, "provider-sync")
-
-// Cooperative cancellation.
-err = queue.Cancel(ctx, jobID)
-
-// Bounded operational queries for a future Console or internal tooling.
-counts, err := queue.JobCounts(ctx, "provider-sync")
-jobs, err := queue.ListJobs(ctx, rhinoq.JobQuery{
-    Queue:  "provider-sync",
-    States: []string{"pending", "blocked", "dead"},
-    Offset: 0,
-    Limit:  100,
-})
+```bash
+rhinoq rules run --owner integrity-1
 ```
 
-List responses intentionally exclude payloads so an operational queue view does not become an accidental bulk data-export path.
+Its cursor and lease are persisted. Another process can resume a bounded page
+after a crash, while owner/epoch fencing prevents a stale scheduler from
+advancing the Rule. Disabling a Rule prevents future claims but allows a page
+already claimed under that immutable version to finish.
 
-## Implemented capabilities
+## Operate without a dashboard
 
-### Durable execution
+The CLI connects directly to PostgreSQL. List commands omit job payloads by
+default so an operator view does not become an accidental data-export path.
+Bounded list and inbox commands support `--limit` and `--offset` for predictable
+pagination.
 
-- Namespaced idempotent enqueue
-- PostgreSQL and in-memory job stores
-- Batch claim with PostgreSQL `FOR UPDATE SKIP LOCKED`
-- Lease ownership fenced by owner and epoch, checked on every write
-- Heartbeat renewal that extends the lease and reports cancellation in one round trip
-- Bounded worker concurrency with slot-driven batch claim and prefetch
-- Six-step graceful shutdown that never releases a lease a handler may still hold
-- Delayed execution through `not_before`
-- Classified retry with exponential backoff and bounded jitter
+```bash
+rhinoq doctor --ci
+rhinoq jobs list --queue generate-report --states pending,blocked,dead
+rhinoq queue counts generate-report
+rhinoq queue pause generate-report
+rhinoq queue resume generate-report
 
-### Runtime control
+rhinoq attention
+rhinoq findings list --statuses open,regressed,acknowledged
+rhinoq rules list --limit 100
+rhinoq explain ready-report-has-output
+```
 
-- Priority with FIFO ordering inside a priority and aging against starvation
-- Producer admission control with a reserved budget for critical work
-- Poison-job protection that parks a payload which keeps taking workers down
-- Pause and resume by queue name
-- Cooperative cancellation for leased jobs
-- Immediate cancellation for waiting jobs
-- Durable global fixed-window rate limiting per queue
-- Job counts, state filters, and bounded pagination
-- Derived Needs Attention view across execution, effects, and outcomes
-- Guarded dead/blocked replay with transactional hash-chained audit
+Needs Attention combines execution failures, uncertain effects, outcome
+mismatches, and live persistent Findings in one bounded inbox. Suppressed or
+resolved Findings are excluded. A queue filter never guesses a business
+Finding's queue when no safe mapping exists.
 
-### Polyglot integration
+Operator decisions are explicit and auditable:
 
-- Agent HTTP surface: one process owns correctness, clients stay thin
-- Protocol handshake reporting compatible, degraded or rejected with reasons
-- Language-neutral error envelope with retry classes and a grouping fingerprint
-- `rhinoq.enqueue()` SQL function so any ORM can enqueue inside its own transaction
-- Single-file TypeScript client as the reference port
-- Separate `/health/live` and `/health/ready`, plus a dependency-free `/metrics` exporter
+```bash
+rhinoq findings acknowledge \
+  --rule ready-report-has-output \
+  --subject-type report \
+  --subject report_01 \
+  --version 1 \
+  --actor operator@example.com
 
-### Integrity foundations
+rhinoq findings resolve \
+  --rule ready-report-has-output \
+  --subject-type report \
+  --subject report_01 \
+  --version 1 \
+  --actor operator@example.com \
+  --reason 'output restored'
+```
 
-- `job.Effect()` opens and resolves a provider call under an explicit confirmation policy
-- Work an earlier attempt confirmed is skipped; work it left uncertain stops the job
-- Effect Ledger with per-effect confirmation policy
-- Explicit effect states including uncertain and confirmed
-- Outcome records separated from execution completion
-- Finding lifecycle domain rules for deduplication, acknowledgement, suppression, resolution and regression
-- Persistent memory/PostgreSQL finding stores with append-only lifecycle events
-- Public Go and Agent HTTP APIs for finding observation, filtering, transition and history
-- Append-only job/table Rule definitions; new versions start in `draft`
-- Read-only PostgreSQL Rule evaluation with timeout, hard result limit and cursor ordering
-- Explain gate for result shape, plan cost and large sequential scans
-- Rule violations open/deduplicate Findings; passing rechecks auto-resolve them
-- Outbox storage and publisher runtime
-- Fail-closed handling for unknown error classes
+## Effects are declared one by one
 
-Correlation timeline and the scan workflow are not complete yet. Periodic table
-Rules now use persisted cursors and fenced scheduler leases. The current code
-should not be presented as a finished integrity product.
+Business criticality belongs to a job; reversibility and confirmation belong
+to each effect. A single job may upload an idempotent object, reserve something
+reversibly, charge a card irreversibly, and send a duplicate-tolerant
+notification.
 
-Using RhinoQ from another language needs one thin file, not a reimplementation. See the [Agent guide](./docs/agent.md).
+`job.Effect(...)` therefore requires an idempotency key and an explicit
+confirmation policy. A returned `202 Accepted` must use external confirmation
+or verification; it must not be recorded as confirmed merely because the HTTP
+request returned.
 
-See the [feature matrix](./docs/feature-matrix.md) for implemented, partial, and planned behavior.
+See [failure semantics](./docs/failure-semantics.md) for the exact uncertain,
+confirmed, retry, and fail-closed behavior.
 
-## Architecture
+## Integration choices
 
-The Go engine owns correctness. SDKs and future framework integrations remain thin clients.
+| Mode | Extra process | Best fit |
+|---|---:|---|
+| **Embedded Go** | No | Go application owns producers and workers |
+| **Transactional SQL enqueue** | No | Any ORM needs to create a job in the same business transaction |
+| **Optional HTTP gateway** | Yes | A non-Go service must run the full worker protocol |
+
+Migration `003_sql_enqueue.sql` installs `rhinoq.enqueue()`, with producer-role
+allowlists, payload limits, schema checks, and idempotency. See the
+[optional HTTP gateway guide](./docs/agent.md) before introducing another
+process.
+
+## Safety and performance model
+
+- PostgreSQL `FOR UPDATE SKIP LOCKED` batch claims.
+- Priority ordering with FIFO inside a priority and bounded aging.
+- Slot-driven prefetch and adaptive idle polling.
+- Owner/epoch fencing on every lease-sensitive write.
+- One-round-trip heartbeat, lease renewal, and cancellation observation.
+- Global queue rate limits and producer admission budgets.
+- Poison-job parking after repeated worker crashes.
+- Partial indexes for hot pending/admission paths.
+- Durable Rule cursors; only due enabled Rules are claimed.
+- Database time is authoritative for leases, delays, and rate windows.
+- Payload-free bounded operational list APIs.
+
+RhinoQ does not publish throughput or latency numbers without a reproducible
+benchmark that records hardware, payload, worker count, durability settings,
+and workload. It is not optimized for the same latency and throughput target as
+a Redis queue; capacity must be established against the workload that will
+actually run.
+
+## When to evaluate something else
+
+RhinoQ is intentionally not a message broker or a general-purpose workflow
+orchestrator. Choose a mature alternative first when you primarily need:
+
+- a high-throughput Redis queue with a large Node ecosystem;
+- topic routing, fan-out, or broker semantics;
+- DAG/workflow authoring and durable application checkpoints;
+- only a minimal PostgreSQL task queue and no integrity workflow.
+
+RhinoQ is most relevant when the unresolved problem is operational:
+background execution exists, but teams still use reconciliation cron jobs,
+incident SQL, and manual investigation to learn whether business state is
+actually correct.
+
+## Current scope
+
+Implemented and covered by automated tests:
+
+- PostgreSQL and in-memory queues;
+- idempotent enqueue, delayed work, priority, admission, rate limits;
+- fenced claims, heartbeat, cancellation, retries, reaping, graceful shutdown;
+- per-effect confirmation policies and uncertain-effect fail-closed behavior;
+- versioned job/table Rules with Explain and bounded evaluation;
+- persistent Findings with acknowledgement, suppression, resolution, and regression;
+- crash-safe periodic Rule scheduling;
+- unified Needs Attention inbox;
+- guarded replay and tamper-evident replay audit;
+- direct PostgreSQL migration, diagnostics, inspection, and control CLI;
+- transactional SQL enqueue and an optional authenticated HTTP gateway.
+
+Still required before a stable release:
+
+- observe-only correlation with an existing execution system;
+- business-key timeline across execution, effects, Rules, and Findings;
+- bounded `scan` onboarding;
+- retention/partition guidance, restore tests, fault-injection evidence;
+- reproducible performance benchmarks and external production evidence;
+- stable public API, upgrade policy, and security review.
+
+See the [feature matrix](./docs/feature-matrix.md) and
+[roadmap](./docs/roadmap.md) for the maintained status.
+
+## Architecture and repository
+
+The Go engine owns correctness. Domain packages do not depend on PostgreSQL,
+HTTP, frameworks, or provider clients; application services coordinate ports;
+adapters implement persistence; runtime packages own concurrent process
+lifecycle.
 
 ```text
-Application / SDK / CLI
-          │
-          ▼
-  Public Go API and protocol
-          │
-          ▼
-   Application use cases
-          │
-          ▼
- Domain state machines ───── Runtime workers
-          │                       │
-          └──────── Ports ────────┘
-                      │
-                      ▼
-          Memory / PostgreSQL adapters
-                      │
-                      ▼
-          PostgreSQL / external providers
-```
-
-Dependency rules:
-
-- Domain code does not import databases, frameworks, transports, or provider clients.
-- Application services coordinate use cases through ports.
-- Adapters implement ports and do not own business invariants.
-- Runtime code owns claiming, leases, retries, concurrency, and process lifecycle.
-- Effect confirmation and outcome verification are not inferred from logs or handler return values.
-
-Read the full [architecture blueprint](./ARCHITECTURE.md).
-
-## Repository map
-
-```text
-cmd/                              agent, worker, and CLI entrypoints
+cmd/                    CLI, worker, and optional HTTP gateway entrypoints
 internal/
-  domain/                         job, retry, effect, and outcome invariants
-  application/                    enqueue, execution, verification, operations
-  ports/                          core storage and runtime interfaces
-  adapters/                       memory and PostgreSQL implementations
-  runtime/                        worker, lease, scheduler, shutdown, supervisor
-  infrastructure/                configuration, health, and migrations
-pkg/rhinoq/                       public Go API
-proto/rhinoq/v1/                  versioned transport contracts
-sdks/typescript/                  developer-facing TypeScript SDK
-tests/                            unit, integration, fault, and benchmark gates
-docs/                             user and operator documentation
-.ai/                              project memory and AI workflow controls
+  domain/               state machines and invariants
+  application/          use cases and orchestration
+  ports/                storage/runtime contracts
+  adapters/             memory and PostgreSQL implementations
+  runtime/              worker, lease, scheduler, shutdown, supervisor
+  infrastructure/       configuration, health, migrations
+pkg/rhinoq/             public embedded Go API
+proto/rhinoq/v1/        versioned transport contracts
+sdks/typescript/        optional HTTP gateway client
+tests/                  unit, integration, PostgreSQL, fault, benchmark gates
+docs/                   developer and operator documentation
+.ai/                    project memory and AI workflow controls
 ```
 
-## Project status
-
-RhinoQ has a runnable Go core, memory adapter, PostgreSQL adapters, migrations,
-and a real-database contract suite. The RUN foundation is ahead of the product
-differentiator: production readiness still requires fault evidence, while the
-v0.1 Integrity Slice now has versioned Rules, an Explain safety gate,
-Rule-to-Finding evaluation and crash-safe periodic scheduling. It still needs
-scan/from-scan onboarding and the correlation timeline.
-
-The next engineering priorities are:
-
-1. Needs Attention backed by persistent Findings
-2. External execution correlation and business-key search
-3. Correlation timeline across job, attempt, effect, Rule, Finding and business state
-4. A bounded `rhinoq scan` workflow and `init --from-scan` plan
-5. Typed Go Rule authoring after the SQL IR is validated
-
-RhinoQ does not publish throughput or latency claims without a repeatable benchmark that records hardware, payload, durability, worker count, and workload.
+Read [ARCHITECTURE.md](./ARCHITECTURE.md) and the
+[runtime flow diagrams](./docs/runtime-flows.md) before changing a layer
+boundary.
 
 ## Documentation
 
-| Document | Purpose |
+| Guide | Use it for |
 |---|---|
-| [Getting started](./docs/getting-started.md) | local setup and runnable commands |
-| [Configuration](./docs/configuration.md) | runtime configuration contract |
-| [PostgreSQL](./docs/postgres.md) | persistence model and migration notes |
-| [Operations](./docs/operations.md) | shutdown, cancellation, rate limits, and inspection |
-| [Failure semantics](./docs/failure-semantics.md) | retry classes and effect uncertainty |
-| [Recovery](./docs/recovery.md) | Needs Attention, guarded replay, and audit semantics |
-| [Integrity Rules](./docs/rules.md) | canonical SQL contract, Explain gate and Finding evaluation |
-| [Feature matrix](./docs/feature-matrix.md) | implementation status by capability |
-| [Competitive landscape](./docs/competitive-landscape.md) | category boundaries, primary sources, and falsifiable differentiation |
-| [Roadmap](./docs/roadmap.md) | milestones and release gates |
-| [Product specification](./RHINOQ.md) | complete product and architecture specification |
+| [Getting started](./docs/getting-started.md) | installation, migration, first durable worker |
+| [Configuration](./docs/configuration.md) | environment and runtime tuning |
+| [PostgreSQL](./docs/postgres.md) | schema lifecycle, pools, query costs |
+| [Operations](./docs/operations.md) | queue controls, shutdown, rate limits |
+| [Recovery](./docs/recovery.md) | Needs Attention, Findings, replay, audit |
+| [Integrity Rules](./docs/rules.md) | Rule contract, Explain, evaluation, scheduler |
+| [Failure semantics](./docs/failure-semantics.md) | retry and Effect Ledger decisions |
+| [Optional HTTP gateway](./docs/agent.md) | non-Go worker integration; no AI/LLM |
+| [Competitive landscape](./docs/competitive-landscape.md) | product boundaries and primary sources |
+| [Product specification](./RHINOQ.md) | detailed product and architecture contract |
 
 ## Development
 
-Requirements:
-
-- Go 1.22 or newer
-- Node.js 22 or newer for the TypeScript SDK
-- PostgreSQL for persistence integration work
-
-Run the Go quality gates:
+Requirements: Go 1.22+, PostgreSQL for real-database tests, and Node.js 22+ only
+when changing the TypeScript client.
 
 ```bash
-gofmt -w cmd internal pkg tests
-go test ./...
+go test ./... -count=1
 go vet ./...
-```
-
-Run the CLI:
-
-```bash
-go run ./cmd/rhinoq-cli doctor
-go run ./cmd/rhinoq-cli init
-go run ./cmd/rhinoq-cli init --apply
-```
-
-Validate the TypeScript SDK:
-
-```bash
-npm --prefix sdks/typescript install
 npm --prefix sdks/typescript run typecheck
 ```
 
-Before changing code, read [AGENTS.md](./AGENTS.md), [ARCHITECTURE.md](./ARCHITECTURE.md), and [CONTRIBUTING.md](./CONTRIBUTING.md).
+Run the CLI from source:
+
+```bash
+go run ./cmd/rhinoq migrate plan
+go run ./cmd/rhinoq doctor
+```
+
+Every user-visible capability or behavior change must update this README in the
+same change, or record why no README change is needed. See
+[AGENTS.md](./AGENTS.md), [CONTRIBUTING.md](./CONTRIBUTING.md), and the
+[Definition of Done](./.ai/DEFINITION_OF_DONE.md).
 
 ## Security and licensing
 
-Report security issues according to [SECURITY.md](./SECURITY.md). Do not open a public issue for an undisclosed vulnerability.
+Report undisclosed vulnerabilities through [SECURITY.md](./SECURITY.md), not a
+public issue.
 
-This repository does not currently grant an open-source license. The project remains under private development while the open-core boundary and license are evaluated. See [LICENSE-STRATEGY.md](./LICENSE-STRATEGY.md).
+This repository does not currently grant an open-source license. The project
+remains under private development while its open-core boundary and license are
+evaluated. See [LICENSE-STRATEGY.md](./LICENSE-STRATEGY.md).
 
 ---
 

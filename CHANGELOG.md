@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Added the embedded migration runner and direct PostgreSQL CLI: read-only
+  migration plan/status/SQL, explicit apply with checksums and advisory
+  locking, database-aware `doctor`, payload-safe job inspection, queue
+  controls, Finding triage, and standalone Rule scheduling.
+- Migration status/apply now fail closed when the database is newer than the
+  running binary, its applied history contains a version gap, or any RhinoQ
+  object exists without authoritative migration history.
+- Added bounded `--limit`/`--offset` pagination to direct PostgreSQL list and
+  Needs Attention CLI operations.
+- Changed enqueue scheduling to pass a `RunAfter` duration into the store, so
+  PostgreSQL—not the producer's wall clock—computes `not_before`; negative
+  delays are rejected.
+- Made embedded Go the documented default. The optional HTTP gateway remains
+  available for non-Go workers and is explicitly not an AI/LLM dependency.
+- Unified Needs Attention with live persistent Findings while preserving safe
+  queue filtering and excluding resolved or actively suppressed drift.
+- Fixed scheduled Rule version consistency: each fenced lease evaluates the
+  immutable version it claimed; enabling wakes its durable schedule without
+  scanning every Rule on each poll, and disabling stops future claims without
+  falsely cancelling an in-flight page.
+- Rewrote the README around installation, first durable job, deterministic
+  integrity Rules, manual operations, honest limitations, and a mandatory
+  README synchronization rule for user-visible changes.
 - Added crash-safe periodic table Rule evaluation with migration
   `007_rule_schedules.sql`, bounded page cursors, database-clock scheduling,
   owner/epoch fencing, failure backoff, and a public `RunRuleScheduler` runtime.

@@ -13,9 +13,26 @@ if err != nil { return err }
 
 Driver PostgreSQL và cách `sql.Open` thuộc application của người dùng; RhinoQ chỉ nhận `*sql.DB` và không khóa driver dependency ở core.
 
+CLI chính thức bundle driver `pgx`; thư viện core vẫn nhận `*sql.DB` để
+application tự sở hữu pool và driver. Chuẩn bị schema bằng luồng explicit:
+
+```bash
+export RHINOQ_DATABASE_URL=postgres://...
+rhinoq migrate plan      # read-only
+rhinoq migrate status    # read-only
+rhinoq migrate sql       # SQL pending để DBA review
+rhinoq migrate apply     # write explicit
+rhinoq doctor --ci
+```
+
+Migration runner embed đúng SQL đã phát hành, kiểm SHA-256 checksum, khóa bằng
+PostgreSQL advisory lock và commit từng migration trong một transaction.
+RhinoQ fail-closed nếu phát hiện bảng RhinoQ cũ nhưng không có metadata
+migration: operator phải review/baseline thủ công, không tự suy đoán schema.
+
 Trước khi chạy production:
 
-1. Apply migrations trong `internal/infrastructure/migrations/` theo thứ tự số.
+1. Review rồi apply migration bằng CLI.
 2. Kiểm tra `db.PingContext` qua readiness check.
 3. Cấu hình connection pool và hard connection budget.
 4. Chạy PostgreSQL integration/fault tests.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/rhinoq/rhinoq/internal/adapters/memory"
 	"github.com/rhinoq/rhinoq/internal/adapters/postgres"
+	attentionapp "github.com/rhinoq/rhinoq/internal/application/attention"
 	"github.com/rhinoq/rhinoq/internal/application/operations"
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
 	"github.com/rhinoq/rhinoq/internal/domain/attempt"
@@ -73,6 +74,7 @@ const (
 	AttentionExecutionBlocked = "execution_blocked"
 	AttentionEffectUncertain  = "effect_uncertain"
 	AttentionOutcomeMismatch  = "outcome_mismatch"
+	AttentionIntegrityFinding = "integrity_finding"
 )
 
 // JobRequest is the single canonical way to enqueue. Everything a job needs is
@@ -169,7 +171,8 @@ type AdmissionPolicy struct {
 // WorkerConfig tunes one worker process. Every field has a working default.
 type WorkerConfig struct {
 	// Name identifies this worker in every lease it takes. Defaults to
-	// hostname-pid. Two workers must never share a name.
+	// hostname-pid. Use a unique name per process for clear operational
+	// attribution; epoch fencing still rejects stale writes if names collide.
 	Name string
 	// Concurrency is how many handlers may run at once.
 	Concurrency int
@@ -376,9 +379,11 @@ func (c *Client) RunRuleScheduler(
 	scheduler, err := rulescheduler.New(rulescheduler.Config{
 		Store: c.ruleSchedules,
 		Evaluate: func(
-			ctx context.Context, id, subjectID, cursor string,
+			ctx context.Context, id string, version int, subjectID, cursor string,
 		) (rule.Evaluation, error) {
-			evaluation, _, err := service.Evaluate(ctx, id, subjectID, cursor)
+			evaluation, _, err := service.EvaluateVersion(
+				ctx, id, version, subjectID, cursor,
+			)
 			return evaluation, err
 		},
 		Owner:        config.Owner,
@@ -398,6 +403,9 @@ func (c *Client) Enqueue(ctx context.Context, request JobRequest) (string, error
 	if c == nil || c.store == nil {
 		return "", errors.New("rhinoq store is required")
 	}
+	if request.RunAfter < 0 {
+		return "", errors.New("rhinoq run-after delay must not be negative")
+	}
 	input := ports.EnqueueInput{
 		Name:           request.Name,
 		Payload:        request.Payload,
@@ -405,9 +413,7 @@ func (c *Client) Enqueue(ctx context.Context, request JobRequest) (string, error
 		CorrelationID:  request.CorrelationID,
 		Priority:       request.Priority,
 		Class:          job.Class(request.Class),
-	}
-	if request.RunAfter > 0 {
-		input.NotBefore = time.Now().UTC().Add(request.RunAfter)
+		RunAfter:       request.RunAfter,
 	}
 	id, err := c.store.Enqueue(ctx, input)
 	return string(id), err
@@ -554,11 +560,13 @@ func (c *Client) ListAttention(ctx context.Context, queue string, offset, limit 
 	if c == nil || c.recovery == nil {
 		return nil, errors.New("rhinoq recovery store is not configured")
 	}
-	service, err := operations.NewRecovery(c.recovery)
+	service, err := attentionapp.New(
+		c.recovery, c.findings, func() time.Time { return time.Now().UTC() },
+	)
 	if err != nil {
 		return nil, err
 	}
-	items, err := service.ListAttention(ctx, recovery.AttentionQuery{
+	items, err := service.List(ctx, recovery.AttentionQuery{
 		Queue: queue, Offset: offset, Limit: limit,
 	})
 	if err != nil {

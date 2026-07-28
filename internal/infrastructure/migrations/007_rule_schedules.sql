@@ -24,3 +24,11 @@ CREATE TABLE IF NOT EXISTS rhinoq_rule_schedules (
 
 CREATE INDEX IF NOT EXISTS rhinoq_rule_schedules_due_idx
     ON rhinoq_rule_schedules (next_run_at, lease_expires_at);
+
+-- Upgrade safety: an enabled Rule created before this migration must become
+-- schedulable without waiting for a definition rewrite.
+INSERT INTO rhinoq_rule_schedules (rule_id, rule_version, next_run_at)
+SELECT id, version, clock_timestamp()
+FROM rhinoq_rules
+WHERE scope = 'table' AND status = 'enabled'
+ON CONFLICT (rule_id, rule_version) DO NOTHING;

@@ -54,6 +54,9 @@ rule, explanation, err := queue.EnableRule(ctx, rule.ID)
 ```
 
 Enabling one version disables the previously enabled version atomically.
+Disable prevents future claims; it does not pretend to cancel a page that was
+already claimed. That in-flight page may finish under its original immutable
+version, and its Finding key records that version.
 
 ## Explain gate
 
@@ -69,10 +72,13 @@ Explain runs against PostgreSQL in a read-only transaction with:
 An unsafe explanation leaves the Rule in `draft`.
 
 ```bash
-export RHINOQ_AGENT_URL=http://localhost:8080
-export RHINOQ_AGENT_TOKEN=...
+export RHINOQ_DATABASE_URL=postgres://...
 rhinoq explain report-output-exists
 ```
+
+The CLI uses the embedded Go client and connects directly to PostgreSQL. If
+`RHINOQ_AGENT_URL` is deliberately set, it can use the optional HTTP gateway
+instead.
 
 The SQL syntax guard is not a security sandbox. Production Rules must use a
 restricted read-only database role. Extensions or functions that can access the
@@ -80,7 +86,8 @@ network or filesystem must not be granted to that role.
 
 ## Evaluation and Findings
 
-Manual evaluation is available through Go and Agent HTTP:
+Manual evaluation is available through embedded Go and the optional HTTP
+Gateway:
 
 ```go
 page, err := queue.EvaluateRule(ctx, ruleID, "", cursor)
@@ -108,5 +115,17 @@ err := queue.RunRuleScheduler(ctx, rhinoq.RuleSchedulerConfig{
 })
 ```
 
+The same runtime can be kept as a separate manual process without introducing
+an application server or LLM:
+
+```bash
+RHINOQ_DATABASE_URL=postgres://... \
+  rhinoq rules run --owner integrity-1 --batch 4 --lease 1m
+```
+
 Each claim evaluates one bounded page. Failures release the lease with a
 backoff, while a stale owner or epoch cannot advance or complete the schedule.
+The claimed immutable Rule version is evaluated even if a newer draft is
+registered or enabled while that page is in flight. Scheduler fencing protects
+cursor progression; Rule evaluation remains at-least-once and Finding
+deduplication is the idempotency boundary.

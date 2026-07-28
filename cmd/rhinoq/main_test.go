@@ -36,12 +36,12 @@ func TestRunExplainCallsAuthenticatedAgent(t *testing.T) {
 	}
 }
 
-func TestRunExplainFailsClosedWithoutAgentURL(t *testing.T) {
+func TestRunExplainFallsBackToEmbeddedPostgresWithoutGateway(t *testing.T) {
 	var output bytes.Buffer
 	if code := runExplain([]string{"rule"}, func(string) string { return "" }, &output); code == 0 {
-		t.Fatal("explain must not pretend success without an Agent")
+		t.Fatal("explain must not pretend success without PostgreSQL")
 	}
-	if !strings.Contains(output.String(), "RHINOQ_AGENT_URL") {
+	if !strings.Contains(output.String(), "RHINOQ_DATABASE_URL") {
 		t.Fatalf("failure should say how to fix configuration: %s", output.String())
 	}
 }

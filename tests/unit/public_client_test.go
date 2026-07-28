@@ -33,3 +33,12 @@ func TestPublicClientUsesStoreBoundary(t *testing.T) {
 		t.Fatalf("expected public job listing, jobs=%+v err=%v", jobs, err)
 	}
 }
+
+func TestPublicClientRejectsNegativeRunAfter(t *testing.T) {
+	client := rhinoq.NewInMemory()
+	if _, err := client.Enqueue(context.Background(), rhinoq.JobRequest{
+		Name: "demo", Payload: []byte("{}"), RunAfter: -time.Second,
+	}); err == nil {
+		t.Fatal("negative run-after must be rejected instead of using ambiguous wall-clock behavior")
+	}
+}

@@ -14,7 +14,7 @@ import (
 )
 
 type EvaluateFunc func(
-	ctx context.Context, id, subjectID, cursor string,
+	ctx context.Context, id string, version int, subjectID, cursor string,
 ) (rule.Evaluation, error)
 
 type Config struct {
@@ -99,7 +99,7 @@ func (s *Scheduler) evaluateLease(
 	lease rule.ScheduleLease,
 ) error {
 	evaluation, err := s.config.Evaluate(
-		ctx, lease.RuleID, "", lease.Cursor,
+		ctx, lease.RuleID, lease.Version, "", lease.Cursor,
 	)
 	if err != nil {
 		if releaseErr := s.config.Store.FailRuleRun(

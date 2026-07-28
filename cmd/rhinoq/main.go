@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rhinoq/rhinoq/internal/infrastructure/config"
+	"github.com/rhinoq/rhinoq/internal/infrastructure/migrations"
 )
 
 func main() {
@@ -19,16 +21,32 @@ func main() {
 		command = os.Args[1]
 	}
 	switch command {
+	case "help", "-h", "--help":
+		printHelp()
 	case "doctor":
 		os.Exit(runDoctor(ciMode()))
 	case "init":
 		runInit()
+	case "migrate":
+		os.Exit(runMigrate(os.Args[2:], os.Getenv, os.Stdout))
+	case "jobs":
+		os.Exit(runJobs(os.Args[2:], os.Getenv, os.Stdout))
+	case "attention":
+		os.Exit(runAttention(os.Args[2:], os.Getenv, os.Stdout))
+	case "queue":
+		os.Exit(runQueue(os.Args[2:], os.Getenv, os.Stdout))
+	case "findings":
+		os.Exit(runFindings(os.Args[2:], os.Getenv, os.Stdout))
+	case "rules":
+		os.Exit(runRules(os.Args[2:], os.Getenv, os.Stdout))
 	case "explain":
 		os.Exit(runExplain(os.Args[2:], os.Getenv, os.Stdout))
 	case "version":
 		fmt.Println("rhinoq 0.1.0-dev")
 	default:
+		fmt.Fprintf(os.Stderr, "FAIL unknown command %q\n\n", command)
 		printHelp()
+		os.Exit(2)
 	}
 }
 
@@ -40,9 +58,22 @@ func runExplain(args []string, getenv func(string) string, output io.Writer) int
 	}
 	agentURL := strings.TrimRight(getenv("RHINOQ_AGENT_URL"), "/")
 	if agentURL == "" {
-		fmt.Fprintln(output, "FAIL RHINOQ_AGENT_URL is empty")
-		fmt.Fprintln(output, "Set it to the authenticated RhinoQ Agent, for example http://localhost:8080")
-		return 2
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		client, closer, err := openClient(ctx, getenv)
+		if err != nil {
+			fmt.Fprintf(output, "FAIL open embedded PostgreSQL client: %v\n", err)
+			return 1
+		}
+		defer closer.Close()
+		record, explanation, err := client.ExplainRule(ctx, args[0])
+		if err != nil {
+			fmt.Fprintf(output, "FAIL explain Rule: %v\n", err)
+			return 1
+		}
+		return printJSON(output, map[string]any{
+			"rule": record, "explanation": explanation,
+		})
 	}
 	endpoint := agentURL + "/v1/rules/" + url.PathEscape(args[0]) + "/explain"
 	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(nil))
@@ -55,7 +86,7 @@ func runExplain(args []string, getenv func(string) string, output io.Writer) int
 	}
 	response, err := (&http.Client{Timeout: 35 * time.Second}).Do(request)
 	if err != nil {
-		fmt.Fprintf(output, "FAIL call Agent: %v\n", err)
+		fmt.Fprintf(output, "FAIL call optional HTTP Gateway: %v\n", err)
 		return 1
 	}
 	defer response.Body.Close()
@@ -99,9 +130,9 @@ func runDoctor(ci bool) int {
 	if c.WorkerName == "" {
 		warnings++
 		fmt.Println("  WARN RHINOQ_WORKER_NAME is empty")
-		fmt.Println("       The worker falls back to hostname-pid. Two processes that end up")
-		fmt.Println("       with the same name cannot be told apart by the lease check.")
-		fmt.Println("       Fix: set RHINOQ_WORKER_NAME to something unique per process.")
+		fmt.Println("       The worker falls back to hostname-pid. Epoch fencing still protects")
+		fmt.Println("       writes, but an explicit unique name makes logs and incidents clearer.")
+		fmt.Println("       Fix: set RHINOQ_WORKER_NAME uniquely per process.")
 	} else {
 		fmt.Printf("  PASS worker identity is %s\n", c.WorkerName)
 	}
@@ -134,7 +165,35 @@ func runDoctor(ci bool) int {
 		fmt.Println("       Fix: export RHINOQ_DATABASE_URL=postgres://user:pass@host:5432/db")
 		fmt.Println("       Verify: rhinoq doctor")
 	} else {
-		fmt.Println("  PASS database URL is configured")
+		dbCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		db, err := openDatabase(dbCtx, os.Getenv)
+		if err != nil {
+			failures++
+			fmt.Printf("  FAIL cannot connect to PostgreSQL: %v\n", err)
+			fmt.Println("       Fix: verify RHINOQ_DATABASE_URL, network access and TLS settings.")
+		} else {
+			defer db.Close()
+			fmt.Println("  PASS PostgreSQL connection is healthy")
+			runner, err := migrations.NewRunner(db)
+			if err != nil {
+				failures++
+				fmt.Printf("  FAIL migration catalog: %v\n", err)
+			} else {
+				statuses, err := runner.Status(dbCtx)
+				if err != nil {
+					failures++
+					fmt.Printf("  FAIL migration state: %v\n", err)
+					fmt.Println("       Fix: run `rhinoq migrate plan`, review it, then `rhinoq migrate apply`.")
+				} else if pending := migrations.PendingCount(statuses); pending > 0 {
+					failures++
+					fmt.Printf("  FAIL %s\n", migrations.Summary(statuses))
+					fmt.Println("       Fix: run `rhinoq migrate plan`, review it, then `rhinoq migrate apply`.")
+				} else {
+					fmt.Printf("  PASS %s\n", migrations.Summary(statuses))
+				}
+			}
+		}
 	}
 
 	fmt.Printf("\n%d failing, %d warning\n", failures, warnings)
@@ -148,7 +207,8 @@ func runInit() {
 	apply := len(os.Args) > 2 && os.Args[2] == "--apply"
 	fmt.Println("RhinoQ initialization plan")
 	fmt.Println("  - create rhinoq.config.env.example")
-	fmt.Println("  - document worker, scheduling and PostgreSQL settings")
+	fmt.Println("  - configure embedded worker, scheduler and PostgreSQL settings")
+	fmt.Println("  - next: rhinoq migrate plan")
 	if !apply {
 		fmt.Println("No files changed. Re-run with --apply to apply this plan.")
 		return
@@ -166,7 +226,22 @@ func runInit() {
 		"RHINOQ_CANCEL_GRACE=10s\n" +
 		"RHINOQ_REAPER_INTERVAL=30s\n" +
 		"RHINOQ_MAX_WORKER_CRASHES=3\n"
-	if err := os.WriteFile("rhinoq.config.env.example", []byte(content), 0644); err != nil {
+	file, err := os.OpenFile(
+		"rhinoq.config.env.example",
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
+		0644,
+	)
+	if err != nil {
+		fmt.Printf("FAIL apply: %v\n", err)
+		fmt.Println("No file was overwritten. Move the existing file or merge the template manually.")
+		os.Exit(1)
+	}
+	if _, err := file.WriteString(content); err != nil {
+		_ = file.Close()
+		fmt.Printf("FAIL apply: %v\n", err)
+		os.Exit(1)
+	}
+	if err := file.Close(); err != nil {
 		fmt.Printf("FAIL apply: %v\n", err)
 		os.Exit(1)
 	}
@@ -175,10 +250,15 @@ func runInit() {
 
 func printHelp() {
 	fmt.Println("RhinoQ CLI")
-	fmt.Println("  rhinoq doctor        check runtime configuration and safety margins")
-	fmt.Println("  rhinoq doctor --ci   same, but exit non-zero on a failing check")
-	fmt.Println("  rhinoq init          show initialization plan")
-	fmt.Println("  rhinoq init --apply  apply initialization plan")
-	fmt.Println("  rhinoq explain <id>  run PostgreSQL query-safety gate for a Rule")
-	fmt.Println("  rhinoq version       print version")
+	fmt.Println("  rhinoq init                         show initialization plan")
+	fmt.Println("  rhinoq init --apply                 write the environment template")
+	fmt.Println("  rhinoq migrate [plan|status|sql|apply]  manage PostgreSQL schema safely")
+	fmt.Println("  rhinoq doctor [--ci]                check config, database and schema")
+	fmt.Println("  rhinoq jobs list                    inspect jobs without payload export")
+	fmt.Println("  rhinoq queue <counts|pause|resume>  control one queue")
+	fmt.Println("  rhinoq attention                    show the operator inbox")
+	fmt.Println("  rhinoq findings [action]            list or triage business drift")
+	fmt.Println("  rhinoq rules <list|enable|disable|run>  manage integrity Rules")
+	fmt.Println("  rhinoq explain <id>                 Explain a Rule using PostgreSQL")
+	fmt.Println("  rhinoq version                      print version")
 }

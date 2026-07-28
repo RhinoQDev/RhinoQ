@@ -158,6 +158,22 @@ func TestRuleScheduleCursorSurvivesCrashAndRejectsStaleOwner(t *testing.T) {
 	); !errors.Is(err, rule.ErrScheduleLeaseLost) {
 		t.Fatalf("stale scheduler must not complete a newer lease: %v", err)
 	}
+	if _, err := client.DisableRule(
+		context.Background(), "scheduled-order-rule",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteRuleRun(
+		context.Background(), second[0],
+	); err != nil {
+		t.Fatalf("a page claimed before disable must be allowed to finish: %v", err)
+	}
+	afterDisable, err := store.ClaimDueRules(
+		context.Background(), "scheduler-c", now.Add(time.Hour), time.Second, 1,
+	)
+	if err != nil || len(afterDisable) != 0 {
+		t.Fatalf("disabled Rule must not be claimed again: leases=%+v err=%v", afterDisable, err)
+	}
 }
 
 func createRuleFixture(t *testing.T) {

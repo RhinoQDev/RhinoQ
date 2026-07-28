@@ -11,8 +11,8 @@ vet:
 
 check: fmt test vet
 
-# The PostgreSQL harness is a separate module: it needs a driver, and the
-# engine stays dependency-free.
+# The PostgreSQL harness remains a separate module. The embedded library accepts
+# database/sql; the root module bundles pgx only for the official CLI.
 db-up:
 	docker compose -f tests/postgres/docker-compose.yml up -d --wait
 

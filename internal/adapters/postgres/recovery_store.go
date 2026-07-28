@@ -146,19 +146,18 @@ func (s *RecoveryStore) Replay(ctx context.Context, request recovery.ReplayReque
 
 	// A replayed job starts its crash budget again: an operator who decided the
 	// payload is safe should not have it parked again by the previous crashes.
-	result, err := tx.ExecContext(ctx, `
+	var notBefore time.Time
+	err = tx.QueryRowContext(ctx, `
 		UPDATE rhinoq_jobs
-		SET state = 'pending', not_before = $1, lease_owner = NULL, lease_until = NULL,
+		SET state = 'pending', not_before = now(), lease_owner = NULL, lease_until = NULL,
 		    cancel_requested = false, blocked_reason = NULL, crash_count = 0
-		WHERE id = $2 AND state IN ('dead', 'blocked')`, request.RequestedAt, request.JobID)
+		WHERE id = $1 AND state IN ('dead', 'blocked')
+		RETURNING not_before`, request.JobID).Scan(&notBefore)
+	if errors.Is(err, sql.ErrNoRows) {
+		return job.Record{}, recovery.AuditRecord{}, recovery.ErrReplayState
+	}
 	if err != nil {
 		return job.Record{}, recovery.AuditRecord{}, err
-	}
-	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
-		if err != nil {
-			return job.Record{}, recovery.AuditRecord{}, err
-		}
-		return job.Record{}, recovery.AuditRecord{}, recovery.ErrReplayState
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO rhinoq_audit
@@ -173,7 +172,7 @@ func (s *RecoveryStore) Replay(ctx context.Context, request recovery.ReplayReque
 		return job.Record{}, recovery.AuditRecord{}, err
 	}
 	record.State = job.Pending
-	record.NotBefore = request.RequestedAt
+	record.NotBefore = notBefore
 	record.LeaseOwner = ""
 	record.LeaseUntil = time.Time{}
 	record.CancelRequested = false

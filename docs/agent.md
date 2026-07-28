@@ -1,173 +1,178 @@
-# Agent và tích hợp đa ngôn ngữ
+# HTTP Gateway tùy chọn cho worker đa ngôn ngữ
 
-## Câu hỏi: nhiều ngôn ngữ thì cần bao nhiêu code?
+> Binary hiện mang tên `rhinoq-agent` vì lý do lịch sử. Đây là một HTTP Gateway
+> deterministic, **không phải AI agent**, không chạy model và không cần LLM.
 
-Một file mỏng cho mỗi ngôn ngữ. Không hơn.
+## Có thực sự cần Gateway không?
+
+Phần lớn dự án không cần.
+
+| Nhu cầu | Đường đơn giản nhất |
+|---|---|
+| Producer và worker đều viết bằng Go | embedded `*rhinoq.Client` |
+| Service khác ngôn ngữ chỉ cần tạo job | `rhinoq.enqueue()` trong transaction SQL |
+| CLI, migration, doctor, Rule scheduler | CLI kết nối PostgreSQL trực tiếp |
+| Worker không phải Go cần claim/heartbeat/effect | HTTP Gateway |
+
+Chỉ thêm Gateway ở dòng cuối. Nó tạo thêm một process, token, health probes và
+deployment lifecycle cần vận hành.
+
+## Vì sao Gateway vẫn tồn tại?
+
+Lease, fencing, retry classification, Effect Ledger và recovery là correctness
+logic. Nếu mỗi SDK Node, Python, Java tự triển khai lại, semantics có thể lệch
+giữa các ngôn ngữ. Gateway giữ logic đó trong Go; client chỉ gửi intent,
+observation và operator decision.
 
 ```text
-Application (Node · Python · Java · .NET · Go)
-      │  thin client: enqueue · claim · report · effect
-      ▼  HTTP
-RhinoQ Agent    ← toàn bộ correctness
-      │
-      ▼
-PostgreSQL
+Node / Python / Java worker
+            │ thin HTTP client
+            ▼
+Optional RhinoQ HTTP Gateway
+            │ database/sql
+            ▼
+        PostgreSQL
 ```
 
-Lý do không viết lại logic ở mỗi SDK: nếu SDK Node xử lý lease một kiểu, SDK Python một kiểu khác, thì correctness bị nhân theo số ngôn ngữ. Một bug lease sẽ tồn tại ở năm nơi và được sửa ở một nơi.
+TypeScript client tham chiếu nằm ở
+[`sdks/typescript/src/interfaces/sdk/agent-client.ts`](../sdks/typescript/src/interfaces/sdk/agent-client.ts).
 
-**Agent giữ:** claim · ordering · lease · fencing · retry classification · rate limit · admission · effect ledger · finding lifecycle · recovery.
-**Client chỉ gửi intent/observation/decision:** enqueue · nhận job · báo kết quả · ghi effect · ghi/triage finding.
+## Khi chỉ cần transactional enqueue
 
-Client TypeScript tham chiếu nằm ở [`sdks/typescript/src/interfaces/sdk/agent-client.ts`](../sdks/typescript/src/interfaces/sdk/agent-client.ts) — khoảng 200 dòng, không dependency. Port sang ngôn ngữ khác là dịch lại 200 dòng đó, không phải viết lại một queue.
-
-## Hai đường vào, chọn theo nhu cầu
-
-| Đường | Cần gì | Được gì | Dùng khi |
-|---|---|---|---|
-| `rhinoq.enqueue()` SQL function | không cần SDK, chỉ cần ORM sẵn có | enqueue trong đúng transaction nghiệp vụ, không dual-write | chỉ cần *tạo* job từ ngôn ngữ đó |
-| Agent HTTP | một file client | đủ vòng đời: claim, heartbeat, complete/fail, effect | cần *chạy* job bằng ngôn ngữ đó |
-
-Rất nhiều hệ thống chỉ cần đường thứ nhất cho hầu hết service, và đường thứ hai cho một hai service thật sự xử lý job.
-
-## Đường 1 — SQL enqueue, không cần SDK
-
-Migration `003_sql_enqueue.sql` tạo `rhinoq.enqueue()`. Đăng ký job name trước (allowlist là ranh giới quyền):
+Migration `003_sql_enqueue.sql` tạo hàm `rhinoq.enqueue()`. Producer role phải
+được allowlist trước:
 
 ```sql
-INSERT INTO rhinoq.job_allowlist (job_name, producer_role, max_payload_bytes)
-VALUES ('settle-scan-credit', 'rhinoq_producer_payments', 262144);
+INSERT INTO rhinoq.job_allowlist (
+    job_name,
+    producer_role,
+    max_payload_bytes
+) VALUES (
+    'generate-report',
+    'app_report_producer',
+    262144
+);
 ```
 
-Rồi enqueue từ bất kỳ ngôn ngữ nào, trong cùng transaction với business write:
+Sau đó application có thể ghi business record và job trong cùng transaction:
 
 ```sql
 BEGIN;
-INSERT INTO scans (id, status) VALUES ('SCAN-9218', 'completed');
+
+INSERT INTO reports (id, status)
+VALUES ('report_01', 'queued');
+
 SELECT rhinoq.enqueue(
-    job_name        => 'settle-scan-credit',
-    payload         => '{"scanId":"SCAN-9218"}'::jsonb,
-    idempotency_key => 'scan:SCAN-9218',
-    correlation_id  => 'SCAN-9218');
+    job_name        => 'generate-report',
+    payload         => '{"reportId":"report_01"}'::jsonb,
+    idempotency_key => 'report:report_01',
+    correlation_id  => 'report_01'
+);
+
 COMMIT;
 ```
 
-Function kiểm trước khi ghi: job name có trong allowlist · role được phép enqueue job đó · payload không null và không vượt giới hạn · payload schema khớp · correlation hợp lệ · class hợp lệ · priority trong khoảng. Payload quá lớn bị từ chối **ngay trong function**, không lọt vào bảng.
+Function kiểm role, allowlist, payload size/schema, class, priority,
+correlation và idempotency trước khi ghi. Không cấp một producer role chung
+quyền enqueue mọi job name.
 
-Không mở `rhinoq.enqueue(any_name, any_json)` cho một producer role chung: một service bị chiếm quyền sẽ tạo được job của mọi domain khác.
+## Khởi động Gateway
 
-## Đường 2 — Agent HTTP
+Chuẩn bị schema bằng CLI trước, rồi đặt token:
 
 ```bash
-export RHINOQ_AGENT_TOKEN=$(openssl rand -hex 32)
-export RHINOQ_DATABASE_URL=postgres://...
+export RHINOQ_DATABASE_URL='postgres://...'
+export RHINOQ_AGENT_TOKEN='a-long-random-secret'
+
+rhinoq migrate plan
+rhinoq migrate apply
 go run ./cmd/rhinoq-agent
 ```
 
-Agent từ chối khởi động nếu không có token và cũng không có `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true`.
+Gateway từ chối khởi động nếu không có token, trừ khi operator chủ động đặt
+`RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true`. Không dùng tùy chọn đó ngoài local
+development.
 
-### Handshake trước, làm việc sau
+## Handshake bắt buộc
+
+Client thương lượng protocol/capability trước khi nhận việc:
 
 ```http
 POST /v1/handshake
-{"protocolVersion":"1.0","capabilities":["claim","heartbeat","fencing","cancel","effect"],"payloadCodec":"json"}
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "protocolVersion": "1.0",
+  "capabilities": ["claim", "heartbeat", "fencing", "cancel", "effect"],
+  "payloadCodec": "json"
+}
 ```
 
-Ba kết quả, phân biệt rõ:
-
-| Kết quả | Nghĩa | Hành vi |
-|---|---|---|
-| `compatible` | đủ capability | chạy bình thường |
-| `degraded` | thiếu capability không cốt lõi | vẫn chạy, `disabled` và `reason` nói rõ cái gì bị tắt |
-| `rejected` | thiếu capability cốt lõi (`claim`, `heartbeat`, `fencing`) hoặc sai protocol major | trả `426`, từ chối kết nối |
-
-`degraded` phải được log và hiển thị: một worker chạy thiếu tính năng hành xử khác một worker bình thường.
-
-### Endpoint
-
-| Nhóm | Endpoint |
+| Kết quả | Hành vi |
 |---|---|
-| Producer | `POST /v1/jobs` · `GET /v1/jobs` · `POST /v1/jobs/{id}/cancel` |
-| Worker | `POST /v1/claim` · `POST /v1/leases/heartbeat` · `POST /v1/leases/complete` · `POST /v1/leases/fail` · `POST /v1/leases/release` |
-| Effect | `POST /v1/effects/begin` · `POST /v1/effects/resolve` |
-| Findings | `POST /v1/findings/observe` · `GET /v1/findings` · `POST /v1/findings/transition` · `GET /v1/findings/history` |
-| Rules | `POST /v1/rules` · `GET /v1/rules` · `POST /v1/rules/{id}/explain` · `POST /v1/rules/{id}/enable` · `POST /v1/rules/{id}/disable` · `POST /v1/rules/{id}/evaluate` |
-| Operator | `GET /v1/queues/{name}/counts` · `POST /v1/queues/{name}/pause` · `POST /v1/queues/{name}/resume` · `GET /v1/attention` · `POST /v1/jobs/{id}/replay` · `GET /v1/jobs/{id}/audit` · `GET /v1/jobs/{id}/attempts` |
-| Vận hành | `GET /health/live` · `GET /health/ready` · `GET /metrics` |
+| `compatible` | đủ capability, có thể làm việc |
+| `degraded` | thiếu capability không cốt lõi; client phải hiển thị lý do |
+| `rejected` | sai major hoặc thiếu claim/heartbeat/fencing; trả `426` |
 
-### Vòng đời một job qua HTTP
+## Worker lifecycle
 
 ```text
-POST /v1/claim              → nhận job + lease token {jobId, owner, epoch}
-POST /v1/leases/heartbeat   → gia hạn lease, biết luôn job có bị cancel không
-POST /v1/leases/complete    → xong
-POST /v1/leases/fail        → hỏng, kèm error envelope
+POST /v1/claim
+    → lease token {jobId, owner, epoch}
+POST /v1/leases/heartbeat
+    → renew lease + observe cancellation
+POST /v1/leases/complete
+    → terminal success
+POST /v1/leases/fail
+    → classified failure
 ```
 
-Lease token phải gửi kèm mọi thao tác sau đó. Sai `epoch` → `409 RHINOQ_LEASE_LOST`, và client phải **dừng**, không retry: job đã thuộc execution khác.
+Mọi write sau claim phải gửi đúng owner/epoch. `409 RHINOQ_LEASE_LOST` nghĩa là
+execution đã stale: worker phải dừng effect và không retry write đó.
 
-### Error envelope — hợp đồng xuyên ngôn ngữ
-
-Client dịch exception bản địa thành envelope; Agent không parse stack trace theo ngôn ngữ:
+Error do SDK gửi lên là language-neutral:
 
 ```json
 {
   "lease": {"jobId": "job_...", "owner": "python-worker-1", "epoch": 3},
-  "queue": "settle-scan-credit",
+  "queue": "provider-sync",
   "error": {
     "type": "ConnectionError",
     "retryClass": "dependency_down",
-    "message": "connection refused to provider-a",
+    "message": "connection refused",
     "language": "python"
   }
 }
 ```
 
-`retryClass` là thứ quyết định số phận job: `transient` · `permanent` · `rate_limited` · `dependency_down` · `cancelled` · `unknown`. Thiếu hoặc sai → `unknown`, tức retry thận trọng rồi park, **không bao giờ retry mù**.
+`retryClass` gồm `transient`, `permanent`, `rate_limited`,
+`dependency_down`, `cancelled`, và `unknown`. Thiếu hoặc sai class được coi là
+`unknown` và xử lý fail-closed theo policy; Gateway không đoán từ stack trace.
 
-Agent trả lại `fingerprint` để cùng một lỗi ở hai ngôn ngữ gom về một nhóm. Hiện dùng SHA-256, không phải BLAKE3.
+## Endpoint groups
 
-### Lỗi trả về
-
-Mọi lỗi có một dạng duy nhất:
-
-```json
-{"error": {"code": "RHINOQ_QUEUE_OVER_CAPACITY", "message": "...", "retryable": true, "retryAfterMs": 30000}}
-```
-
-| Status | Nghĩa |
+| Nhóm | Endpoint chính |
 |---|---|
-| `401` | thiếu hoặc sai token |
-| `409` | fencing từ chối, hoặc effect uncertain/đã confirmed |
-| `422` | replay bị từ chối vì effect chưa an toàn |
-| `426` | protocol không tương thích |
-| `429` | queue vượt ngân sách admission, kèm `retryAfterMs` |
+| Protocol | `POST /v1/handshake` |
+| Producer | `POST /v1/jobs`, `GET /v1/jobs`, cancel |
+| Worker | claim, heartbeat, complete, fail, release |
+| Effect | begin, resolve |
+| Findings | observe, list, transition, history |
+| Rules | register, list, explain, enable, disable, evaluate |
+| Operator | queue counts/pause/resume, attention, replay, audit, attempts |
+| Process | `/health/live`, `/health/ready`, `/metrics` |
 
-`message` mang đủ năm phần: chuyện gì đã xảy ra · vì sao quan trọng · RhinoQ đã làm gì · sửa thế nào · kiểm lại bằng lệnh nào.
+`/health/live` không chạm database. `/health/ready` kiểm dependency và trả
+`503` trong lúc drain. Không gộp hai probe, nếu không database chậm có thể tạo
+restart loop.
 
-## Health và metrics
+## Giới hạn hiện tại
 
-`/health/live` chỉ trả lời process còn sống — không chạm database. `/health/ready` kiểm store thật và trả `503` khi Agent đang drain. Gộp hai cái làm một sẽ tạo restart loop mỗi khi database chậm.
+- Chưa có tenant isolation và HTTP-layer per-job-name RBAC.
+- Chưa có gRPC/Unix socket, streaming claim hoặc compression.
+- TypeScript là reference client duy nhất; chưa cam kết SDK Python/Java/.NET.
+- HTTP Gateway không phải control plane và không thay thế database backup,
+  restricted roles hay network policy.
 
-`/metrics` xuất Prometheus text format, không kéo thêm dependency:
-
-```text
-rhinoq_jobs{state="pending"} 42
-rhinoq_agent_jobs_accepted_total 1200
-rhinoq_agent_jobs_failed_total 3
-rhinoq_agent_ready 1
-```
-
-## Thứ tự triển khai SDK
-
-1. TypeScript client (đã có, tham chiếu)
-2. Protocol ổn định
-3. Go SDK
-4. Python SDK
-5. Java/.NET nếu có nhu cầu thật
-
-Không thêm SDK thứ hai nếu chưa có người cam kết maintain: chi phí tăng theo *số ngôn ngữ*, không theo số tính năng.
-
-## Chưa có
-
-gRPC/Unix socket transport · msgpack/zstd · streaming claim (long-poll) · tenant isolation · per-job-name RBAC ở tầng HTTP (mới có ở SQL function) · Agent chạy embedded trong process ứng dụng.
+Chỉ mở rộng Gateway/SDK khi có design partner thực sự cần polyglot worker.

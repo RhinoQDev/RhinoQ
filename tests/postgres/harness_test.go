@@ -17,14 +17,13 @@ import (
 	"context"
 	"database/sql"
 	"os"
-	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/rhinoq/rhinoq/internal/adapters/postgres"
+	"github.com/rhinoq/rhinoq/internal/infrastructure/migrations"
 	"github.com/rhinoq/rhinoq/internal/ports"
 	"github.com/rhinoq/rhinoq/pkg/rhinoq"
 )
@@ -62,39 +61,29 @@ func TestMain(m *testing.M) {
 func applyMigrations(db *sql.DB) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	runner, err := migrations.NewRunner(db)
+	if err != nil {
+		return err
+	}
+	statuses, err := runner.Apply(ctx)
+	if err != nil {
+		return err
+	}
+	if migrations.PendingCount(statuses) != 0 {
+		return migrationError{
+			file: "migration runner",
+			err:  errString("runner returned with pending migrations"),
+		}
+	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-
-	// Production roles often prepend an application schema. Run migrations
-	// under that hostile search_path so every authoritative table has to choose
-	// its schema explicitly; otherwise a later migration may silently create a
-	// second rhinoq_jobs in the wrong namespace.
 	if _, err := conn.ExecContext(ctx, `
 		CREATE SCHEMA IF NOT EXISTS rhinoq;
 		SET search_path = rhinoq, public`); err != nil {
 		return migrationError{file: "search_path", err: err}
-	}
-
-	pattern := filepath.Join("..", "..", "internal", "infrastructure", "migrations", "*.sql")
-	files, err := filepath.Glob(pattern)
-	if err != nil {
-		return err
-	}
-	if len(files) == 0 {
-		return errNoMigrations
-	}
-	sort.Strings(files)
-	for _, file := range files {
-		statements, err := os.ReadFile(file)
-		if err != nil {
-			return err
-		}
-		if _, err := conn.ExecContext(ctx, string(statements)); err != nil {
-			return migrationError{file: filepath.Base(file), err: err}
-		}
 	}
 	return validateSchemaLayout(ctx, conn)
 }
@@ -127,8 +116,6 @@ type migrationError struct {
 }
 
 func (e migrationError) Error() string { return "apply " + e.file + ": " + e.err.Error() }
-
-var errNoMigrations = migrationError{file: "migrations", err: errString("no migration files found")}
 
 type errString string
 

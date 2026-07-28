@@ -10,6 +10,10 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow: tương quan in
 - Giữ dependency một chiều giữa contracts, domain, application, runtime, ports, adapters và infrastructure.
 - Chưa tuyên bố throughput/latency production khi chưa có benchmark tái lập.
 - PostgreSQL là authoritative store mặc định.
+- Embedded Go là deployment mặc định: application dùng `*rhinoq.Client` trực
+  tiếp với PostgreSQL, không cần server riêng.
+- `rhinoq-agent` chỉ là HTTP Gateway tùy chọn cho worker không phải Go; nó
+  không phải AI agent và RhinoQ không cần LLM.
 
 ## Thuật ngữ bắt buộc
 
@@ -21,4 +25,7 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow: tương quan in
 
 ## Trạng thái scaffold
 
-Đã có scaffold Go cho engine/domain/application/ports, cùng TypeScript SDK scaffold. PostgreSQL adapter, worker runtime đầy đủ, Console và protocol generation chưa hoàn thiện.
+Đã có Go engine/domain/application/ports, PostgreSQL adapter, worker runtime,
+Rule scheduler, Finding inbox và CLI vận hành trực tiếp. TypeScript chỉ là
+client cho HTTP Gateway tùy chọn. Console, scan/correlation và protocol
+generation chưa hoàn thiện.

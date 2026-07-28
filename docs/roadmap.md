@@ -42,7 +42,7 @@ requiring the application's current queue to be replaced.
 - [x] finding domain lifecycle and deduplication rules
 - [x] persistent memory/PostgreSQL finding store and public Go/Agent API
 - [x] manual table-scoped Rule evaluation folds violations/passes into Findings
-- [ ] Needs Attention backed by persistent findings
+- [x] Needs Attention backed by persistent findings
 - [x] acknowledge, suppress, resolve and regressed operations with append-only events
 - [x] guarded manual replay and transactional audit hash chain
 - [ ] correlation timeline and business-key/external-job search
@@ -58,8 +58,9 @@ requiring the application's current queue to be replaced.
 ## v0.2 — Integrity Hardening
 
 - [x] versioned Rule contracts
-- [ ] scheduled and signal-first Rule evaluation
-- [ ] finding suppression, deduplication and regression hardening
+- [x] crash-safe scheduled Rule evaluation
+- [ ] signal-first Rule evaluation
+- [x] finding suppression, deduplication and regression lifecycle
 - [ ] reconciliation cursors, budgets and backpressure
 - [ ] handler and verifier version evidence
 
@@ -73,7 +74,7 @@ requiring the application's current queue to be replaced.
 ## Later, after design-partner evidence
 
 - [ ] Console Queues and Findings screens with correlation timeline
-- [ ] gRPC/Unix-socket Agent transport
+- [ ] gRPC/Unix-socket gateway transport, only after real polyglot demand
 - [ ] NestJS integration
 - [ ] retention and partition sweeper
 - [ ] reproducible fault and benchmark suites

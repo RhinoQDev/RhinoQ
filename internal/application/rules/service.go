@@ -141,6 +141,32 @@ func (s *Service) Evaluate(
 	if !found {
 		return rule.Evaluation{}, nil, ports.ErrRuleNotFound
 	}
+	return s.evaluateRecord(ctx, record, subjectID, cursor)
+}
+
+// EvaluateVersion is used by the durable scheduler: a lease names one
+// immutable Rule version and must never drift to a newer draft with the same ID.
+func (s *Service) EvaluateVersion(
+	ctx context.Context,
+	id string,
+	version int,
+	subjectID, cursor string,
+) (rule.Evaluation, []finding.Record, error) {
+	record, found, err := s.store.GetRuleVersion(ctx, id, version)
+	if err != nil {
+		return rule.Evaluation{}, nil, err
+	}
+	if !found {
+		return rule.Evaluation{}, nil, ports.ErrRuleNotFound
+	}
+	return s.evaluateRecord(ctx, record, subjectID, cursor)
+}
+
+func (s *Service) evaluateRecord(
+	ctx context.Context,
+	record rule.Record,
+	subjectID, cursor string,
+) (rule.Evaluation, []finding.Record, error) {
 	if s.evaluator == nil || s.findings == nil {
 		return rule.Evaluation{}, nil, errors.New(
 			"PostgreSQL rule evaluator and finding store are required",

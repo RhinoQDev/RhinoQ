@@ -24,8 +24,12 @@ Chạy test phù hợp theo tầng. Nếu không chạy được, ghi nguyên nh
 
 ## 5. Review
 
-Rà diff, import boundary, secret/payload, retry mù, race condition, migration và docs.
+Rà diff, import boundary, secret/payload, retry mù, race condition, migration
+và docs. Với mọi thay đổi user-visible, đối chiếu `README.md`: capability,
+command, limitation và trạng thái phải khớp code hiện tại.
 
 ## 6. Handoff
 
-Báo file đã đổi, hành vi mới, lệnh kiểm tra, kết quả, giới hạn và việc tiếp theo. Cập nhật `CHANGELOG.md` nếu thay đổi user-visible.
+Báo file đã đổi, hành vi mới, lệnh kiểm tra, kết quả, giới hạn và việc tiếp theo.
+Cập nhật `README.md` và `CHANGELOG.md` nếu thay đổi user-visible; nếu README
+không cần đổi, ghi rõ lý do trong handoff.

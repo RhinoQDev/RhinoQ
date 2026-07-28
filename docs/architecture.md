@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TB
-  I["Agent HTTP / Go API / CLI / SDK"]
+  I["Embedded Go API / CLI / optional HTTP Gateway"]
   F["Public facade"]
   A["Application use cases"]
   R["Runtime: worker / lease / supervisor"]

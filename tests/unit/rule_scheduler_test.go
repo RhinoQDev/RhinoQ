@@ -12,14 +12,16 @@ import (
 )
 
 type schedulerEvaluator struct {
-	cursors []string
-	fail    error
+	cursors  []string
+	versions []int
+	fail     error
 }
 
 func (e *schedulerEvaluator) Evaluate(
-	_ context.Context, _, _, cursor string,
+	_ context.Context, _ string, version int, _, cursor string,
 ) (rule.Evaluation, error) {
 	e.cursors = append(e.cursors, cursor)
+	e.versions = append(e.versions, version)
 	if e.fail != nil {
 		return rule.Evaluation{}, e.fail
 	}
@@ -52,6 +54,9 @@ func TestRuleSchedulerPersistsCursorBetweenBoundedClaims(t *testing.T) {
 	if len(evaluator.cursors) != 2 ||
 		evaluator.cursors[0] != "" || evaluator.cursors[1] != "report-0500" {
 		t.Fatalf("scheduler must resume the persisted page cursor: %v", evaluator.cursors)
+	}
+	if evaluator.versions[0] != 1 || evaluator.versions[1] != 1 {
+		t.Fatalf("scheduler must evaluate the immutable leased version: %v", evaluator.versions)
 	}
 	clock = clock.Add(9 * time.Minute)
 	if err := scheduler.RunOnce(context.Background()); err != nil {
@@ -96,6 +101,33 @@ func TestRuleSchedulerReleasesFailedPageWithBackoff(t *testing.T) {
 	_ = scheduler.RunOnce(context.Background())
 	if len(evaluator.cursors) != 2 {
 		t.Fatalf("failed rule must become claimable after backoff: calls=%d", len(evaluator.cursors))
+	}
+}
+
+func TestDisablingRuleStopsFutureClaimsWithoutCancellingInflightPage(t *testing.T) {
+	store := memory.NewRuleStore()
+	now := time.Date(2026, 7, 28, 8, 0, 0, 0, time.UTC)
+	saveEnabledTableRule(t, store, now)
+	leases, err := store.ClaimDueRules(
+		context.Background(), "scheduler-a", now, time.Minute, 1,
+	)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("claim enabled Rule: leases=%+v err=%v", leases, err)
+	}
+	if _, err := store.SetRuleStatus(
+		context.Background(), leases[0].RuleID, leases[0].Version,
+		rule.Disabled, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteRuleRun(context.Background(), leases[0]); err != nil {
+		t.Fatalf("an in-flight page claimed while enabled may finish: %v", err)
+	}
+	next, err := store.ClaimDueRules(
+		context.Background(), "scheduler-b", now.Add(time.Hour), time.Minute, 1,
+	)
+	if err != nil || len(next) != 0 {
+		t.Fatalf("disabled Rule must not be claimed again: leases=%+v err=%v", next, err)
 	}
 }
 

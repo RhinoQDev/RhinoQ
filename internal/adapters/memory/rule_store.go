@@ -62,6 +62,18 @@ func (s *RuleStore) GetRule(_ context.Context, id string) (rule.Record, bool, er
 	return latestRule(s.records[id])
 }
 
+func (s *RuleStore) GetRuleVersion(
+	_ context.Context, id string, version int,
+) (rule.Record, bool, error) {
+	if id == "" || version < 1 {
+		return rule.Record{}, false, rule.ErrInvalidRule
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	record, found := s.records[id][version]
+	return record, found, nil
+}
+
 func latestRule(versions map[int]rule.Record) (rule.Record, bool, error) {
 	var latest rule.Record
 	found := false
@@ -144,7 +156,7 @@ func (s *RuleStore) SetRuleStatus(
 	}
 	if status == rule.Enabled {
 		for number, existing := range versions {
-			if existing.Status == rule.Enabled {
+			if number != version && existing.Status == rule.Enabled {
 				existing.Status = rule.Disabled
 				existing.UpdatedAt = at
 				versions[number] = existing
@@ -154,6 +166,12 @@ func (s *RuleStore) SetRuleStatus(
 	record.Status = status
 	record.UpdatedAt = at
 	versions[version] = record
+	key := scheduleKey(id, version)
+	schedule := s.schedules[key]
+	if status == rule.Enabled && record.Scope == rule.TableScope {
+		schedule.nextRunAt = at
+		s.schedules[key] = schedule
+	}
 	return record, nil
 }
 

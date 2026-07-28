@@ -15,8 +15,10 @@ type EnqueueInput struct {
 	Name           string
 	Payload        []byte
 	IdempotencyKey string
-	NotBefore      time.Time
-	CorrelationID  string
+	// RunAfter is a duration so the store's authoritative clock computes the
+	// eligibility timestamp. Producers never send an absolute wall-clock time.
+	RunAfter      time.Duration
+	CorrelationID string
 	// Priority orders claiming inside a queue; higher runs first. Waiting jobs
 	// age upwards so a low priority job cannot starve (domain/job scheduling).
 	Priority int

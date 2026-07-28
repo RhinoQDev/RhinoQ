@@ -95,6 +95,24 @@ func (s *RuleStore) GetRule(
 	return record, err == nil, err
 }
 
+func (s *RuleStore) GetRuleVersion(
+	ctx context.Context,
+	id string,
+	version int,
+) (rule.Record, bool, error) {
+	if id == "" || version < 1 {
+		return rule.Record{}, false, rule.ErrInvalidRule
+	}
+	record, err := scanRule(s.db.QueryRowContext(ctx, `
+		SELECT `+ruleColumns+`
+		FROM rhinoq_rules
+		WHERE id = $1 AND version = $2`, id, version))
+	if errors.Is(err, sql.ErrNoRows) {
+		return rule.Record{}, false, nil
+	}
+	return record, err == nil, err
+}
+
 func (s *RuleStore) ListRules(
 	ctx context.Context,
 	query rule.Query,
@@ -182,6 +200,20 @@ func (s *RuleStore) SetRuleStatus(
 	}
 	if err != nil {
 		return rule.Record{}, err
+	}
+	if record.Scope == rule.TableScope {
+		if status == rule.Enabled {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO rhinoq_rule_schedules (
+					rule_id, rule_version, next_run_at
+				) VALUES ($1, $2, clock_timestamp())
+				ON CONFLICT (rule_id, rule_version) DO UPDATE
+				SET next_run_at = clock_timestamp()`,
+				id, version,
+			); err != nil {
+				return rule.Record{}, err
+			}
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return rule.Record{}, err
@@ -280,14 +312,6 @@ func (s *RuleStore) ClaimDueRules(
 		return nil, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO rhinoq_rule_schedules (rule_id, rule_version, next_run_at)
-		SELECT id, version, clock_timestamp()
-		FROM rhinoq_rules
-		WHERE scope = 'table' AND status = 'enabled'
-		ON CONFLICT (rule_id, rule_version) DO NOTHING`); err != nil {
-		return nil, err
-	}
 	rows, err := tx.QueryContext(ctx, `
 		WITH due AS (
 			SELECT schedule.rule_id, schedule.rule_version

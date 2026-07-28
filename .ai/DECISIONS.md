@@ -10,7 +10,9 @@
 ## ADR-0004 — Go authoritative engine, TypeScript SDK
 
 - **Status:** accepted
-- **Decision:** Go sở hữu Agent, worker, scheduler, lease, retry và correctness; TypeScript cung cấp SDK/CLI cho ứng dụng Node.js.
+- **Decision:** Go sở hữu embedded client, HTTP Gateway, worker, scheduler,
+  lease, retry và correctness; TypeScript chỉ cung cấp thin client cho ứng
+  dụng Node.js cần Gateway.
 - **Reason:** runtime hạ tầng cần binary độc lập, concurrency, resource control và hỗ trợ đa ngôn ngữ.
 - **Constraint:** mọi giao tiếp qua versioned protocol; SDK không tự thực thi business state machine.
 - **Rollback:** giữ protocol ổn định để thay client hoặc runtime mà không đổi public contract.
@@ -72,9 +74,27 @@
 - **Context:** Outcome và Reconciliation tách thành hai API làm tăng surface area nhưng cùng trả lời một câu hỏi: subject có vi phạm invariant không. Raw SQL linh hoạt nhưng một query thiếu index hoặc không bounded có thể gây incident production.
 - **Decision:** dùng một Rule contract có scope `job` và `table`. Query trả `subject_id`, `violated`, `evidence`; table scope nhận baseline/cursor/limit. Definition append-only theo version, luôn bắt đầu `draft`; enable chạy PostgreSQL Explain trong read-only transaction, kiểm result shape, statement timeout, hard limit, plan cost và large sequential scan.
 - **Security boundary:** syntax guard không phải SQL sandbox. Production cần restricted read-only role và không grant function/extension có filesystem/network side effect.
-- **Consequences:** violation tạo/dedup Finding; pass tự resolve Finding; scheduler cursor persistence làm sau trên cùng contract. Không xây invariant DSL ở v0.1.
+- **Consequences:** violation tạo/dedup Finding; pass tự resolve Finding;
+  scheduler dùng persistent cursor và fenced lease trên cùng contract. Không
+  xây invariant DSL ở v0.1.
 - **Rollback:** disable Rule version; definition và Explain evidence vẫn được giữ để audit.
 - **Owner:** integrity engine
+
+## ADR-0010 — Embedded Go mặc định, HTTP Gateway là tùy chọn
+
+- **Status:** accepted
+- **Context:** Bắt người dùng Go chạy thêm một process làm onboarding và vận
+  hành phức tạp hơn, đồng thời tên `Agent` dễ bị hiểu sai thành AI/LLM.
+- **Decision:** public Go API kết nối trực tiếp PostgreSQL là đường mặc định.
+  CLI cũng dùng cùng public boundary. Binary `rhinoq-agent` hiện tại chỉ là
+  authenticated HTTP Gateway cho worker không phải Go; không có LLM và không
+  được yêu cầu trong quickstart.
+- **Consequences:** migration, doctor, operations và Rule scheduler phải dùng
+  được không qua Gateway. Tài liệu đa ngôn ngữ vẫn giữ protocol/fencing ở Go
+  thay vì nhân correctness sang SDK.
+- **Rollback:** nếu design partner thực tế cần remote control plane, có thể
+  nâng Gateway thành deployment chính mà không đổi domain/port contract.
+- **Owner:** product + engine
 
 ## Template cho ADR mới
 

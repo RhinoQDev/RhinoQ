@@ -76,7 +76,7 @@ func TestDelayedJobIsNotClaimedBeforeItsTime(t *testing.T) {
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
 	if _, err := store.Enqueue(ctx, ports.EnqueueInput{
-		Name: "later", Payload: []byte("{}"), NotBefore: now.Add(time.Hour),
+		Name: "later", Payload: []byte("{}"), RunAfter: time.Hour,
 	}); err != nil {
 		t.Fatal(err)
 	}

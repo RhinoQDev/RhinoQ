@@ -61,6 +61,9 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 	if input.Priority < job.MinPriority || input.Priority > job.MaxPriority {
 		return "", job.ErrInvalidPriority
 	}
+	if input.RunAfter < 0 {
+		return "", errors.New("run-after delay must not be negative")
+	}
 	class, err := job.NormalizeClass(input.Class)
 	if err != nil {
 		return "", err
@@ -92,13 +95,13 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 		INSERT INTO rhinoq_jobs
 			(id, name, payload, state, class, priority, idempotency_key, correlation_id, not_before)
 		VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7,
-			GREATEST(COALESCE($8::timestamptz, now()), now()) + ($9 * interval '1 millisecond'))
+			now() + (($8::bigint + $9::bigint) * interval '1 millisecond'))
 		ON CONFLICT (name, idempotency_key)
 		DO UPDATE SET name = EXCLUDED.name
 		RETURNING id`,
 		id, input.Name, input.Payload, string(class), input.Priority,
 		idempotency, nullableString(input.CorrelationID),
-		nullableTime(input.NotBefore), deferBy.Milliseconds(),
+		input.RunAfter.Milliseconds(), deferBy.Milliseconds(),
 	).Scan(&storedID)
 	if err != nil {
 		return "", err

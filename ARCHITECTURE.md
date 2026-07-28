@@ -190,7 +190,7 @@ Nếu cần một chiều ngược, dùng event hoặc port, không dùng import
 cmd/
   rhinoq-agent/
   rhinoq-worker/
-  rhinoq-cli/
+  rhinoq/
 internal/
   domain/
   application/

@@ -28,5 +28,5 @@ Results:
 - [ ] No layer boundary bypass
 - [ ] Failure/uncertain path covered
 - [ ] Docs/changelog updated if needed
+- [ ] README updated for every user-visible change, or the PR explains why not
 - [ ] Rollback/migration plan documented if needed
-

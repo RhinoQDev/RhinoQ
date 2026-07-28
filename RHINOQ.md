@@ -4,6 +4,19 @@
 
 RhinoQ là PostgreSQL job queue có business-integrity workflow cho background work quan trọng, nơi _"worker chạy xong"_ chưa đủ và hệ thống cần biết trạng thái nghiệp vụ cuối cùng có thực sự chính xác hay không. `scan`/observe-only là đường đánh giá trên execution system hiện hữu; native queue vẫn là core product.
 
+## Implementation authority — cập nhật 2026-07-28
+
+- Go là ngôn ngữ authoritative cho engine, embedded API, worker, scheduler và
+  CLI.
+- Deployment mặc định là application Go dùng `*rhinoq.Client` trực tiếp với
+  PostgreSQL; không cần server RhinoQ riêng.
+- Binary lịch sử `rhinoq-agent` chỉ là HTTP Gateway tùy chọn cho worker không
+  phải Go. Nó không phải AI agent, không chạy model và không cần LLM.
+- CLI chính thức là `rhinoq`, không phải `npx rhinoq`.
+- TypeScript/NestJS snippets còn lại trong tài liệu này mô tả adapter/DX có thể
+  làm sau khi protocol ổn định; chúng không phải public contract v0.1 và không
+  được dùng thay cho README, `pkg/rhinoq`, feature matrix hoặc test hiện tại.
+
 ---
 
 ## Mục lục
@@ -40,7 +53,7 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow cho background w
 
 **PHẦN X — MIGRATION TỪ BULLMQ** 51. [Bốn công cụ, không phải một suite](#51-bốn-công-cụ-không-phải-một-suite) 52. [Drain và cutover](#52-drain-và-cutover)
 
-**PHẦN XI — ĐA NGÔN NGỮ VÀ DATABASE** 53. [Agent, Protocol, SDK](#53-agent-protocol-sdk) 54. [Intent Bridge cho database khác](#54-intent-bridge-cho-database-khác)
+**PHẦN XI — ĐA NGÔN NGỮ VÀ DATABASE** 53. [Embedded Go, HTTP Gateway tùy chọn, Protocol và SDK](#53-embedded-go-http-gateway-tùy-chọn-protocol-và-sdk) 54. [Intent Bridge cho database khác](#54-intent-bridge-cho-database-khác)
 
 **PHẦN XII — THỰC THI** 55. [Scope v0.1](#55-scope-v01) 56. [Roadmap](#56-roadmap) 57. [Loại bỏ và hạ cấp](#57-loại-bỏ-và-hạ-cấp) 58. [Quy tắc quyết định tính năng](#58-quy-tắc-quyết-định-tính-năng) 59. [Vấn đề mở](#59-vấn-đề-mở) 60. [Rủi ro](#60-rủi-ro) 61. [Bước tiếp theo](#61-bước-tiếp-theo) 62. [Phán quyết cuối](#62-phán-quyết-cuối)
 
@@ -52,9 +65,11 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow cho background w
 
 **RhinoQ** — tê giác. Nặng, bền, da dày, không lay chuyển.
 
-- Package: `rhinoq` / `@rhinoq/core`
-- CLI: `npx rhinoq`
-- Config: `rhinoq.config.ts` hoặc `rhinoq.yaml`
+- Go module: `github.com/rhinoq/rhinoq`
+- Public package: `github.com/rhinoq/rhinoq/pkg/rhinoq`
+- CLI: `rhinoq`
+- Config hiện tại: typed Go config + environment; YAML/TypeScript config chưa
+  phải public contract
 - DB schema: `rhinoq`
 
 Kiểm tra trước khi cam kết: `npm view rhinoq`, GitHub search, `rhinoq.dev`.
@@ -123,7 +138,8 @@ RECOVER   Khi trạng thái sai, có thể điều tra và phục hồi an toàn
 
 ### 3.1 Năng lực xuyên suốt — không phải sản phẩm riêng
 
-Bounded storage · Resource Governor · Security · Tenant isolation · Metrics · Agent protocol · SDK · Console · Migration tooling.
+Bounded storage · Resource Governor · Security · Tenant isolation · Metrics ·
+optional Gateway protocol · SDK · Console · Migration tooling.
 
 Đây là **điều kiện nền** để bốn lớp trên tồn tại được trong production, không phải điểm quảng cáo chính.
 
@@ -553,7 +569,7 @@ export default async function (payload, ctx) {
 
 Idempotency key phải **truyền xuống service bên ngoài**, không chỉ dùng nội bộ. Stripe/PayPal tự dedupe theo header — đây là cách an toàn nhất.
 
-### 10.3b State machine đầy đủ
+### 10.4 State machine đầy đủ
 
 Bốn trạng thái ở trên là tối thiểu cho v0.1. Bản đầy đủ cần tám, vì verify là một quá trình có thời gian chứ không phải một phép kiểm tức thời:
 
@@ -582,7 +598,7 @@ confirmed ──→ compensated (đã chạy job bù trừ)
 
 Phân biệt `uncertain` với `verifying` quan trọng: không có `verifying` thì nhiều verifier có thể cùng tra một effect, gọi provider API trùng lặp.
 
-### 10.3c Effect fencing — dedupe xuyên attempt
+### 10.5 Effect fencing — dedupe xuyên attempt
 
 Effect phải gắn với `job_id` · `attempt_id` · `lease_epoch` · `effect_name` · `effect_key`.
 
@@ -612,25 +628,25 @@ CREATE TABLE rhinoq.effects (
 
 Mọi thao tác trên effect phải kiểm `lease_epoch` (mục 41.3).
 
-### 10.4 Effect KHÔNG dùng cho
+### 10.6 Effect KHÔNG dùng cho
 
 Phép tính trong memory · database write nằm cùng transaction · tác vụ chạy lại tự do được · cache update · log · temporary file tái tạo được.
 
 Khai báo effect cho những thứ này chỉ tạo overhead vô ích.
 
-### 10.5 Adapter chỉ là primitive
+### 10.7 Adapter chỉ là primitive
 
 Bốn primitive phủ phần lớn trường hợp: **HTTP idempotency** · **object storage existence** (HEAD object) · **external database reference** · **external signal**.
 
 Không viết hàng chục integration riêng cho từng nhà cung cấp khi chưa có contributor hoặc nhu cầu thật.
 
-### 10.6 Effect không verify được là hợp lệ
+### 10.8 Effect không verify được là hợp lệ
 
 `webhook-out` gửi cho đối tác không có API tra cứu là **không thể verify**. Với những effect đó, `needs_decision` là trạng thái cuối cùng hợp lệ, không phải thất bại của thiết kế.
 
 ---
 
-### 10.7 Failure semantics table — công bố trong README
+### 10.9 Failure semantics table — công bố trong README
 
 RhinoQ **không** ngăn được mọi side effect trùng. Nói thế là lời hứa exactly-once giả. Bảng này phải nằm trong README, không giấu trong docs:
 
@@ -712,7 +728,9 @@ Backoff giữa các lần kiểm tra
 Final verify gần deadline
 ```
 
-Không cho mỗi job tạo vòng polling độc lập. Agent giữ `next_check_at` / `check_stage` / `deadline_at` trong một timing wheel, không tạo sẵn nhiều job kiểm tra.
+Không cho mỗi job tạo vòng polling độc lập. Scheduler/runtime giữ
+`next_check_at` / `check_stage` / `deadline_at` trong một timing wheel, không
+tạo sẵn nhiều job kiểm tra.
 
 ### 11.5 Outcome đọc quá sớm — nguồn báo sai lớn nhất
 
@@ -822,7 +840,7 @@ Callback tuỳ ý vẫn được phép — nhưng chạy trong worker của ngư
 Contract test (mục 47) nói "kiểm tra index" — đây là cách kiểm cụ thể:
 
 ```bash
-npx rhinoq outcome:explain
+rhinoq explain <rule-id>
 ```
 
 ```
@@ -866,7 +884,8 @@ outcome.fieldEquals({
 
 Có thể tích hợp metadata từ Drizzle hoặc Prisma. API chuỗi đơn giản vẫn có thể tồn tại cho trường hợp cơ bản, nhưng không nên là API duy nhất.
 
-**Custom verifier chạy trong application worker của người dùng**, không chạy trong Agent (vốn có quyền database cao). Xem mục 38 cho ràng buộc bảo mật.
+**Custom verifier chạy trong application process/worker của người dùng**, không
+chạy bằng privileged Gateway role. Xem mục 38 cho ràng buộc bảo mật.
 
 ---
 
@@ -891,7 +910,7 @@ ORDER BY updated_at, id LIMIT 1000;
 
 Mỗi rule phải khai báo: `scope` · `cursor` · `batch size` · `resource class` · `statement timeout` · `maximum affected records`.
 
-### 12.2b Cursor `updated_at` có thể bỏ sót
+### 12.3 Cursor `updated_at` có thể bỏ sót
 
 `WHERE (updated_at, id) > (...)` bỏ sót record khi: import dữ liệu cũ · restore · timestamp bị backdate · **transaction commit muộn** (row có `updated_at` cũ nhưng chỉ visible sau khi cursor đã vượt qua) · clock lệch giữa các service.
 
@@ -908,9 +927,9 @@ Với timestamp bắt buộc phải có overlap window:
 cursor = 12:00  →  lần chạy sau đọc lại từ 11:55
 ```
 
-Overlap tạo finding trùng, nên phải dedupe (mục 12.2d).
+Overlap tạo finding trùng, nên phải dedupe (mục 12.5).
 
-### 12.2c Finding lifecycle
+### 12.4 Finding lifecycle
 
 Reconciliation phát hiện mismatch nhưng nếu không có lifecycle, Needs Attention sẽ đầy cảnh báo cũ và không ai đọc nữa.
 
@@ -926,7 +945,7 @@ Bốn câu hỏi lifecycle phải trả lời được: finding đã được x�
 
 `false_positive` và `ignored` **phải có expiry**. Đánh dấu vĩnh viễn là cách chôn vấn đề.
 
-### 12.2d Drift deduplication
+### 12.5 Drift deduplication
 
 Rule chạy mỗi phút không được tạo 60 finding cho cùng một scan.
 
@@ -947,7 +966,7 @@ CREATE TABLE rhinoq.findings (
 
 Thấy lại chỉ `UPDATE last_seen, occurrence_count, latest_evidence`. `observed_invariant_version` nằm trong key để khi invariant đổi (deploy mới) thì tạo finding mới thay vì gộp nhầm vào cái cũ.
 
-### 12.3 Không tự repair mặc định
+### 12.6 Không tự repair mặc định
 
 ```
 detect → explain → preview → chờ phê duyệt
@@ -1035,8 +1054,10 @@ Dry-run mặc định · expected change · affected business objects · effect 
 ### Bước 1 — Cài
 
 ```bash
-npm i @rhinoq/nest
-npx rhinoq init
+go get github.com/rhinoq/rhinoq
+go get github.com/jackc/pgx/v5
+go install github.com/rhinoq/rhinoq/cmd/rhinoq@latest
+rhinoq init
 ```
 
 ### Bước 2 — Xem RhinoQ sẽ làm gì (chưa làm gì cả)
@@ -1045,19 +1066,13 @@ npx rhinoq init
 
 ```
 Will create:
-  rhinoq.config.ts
-  src/jobs/example.ts
-  src/rhinoq.worker.ts
-  migrations/001_rhinoq.sql
-
-Will modify:
-  src/app.module.ts   (+3 dòng: import RhinoQModule)
+  rhinoq.config.env.example
 
 No database changes have been applied.
-No files have been modified.
+No existing file has been modified.
 No network request has been made.
 
-Chạy `npx rhinoq init --apply` để thực hiện.
+Chạy `rhinoq init --apply` để tạo template.
 ```
 
 Đây là điểm khác biệt về **niềm tin**, không phải tiện lợi. Một CLI tự sửa file, tự chạy SQL, tự mount route admin sẽ làm người dùng cẩn thận dừng lại ngay — và người dùng cẩn thận chính là đối tượng của RhinoQ.
@@ -1065,120 +1080,101 @@ Chạy `npx rhinoq init --apply` để thực hiện.
 ### Bước 3 — Apply
 
 ```bash
-npx rhinoq init --apply
-npx rhinoq migrate
+rhinoq init --apply
+rhinoq migrate plan
+rhinoq migrate apply
+rhinoq doctor --ci
 ```
 
-Local dev có thể `autoApply: true`. **Production không bao giờ** — xem mục 46.
+Không có `autoApply` ngầm. `plan`, `status` và `sql` chỉ đọc; chỉ
+`migrate apply` mới ghi database — xem mục 46.
 
 ### Bước 4 — Tạo job
 
-```ts
-export const sendEmail = defineJob({
-  name: "send-email",
-  handler: async ({ userId }) => {
-    await emailService.sendWelcome(userId);
-  },
-});
+```go
+err := queue.Handle("send-email", func(ctx context.Context, job rhinoq.Job) error {
+    return emailService.SendWelcome(ctx, job.Payload)
+})
 ```
 
 Không profile. Không effect. Không outcome. Không correlation.
 
 ### Bước 5 — Chạy local
 
-```bash
-npx rhinoq dev
-```
-
-Một lệnh có thể chạy application runtime + worker + Console local, nhưng application command phải được cấu hình rõ ràng:
-
-```ts
-export default defineConfig({
-  dev: {
-    appCommand: "npm run start:dev",
-  },
-});
-```
-
-RhinoQ không thể tự biết ứng dụng dùng `nest start --watch`, `tsx watch`, `nodemon`, `vite`, `next dev` hay một lệnh custom nào. Nếu chưa có `appCommand`, CLI phải báo thiếu cấu hình thay vì giả định cách chạy app.
-
-Phương án tương đương là để CLI sinh scripts:
-
-```json
-{
-  "scripts": {
-    "dev:app": "nest start --watch",
-    "dev": "concurrently \"npm run dev:app\" \"rhinoq work\""
-  }
-}
-```
+Chạy application Go như bình thường; worker embedded chạy bằng
+`queue.Run(ctx)`. CLI hiện tại không giả vờ có `rhinoq dev`, vì nó không thể
+biết command của application. Nếu sau này thêm lệnh tổng hợp, `appCommand` phải
+được developer khai báo và review; RhinoQ không tự đoán.
 
 ### Bước 6 — Enqueue
 
-```ts
-await jobs.sendEmail({ userId });
+```go
+jobID, err := queue.Enqueue(ctx, rhinoq.JobRequest{
+    Name:           "send-email",
+    Payload:        payload,
+    IdempotencyKey: "welcome:" + userID,
+    CorrelationID:  userID,
+})
 ```
 
 ### Bước 7 — Quan sát
 
-```
-✓ send-email completed in 420ms
-```
-
-### Chỉ SAU khi hoàn thành bảy bước, RhinoQ mới gợi ý bước tiếp theo
-
-```
-💡 Job "send-email" gọi một service bên ngoài.
-   Bảo vệ nó khỏi retry không an toàn?
-
-   npx rhinoq protect send-email
+```bash
+rhinoq jobs list --queue send-email
+rhinoq attention
 ```
 
-Đây là cách giới thiệu Effect **mà không ép người dùng học trước**. Họ đã có job chạy được, đã thấy giá trị, và giờ mới gặp khái niệm mới — đúng lúc nó có nghĩa với họ.
+Chỉ sau khi job cơ bản chạy được, docs mới giới thiệu Effect, Rule và Finding.
+Không quảng bá command `protect` trước khi command đó thực sự tồn tại.
 
 ---
 
 ## 15. Cần chạy bao nhiêu process?
 
-Người đọc tài liệu thấy: Application · Worker · Runtime · Agent · Console · PostgreSQL · process isolation — và dễ nghĩ phải deploy năm service. Câu trả lời phải nằm ngay trang đầu:
+Người đọc tài liệu thấy Application · Worker · Runtime · Gateway · Console ·
+PostgreSQL và dễ nghĩ phải deploy nhiều service. Mặc định thực tế nhỏ hơn:
 
-| Môi trường              | Process                                                  | Ghi chú                                          |
-| ----------------------- | -------------------------------------------------------- | ------------------------------------------------ |
-| **Development**         | `npx rhinoq dev`                                         | app command đã cấu hình + worker + Console local |
-| **Production đơn giản** | API process · Worker process · PostgreSQL                | **đây là mặc định** — hai process, một database  |
-| **Production nâng cao** | API · N worker · standalone Agent · Console · PostgreSQL | chỉ khi cần polyglot hoặc tách hoàn toàn         |
+| Môi trường | Process | Ghi chú |
+|---|---|---|
+| **Development** | application Go embedded · PostgreSQL | producer, handler, worker và scheduler có thể cùng process |
+| **Production đơn giản** | application/worker Go · PostgreSQL | có thể cùng process hoặc tách worker để cô lập tải |
+| **Production scale-out** | API · N Go worker · PostgreSQL | vẫn không cần Gateway |
+| **Polyglot tùy chọn** | API · workers · HTTP Gateway · PostgreSQL | chỉ khi worker không phải Go cần full protocol |
 
-> **Standalone Agent không được xuất hiện trong hướng dẫn bắt đầu.** Nó là tuỳ chọn cho polyglot (mục 53), không phải yêu cầu. Trang "Getting Started" chỉ nói tới hai process.
+> HTTP Gateway không xuất hiện trong quickstart. Nó không phải AI/LLM và không
+> cần cho CLI, migration, Rule scheduler hoặc embedded Go.
 
 ---
 
 ## 16. Một canonical API — không hai hệ cấu hình song song
 
-RhinoQ có nguy cơ có sáu cách khai báo job: file-based convention · NestJS decorator · TypeScript config · YAML Blueprint · CLI generate · SQL enqueue function. Người dùng sẽ không biết cách nào là chính thức, dùng YAML rồi có cần TypeScript nữa không, decorator và file-based có dùng chung được không.
+RhinoQ có nguy cơ có nhiều nguồn sự thật: Go registration, file convention,
+framework decorator, YAML, generated code và SQL enqueue. v0.1 chỉ có một
+runtime contract authoritative.
 
-### 16.1 Nguồn sự thật duy nhất cho Node: `defineJob`
+### 16.1 Nguồn sự thật v0.1: public Go API
 
-```ts
-export const sendEmail = defineJob({
-  name: 'send-email',
-  handler: async (payload, ctx) => { ... },
-  // mọi thứ khác đều tuỳ chọn:
-  // profile, retry, effects, outcome, replay, correlation
+```go
+err := queue.Handle("send-email", handler)
+
+jobID, err := queue.Enqueue(ctx, rhinoq.JobRequest{
+    Name:           "send-email",
+    Payload:        payload,
+    IdempotencyKey: "welcome:" + userID,
+    CorrelationID:  userID,
 })
 ```
 
-Mọi cách khác **chỉ là adapter hoặc công cụ quanh nó**:
+| Cách | Vai trò |
+|---|---|
+| `Handle` + `JobRequest` (Go) | **canonical v0.1** |
+| `rhinoq.enqueue()` | transactional producer interface cho ORM/ngôn ngữ khác |
+| HTTP Gateway | worker protocol tùy chọn cho non-Go |
+| TypeScript/NestJS adapter | future thin adapter; không sở hữu correctness |
+| YAML/code generation | chưa phải public contract |
 
-| Cách                     | Vai trò                                                                       |
-| ------------------------ | ----------------------------------------------------------------------------- |
-| `defineJob` (TypeScript) | **canonical** — nguồn sự thật                                                 |
-| NestJS module            | adapter: `RhinoQModule.register([sendEmail])`                                 |
-| File-based discovery     | tiện ích: tự tìm `defineJob` export trong `jobs/`                             |
-| YAML Blueprint           | **chỉ** cho generate, import/export, ops config — **không chứa handler code** |
-| CLI generate             | sinh ra `defineJob` từ YAML                                                   |
-| SQL enqueue function     | interface enqueue cho ngôn ngữ khác (mục 53.3)                                |
-
-> **Không có hai hệ cấu hình job độc lập.** YAML không định nghĩa hành vi runtime của job; nó chỉ sinh ra hoặc mô tả `defineJob`. Nếu YAML và TypeScript mâu thuẫn, TypeScript thắng — và CLI phải cảnh báo.
+> Không có một state machine thứ hai trong SDK. Lease, retry, Effect Ledger,
+> Rule và recovery vẫn do Go engine sở hữu.
 
 ### 16.2 Ba trang tài liệu, ba mức
 
@@ -1186,45 +1182,38 @@ Docs phải tách thành ba trang riêng, không gộp một trang "API Referenc
 
 **Trang 1 — Simple Job.** Chỉ dạy: enqueue · worker · retry · delayed · inspect.
 
-```ts
-export const sendWelcomeEmail = defineJob({
-  name: "send-welcome-email",
-  handler: async ({ userId }) => {
-    await emailService.sendWelcome(userId);
-  },
-});
-
-await jobs.sendWelcomeEmail({ userId });
+```go
+_ = queue.Handle("send-welcome-email", sendWelcome)
+_, _ = queue.Enqueue(ctx, rhinoq.JobRequest{
+    Name: "send-welcome-email", Payload: payload,
+    IdempotencyKey: "welcome:" + userID,
+})
 ```
 
 **Trang 2 — Transactional Job.** Chỉ giới thiệu COMMIT, chưa nói gì tới Effect/Outcome.
 
-```ts
-await db.transaction(async (tx) => {
-  const order = await createOrder(tx);
-  await jobs.provisionOrder({ orderId: order.id }, { tx });
-});
+```sql
+BEGIN;
+INSERT INTO orders (...) VALUES (...);
+SELECT rhinoq.enqueue(
+  job_name => 'provision-order',
+  payload => $1,
+  idempotency_key => $2,
+  correlation_id => $3
+);
+COMMIT;
 ```
 
 **Trang 3 — Protected Job.** Giờ mới tới Effect, rồi Outcome, rồi Repair.
 
-```ts
-export const provisionAccount = defineJob({
-  name: "provision-account",
-  handler: async ({ orderId }, ctx) => {
-    await ctx.effect.run("provision", {
-      confirm: "on-return",
-      execute: async (effect) =>
-        provider.createAccount({
-          orderId,
-          idempotencyKey: effect.idempotencyKey,
-        }),
-    });
-  },
-});
-```
+Protected Job dùng `job.Effect(...)` với idempotency key và confirmation policy
+explicit. API chính xác nằm trong `pkg/rhinoq/effect.go`; callback return chỉ
+được confirm khi policy khai báo điều đó.
 
-### 16.3 Context API
+### 16.3 Context API tương lai
+
+Danh sách dưới đây là DX proposal cho TypeScript adapter, chưa phải Go API hiện
+tại:
 
 ```ts
 ctx.effect.run(name, options); // options gồm confirm + execute
@@ -1239,7 +1228,7 @@ ctx.correlation;
 ctx.attempt;
 ```
 
-### 16.4 `effect.run()` phải là mặc định — API thủ công quá dễ dùng sai
+### 16.4 Confirmation helper phải là mặc định — API thủ công quá dễ dùng sai
 
 ```ts
 // ❌ Dễ quên confirm()
@@ -1273,7 +1262,10 @@ confirm: (result) => result.status === "completed";
 
 RhinoQ phải phân biệt rõ ba trạng thái: **Request accepted** · **Effect confirmed** · **Outcome achieved**. Callback return không tự động chứng minh cả ba.
 
-API thủ công vẫn giữ cho trường hợp effect kéo dài qua nhiều bước hoặc confirm đến từ webhook — nhưng docs, lint rule và `rhinoq doctor` đều đẩy người dùng về `effect.run()`.
+API thủ công vẫn giữ cho trường hợp effect kéo dài qua nhiều bước hoặc confirm
+đến từ webhook. Trong Go v0.1, `job.Effect(...)` là helper public hiện có;
+`ctx.effect.run()` là tên proposal cho TypeScript adapter, không phải command/API
+đã phát hành.
 
 ---
 
@@ -1365,7 +1357,7 @@ How to fix
   hoặc: defineJob({ heartbeat: 'automatic' })
 
 Verify
-  npx rhinoq doctor --job=transcode-video
+  rhinoq doctor --ci
 ```
 
 Năm phần: **What happened · Why it matters · What RhinoQ did · Exact fix · Command to verify.**
@@ -1377,7 +1369,7 @@ Phần "What RhinoQ did" là thứ hiếm thấy nhưng quan trọng nhất khi 
 Không chỉ kiểm database (mục 46). Phải kiểm toàn bộ:
 
 ```bash
-npx rhinoq doctor
+rhinoq doctor
 ```
 
 ```
@@ -1548,7 +1540,7 @@ Màn hình người vận hành mở hằng ngày. Sáu loại, và **chỉ** s�
 | Repair pending   | có repair plan chờ phê duyệt                               |
 | Cancel failed    | worker không phản hồi lệnh cancel (mục 9.3)                |
 
-Mỗi mục hiện kèm **finding lifecycle** (mục 12.2c) — đã acknowledge chưa, đã repair chưa, có `regressed` không. Không có lifecycle thì màn hình này đầy cảnh báo cũ sau hai tuần và không ai đọc nữa.
+Mỗi mục hiện kèm **finding lifecycle** (mục 12.4) — đã acknowledge chưa, đã repair chưa, có `regressed` không. Không có lifecycle thì màn hình này đầy cảnh báo cũ sau hai tuần và không ai đọc nữa.
 
 ---
 
@@ -1863,7 +1855,7 @@ Không dùng superuser runtime. Bảy role tối thiểu:
 rhinoq_owner            sở hữu schema
 rhinoq_migrator         chỉ chạy migration
 rhinoq_producer         chỉ EXECUTE rhinoq.enqueue()
-rhinoq_agent            claim, lease, update state
+rhinoq_runtime          claim, lease, update state
 rhinoq_verifier         chỉ SELECT trên allowlist (mục 38)
 rhinoq_console_viewer   chỉ đọc
 rhinoq_operator         retry/resume/repair
@@ -1877,19 +1869,24 @@ rhinoq_operator         retry/resume/repair
 
 Nghĩa là API server bị compromise cũng không đọc được toàn bộ queue.
 
-**Worker không trực tiếp sửa trạng thái job** — phải qua Agent với attempt token (mục 35).
+**Handler không trực tiếp sửa bảng trạng thái job.** Embedded worker gọi public
+Go/application boundary; remote worker gọi HTTP Gateway. Cả hai đường cuối cùng
+đều phải trình lease owner/epoch ở mọi write (mục 35).
 
 ---
 
-## 35. Attempt token
+## 35. Execution fence
 
-Agent cấp token khi giao job:
+Contract v0.1 dùng:
 
+```text
+{ jobId, leaseOwner, leaseEpoch }
 ```
-{ jobId, attemptId, leaseOwner, expiresAt, nonce, signature }
-```
 
-Worker báo hoàn thành phải trả token hợp lệ.
+Mỗi claim tăng `leaseEpoch`. Heartbeat, complete, fail, release, begin effect
+và resolve effect đều phải khớp owner/epoch trong `WHERE`; stale execution nhận
+`ErrLeaseLost`. Signed remote attempt token có thể thêm sau nhưng không thay
+thế database fencing counter.
 
 **Ngăn được:** worker cũ (đã mất lease, bị coi là chết) báo `completed` sau khi lease đã chuyển cho worker khác — một failure mode phổ biến nếu hệ thống visibility-timeout không fence mọi write theo execution generation.
 
@@ -1939,7 +1936,8 @@ never-persist     không bao giờ ghi xuống DB
 
 ## 38. Outcome DSL không chạy SQL tuỳ ý
 
-Verifier chạy trong Agent (có quyền DB) **chỉ được** dùng primitive ở mục 11.7, với:
+Rule verifier chạy trong Go engine bằng restricted read-only database role và
+**chỉ được** dùng contract ở mục 11.7, với:
 
 - Table/view allowlist
 - Column allowlist
@@ -1948,7 +1946,8 @@ Verifier chạy trong Agent (có quyền DB) **chỉ được** dùng primitive 
 - Statement timeout
 - Tenant filter bắt buộc
 
-Custom verifier phức tạp → chạy trong application worker của người dùng, với quyền của họ, không phải quyền Agent.
+Custom verifier phức tạp → chạy trong application worker của người dùng, với
+quyền của họ, không phải privileged migration/runtime role.
 
 ---
 
@@ -2025,14 +2024,16 @@ isolation:
   maxLogBytes: 1MB
 ```
 
-Mục tiêu: **một handler hoặc package độc hại không được đọc credential của Agent.** Agent giữ quyền database cao; handler thì không.
+Mục tiêu khi tách process: **một handler hoặc package độc hại không được đọc
+credential của runtime/Gateway.** Embedded mode chia sẻ process nên không tạo
+OS isolation; workload không tin cậy phải chạy worker riêng với credential hẹp.
 
 ## 40.4 GDPR và data deletion
 
 Payload, error log và correlation có thể chứa dữ liệu người dùng. Nếu không có đường xoá, RhinoQ trở thành rủi ro tuân thủ cho người dùng.
 
 ```bash
-npx rhinoq privacy:erase --subject=user:USR-1928
+rhinoq privacy erase --subject=user:USR-1928   # planned, chưa implement
 ```
 
 Năm năng lực cần: delete/anonymize by subject · **payload crypto-shredding** (mã hoá payload bằng key riêng theo subject, xoá key là xoá dữ liệu — không cần rewrite partition) · retention theo data class · legal hold · audit exemption.
@@ -2393,19 +2394,22 @@ Không nên biến lợi thế chính (embedded) thành giới hạn cứng làm
 
 ## 46. Migration schema
 
-```ts
-autoMigrate: process.env.NODE_ENV !== "production";
-```
-
 ```bash
-npx rhinoq migrate:generate > migrations/001_rhinoq.sql
+rhinoq migrate plan     # read-only
+rhinoq migrate status   # read-only
+rhinoq migrate sql      # in pending SQL cho DBA review
+rhinoq migrate apply    # explicit write
 ```
 
-> **RhinoQ không tự sửa DB của bạn ở production. Nó chỉ đưa SQL.**
+> **RhinoQ không auto-migrate khi application boot.** Operator review plan/SQL
+> rồi mới chạy action `apply`.
 
-**Nhiều instance boot cùng lúc:** `pg_advisory_lock(748291)` — một chạy, các instance khác chờ.
+Runner embed migration đã phát hành, kiểm SHA-256 checksum, lấy PostgreSQL
+advisory lock và commit từng version trong transaction riêng.
 
-**Version mismatch:** DB cũ hơn → production throw rõ ràng. DB mới hơn → cảnh báo và **không chạy tiếp**.
+**Version mismatch:** DB cũ hơn → `doctor --ci` fail và chỉ đường migrate. DB
+mới hơn binary, checksum drift, history gap hoặc schema cũ không có tracking →
+fail-closed; không tự sửa/baseline.
 
 > **Quy tắc bất di bất dịch: migration chỉ THÊM, không bao giờ xoá hay đổi tên column.** Rolling deploy có v1 và v2 song song vài phút, cả hai phải đọc được cùng schema.
 
@@ -2417,7 +2421,7 @@ npx rhinoq migrate:generate > migrations/001_rhinoq.sql
 
 RhinoQ không được làm mọi lần chạy test trở nên nặng.
 
-| Tầng            | Cần Postgres/Agent? | Kiểm tra                                                                                                                                          |
+| Tầng            | Cần Postgres/Gateway? | Kiểm tra                                                                                                                                          |
 | --------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Unit**        | không               | handler logic · outcome rule · repair calculation · retry policy                                                                                  |
 | **Contract**    | không               | payment job có idempotency? outcome có deadline? payload có secret? query field có index? effect irreversible có policy?                          |
@@ -2537,8 +2541,8 @@ Bảy thứ phải công bố trước khi nói "production-ready":
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
 | **Fault-test logs**         | log thật của `kill -9` giữa lúc chạy, mất DB connection, lease expiry, Postgres restart — có timestamp, có kết quả | chứng minh crash recovery không phải lý thuyết |
 | **Reproducible benchmarks** | script + hardware spec + workload, ai cũng chạy lại được                                                           | benchmark không tái hiện được là marketing     |
-| **Known limitations**       | danh sách thẳng thắn cái chưa làm được                                                                             | mục 6 + mục 10.7                               |
-| **Failure semantics table** | mục 10.7                                                                                                           | người ta cần biết chính xác được đảm bảo gì    |
+| **Known limitations**       | danh sách thẳng thắn cái chưa làm được                                                                             | mục 6 + mục 10.9                               |
+| **Failure semantics table** | mục 10.9                                                                                                           | người ta cần biết chính xác được đảm bảo gì    |
 | **Migration guide**         | mục 51–52, có checklist và rollback                                                                                |                                                |
 | **Database impact report**  | latency API trước/sau, WAL/job, connection usage ở mỗi mode                                                        | trả lời câu hỏi lớn nhất (mục 45)              |
 | **Case study thật**         | ít nhất một hệ thống production dùng thật, có số liệu                                                              | thứ khó nhất và giá trị nhất                   |
@@ -2623,7 +2627,7 @@ Liveness fail → restart pod. Readiness fail → **không** restart, chỉ ng�
 ### Analyze
 
 ```bash
-npx rhinoq analyze --bullmq
+rhinoq analyze --bullmq   # planned, chưa implement
 ```
 
 Xác định queue nào phù hợp chuyển — và **tự loại những queue không nên chuyển** (throughput cao, dùng Flows, dùng group rate limiter). Việc tự loại tạo niềm tin nhiều hơn là nói mình làm được mọi thứ.
@@ -2661,7 +2665,7 @@ PHA 1 — STOP PRODUCING
   → Hai worker chạy song song, hai tập job KHÁC NHAU. Không trùng, không mất.
 
 PHA 2 — DRAIN COMPLETE
-  npx rhinoq drain-status → waiting 0 · active 0 · delayed 0 · repeat 0
+  rhinoq drain-status → waiting 0 · active 0 · delayed 0 · repeat 0  # planned
   → An toàn tắt BullMQ worker
 ```
 
@@ -2673,24 +2677,28 @@ PHA 2 — DRAIN COMPLETE
 
 # PHẦN XI — ĐA NGÔN NGỮ VÀ DATABASE
 
-## 53. Agent, Protocol, SDK
+## 53. Embedded Go, HTTP Gateway tùy chọn, Protocol và SDK
 
-RhinoQ không nên bị khoá vào Node.js. Kiến trúc dài hạn:
+Go embedded là đường mặc định. Chỉ khi worker không phải Go cần full lifecycle
+mới thêm HTTP Gateway:
 
 ```
-Application (Node · Go · Python · Java · .NET)
-      │  Thin SDK
-      ▼  Unix socket / gRPC
-RhinoQ Agent    ← toàn bộ correctness
-      │
-      ▼
-PostgreSQL
+Go application ────────────────┐
+  embedded Client              │
+                              ▼
+Non-Go worker → thin SDK → optional HTTP Gateway → PostgreSQL
 ```
 
-**Agent chứa:** claim · lease · retry · scheduler · storage · resource governor · compaction · security.
-**SDK chỉ làm bốn việc:** enqueue · register handler · receive job · report result/effect.
+Gateway hiện mang tên binary `rhinoq-agent` vì lịch sử; nó là process
+deterministic, không phải AI/LLM. **Go engine chứa:** claim · lease · retry ·
+scheduler · storage · Effect Ledger · Finding lifecycle · recovery.
+**SDK chỉ gửi:** enqueue · receive job · heartbeat · result/effect · operator
+decision.
 
-Lý do: nếu SDK Node xử lý lease một kiểu, SDK Python một kiểu khác, SDK Java có bug crash-recovery riêng — correctness bị nhân theo số ngôn ngữ. Gom vào một Agent là cách duy nhất giữ đúng lời hứa khi có nhiều SDK.
+Lý do: nếu SDK Node xử lý lease một kiểu, SDK Python một kiểu khác, SDK Java có
+bug crash-recovery riêng thì correctness bị nhân theo số ngôn ngữ. Giữ state
+machine trong Go engine tránh sai lệch; điều đó không có nghĩa mọi deployment
+phải chạy Gateway.
 
 **SQL enqueue function** cho phép mọi ORM dùng được ngay, kể cả trước khi có SDK riêng:
 
@@ -2703,7 +2711,7 @@ COMMIT;
 
 ### 53.1 Protocol version negotiation
 
-Không dựa vào package version. Agent và SDK phải bắt tay rõ ràng:
+Không dựa vào package version. Gateway và SDK phải bắt tay rõ ràng:
 
 ```json
 {
@@ -2743,7 +2751,9 @@ Node error, Python exception, Go error và Java exception có cấu trúc khác 
 }
 ```
 
-`retryClass` map thẳng vào mục 9.2. SDK chịu trách nhiệm dịch exception bản địa sang envelope này; **Agent chỉ hiểu envelope**, không parse stack trace theo ngôn ngữ.
+`retryClass` map thẳng vào mục 9.2. SDK chịu trách nhiệm dịch exception bản địa
+sang envelope này; **Gateway chỉ hiểu envelope**, không parse stack trace theo
+ngôn ngữ.
 
 ### 53.3 SQL enqueue function cần auth và schema contract
 
@@ -2772,9 +2782,11 @@ rhinoq.enqueue(
 
 **Permission theo job name:** role `rhinoq_producer_payments` chỉ enqueue được job trong nhóm payment. Một service bị compromise không enqueue được job của domain khác.
 
-**Thứ tự triển khai:** 1) Node SDK → 2) Protocol ổn định → 3) Go SDK → 4) Python SDK → 5) Java/.NET nếu có nhu cầu.
+**Thứ tự triển khai:** 1) Go embedded API → 2) HTTP protocol ổn định → 3)
+TypeScript reference client → 4) Python/Java/.NET chỉ khi có design partner.
 
-> **Không viết năm SDK trước khi Node runtime ổn định.** Và không thêm SDK thứ hai nếu chưa có người khác cam kết maintain nó — chi phí maintain tăng theo _số ngôn ngữ_, không theo số tính năng.
+> Không viết nhiều SDK trước khi protocol ổn định và chưa có người cam kết
+> maintain. Chi phí tăng theo số ngôn ngữ, không theo số tính năng.
 
 ---
 
@@ -2785,7 +2797,7 @@ Không cần nói MongoDB/SQL Server/MySQL "không dùng được".
 ```
 business transaction + local intent outbox → cùng commit
                     ↓
-Agent đọc outbox (CDC hoặc cursor)
+Gateway/bridge process đọc outbox (CDC hoặc cursor)
                     ↓
 materialize idempotently sang RhinoQ Postgres
 ```
@@ -2841,68 +2853,69 @@ quyết định adopt queue.
 9. DLQ
 10. Crash recovery
 11. Basic delayed job
-    11b. **Production foundation theo pg-boss reference (mục 9.1)** — graceful shutdown 6 bước · pause/resume queue · rate limiting per-queue · worker process riêng · metrics export · NestJS module. Không yêu cầu feature parity toàn bộ.
-    11c. **Retry classification (mục 9.2)** — 7 class, không retry mù mọi exception
-    11d. **Cancellation cơ bản (mục 9.3)** — `abortSignal` cooperative + `cancel_requested`
-    11e. **Poison-job protection (mục 9.4)** — `maxWorkerCrashesPerJob`
-    11f. **`lease_epoch` fencing (mục 41.3)** — kiểm ở cả 7 thao tác
-    11g. **Admission control (mục 28.2)** — `maxPendingJobs` + `criticalReservedSlots`
+12. **Production foundation theo pg-boss reference (mục 9.1)** — graceful shutdown 6 bước · pause/resume queue · rate limiting per-queue · worker có thể tách process · metrics export. Không yêu cầu feature parity toàn bộ.
+13. **Retry classification (mục 9.2)** — 7 class, không retry mù mọi exception
+14. **Cancellation cơ bản (mục 9.3)** — `abortSignal` cooperative + `cancel_requested`
+15. **Poison-job protection (mục 9.4)** — `maxWorkerCrashesPerJob`
+16. **`lease_epoch` fencing (mục 41.3)** — kiểm ở cả 7 thao tác
+17. **Admission control (mục 28.2)** — `maxPendingJobs` + `criticalReservedSlots`
 
 ### RULES
 
-12. **Một canonical Rule model** thay cho hai subsystem Outcome/Reconciliation:
+18. **Một canonical Rule model** thay cho hai subsystem Outcome/Reconciliation:
     - `scope: job` kiểm hậu điều kiện của một execution;
     - `scope: table` quét business record đáng lẽ phải có job/outcome.
-13. Rule dùng SQL parameterized có budget, statement timeout, read-only role và
+19. Rule dùng SQL parameterized có budget, statement timeout, read-only role và
     baseline mặc định. Không phát minh invariant DSL ở v0.1.
-14. **`rhinoq explain`** chặn rule thiếu index hoặc vượt query budget ở CI.
-15. **External correlation** — `source_system`, `source_job_id`,
+20. **`rhinoq explain`** chặn rule thiếu index hoặc vượt query budget ở CI.
+21. **External correlation** — `source_system`, `source_job_id`,
     `business_key`; timeline nối được execution ngoài RhinoQ.
-16. **Effect tối giản** — `pending` · `confirmed` · `uncertain`; unknown effect
+22. **Effect tối giản** — `pending` · `confirmed` · `uncertain`; unknown effect
     không auto-retry và tạo finding. Provider adapter hoãn tới khi có nhu cầu.
 
 ### RECOVER
 
-17. **Persistent finding lifecycle** — dedup bằng rule/subject/version;
+23. **Persistent finding lifecycle** — dedup bằng rule/subject/version;
     `open → acknowledged → resolved`; suppression có expiry; resolved quay lại
     thành `regressed`; append-only event history.
-18. **Incremental table rule runner** — cursor an toàn, bounded batch, baseline
+24. **Incremental table rule runner** — cursor an toàn, bounded batch, baseline
     mặc định, không full scan ngầm.
-19. Needs Attention đọc từ finding bền vững, không chỉ union query tạm thời.
-20. `rhinoq fix` dry-run mặc định, `--limit` và audit; v0.1 không auto-repair.
-21. Business timeline/search theo correlation và external job id.
+25. Needs Attention đọc từ finding bền vững, không chỉ union query tạm thời.
+26. `rhinoq fix` dry-run mặc định, `--limit` và audit; v0.1 không auto-repair.
+27. Business timeline/search theo correlation và external job id.
 
 ### ADOPTION PATH BẮT BUỘC
 
-22. `rhinoq scan` chỉ quét bảng có correlation/job reference, dùng read-only
+28. `rhinoq scan` chỉ quét bảng có correlation/job reference, dùng read-only
     role, bounded sample và gọi kết quả là anomaly—không tự tuyên bố lỗi.
-23. `rhinoq init --from-scan` sinh plan; baseline là mặc định.
-24. Không yêu cầu cutover queue để thấy finding đầu tiên.
+29. `rhinoq init --from-scan` sinh plan; baseline là mặc định.
+30. Không yêu cầu cutover queue để thấy finding đầu tiên.
 
 ### DEVELOPER EXPERIENCE (không phải "làm sau")
 
-17a. **`rhinoq init` chỉ tạo plan**, cần `--apply` (mục 14) — quyết định về niềm tin, không phải tiện lợi
-17.1. **`rhinoq dev`** — một lệnh chạy app + worker + Console local, với app command được cấu hình
-17c. **`defineJob` là canonical API duy nhất** (mục 16.1) — không có hệ cấu hình song song
-17d. **`ctx.effect.run()` là mặc định** (mục 16.4) — API thủ công quá dễ quên `confirm()`
-17e. **Ba trang docs tách biệt** (mục 16.2): Simple → Transactional → Protected
-17.2. **Error message năm phần** + `rhinoq doctor` (mục 17.2)
-17g. **Màn hình Queues** trong Console (mục 21) — thiếu là người dùng phải cài dashboard khác
+31. **`rhinoq init` chỉ tạo plan**, cần `--apply` (mục 14) — quyết định về niềm tin, không phải tiện lợi
+32. **Embedded quickstart** — application Go + PostgreSQL; không hứa
+    `rhinoq dev` trước khi có app-command contract có thể code/test
+33. **`Handle` + `JobRequest` là canonical API v0.1** (mục 16.1) — SDK không có state machine song song
+34. **`job.Effect(...)` là helper mặc định trong Go** (mục 16.4) — confirmation policy explicit
+35. **Ba trang docs tách biệt** (mục 16.2): Simple → Transactional → Protected
+36. **Error message năm phần** + `rhinoq doctor` (mục 17.2)
+37. **Màn hình Queues** trong Console (mục 21) — thiếu là người dùng phải cài dashboard khác
 
 ### INFRASTRUCTURE BẮT BUỘC
 
-18. Hard connection budget + admission control
-19. Partition cho `attempts`/`events` (KHÔNG partition `jobs_hot`) + sweeper trong **một transaction** (mục 41.1)
-20. Retention + idempotency horizon (mục 41)
-21. Console auth (không mount nếu thiếu — app vẫn boot, mục 36)
-22. Database role separation + `lease_epoch` fencing
-23. Unit/integration/reliability test harness (có test crash ở từng điểm của sweeper)
-24. Benchmark harness
-25. **Clock authority = DB time** (mục 50.3) — quyết định sớm, sửa sau rất khó
-26. **`/health/live` + `/health/ready` tách riêng** (mục 50.5)
-27. **Audit hash chain** (mục 40.1) — thêm sau khi đã có dữ liệu thì phải rewrite toàn bộ
+38. Hard connection budget + admission control
+39. Partition cho `attempts`/`events` (KHÔNG partition `jobs_hot`) + sweeper trong **một transaction** (mục 41.1)
+40. Retention + idempotency horizon (mục 41)
+41. Console auth (không mount nếu thiếu — app vẫn boot, mục 36)
+42. Database role separation + `lease_epoch` fencing
+43. Unit/integration/reliability test harness (có test crash ở từng điểm của sweeper)
+44. Benchmark harness
+45. **Clock authority = DB time** (mục 50.3) — quyết định sớm, sửa sau rất khó
+46. **`/health/live` + `/health/ready` tách riêng** (mục 50.5)
+47. **Audit hash chain** (mục 40.1) — thêm sau khi đã có dữ liệu thì phải rewrite toàn bộ
 
-Mục 11b vẫn là release gate cho **native queue**, nhưng không phải toàn bộ product thesis. Nếu parity RUN kéo chậm VERIFY/RECOVER, observe-only mode được ưu tiên trước.
+Hạng mục 12 vẫn là release gate cho **native queue**, nhưng không phải toàn bộ product thesis. Nếu parity RUN kéo chậm VERIFY/RECOVER, observe-only mode được ưu tiên trước.
 
 Acceptance test của v0.1 không phải “enqueue rồi worker complete”. Nó phải là:
 
@@ -2923,7 +2936,7 @@ External effect demo vẫn cần, nhưng câu đúng là:
 | **v0.3 — Safe Recovery**             | Resume · repair dry-run · precondition · approval · audit đầy đủ |
 | **v0.4 — Adoption Expansion**        | adapter thứ hai · BullMQ Analyze · Protect Intent · Drain Status · migration docs |
 | **v0.5 — Runtime Intelligence**      | adaptive concurrency · circuit breaker · fair scheduling · error fingerprint · storage circuit breaker                                        |
-| **v0.6 — Polyglot**                  | stable protocol · Go SDK · Python SDK · Agent binary độc lập                                                                                  |
+| **v0.6 — Polyglot**                  | stable HTTP protocol · Python/Java/.NET SDK theo nhu cầu · Gateway hardening; Go embedded đã là nền tảng từ v0.1                              |
 | **Sau khi có nhu cầu thật**          | SQL Server/MongoDB Intent Bridge · Restore Guard · advanced incident workspace · native storage engine thứ hai · DAG · advanced rate limiting |
 
 **Quy tắc tự áp mới:** không mở rộng sang adapter thứ hai, DAG, auto-repair hoặc Outcome Level 2 trước khi ba design partner xác nhận cùng một loại finding có giá trị. Không hoãn differentiator tới sau ba user; differentiator là thứ dùng để có ba design partner.
@@ -2942,7 +2955,8 @@ Restore Guard · cross-region control · advanced incident workspace · approval
 
 ### Giữ làm infrastructure (không quảng bá thành sản phẩm)
 
-Hotset storage · compaction · Resource Governor · Agent protocol · encryption · partitioning · metrics · error fingerprint.
+Hotset storage · compaction · Resource Governor · optional Gateway protocol ·
+encryption · partitioning · metrics · error fingerprint.
 
 ---
 

@@ -74,16 +74,16 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 	if err != nil {
 		return "", err
 	}
-	notBefore := input.NotBefore
+	if input.RunAfter < 0 {
+		return "", errors.New("run-after delay must not be negative")
+	}
+	notBefore := now.Add(input.RunAfter)
 	if policy, ok := s.admission[input.Name]; ok {
 		decision, err := policy.Decide(input.Name, s.pendingCount(input.Name), class.IsCritical())
 		if err != nil {
 			return "", err
 		}
 		if decision.DeferBy > 0 {
-			if notBefore.IsZero() || notBefore.Before(now) {
-				notBefore = now
-			}
 			notBefore = notBefore.Add(decision.DeferBy)
 		}
 	}
