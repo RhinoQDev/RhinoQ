@@ -787,14 +787,24 @@ func (s *JobStore) IsCancelRequested(ctx context.Context, id ports.JobID) (bool,
 // have taken down more workers than the protection budget allows: those are
 // parked as blocked so one poison payload cannot walk through the whole fleet
 // (specification 9.4).
+//
+// It reaps at most one batch. Without the LIMIT, a mass expiry - a deploy that
+// killed every worker at once - would lock and rewrite every leased row in a
+// single statement, holding locks and generating WAL in proportion to the whole
+// backlog rather than to a bounded unit of work. The caller repeats while
+// Saturated is set, which keeps each statement short enough to interleave with
+// live claims.
 func (s *JobStore) RequeueExpired(ctx context.Context, input ports.ReapInput) (ports.ReapResult, error) {
 	protection := input.Protection.Normalize()
+	limit := ports.NormalizeReapLimit(input.Limit)
 	var result ports.ReapResult
 	rows, err := s.db.QueryContext(ctx, `
 		WITH expired AS (
 			SELECT id, attempts, lease_owner, lease_epoch FROM rhinoq_jobs
 			WHERE state = 'leased' AND lease_until <= now()
+			ORDER BY lease_until, id
 			FOR UPDATE SKIP LOCKED
+			LIMIT $2
 		), reaped AS (
 			UPDATE rhinoq_jobs j
 			SET crash_count = j.crash_count + 1,
@@ -818,7 +828,7 @@ func (s *JobStore) RequeueExpired(ctx context.Context, input ports.ReapInput) (p
 		)
 		SELECT r.id, r.lease_epoch, r.new_state
 		FROM reaped r
-		LEFT JOIN evidence e ON e.job_id = r.id`, protection.MaxWorkerCrashesPerJob)
+		LEFT JOIN evidence e ON e.job_id = r.id`, protection.MaxWorkerCrashesPerJob, limit)
 	if err != nil {
 		return ports.ReapResult{}, err
 	}
@@ -836,7 +846,11 @@ func (s *JobStore) RequeueExpired(ctx context.Context, input ports.ReapInput) (p
 			result.Requeued++
 		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return ports.ReapResult{}, err
+	}
+	result.Saturated = len(result.Expired) >= limit
+	return result, nil
 }
 
 // reserveRateSlotsTx reserves up to want slots for a queue in its current fixed

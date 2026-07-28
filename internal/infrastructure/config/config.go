@@ -23,6 +23,14 @@ type Config struct {
 	ShutdownGrace   time.Duration
 	CancelGrace     time.Duration
 	ReaperInterval  time.Duration
+	// ReapBatchLimit caps how many expired leases one reaper statement touches.
+	// It exists so a mass expiry - every worker dying at once - is drained in
+	// bounded units instead of one statement whose lock time and WAL scale with
+	// the outage.
+	ReapBatchLimit int
+	// ReapSweepBudget bounds how long one sweep keeps draining before it yields
+	// until the next tick, so recovery cannot starve live claims.
+	ReapSweepBudget time.Duration
 	// MaxWorkerCrashes is how many times one job may take a worker down before
 	// it is parked as a poison job.
 	MaxWorkerCrashes int
@@ -36,6 +44,9 @@ type Config struct {
 const (
 	maxPrefetchFactor = 3.0
 	maxClaimBatchCap  = 1000
+	// maxReapBatchCap mirrors ports.MaxReapBatchLimit. Config must not depend on
+	// the ports package, so the two are kept in sync deliberately.
+	maxReapBatchCap = 1000
 )
 
 func LoadFromEnv(getenv func(string) string) (Config, error) {
@@ -90,12 +101,21 @@ func LoadFromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	reapBatch, err := positiveInt(getenv, "RHINOQ_REAP_BATCH_LIMIT", 500)
+	if err != nil {
+		return Config{}, err
+	}
+	reapBudget, err := positiveDuration(getenv, "RHINOQ_REAP_SWEEP_BUDGET", reaper/2)
+	if err != nil {
+		return Config{}, err
+	}
 	config := Config{
 		DatabaseURL: getenv("RHINOQ_DATABASE_URL"), WorkerName: getenv("RHINOQ_WORKER_NAME"),
 		Concurrency: concurrency, PrefetchFactor: prefetch, MaxClaimBatch: maxClaimBatch,
 		LeaseDuration: lease, HeartbeatEvery: heartbeat, PollInterval: poll,
 		MaxPollInterval: maxPoll, ShutdownGrace: shutdownGrace, CancelGrace: cancelGrace,
-		ReaperInterval: reaper, MaxWorkerCrashes: crashes, ClaimLimit: claimLimit,
+		ReaperInterval: reaper, ReapBatchLimit: reapBatch, ReapSweepBudget: reapBudget,
+		MaxWorkerCrashes: crashes, ClaimLimit: claimLimit,
 	}
 	return config, config.Validate()
 }
@@ -106,6 +126,12 @@ func (c Config) Validate() error {
 	}
 	if c.MaxClaimBatch > maxClaimBatchCap {
 		return fmt.Errorf("RHINOQ_MAX_CLAIM_BATCH must not exceed %d: a larger batch protects nothing and holds leases while jobs wait", maxClaimBatchCap)
+	}
+	if c.ReapBatchLimit > maxReapBatchCap {
+		return fmt.Errorf("RHINOQ_REAP_BATCH_LIMIT must not exceed %d: one statement over a larger set holds locks and writes WAL in proportion to the whole backlog", maxReapBatchCap)
+	}
+	if c.ReapSweepBudget > c.ReaperInterval {
+		return fmt.Errorf("RHINOQ_REAP_SWEEP_BUDGET (%s) must not exceed RHINOQ_REAPER_INTERVAL (%s): a sweep that outlasts its own tick never yields to live claims", c.ReapSweepBudget, c.ReaperInterval)
 	}
 	if c.PrefetchFactor <= 0 || c.PrefetchFactor > maxPrefetchFactor {
 		return fmt.Errorf("RHINOQ_PREFETCH_FACTOR must be between 0 and %.1f: prefetched jobs hold a lease while they wait for a slot", maxPrefetchFactor)

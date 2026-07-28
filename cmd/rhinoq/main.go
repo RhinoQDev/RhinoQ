@@ -141,6 +141,7 @@ func runDoctor(ci bool) int {
 	fmt.Printf("       concurrency=%d prefetch=%.1f max_claim_batch=%d\n", c.Concurrency, c.PrefetchFactor, c.MaxClaimBatch)
 	fmt.Printf("       lease=%s heartbeat=%s poll=%s..%s\n", c.LeaseDuration, c.HeartbeatEvery, c.PollInterval, c.MaxPollInterval)
 	fmt.Printf("       shutdown_grace=%s cancel_grace=%s reaper=%s\n", c.ShutdownGrace, c.CancelGrace, c.ReaperInterval)
+	fmt.Printf("       reap_batch=%d reap_budget=%s\n", c.ReapBatchLimit, c.ReapSweepBudget)
 
 	fmt.Println("Fencing")
 	if c.WorkerName == "" {

@@ -498,10 +498,16 @@ func (s *JobStore) RequeueExpired(_ context.Context, input ports.ReapInput) (por
 		return ports.ReapResult{}, errors.New("reaper time is required")
 	}
 	protection := input.Protection.Normalize()
+	// The same batch bound as PostgreSQL, so a test that exercises saturation
+	// against memory describes the real engine's behaviour.
+	limit := ports.NormalizeReapLimit(input.Limit)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var result ports.ReapResult
 	for id, record := range s.jobs {
+		if len(result.Expired) >= limit {
+			break
+		}
 		if record.State != job.Leased || record.LeaseUntil.IsZero() || record.LeaseUntil.After(input.Now) {
 			continue
 		}
@@ -527,6 +533,7 @@ func (s *JobStore) RequeueExpired(_ context.Context, input ports.ReapInput) (por
 			OccurredAt: input.Now,
 		})
 	}
+	result.Saturated = len(result.Expired) >= limit
 	return result, nil
 }
 

@@ -248,6 +248,14 @@ type WorkerConfig struct {
 	RetryMaxDelay  time.Duration
 	// ReaperInterval is how often expired leases are swept back into the queue.
 	ReaperInterval time.Duration
+	// ReapBatchLimit caps how many expired leases one statement touches, so a
+	// mass expiry is drained in bounded units instead of one statement whose
+	// lock time and WAL scale with the size of the outage. Defaults to 500.
+	ReapBatchLimit int
+	// ReapSweepBudget bounds how long one sweep keeps draining before yielding
+	// until the next tick, so recovery cannot starve live claims. Defaults to
+	// half the reaper interval.
+	ReapSweepBudget time.Duration
 	// MaxWorkerCrashes is how many times one job may take a worker down before
 	// it is parked as a poison job instead of retried.
 	MaxWorkerCrashes int
@@ -289,6 +297,13 @@ func (c WorkerConfig) withDefaults() WorkerConfig {
 	}
 	if c.ReaperInterval <= 0 {
 		c.ReaperInterval = 30 * time.Second
+	}
+	if c.ReapSweepBudget <= 0 {
+		c.ReapSweepBudget = c.ReaperInterval / 2
+	}
+	if c.ReapSweepBudget > c.ReaperInterval {
+		// A sweep that outlasts its own tick never yields to live claims.
+		c.ReapSweepBudget = c.ReaperInterval
 	}
 	return c
 }
@@ -808,7 +823,8 @@ func (c *Client) RunWorker(ctx context.Context, config WorkerConfig) error {
 	reaper, err := lease.NewReaper(lease.Config{
 		Store: c.store, Effects: c.effects, Interval: settings.ReaperInterval,
 		Protection: job.Protection{MaxWorkerCrashesPerJob: settings.MaxWorkerCrashes},
-		Now:        func() time.Time { return time.Now().UTC() },
+		BatchLimit: settings.ReapBatchLimit, SweepBudget: settings.ReapSweepBudget,
+		Now: func() time.Time { return time.Now().UTC() },
 	})
 	if err != nil {
 		return err

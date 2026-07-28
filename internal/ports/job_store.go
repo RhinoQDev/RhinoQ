@@ -132,10 +132,34 @@ type ListJobsInput struct {
 	Limit     int
 }
 
-// ReapInput drives one sweep over expired leases.
+// ReapInput drives one batch of the sweep over expired leases.
 type ReapInput struct {
 	Now        time.Time
 	Protection job.Protection
+	// Limit caps how many expired leases one statement may touch. A mass
+	// expiry - a deploy that killed every worker, or a network partition -
+	// otherwise locks and rewrites every leased row in a single statement, with
+	// WAL and lock-hold time proportional to the whole backlog. Zero means
+	// DefaultReapBatchLimit.
+	Limit int
+}
+
+const (
+	// DefaultReapBatchLimit is the batch a sweep uses when none is configured.
+	DefaultReapBatchLimit = 500
+	// MaxReapBatchLimit bounds one statement no matter what a caller asks for.
+	MaxReapBatchLimit = 1000
+)
+
+// NormalizeReapLimit clamps a requested batch into the supported range.
+func NormalizeReapLimit(limit int) int {
+	if limit <= 0 {
+		return DefaultReapBatchLimit
+	}
+	if limit > MaxReapBatchLimit {
+		return MaxReapBatchLimit
+	}
+	return limit
 }
 
 // ExpiredLease identifies an execution that died. The epoch is what makes the
@@ -146,14 +170,18 @@ type ExpiredLease struct {
 	Epoch int64
 }
 
-// ReapResult reports what a sweep did. Blocked jobs crashed their worker often
-// enough to be parked instead of handed to the next one.
+// ReapResult reports what one batch did. Blocked jobs crashed their worker
+// often enough to be parked instead of handed to the next one.
 type ReapResult struct {
 	Requeued int
 	Blocked  int
-	// Expired lists the executions that lost their lease in this sweep, so the
+	// Expired lists the executions that lost their lease in this batch, so the
 	// effect ledger can be cleaned up after them.
 	Expired []ExpiredLease
+	// Saturated reports that the batch filled its limit, so more expired leases
+	// are probably waiting. The caller decides whether to keep going; the store
+	// never loops on its own.
+	Saturated bool
 }
 
 // LeaseFence is the subset of JobStore that other stores need in order to
