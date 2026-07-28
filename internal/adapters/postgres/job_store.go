@@ -34,6 +34,30 @@ const jobColumns = `j.id, j.queue_name, j.job_name, COALESCE(j.group_key, ''),
 // upwards by waiting time and capped, so nothing starves. Change both together.
 const effectivePrioritySQL = `(j.priority + LEAST(EXTRACT(epoch FROM (now() - j.not_before)) / 3600.0, 5.0))`
 
+// effectivePriorityBare is the same expression over unqualified columns, for use
+// against a CTE that already projected them. now() is stable within a statement,
+// and the lease update touches neither priority nor not_before, so re-applying
+// the expression after the update reproduces the original claim order exactly.
+const effectivePriorityBare = `(priority + LEAST(EXTRACT(epoch FROM (now() - not_before)) / 3600.0, 5.0))`
+
+// claimReturningColumns and claimSelectColumns are the same projection twice:
+// once qualified for RETURNING, once bare for reading it back out of the CTE.
+// Both must stay in scanJob's order.
+const claimReturningColumns = `j.id, j.queue_name, j.job_name,
+	COALESCE(j.group_key, '') AS group_key, j.payload, j.state, j.resource_class,
+	j.priority, j.attempts, j.crash_count,
+	COALESCE(j.blocked_reason, '') AS blocked_reason,
+	COALESCE(j.idempotency_key, '') AS idempotency_key,
+	COALESCE(j.correlation_id, '') AS correlation_id,
+	j.created_at, j.not_before, COALESCE(j.lease_owner, '') AS lease_owner,
+	j.lease_epoch, COALESCE(j.lease_until, 'epoch'::timestamptz) AS lease_until,
+	j.cancel_requested`
+
+const claimSelectColumns = `id, queue_name, job_name, group_key, payload, state,
+	resource_class, priority, attempts, crash_count, blocked_reason,
+	idempotency_key, correlation_id, created_at, not_before, lease_owner,
+	lease_epoch, lease_until, cancel_requested`
+
 // maxClaimCandidates caps how far a single claim may look ahead when it
 // over-fetches to survive rate-limited queues. It protects the database from a
 // worker asking for an unbounded batch.
@@ -266,10 +290,30 @@ func (s *JobStore) JobCounts(ctx context.Context, queueName string) (map[job.Sta
 	return counts, rows.Err()
 }
 
-// Claim locks a batch of eligible jobs, reserves rate-limit slots one queue at a
-// time rather than one job at a time, and leases the survivors with a single
-// UPDATE. The cost is two statements plus one per distinct queue in the batch,
-// no matter how many jobs are claimed.
+// Claim takes a batch in exactly one round trip, whatever the batch size and
+// however many execution lanes it spans.
+//
+// The previous implementation cost three statements plus one per distinct lane,
+// and the per-lane rate reservations ran inside the window where the candidate
+// rows were already locked FOR UPDATE. A worker subscribed to thirty lanes paid
+// thirty extra round trips while holding those locks, so latency to other
+// workers grew with the number of lanes rather than with the amount of work.
+//
+// Everything now happens in one statement:
+//
+//	locked    lock eligible candidates, over-fetching so a saturated lane
+//	          cannot starve the others
+//	controls  lock the rate-limit rows for those lanes, in name order
+//	budget    compute each lane's remaining allowance
+//	ranked    rank candidates within their lane
+//	chosen    keep what fits the allowance, then the batch limit
+//	reserve   consume exactly the slots that were chosen
+//	leased    take the leases
+//	evidence  append the claim timeline
+//
+// Reserving from chosen rather than from the candidate count is a deliberate
+// change: the old code reserved slots for candidates it then discarded to the
+// batch limit, burning rate budget on work it never claimed.
 func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Record, error) {
 	if input.Owner == "" || input.Limit <= 0 || input.LeaseDuration <= 0 {
 		return nil, errors.New("claim requires an owner, a positive limit and a lease duration")
@@ -280,195 +324,14 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	if err := ports.ValidateClaimQueues(input.QueueNames); err != nil {
 		return nil, err
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
 
-	candidates, err := s.lockCandidates(ctx, tx, input.Limit, input.QueueNames)
-	if err != nil {
-		return nil, err
-	}
-	if len(candidates) == 0 {
-		return []job.Record{}, tx.Commit()
-	}
-
-	wanted := make(map[string]int, len(candidates))
-	for _, item := range candidates {
-		wanted[item.queueName]++
-	}
-	granted := make(map[string]int, len(wanted))
-	for queueName, want := range wanted {
-		allowed, err := s.reserveRateSlotsTx(ctx, tx, queueName, want)
-		if err != nil {
-			return nil, err
-		}
-		granted[queueName] = allowed
-	}
-
-	ids := make([]string, 0, input.Limit)
-	for _, item := range candidates {
-		if len(ids) == input.Limit {
-			break
-		}
-		if granted[item.queueName] <= 0 {
-			continue
-		}
-		granted[item.queueName]--
-		ids = append(ids, item.id)
-	}
-	if len(ids) == 0 {
-		return []job.Record{}, tx.Commit()
-	}
-
-	claimed, err := s.leaseTx(ctx, tx, input, ids)
-	if err != nil {
-		return nil, err
-	}
-	// UPDATE ... RETURNING has no ordering guarantee. Restore the order chosen
-	// by lockCandidates before exposing the batch to a worker or writing its
-	// evidence timeline.
-	byID := make(map[string]job.Record, len(claimed))
-	for _, record := range claimed {
-		byID[string(record.ID)] = record
-	}
-	ordered := make([]job.Record, 0, len(claimed))
-	for _, id := range ids {
-		if record, ok := byID[id]; ok {
-			ordered = append(ordered, record)
-		}
-	}
-	claimed = ordered
-	if err := s.insertClaimEventsTx(ctx, tx, claimed); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return claimed, nil
-}
-
-func (s *JobStore) insertClaimEventsTx(ctx context.Context, tx *sql.Tx, claimed []job.Record) error {
-	if len(claimed) == 0 {
-		return nil
-	}
-	var query strings.Builder
-	query.WriteString(`INSERT INTO rhinoq_attempt_events
-		(job_id, attempt_number, lease_owner, lease_epoch, kind, result_state) VALUES `)
-	args := make([]any, 0, len(claimed)*4)
-	for index, record := range claimed {
-		if index > 0 {
-			query.WriteString(", ")
-		}
-		base := len(args)
-		fmt.Fprintf(&query, "($%d, $%d, $%d, $%d, 'claimed', 'leased')",
-			base+1, base+2, base+3, base+4)
-		args = append(args, string(record.ID), record.Attempts, record.LeaseOwner, record.LeaseEpoch)
-	}
-	if _, err := tx.ExecContext(ctx, query.String(), args...); err != nil {
-		ids := make([]string, 0, len(claimed))
-		for _, record := range claimed {
-			ids = append(ids, string(record.ID))
-		}
-		return fmt.Errorf("append claimed attempt events for jobs %s: %w", strings.Join(ids, ", "), err)
-	}
-	return nil
-}
-
-type claimCandidate struct{ id, queueName string }
-
-// lockCandidates over-fetches on purpose: a lane whose rate window saturates
-// mid-batch would otherwise return an empty claim and let its jobs, which sort
-// first, starve every other lane on the next poll.
-func (s *JobStore) lockCandidates(
-	ctx context.Context,
-	tx *sql.Tx,
-	limit int,
-	queueNames []string,
-) ([]claimCandidate, error) {
-	candidateLimit := limit * 4
-	if candidateLimit > maxClaimCandidates {
-		candidateLimit = maxClaimCandidates
-	}
-	if candidateLimit < limit {
-		candidateLimit = limit
-	}
-	var query strings.Builder
-	query.WriteString(`
-		SELECT j.id, j.queue_name
-		FROM rhinoq_jobs j
-		LEFT JOIN rhinoq_queue_controls qc ON qc.queue_name = j.queue_name
-		WHERE j.state IN ('pending', 'retry_wait')
-		  AND j.not_before <= now()
-		  AND qc.paused_at IS NULL`)
-	args := []any{candidateLimit}
-	if len(queueNames) > 0 {
-		query.WriteString(`
-		  AND j.queue_name IN (`)
-		for index, name := range queueNames {
-			if index > 0 {
-				query.WriteString(", ")
-			}
-			args = append(args, name)
-			fmt.Fprintf(&query, "$%d", len(args))
-		}
-		query.WriteByte(')')
-	}
-	query.WriteString(`
-		  AND (
-		      qc.rate_limit_max IS NULL
-		      OR qc.rate_window_started_at IS NULL
-		      OR qc.rate_window_started_at + (qc.rate_limit_window_ms * interval '1 millisecond') <= now()
-		      OR qc.rate_window_count < qc.rate_limit_max
-		  )
-		ORDER BY ` + effectivePrioritySQL + ` DESC, j.created_at, j.id
-		FOR UPDATE OF j SKIP LOCKED
-		LIMIT $1`)
-	rows, err := tx.QueryContext(ctx, query.String(), args...)
+	query, args := s.buildClaimStatement(input)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	candidates := make([]claimCandidate, 0, candidateLimit)
-	for rows.Next() {
-		var item claimCandidate
-		if err := rows.Scan(&item.id, &item.queueName); err != nil {
-			return nil, err
-		}
-		candidates = append(candidates, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return candidates, rows.Close()
-}
-
-// leaseTx takes the whole batch in one UPDATE and returns the leases with the
-// expiry and epoch the database itself assigned.
-func (s *JobStore) leaseTx(ctx context.Context, tx *sql.Tx, input ports.ClaimInput, ids []string) ([]job.Record, error) {
-	args := make([]any, 0, len(ids)+2)
-	args = append(args, input.Owner, input.LeaseDuration.Milliseconds())
-	placeholders := make([]string, 0, len(ids))
-	for _, id := range ids {
-		args = append(args, id)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
-	}
-	rows, err := tx.QueryContext(ctx, `
-		UPDATE rhinoq_jobs j
-		SET state = 'leased',
-		    attempts = j.attempts + 1,
-		    blocked_reason = NULL,
-		    lease_owner = $1,
-		    lease_epoch = j.lease_epoch + 1,
-		    lease_until = now() + ($2 * interval '1 millisecond')
-		WHERE j.id IN (`+strings.Join(placeholders, ", ")+`)
-		RETURNING `+jobColumns, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	claimed := make([]job.Record, 0, len(ids))
+	claimed := make([]job.Record, 0, input.Limit)
 	for rows.Next() {
 		record, err := scanJob(rows)
 		if err != nil {
@@ -479,7 +342,141 @@ func (s *JobStore) leaseTx(ctx context.Context, tx *sql.Tx, input ports.ClaimInp
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return claimed, rows.Close()
+	return claimed, nil
+}
+
+func (s *JobStore) buildClaimStatement(input ports.ClaimInput) (string, []any) {
+	candidateLimit := input.Limit * 4
+	if candidateLimit > maxClaimCandidates {
+		candidateLimit = maxClaimCandidates
+	}
+	if candidateLimit < input.Limit {
+		candidateLimit = input.Limit
+	}
+
+	// $1 owner, $2 lease milliseconds, $3 candidate limit, $4 batch limit.
+	args := []any{input.Owner, input.LeaseDuration.Milliseconds(), candidateLimit, input.Limit}
+
+	var laneFilter strings.Builder
+	if len(input.QueueNames) > 0 {
+		laneFilter.WriteString("\n\t\t\t  AND j.queue_name IN (")
+		for index, name := range input.QueueNames {
+			if index > 0 {
+				laneFilter.WriteString(", ")
+			}
+			args = append(args, name)
+			fmt.Fprintf(&laneFilter, "$%d", len(args))
+		}
+		laneFilter.WriteByte(')')
+	}
+
+	query := `
+		WITH locked AS (
+			SELECT j.id, j.queue_name, j.priority, j.created_at, j.not_before
+			FROM rhinoq_jobs j
+			LEFT JOIN rhinoq_queue_controls qc ON qc.queue_name = j.queue_name
+			WHERE j.state IN ('pending', 'retry_wait')
+			  AND j.not_before <= now()
+			  AND qc.paused_at IS NULL` + laneFilter.String() + `
+			  AND (
+			      qc.rate_limit_max IS NULL
+			      OR qc.rate_window_started_at IS NULL
+			      OR qc.rate_window_started_at + (qc.rate_limit_window_ms * interval '1 millisecond') <= now()
+			      OR qc.rate_window_count < qc.rate_limit_max
+			  )
+			ORDER BY ` + effectivePrioritySQL + ` DESC, j.created_at, j.id
+			FOR UPDATE OF j SKIP LOCKED
+			LIMIT $3
+		),
+		-- Lock the rate rows before reading their counters, otherwise two
+		-- concurrent claims both see the same remaining allowance and both
+		-- grant it. Ordering by name keeps the lock order consistent between
+		-- workers so they cannot deadlock against each other.
+		controls AS (
+			SELECT qc.queue_name, qc.rate_limit_max, qc.rate_limit_window_ms,
+			       qc.rate_window_started_at, qc.rate_window_count
+			FROM rhinoq_queue_controls qc
+			WHERE qc.rate_limit_max IS NOT NULL
+			  AND qc.queue_name IN (SELECT queue_name FROM locked)
+			ORDER BY qc.queue_name
+			FOR UPDATE
+		),
+		budget AS (
+			SELECT lanes.queue_name,
+			       c.queue_name IS NOT NULL AS limited,
+			       (
+			           c.rate_window_started_at IS NULL
+			           OR c.rate_window_started_at + (c.rate_limit_window_ms * interval '1 millisecond') <= now()
+			       ) AS window_expired,
+			       CASE
+			           WHEN c.queue_name IS NULL THEN NULL
+			           WHEN c.rate_window_started_at IS NULL
+			             OR c.rate_window_started_at + (c.rate_limit_window_ms * interval '1 millisecond') <= now()
+			             THEN c.rate_limit_max
+			           ELSE GREATEST(c.rate_limit_max - c.rate_window_count, 0)
+			       END AS allowance
+			FROM (SELECT DISTINCT queue_name FROM locked) lanes
+			LEFT JOIN controls c ON c.queue_name = lanes.queue_name
+		),
+		ranked AS (
+			SELECT id, queue_name, priority, created_at, not_before,
+			       row_number() OVER (
+			           PARTITION BY queue_name
+			           ORDER BY ` + effectivePriorityBare + ` DESC, created_at, id
+			       ) AS lane_rank
+			FROM locked
+		),
+		chosen AS (
+			SELECT r.id, r.queue_name
+			FROM ranked r
+			JOIN budget b ON b.queue_name = r.queue_name
+			WHERE b.allowance IS NULL OR r.lane_rank <= b.allowance
+			ORDER BY ` + effectivePriorityBare + ` DESC, r.created_at, r.id
+			LIMIT $4
+		),
+		taken AS (
+			SELECT queue_name, count(*)::int AS slots FROM chosen GROUP BY queue_name
+		),
+		reserve AS (
+			UPDATE rhinoq_queue_controls qc
+			SET rate_window_started_at =
+			        CASE WHEN b.window_expired THEN now() ELSE qc.rate_window_started_at END,
+			    rate_window_count =
+			        CASE WHEN b.window_expired THEN t.slots ELSE qc.rate_window_count + t.slots END,
+			    updated_at = now()
+			FROM taken t
+			JOIN budget b ON b.queue_name = t.queue_name
+			WHERE qc.queue_name = t.queue_name AND b.limited
+			RETURNING qc.queue_name
+		),
+		leased AS (
+			UPDATE rhinoq_jobs j
+			SET state = 'leased',
+			    attempts = j.attempts + 1,
+			    blocked_reason = NULL,
+			    lease_owner = $1,
+			    lease_epoch = j.lease_epoch + 1,
+			    lease_until = now() + ($2 * interval '1 millisecond')
+			FROM chosen c
+			WHERE j.id = c.id
+			RETURNING ` + claimReturningColumns + `
+		),
+		evidence AS (
+			INSERT INTO rhinoq_attempt_events
+				(job_id, attempt_number, lease_owner, lease_epoch, kind, result_state)
+			SELECT id, attempts, lease_owner, lease_epoch, 'claimed', 'leased'
+			FROM leased
+			RETURNING job_id
+		)
+		SELECT ` + claimSelectColumns + `
+		FROM leased
+		-- UPDATE ... RETURNING has no ordering guarantee. The lease touches
+		-- neither priority nor not_before and now() is stable within the
+		-- statement, so re-applying the ranking expression here reproduces the
+		-- order the candidates were chosen in.
+		ORDER BY ` + effectivePriorityBare + ` DESC, created_at, id`
+
+	return query, args
 }
 
 func (s *JobStore) PauseQueue(ctx context.Context, name string) error {
@@ -851,47 +848,6 @@ func (s *JobStore) RequeueExpired(ctx context.Context, input ports.ReapInput) (p
 	}
 	result.Saturated = len(result.Expired) >= limit
 	return result, nil
-}
-
-// reserveRateSlotsTx reserves up to want slots for a queue in its current fixed
-// window and returns how many were granted. Reserving a batch at once keeps the
-// claim path at one statement per queue instead of one per job.
-func (s *JobStore) reserveRateSlotsTx(ctx context.Context, tx *sql.Tx, name string, want int) (int, error) {
-	var granted int
-	err := tx.QueryRowContext(ctx, `
-		WITH locked AS (
-			SELECT queue_name, rate_limit_max,
-			       CASE
-			           WHEN rate_window_started_at IS NULL
-			             OR rate_window_started_at + (rate_limit_window_ms * interval '1 millisecond') <= now()
-			           THEN true ELSE false
-			       END AS window_expired,
-			       rate_window_count
-			FROM rhinoq_queue_controls
-			WHERE queue_name = $1 AND rate_limit_max IS NOT NULL
-			FOR UPDATE
-		), reservation AS (
-			SELECT queue_name, window_expired,
-			       CASE WHEN window_expired THEN 0 ELSE rate_window_count END AS used,
-			       LEAST($2, GREATEST(rate_limit_max -
-			           CASE WHEN window_expired THEN 0 ELSE rate_window_count END, 0)) AS granted
-			FROM locked
-		)
-		UPDATE rhinoq_queue_controls qc
-		SET rate_window_started_at = CASE WHEN reservation.window_expired THEN now() ELSE qc.rate_window_started_at END,
-		    rate_window_count = reservation.used + reservation.granted,
-		    updated_at = now()
-		FROM reservation
-		WHERE qc.queue_name = reservation.queue_name
-		RETURNING reservation.granted`, name, want).Scan(&granted)
-	if errors.Is(err, sql.ErrNoRows) {
-		// No controls row, or no rate limit configured: the queue is unlimited.
-		return want, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	return granted, nil
 }
 
 type scanner interface {
