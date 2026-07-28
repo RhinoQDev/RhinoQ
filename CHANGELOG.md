@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Effects no longer require a RhinoQ job. A new correlation model gives every
+  entry a `SubjectRef` and an `ExecutionRef`, and a RhinoQ job id becomes one
+  kind of execution reference rather than a precondition, so a team running
+  BullMQ, Temporal or cron can record what its worker did and read it back by
+  business subject. The external path is explicitly weaker: without a lease
+  nothing can fence it, so deduplication rests on the execution reference plus
+  the idempotency key, and recording a RhinoQ execution through it is refused
+  rather than silently accepted.
+
 - Rule observations are three-state: passed, violated and unknown. The query's
   `violated` column is now nullable — `NULL` means the check could not decide —
   with an optional `unknown_reason` column and a per-Rule `OnUnknown` policy

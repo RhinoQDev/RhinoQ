@@ -2,12 +2,16 @@ package rhinoq
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	"github.com/madebyduy/RhinoQ/internal/adapters/postgres"
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
+	"github.com/madebyduy/RhinoQ/internal/domain/effect"
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 	"github.com/madebyduy/RhinoQ/internal/runtime/rulescheduler"
@@ -32,6 +36,10 @@ type IntegrityClient struct {
 	ruleExplainer ports.RuleExplainer
 	ruleEvaluator ports.RuleEvaluator
 	ruleSchedules ports.RuleScheduleStore
+	// externalEffects records and reads Effect Ledger entries for executions
+	// RhinoQ did not run. It is nil for the in-memory facade, which has no
+	// ledger.
+	externalEffects ports.ExternalEffectStore
 }
 
 // NewIntegrity opens the integrity plane against an existing PostgreSQL
@@ -57,6 +65,10 @@ func NewIntegrity(db *sql.DB) (*IntegrityClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	effectStore, err := postgres.NewEffectStore(db)
+	if err != nil {
+		return nil, err
+	}
 	ruleEvaluator, err := postgres.NewRuleEvaluator(db, nil)
 	if err != nil {
 		return nil, err
@@ -64,7 +76,8 @@ func NewIntegrity(db *sql.DB) (*IntegrityClient, error) {
 	return &IntegrityClient{
 		findings: findingStore, rules: ruleStore,
 		ruleExplainer: ruleExplainer, ruleEvaluator: ruleEvaluator,
-		ruleSchedules: ruleStore,
+		externalEffects: effectStore,
+		ruleSchedules:   ruleStore,
 	}, nil
 }
 
@@ -232,4 +245,130 @@ func (c *IntegrityClient) RunScheduler(ctx context.Context, config RuleScheduler
 		return err
 	}
 	return scheduler.Run(ctx)
+}
+
+// SubjectRef names the business thing an invariant is about.
+type SubjectRef struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// ExecutionRef names the run that acted on a subject, in whatever system
+// performed it: "bullmq", "temporal", "cron", "app", or "rhinoq" for RhinoQ's
+// own runtime.
+type ExecutionRef struct {
+	SourceSystem string `json:"sourceSystem"`
+	SourceID     string `json:"sourceId"`
+}
+
+// ExternalEffectRequest records something an execution RhinoQ did not run did
+// to the outside world.
+type ExternalEffectRequest struct {
+	// Execution is required and must not claim to be a RhinoQ job: work RhinoQ
+	// leased records its effects through the runtime, where a lease can fence
+	// them.
+	Execution ExecutionRef
+	// Subject is optional but is what makes the entry findable later.
+	Subject     SubjectRef
+	BusinessKey string
+	// Name is what was done ("charge-card", "upload-report"); IdempotencyKey is
+	// what makes doing it twice detectable.
+	Name           string
+	IdempotencyKey string
+	Irreversible   bool
+	ExternalRef    string
+}
+
+// RecordExternalEffect writes one Effect Ledger entry for an execution another
+// system ran.
+//
+// This is the no-cutover path: a BullMQ worker that just called a payment
+// provider can record that it did, and a Rule can later ask whether the
+// business state matches, without any of it going through a RhinoQ queue.
+//
+// It is deliberately weaker than the runtime path, and the difference matters.
+// A RhinoQ execution holds a lease, so BeginEffect can refuse a write from a
+// worker that already lost its job. An external execution has no lease, so
+// nothing here can prove the caller still owns the work. What remains is
+// deduplication on (execution, name, idempotency key): calling twice with the
+// same key returns the first entry rather than recording a second.
+func (c *IntegrityClient) RecordExternalEffect(
+	ctx context.Context,
+	request ExternalEffectRequest,
+) (EffectEvidence, error) {
+	if c == nil || c.externalEffects == nil {
+		return EffectEvidence{}, errors.New("rhinoq effect store is not configured")
+	}
+	id, err := newEffectID()
+	if err != nil {
+		return EffectEvidence{}, err
+	}
+	record, err := effect.NewExternalRecord(
+		effect.ID(id),
+		correlation.ExecutionRef{
+			SourceSystem: request.Execution.SourceSystem,
+			SourceID:     request.Execution.SourceID,
+		},
+		correlation.SubjectRef{Type: request.Subject.Type, ID: request.Subject.ID},
+		request.BusinessKey, request.Name, request.IdempotencyKey,
+		request.Irreversible, time.Now().UTC(),
+	)
+	if err != nil {
+		return EffectEvidence{}, err
+	}
+	record.ExternalRef = request.ExternalRef
+	stored, err := c.externalEffects.BeginExternalEffect(ctx, record)
+	if err != nil {
+		return EffectEvidence{}, err
+	}
+	return publicEffect(stored), nil
+}
+
+// SubjectEffects reads the Effect Ledger for one business subject, whichever
+// system produced the entries. It is the read half of the no-cutover path: an
+// operator asks about a report, not about a job.
+func (c *IntegrityClient) SubjectEffects(
+	ctx context.Context,
+	subject SubjectRef,
+	offset, limit int,
+) ([]EffectEvidence, error) {
+	if c == nil || c.externalEffects == nil {
+		return nil, errors.New("rhinoq effect store is not configured")
+	}
+	records, err := c.externalEffects.ListSubjectEffects(
+		ctx, correlation.SubjectRef{Type: subject.Type, ID: subject.ID}, offset, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	evidence := make([]EffectEvidence, 0, len(records))
+	for _, record := range records {
+		evidence = append(evidence, publicEffect(record))
+	}
+	return evidence, nil
+}
+
+// newEffectID generates the identifier for an externally recorded effect.
+// Unlike the runtime path, which derives a deterministic id from the job, an
+// external caller has no such handle - so the id is random and the execution
+// reference plus idempotency key is what deduplicates.
+func newEffectID() (string, error) {
+	buffer := make([]byte, 16)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return "effect_" + hex.EncodeToString(buffer), nil
+}
+
+func publicEffect(record effect.Record) EffectEvidence {
+	return EffectEvidence{
+		ID: string(record.ID), JobID: record.JobID, Name: record.Name,
+		SourceSystem: record.Execution.SourceSystem,
+		SourceID:     record.Execution.SourceID,
+		SubjectType:  record.Subject.Type, SubjectID: record.Subject.ID,
+		BusinessKey:    record.BusinessKey,
+		IdempotencyKey: record.IdempotencyKey, State: string(record.State),
+		Irreversible: record.Irreversible, ExternalRef: record.ExternalRef,
+		CreatedAt: record.CreatedAt, LeaseEpoch: record.LeaseEpoch,
+	}
 }

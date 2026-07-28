@@ -177,3 +177,48 @@ The claimed immutable Rule version is evaluated even if a newer draft is
 registered or enabled while that page is in flight. Scheduler fencing protects
 cursor progression; Rule evaluation remains at-least-once and Finding
 deduplication is the idempotency boundary.
+
+## Verifying work RhinoQ did not run
+
+An Effect Ledger entry used to require a RhinoQ job id, which excluded the case
+it is most needed for: a team already running BullMQ, Temporal, cron or a
+hand-written worker has no RhinoQ job to attach to.
+
+A job id is now one kind of execution reference:
+
+```go
+integrity, _ := rhinoq.NewIntegrity(db)
+
+_, err := integrity.RecordExternalEffect(ctx, rhinoq.ExternalEffectRequest{
+    Execution:      rhinoq.ExecutionRef{SourceSystem: "bullmq", SourceID: job.id},
+    Subject:        rhinoq.SubjectRef{Type: "report", ID: reportID},
+    Name:           "upload-report",
+    IdempotencyKey: reportID + ":pdf",
+    ExternalRef:    objectKey,
+})
+```
+
+and read back by subject, not by job:
+
+```go
+effects, err := integrity.SubjectEffects(ctx, rhinoq.SubjectRef{
+    Type: "report", ID: reportID,
+}, 0, 50)
+```
+
+### This path is weaker than the runtime path, on purpose
+
+| | RhinoQ execution | External execution |
+|---|---|---|
+| Recorded through | the worker's lease | `RecordExternalEffect` |
+| Fenced against a lost lease | yes, by `lease_epoch` | **no** |
+| Deduplicated by | `(job, name, key)` | `(source system, source id, name, key)` |
+
+There is no lease for work RhinoQ did not run, so nothing can prove the caller
+still owns it. Deduplication on the execution reference plus the idempotency key
+is the guarantee an external caller can actually provide, and claiming more
+would be worse than saying so.
+
+Recording a RhinoQ execution through `RecordExternalEffect` is refused rather
+than silently accepted: the runtime has a fence, and skipping it would throw
+away the protection the job already had.

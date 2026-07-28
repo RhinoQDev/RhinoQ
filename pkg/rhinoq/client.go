@@ -180,7 +180,12 @@ type AttemptEvent struct {
 // EffectEvidence is one declared external effect attached to a job.
 type EffectEvidence struct {
 	ID             string    `json:"id"`
-	JobID          string    `json:"jobId"`
+	JobID          string    `json:"jobId,omitempty"`
+	SourceSystem   string    `json:"sourceSystem"`
+	SourceID       string    `json:"sourceId"`
+	SubjectType    string    `json:"subjectType,omitempty"`
+	SubjectID      string    `json:"subjectId,omitempty"`
+	BusinessKey    string    `json:"businessKey,omitempty"`
 	Name           string    `json:"name"`
 	IdempotencyKey string    `json:"idempotencyKey"`
 	State          string    `json:"state"`
@@ -664,12 +669,7 @@ func (c *Client) ListEffectEvidence(ctx context.Context, id string, offset, limi
 	}
 	result := make([]EffectEvidence, 0, len(records))
 	for _, record := range records {
-		result = append(result, EffectEvidence{
-			ID: string(record.ID), JobID: record.JobID, Name: record.Name,
-			IdempotencyKey: record.IdempotencyKey, State: string(record.State),
-			Irreversible: record.Irreversible, ExternalRef: record.ExternalRef,
-			CreatedAt: record.CreatedAt, LeaseEpoch: record.LeaseEpoch,
-		})
+		result = append(result, publicEffect(record))
 	}
 	return result, nil
 }
