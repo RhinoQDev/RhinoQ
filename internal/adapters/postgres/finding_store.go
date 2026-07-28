@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rhinoq/rhinoq/internal/domain/finding"
 	"github.com/rhinoq/rhinoq/internal/ports"
@@ -93,6 +94,46 @@ func (s *FindingStore) ObserveFinding(
 		return finding.Record{}, err
 	}
 	return updated, nil
+}
+
+func (s *FindingStore) ObserveFindingPass(
+	ctx context.Context,
+	key finding.Key,
+	observedAt time.Time,
+) (finding.Record, bool, error) {
+	if err := key.Validate(); err != nil {
+		return finding.Record{}, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return finding.Record{}, false, err
+	}
+	defer tx.Rollback()
+	if err := lockFindingKey(ctx, tx, key); err != nil {
+		return finding.Record{}, false, err
+	}
+	existing, found, err := getFindingForUpdate(ctx, tx, key)
+	if err != nil {
+		return finding.Record{}, false, err
+	}
+	updated, changed, err := finding.ApplyPass(existing, found, key, observedAt)
+	if err != nil || !changed {
+		return updated, changed, err
+	}
+	if err := updateFinding(ctx, tx, updated); err != nil {
+		return finding.Record{}, false, err
+	}
+	if err := insertFindingEvent(ctx, tx, finding.Event{
+		Key: key, Kind: finding.EventPassed,
+		FromStatus: existing.Status, ToStatus: updated.Status,
+		Actor: updated.Actor, Reason: updated.Reason, OccurredAt: observedAt,
+	}); err != nil {
+		return finding.Record{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return finding.Record{}, false, err
+	}
+	return updated, true, nil
 }
 
 func (s *FindingStore) TransitionFinding(

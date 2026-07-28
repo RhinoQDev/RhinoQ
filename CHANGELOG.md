@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added append-only job/table integrity Rules with memory/PostgreSQL stores,
+  draft/enable/disable lifecycle, Agent/Go APIs and migration `006_rules.sql`.
+- Added PostgreSQL read-only Rule Explain and evaluation: statement timeout,
+  hard row limit, canonical result-shape validation, plan-cost and sequential
+  scan budgets, persisted query hash/evidence, and `rhinoq explain <rule-id>`.
+- Connected Rule observations to persistent Findings: violations open or
+  deduplicate drift, passing rechecks auto-resolve it with an append-only
+  `passed` event, and table pages enforce a strict subject cursor.
 - Added persistent memory and PostgreSQL finding stores, atomic observation
   deduplication, lifecycle transitions, append-only finding events, business
   subject filtering, public Go APIs and Agent HTTP endpoints.

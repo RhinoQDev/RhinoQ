@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/rhinoq/rhinoq/internal/infrastructure/config"
 )
@@ -17,11 +23,50 @@ func main() {
 		os.Exit(runDoctor(ciMode()))
 	case "init":
 		runInit()
+	case "explain":
+		os.Exit(runExplain(os.Args[2:], os.Getenv, os.Stdout))
 	case "version":
 		fmt.Println("rhinoq 0.1.0-dev")
 	default:
 		printHelp()
 	}
+}
+
+func runExplain(args []string, getenv func(string) string, output io.Writer) int {
+	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintln(output, "FAIL rule id is required")
+		fmt.Fprintln(output, "Usage: rhinoq explain <rule-id>")
+		return 2
+	}
+	agentURL := strings.TrimRight(getenv("RHINOQ_AGENT_URL"), "/")
+	if agentURL == "" {
+		fmt.Fprintln(output, "FAIL RHINOQ_AGENT_URL is empty")
+		fmt.Fprintln(output, "Set it to the authenticated RhinoQ Agent, for example http://localhost:8080")
+		return 2
+	}
+	endpoint := agentURL + "/v1/rules/" + url.PathEscape(args[0]) + "/explain"
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(nil))
+	if err != nil {
+		fmt.Fprintf(output, "FAIL build explain request: %v\n", err)
+		return 2
+	}
+	if token := getenv("RHINOQ_AGENT_TOKEN"); token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := (&http.Client{Timeout: 35 * time.Second}).Do(request)
+	if err != nil {
+		fmt.Fprintf(output, "FAIL call Agent: %v\n", err)
+		return 1
+	}
+	defer response.Body.Close()
+	if _, err := io.Copy(output, response.Body); err != nil {
+		fmt.Fprintf(output, "\nFAIL read Agent response: %v\n", err)
+		return 1
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return 1
+	}
+	return 0
 }
 
 func ciMode() bool {
@@ -134,5 +179,6 @@ func printHelp() {
 	fmt.Println("  rhinoq doctor --ci   same, but exit non-zero on a failing check")
 	fmt.Println("  rhinoq init          show initialization plan")
 	fmt.Println("  rhinoq init --apply  apply initialization plan")
+	fmt.Println("  rhinoq explain <id>  run PostgreSQL query-safety gate for a Rule")
 	fmt.Println("  rhinoq version       print version")
 }

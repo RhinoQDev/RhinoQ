@@ -78,8 +78,8 @@ RhinoQ organizes work into four explicit stages:
 |---|---|---|---|
 | **COMMIT** | Was the work recorded durably? | idempotency, correlation, payload validation, outbox foundation | Foundation implemented |
 | **RUN** | Can the work execute and recover safely? | claims, leases, heartbeat, retries, cancellation, rate limits | Core implemented |
-| **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, confirmation policy, Outcome contracts | Domain foundation; usable indexed verifier pending |
-| **RECOVER** | Can an operator investigate and repair safely? | persistent findings, reverse reconciliation, replay policy, audit | Persistent finding lifecycle implemented; Rule runner pending |
+| **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, versioned job/table Rules, PostgreSQL Explain gate | Manual bounded evaluation implemented; scheduling pending |
+| **RECOVER** | Can an operator investigate and repair safely? | persistent findings, rule pass/regression, replay policy, audit | Rule-to-Finding lifecycle implemented; timeline pending |
 
 RhinoQ's PostgreSQL-backed queue is part of the core product, but queue parity
 is not its differentiator. It is not a message broker or a general-purpose
@@ -217,10 +217,14 @@ List responses intentionally exclude payloads so an operational queue view does 
 - Finding lifecycle domain rules for deduplication, acknowledgement, suppression, resolution and regression
 - Persistent memory/PostgreSQL finding stores with append-only lifecycle events
 - Public Go and Agent HTTP APIs for finding observation, filtering, transition and history
+- Append-only job/table Rule definitions; new versions start in `draft`
+- Read-only PostgreSQL Rule evaluation with timeout, hard result limit and cursor ordering
+- Explain gate for result shape, plan cost and large sequential scans
+- Rule violations open/deduplicate Findings; passing rechecks auto-resolve them
 - Outbox storage and publisher runtime
 - Fail-closed handling for unknown error classes
 
-The reverse reconciler, Rule runner, scan workflow, and query-cost gate are not
+Persistent Rule scheduling, correlation timeline and the scan workflow are not
 complete yet. The current code should not be presented as a finished integrity
 product.
 
@@ -287,15 +291,15 @@ docs/                             user and operator documentation
 RhinoQ has a runnable Go core, memory adapter, PostgreSQL adapters, migrations,
 and a real-database contract suite. The RUN foundation is ahead of the product
 differentiator: production readiness still requires fault evidence, while the
-v0.1 Integrity Slice now has persistent findings, but still needs the Rule
-runner, reverse reconciliation, scan/baseline workflow, and correlation
-timeline.
+v0.1 Integrity Slice now has versioned Rules, an Explain safety gate and
+Rule-to-Finding evaluation. It still needs crash-safe periodic scheduling,
+scan/from-scan onboarding and the correlation timeline.
 
 The next engineering priorities are:
 
-1. Canonical Rule model for job-scoped and table-scoped checks
-2. Incremental runner with mandatory baseline and query-cost gate
-3. Correlation timeline across job, attempt, effect, finding and business state
+1. Persistent scheduler cursor and crash-safe periodic Rule execution
+2. Needs Attention backed by persistent Findings
+3. Correlation timeline across job, attempt, effect, Rule, Finding and business state
 4. A bounded `rhinoq scan` workflow and `init --from-scan` plan
 5. Fault-injection, retention, security, and reproducible benchmark gates
 
@@ -311,6 +315,7 @@ RhinoQ does not publish throughput or latency claims without a repeatable benchm
 | [Operations](./docs/operations.md) | shutdown, cancellation, rate limits, and inspection |
 | [Failure semantics](./docs/failure-semantics.md) | retry classes and effect uncertainty |
 | [Recovery](./docs/recovery.md) | Needs Attention, guarded replay, and audit semantics |
+| [Integrity Rules](./docs/rules.md) | canonical SQL contract, Explain gate and Finding evaluation |
 | [Feature matrix](./docs/feature-matrix.md) | implementation status by capability |
 | [Competitive landscape](./docs/competitive-landscape.md) | category boundaries, primary sources, and falsifiable differentiation |
 | [Roadmap](./docs/roadmap.md) | milestones and release gates |

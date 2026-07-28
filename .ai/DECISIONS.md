@@ -66,6 +66,16 @@
 - **Rollback:** không áp dụng; đây là giới hạn claim, không phải coupling kỹ thuật.
 - **Owner:** product
 
+## ADR-0009 — Một Rule model, draft phải qua PostgreSQL Explain trước khi enable
+
+- **Status:** accepted
+- **Context:** Outcome và Reconciliation tách thành hai API làm tăng surface area nhưng cùng trả lời một câu hỏi: subject có vi phạm invariant không. Raw SQL linh hoạt nhưng một query thiếu index hoặc không bounded có thể gây incident production.
+- **Decision:** dùng một Rule contract có scope `job` và `table`. Query trả `subject_id`, `violated`, `evidence`; table scope nhận baseline/cursor/limit. Definition append-only theo version, luôn bắt đầu `draft`; enable chạy PostgreSQL Explain trong read-only transaction, kiểm result shape, statement timeout, hard limit, plan cost và large sequential scan.
+- **Security boundary:** syntax guard không phải SQL sandbox. Production cần restricted read-only role và không grant function/extension có filesystem/network side effect.
+- **Consequences:** violation tạo/dedup Finding; pass tự resolve Finding; scheduler cursor persistence làm sau trên cùng contract. Không xây invariant DSL ở v0.1.
+- **Rollback:** disable Rule version; definition và Explain evidence vẫn được giữ để audit.
+- **Owner:** integrity engine
+
 ## Template cho ADR mới
 
 ```text

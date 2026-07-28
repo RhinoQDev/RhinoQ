@@ -19,6 +19,7 @@
 ## Thiết kế
 
 - [Feature matrix](./feature-matrix.md)
+- [Integrity Rules](./rules.md)
 - [Competitive landscape](./competitive-landscape.md)
 - [Roadmap](./roadmap.md)
 - [Architecture decision records](../.ai/DECISIONS.md)

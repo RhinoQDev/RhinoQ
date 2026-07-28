@@ -135,6 +135,7 @@ type Event struct {
 const (
 	EventObserved   = "observed"
 	EventTransition = "transitioned"
+	EventPassed     = "passed"
 )
 
 // Suppressed reports whether the finding is currently hidden.
@@ -201,6 +202,34 @@ func Apply(existing Record, found bool, observation Observation) (Record, error)
 		updated.SuppressedUntil = time.Time{}
 	}
 	return updated, nil
+}
+
+// ApplyPass resolves an existing finding when the same Rule observes that its
+// invariant now passes. A pass without an existing finding is intentionally a
+// no-op so healthy records do not fill the finding table.
+func ApplyPass(
+	existing Record,
+	found bool,
+	key Key,
+	observedAt time.Time,
+) (Record, bool, error) {
+	if err := key.Validate(); err != nil {
+		return Record{}, false, err
+	}
+	if observedAt.IsZero() {
+		return Record{}, false, ErrObservationTime
+	}
+	if !found || existing.Status == Resolved {
+		return existing, false, nil
+	}
+	updated := existing
+	updated.Status = Resolved
+	updated.Actor = "rhinoq:rule"
+	updated.Reason = "the rule passed"
+	updated.ResolvedAt = observedAt
+	updated.SuppressedUntil = time.Time{}
+	updated.UpdatedAt = observedAt
+	return updated, true, nil
 }
 
 // Transition is an operator-driven status change.

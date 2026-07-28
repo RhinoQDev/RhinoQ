@@ -14,6 +14,7 @@ var (
 	ErrLeaseLost       = errors.New("RHINOQ_LEASE_LOST")
 	ErrJobNotFound     = errors.New("RHINOQ_JOB_NOT_FOUND")
 	ErrFindingNotFound = errors.New("RHINOQ_FINDING_NOT_FOUND")
+	ErrRuleNotFound    = errors.New("RHINOQ_RULE_NOT_FOUND")
 )
 
 // LeaseLostError explains a fencing rejection to the operator reading the log.

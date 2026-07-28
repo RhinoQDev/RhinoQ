@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/rhinoq/rhinoq/internal/domain/finding"
 	"github.com/rhinoq/rhinoq/internal/ports"
@@ -50,6 +51,32 @@ func (s *FindingStore) ObserveFinding(
 		Evidence: observation.Evidence, OccurredAt: observation.ObservedAt,
 	})
 	return updated, nil
+}
+
+func (s *FindingStore) ObserveFindingPass(
+	_ context.Context,
+	key finding.Key,
+	observedAt time.Time,
+) (finding.Record, bool, error) {
+	if err := key.Validate(); err != nil {
+		return finding.Record{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mapKey := key.String()
+	existing, found := s.records[mapKey]
+	updated, changed, err := finding.ApplyPass(existing, found, key, observedAt)
+	if err != nil || !changed {
+		return updated, changed, err
+	}
+	s.records[mapKey] = updated
+	s.nextSeq++
+	s.events[mapKey] = append(s.events[mapKey], finding.Event{
+		Sequence: s.nextSeq, Key: key, Kind: finding.EventPassed,
+		FromStatus: existing.Status, ToStatus: updated.Status,
+		Actor: updated.Actor, Reason: updated.Reason, OccurredAt: observedAt,
+	})
+	return updated, true, nil
 }
 
 func (s *FindingStore) TransitionFinding(

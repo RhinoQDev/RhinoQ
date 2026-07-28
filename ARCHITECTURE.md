@@ -62,6 +62,7 @@ Không đặt implementation vào đây. Contract phải có version và backwar
 Chứa invariant thuần nghiệp vụ của RhinoQ:
 
 - state machine của job, attempt, effect và outcome
+- Rule version/scope/status và Finding lifecycle
 - điều kiện chuyển trạng thái
 - retry classification
 - quy tắc fail-closed khi unknown/uncertain
@@ -78,7 +79,8 @@ Chứa use case, transaction boundary và orchestration cấp sản phẩm:
 - `ClaimJobs`
 - `RunAttempt`
 - `BeginEffect`, `ConfirmEffect`, `VerifyOutcome`
-- `ReconcileBusinessState`
+- `RegisterRule`, `ExplainRule`, `EvaluateRule`
+- fold Rule observation vào persistent Finding
 - `RetryJob`, `ResumeJob`, `RepairJob`
 - `PauseQueue`, `DrainQueue`, `CancelJob`
 
@@ -134,6 +136,8 @@ Các implementation có thể thay thế:
 - `postgres-job-store`
 - `postgres-effect-store`
 - `postgres-outcome-store`
+- `postgres-rule-store`, read-only `postgres-rule-explainer/evaluator`
+- `postgres-finding-store`
 - `postgres-migration`
 - `provider-http`, `provider-stripe`, `provider-s3`
 - `drizzle-metadata`, `prisma-metadata`
@@ -141,6 +145,10 @@ Các implementation có thể thay thế:
 - `console-http`, `grpc-agent`, `cli`
 
 Adapter dịch dữ liệu giữa external system và port. Không đặt retry business, repair logic hoặc invariant vào adapter.
+
+Rule SQL adapter chỉ thực thi contract do domain/application đã validate. Nó
+phải dùng read-only transaction, local statement timeout và hard result limit;
+database role bị giới hạn vẫn là security boundary bắt buộc.
 
 ### Tầng 7 — Infrastructure (Go + deployment)
 

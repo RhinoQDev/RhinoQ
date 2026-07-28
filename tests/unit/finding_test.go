@@ -143,3 +143,25 @@ func TestFindingTransitionRejectsInvalidOperatorActions(t *testing.T) {
 		t.Fatalf("operator transitions must identify an actor, got %v", err)
 	}
 }
+
+func TestFindingPassResolvesExistingDriftWithoutCreatingHealthyNoise(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	key := finding.Key{
+		RuleID: "report-output-exists", SubjectType: "report",
+		SubjectID: "report-1", ObservedInvariantVersion: 1,
+	}
+	if _, changed, err := finding.ApplyPass(
+		finding.Record{}, false, key, now,
+	); err != nil || changed {
+		t.Fatalf("healthy subject without a finding must be a no-op: changed=%v err=%v", changed, err)
+	}
+	open := finding.Record{
+		Key: key, Status: finding.Open, FirstSeen: now.Add(-time.Minute),
+		LastSeen: now.Add(-time.Minute), OccurrenceCount: 1,
+	}
+	resolved, changed, err := finding.ApplyPass(open, true, key, now)
+	if err != nil || !changed || resolved.Status != finding.Resolved ||
+		resolved.Actor != "rhinoq:rule" {
+		t.Fatalf("a passing recheck must auto-resolve: %+v changed=%v err=%v", resolved, changed, err)
+	}
+}

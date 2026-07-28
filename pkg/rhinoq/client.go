@@ -240,11 +240,14 @@ func (c WorkerConfig) withDefaults() WorkerConfig {
 }
 
 type Client struct {
-	store    ports.JobStore
-	effects  ports.EffectStore
-	recovery ports.RecoveryStore
-	findings ports.FindingStore
-	handlers *worker.HandlerRegistry
+	store         ports.JobStore
+	effects       ports.EffectStore
+	recovery      ports.RecoveryStore
+	findings      ports.FindingStore
+	rules         ports.RuleStore
+	ruleExplainer ports.RuleExplainer
+	ruleEvaluator ports.RuleEvaluator
+	handlers      *worker.HandlerRegistry
 	// retry is the policy applied to failures reported through the remote
 	// worker API, where no in-process worker owns a policy.
 	retry retry.Policy
@@ -271,13 +274,15 @@ func NewInMemory() *Client {
 	}
 	outcomes := memory.NewOutcomeStore()
 	findingStore := memory.NewFindingStore()
+	ruleStore := memory.NewRuleStore()
 	recoveryStore, err := memory.NewRecoveryStore(jobs, effects, outcomes)
 	if err != nil {
 		panic(err)
 	}
 	return &Client{
 		store: jobs, effects: effects, recovery: recoveryStore,
-		findings: findingStore, handlers: worker.NewHandlerRegistry(),
+		findings: findingStore, rules: ruleStore,
+		handlers: worker.NewHandlerRegistry(),
 	}
 }
 
@@ -298,9 +303,22 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	ruleStore, err := postgres.NewRuleStore(db)
+	if err != nil {
+		return nil, err
+	}
+	ruleExplainer, err := postgres.NewRuleExplainer(db, nil)
+	if err != nil {
+		return nil, err
+	}
+	ruleEvaluator, err := postgres.NewRuleEvaluator(db, nil)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		store: store, effects: effects, recovery: recoveryStore,
-		findings: findingStore, handlers: worker.NewHandlerRegistry(),
+		findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
+		ruleEvaluator: ruleEvaluator, handlers: worker.NewHandlerRegistry(),
 	}, nil
 }
 
@@ -311,6 +329,15 @@ func NewWithStore(store ports.JobStore) *Client {
 	}
 	if findingStore, ok := store.(ports.FindingStore); ok {
 		client.findings = findingStore
+	}
+	if ruleStore, ok := store.(ports.RuleStore); ok {
+		client.rules = ruleStore
+	}
+	if explainer, ok := store.(ports.RuleExplainer); ok {
+		client.ruleExplainer = explainer
+	}
+	if evaluator, ok := store.(ports.RuleEvaluator); ok {
+		client.ruleEvaluator = evaluator
 	}
 	return client
 }

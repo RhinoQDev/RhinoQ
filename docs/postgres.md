@@ -31,6 +31,7 @@ Trước khi chạy production:
 | Enqueue vào queue có admission policy | thêm một count bị chặn ở đúng capacity, dùng partial index `rhinoq_jobs_pending_by_queue_idx`. Không count toàn bảng. |
 | Reaper | một statement, `FOR UPDATE SKIP LOCKED`, đồng thời append lease-expired evidence và trả số job requeue/park. |
 | Finding observation | transaction-scoped advisory lock theo finding key, fold observation vào current record và append lifecycle event trong cùng transaction. |
+| Rule Explain/evaluate | read-only transaction, local statement timeout, hard row limit; Explain evidence lưu theo immutable Rule version. |
 
 Aging trong `ORDER BY` không index được, nên index claim phủ phần filter (`state`, `not_before`, `priority`, `created_at`) và phần xếp hạng chạy trên tập candidate đã hẹp.
 

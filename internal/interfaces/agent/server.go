@@ -125,6 +125,12 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /v1/findings", s.guard(s.handleListFindings))
 	mux.HandleFunc("POST /v1/findings/transition", s.guard(s.handleTransitionFinding))
 	mux.HandleFunc("GET /v1/findings/history", s.guard(s.handleFindingHistory))
+	mux.HandleFunc("POST /v1/rules", s.guard(s.handleRegisterRule))
+	mux.HandleFunc("GET /v1/rules", s.guard(s.handleListRules))
+	mux.HandleFunc("POST /v1/rules/{id}/explain", s.guard(s.handleExplainRule))
+	mux.HandleFunc("POST /v1/rules/{id}/enable", s.guard(s.handleEnableRule))
+	mux.HandleFunc("POST /v1/rules/{id}/disable", s.guard(s.handleDisableRule))
+	mux.HandleFunc("POST /v1/rules/{id}/evaluate", s.guard(s.handleEvaluateRule))
 
 	s.mux = mux
 }
@@ -333,6 +339,116 @@ func (s *Server) handleFindingHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+type registerRuleRequest struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Scope       string    `json:"scope"`
+	SubjectType string    `json:"subjectType"`
+	JobName     string    `json:"jobName,omitempty"`
+	Query       string    `json:"query"`
+	BaselineAt  time.Time `json:"baselineAt,omitempty"`
+	EveryMs     int64     `json:"everyMs,omitempty"`
+	WithinMs    int64     `json:"withinMs,omitempty"`
+	MaxRows     int       `json:"maxRows,omitempty"`
+
+	StatementTimeoutMs int64   `json:"statementTimeoutMs,omitempty"`
+	MaxPlanCost        float64 `json:"maxPlanCost,omitempty"`
+	MaxSeqScanRows     int64   `json:"maxSeqScanRows,omitempty"`
+}
+
+func (s *Server) handleRegisterRule(w http.ResponseWriter, r *http.Request) {
+	var request registerRuleRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	record, err := s.client.RegisterRule(r.Context(), rhinoq.RuleDefinition{
+		ID: request.ID, Name: request.Name, Scope: request.Scope,
+		SubjectType: request.SubjectType, JobName: request.JobName,
+		Query: request.Query, BaselineAt: request.BaselineAt,
+		Every:            time.Duration(request.EveryMs) * time.Millisecond,
+		Within:           time.Duration(request.WithinMs) * time.Millisecond,
+		MaxRows:          request.MaxRows,
+		StatementTimeout: time.Duration(request.StatementTimeoutMs) * time.Millisecond,
+		MaxPlanCost:      request.MaxPlanCost, MaxSeqScanRows: request.MaxSeqScanRows,
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"rule": record})
+}
+
+func (s *Server) handleListRules(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	records, err := s.client.ListRules(r.Context(), rhinoq.RuleQuery{
+		Scope: query.Get("scope"), Statuses: splitStates(query.Get("statuses")),
+		Offset: intParam(query.Get("offset"), 0), Limit: intParam(query.Get("limit"), 50),
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rules": records})
+}
+
+func (s *Server) handleExplainRule(w http.ResponseWriter, r *http.Request) {
+	record, explanation, err := s.client.ExplainRule(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rule": record, "explanation": explanation,
+	})
+}
+
+func (s *Server) handleEnableRule(w http.ResponseWriter, r *http.Request) {
+	record, explanation, err := s.client.EnableRule(r.Context(), r.PathValue("id"))
+	if errors.Is(err, rhinoq.ErrRuleUnsafe) {
+		status, body := describe(err)
+		writeJSON(w, status, map[string]any{
+			"rule": record, "explanation": explanation, "error": body,
+		})
+		return
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rule": record, "explanation": explanation,
+	})
+}
+
+func (s *Server) handleDisableRule(w http.ResponseWriter, r *http.Request) {
+	record, err := s.client.DisableRule(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rule": record})
+}
+
+type evaluateRuleRequest struct {
+	SubjectID string `json:"subjectId,omitempty"`
+	Cursor    string `json:"cursor,omitempty"`
+}
+
+func (s *Server) handleEvaluateRule(w http.ResponseWriter, r *http.Request) {
+	var request evaluateRuleRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	evaluation, err := s.client.EvaluateRule(
+		r.Context(), r.PathValue("id"), request.SubjectID, request.Cursor,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, evaluation)
 }
 
 type replayRequest struct {

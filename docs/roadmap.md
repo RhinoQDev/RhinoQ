@@ -29,11 +29,11 @@ requiring the application's current queue to be replaced.
 - [x] explicit Effect Ledger states and fenced transitions
 - [x] explicit effect confirmation policy
 - [x] legacy Outcome Level 1 domain foundation
-- [ ] one canonical Rule contract with `job` and `table` scopes
-- [ ] parameterized SQL executor with read-only role, statement timeout and
+- [x] one canonical, append-only Rule contract with `job` and `table` scopes
+- [x] parameterized SQL executor with read-only transaction, statement timeout and
   bounded results
-- [ ] baseline policy and incremental table cursor
-- [ ] query-cost and index gate
+- [ ] persisted scheduler cursor and crash recovery (manual bounded cursor pages implemented)
+- [x] query-cost, result-shape and large sequential-scan gate
 - [ ] external execution correlation:
   `source_system`, `source_job_id`, `business_key`
 
@@ -41,7 +41,7 @@ requiring the application's current queue to be replaced.
 
 - [x] finding domain lifecycle and deduplication rules
 - [x] persistent memory/PostgreSQL finding store and public Go/Agent API
-- [ ] table-scoped Rule runner for one business subject
+- [x] manual table-scoped Rule evaluation folds violations/passes into Findings
 - [ ] Needs Attention backed by persistent findings
 - [x] acknowledge, suppress, resolve and regressed operations with append-only events
 - [x] guarded manual replay and transactional audit hash chain
@@ -57,8 +57,8 @@ requiring the application's current queue to be replaced.
 
 ## v0.2 — Integrity Hardening
 
-- [ ] versioned Rule contracts
-- [ ] signal-first and batched Rule evaluation
+- [x] versioned Rule contracts
+- [ ] scheduled and signal-first Rule evaluation
 - [ ] finding suppression, deduplication and regression hardening
 - [ ] reconciliation cursors, budgets and backpressure
 - [ ] handler and verifier version evidence

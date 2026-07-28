@@ -91,6 +91,7 @@ Ba kết quả, phân biệt rõ:
 | Worker | `POST /v1/claim` · `POST /v1/leases/heartbeat` · `POST /v1/leases/complete` · `POST /v1/leases/fail` · `POST /v1/leases/release` |
 | Effect | `POST /v1/effects/begin` · `POST /v1/effects/resolve` |
 | Findings | `POST /v1/findings/observe` · `GET /v1/findings` · `POST /v1/findings/transition` · `GET /v1/findings/history` |
+| Rules | `POST /v1/rules` · `GET /v1/rules` · `POST /v1/rules/{id}/explain` · `POST /v1/rules/{id}/enable` · `POST /v1/rules/{id}/disable` · `POST /v1/rules/{id}/evaluate` |
 | Operator | `GET /v1/queues/{name}/counts` · `POST /v1/queues/{name}/pause` · `POST /v1/queues/{name}/resume` · `GET /v1/attention` · `POST /v1/jobs/{id}/replay` · `GET /v1/jobs/{id}/audit` · `GET /v1/jobs/{id}/attempts` |
 | Vận hành | `GET /health/live` · `GET /health/ready` · `GET /metrics` |
 

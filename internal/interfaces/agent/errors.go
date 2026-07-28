@@ -7,6 +7,7 @@ import (
 	"github.com/rhinoq/rhinoq/internal/contracts/diagnostic"
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
 	"github.com/rhinoq/rhinoq/internal/domain/recovery"
+	"github.com/rhinoq/rhinoq/internal/domain/rule"
 	"github.com/rhinoq/rhinoq/internal/ports"
 	"github.com/rhinoq/rhinoq/pkg/rhinoq"
 )
@@ -57,6 +58,9 @@ func describe(err error) (int, ErrorBody) {
 	if errors.Is(err, ports.ErrFindingNotFound) {
 		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_FINDING_NOT_FOUND", Message: err.Error()}
 	}
+	if errors.Is(err, ports.ErrRuleNotFound) {
+		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_RULE_NOT_FOUND", Message: err.Error()}
+	}
 	switch {
 	case errors.Is(err, rhinoq.ErrEffectUncertain):
 		return http.StatusConflict, ErrorBody{Code: "RHINOQ_EFFECT_UNCERTAIN", Message: err.Error()}
@@ -73,6 +77,13 @@ func describe(err error) (int, ErrorBody) {
 		return http.StatusUnprocessableEntity, ErrorBody{Code: "RHINOQ_REPLAY_REFUSED", Message: err.Error()}
 	case errors.Is(err, recovery.ErrInvalidReplayRequest):
 		return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_INVALID_REQUEST", Message: err.Error()}
+	case errors.Is(err, rule.ErrRuleUnsafe):
+		return http.StatusUnprocessableEntity, ErrorBody{Code: "RHINOQ_RULE_UNSAFE", Message: err.Error()}
+	case errors.Is(err, rule.ErrUnsafeQuery),
+		errors.Is(err, rule.ErrInvalidRule),
+		errors.Is(err, rule.ErrBaselineRequired),
+		errors.Is(err, rule.ErrIntervalRequired):
+		return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_RULE_INVALID", Message: err.Error()}
 	}
 	return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_INVALID_REQUEST", Message: err.Error()}
 }
