@@ -2,7 +2,7 @@
 
 > **Run the job. Verify the result. Recover safely.**
 
-RhinoQ là durable job queue dành cho background work quan trọng, nơi _"worker chạy xong"_ chưa đủ và hệ thống cần biết trạng thái nghiệp vụ cuối cùng có thực sự chính xác hay không.
+RhinoQ là business-integrity layer cho background work quan trọng, nơi _"worker chạy xong"_ chưa đủ và hệ thống cần biết trạng thái nghiệp vụ cuối cùng có thực sự chính xác hay không. Sản phẩm có native PostgreSQL queue làm reference execution adapter, nhưng VERIFY/RECOVER phải dùng được với queue hoặc durable runtime hiện hữu.
 
 ---
 
@@ -65,7 +65,7 @@ Kiểm tra trước khi cam kết: `npm view rhinoq`, GitHub search, `rhinoq.dev
 
 ### Định vị chính
 
-> RhinoQ là **business-integrity job queue**: ghi nhận background work bền vững, thực thi an toàn, xác minh trạng thái nghiệp vụ quan trọng sau execution, và hỗ trợ phục hồi sai lệch mà không lặp lại những effect nguy hiểm.
+> RhinoQ là **business-integrity layer cho background execution**: tương quan công việc, xác minh trạng thái nghiệp vụ quan trọng sau execution, và hỗ trợ phục hồi sai lệch có kiểm soát. Native queue là một execution adapter, không phải điều kiện để dùng VERIFY/RECOVER.
 
 ### Câu cho người dùng BullMQ
 
@@ -75,7 +75,7 @@ Kiểm tra trước khi cam kết: `npm view rhinoq`, GitHub search, `rhinoq.dev
 
 1. Intent không bị mất khi được ghi cùng transaction nghiệp vụ
 2. Worker crash không làm mất job
-3. Effect irreversible không bị retry mù
+3. Effect đã khai báo không bị retry mù khi trạng thái còn chưa biết
 4. Job quan trọng có thể khai báo hậu điều kiện nghiệp vụ
 5. Sai lệch giữa execution và business state được đưa ra rõ ràng
 6. Repair luôn có preview, idempotency và audit
@@ -90,6 +90,9 @@ Quá rộng hoặc không thể chứng minh:
 - ❌ "Chỉ RhinoQ có transactional enqueue" — pg-boss cũng có
 - ❌ "RhinoQ nhanh hơn BullMQ" — không đúng, và không phải mục tiêu
 - ❌ "RhinoQ thay thế Temporal"
+- ❌ "Chỉ RhinoQ xử lý được worker crash giữa external call" — durable execution đã thu hẹp đáng kể bài toán này
+- ❌ "Durable step bảo đảm exactly-once cho mọi external API" — DBOS Go ghi rõ external step vẫn at-least-once
+- ❌ "Muốn dùng VERIFY phải thay queue hiện tại bằng RhinoQ"
 - ❌ "Mọi job đều cần Outcome" — phần lớn job không cần
 - ❌ "RhinoQ không bao giờ ảnh hưởng database"
 - ❌ "RhinoQ không bao giờ làm tăng dung lượng lưu trữ"
@@ -192,6 +195,17 @@ t=4  Charge lần thứ hai
 
 Các queue như BullMQ, pg-boss, RabbitMQ và SQS mặc định chỉ quản lý execution/delivery state, không tự biết semantic của external effect. Nếu ứng dụng không tự xây idempotency, effect ledger hoặc verification, retry có thể lặp lại effect đã xảy ra.
 
+**Durable execution đã giải một phần lớn hơn queue truyền thống.** DBOS, Restate, Temporal và Hatchet checkpoint/journal tiến độ để recovery bỏ qua step đã được ghi nhận hoàn tất. Với database write nằm trong transaction do runtime quản lý, cơ chế này có thể loại bỏ nhiều cửa sổ lỗi mà queue thông thường để lại.
+
+Nhưng không được suy từ đó thành _mọi external effect đều exactly-once_. Tài liệu Go chính thức của [DBOS Steps](https://docs.dbos.dev/golang/tutorials/step-tutorial) ghi rõ step chạy **at-least-once**: nếu process chết sau side effect nhưng trước checkpoint, step sẽ chạy lại. Exactly-once database write cần datasource transaction. Với Stripe, email, object storage hoặc provider không tham gia transaction, ứng dụng vẫn cần một trong các cơ chế:
+
+- idempotency key được provider thực thi;
+- durable/reliable call qua runtime có protocol phù hợp;
+- effect record + confirmation/verification;
+- reconciliation sau sự kiện.
+
+Vì vậy Effect Ledger **không còn được định vị là cơ chế duy nhất** giải crash window. Nó là primitive hiển thị rõ `accepted / confirmed / uncertain` cho effect không thể đặt trọn trong transaction hoặc durable-call protocol.
+
 ### 5.3 Execution thành công nhưng business state sai (VERIFY — Outcome)
 
 Job chạy xong, log sạch, dashboard xanh — nhưng:
@@ -211,22 +225,52 @@ Order tạo bằng SQL tay · code quên enqueue ở một nhánh if · deploy l
 
 ---
 
-## 6. Đối thủ
+## 6. Đối thủ — chia theo category, không gom vào một bảng thắng/thua
 
-|                       | RhinoQ                                     | BullMQ                               | pg-boss                                    | Inngest       | Temporal      |
-| --------------------- | ------------------------------------------ | ------------------------------------ | ------------------------------------------ | ------------- | ------------- |
-| Hạ tầng thêm          | **0**                                      | Redis                                | 0                                          | cloud         | cluster       |
-| Transactional enqueue | có                                         | không                                | **có**                                     | không         | không         |
-| Effect uncertainty    | **có**                                     | không                                | không                                      | không         | một phần      |
-| Business invariant    | **có**                                     | không                                | không                                      | không         | không         |
-| Reconciliation        | **có**                                     | không                                | không                                      | không         | không         |
-| Payload ra ngoài      | không                                      | không                                | không                                      | **có**        | không         |
-| Độ phức tạp vận hành  | thấp                                       | trung bình                           | thấp                                       | thấp          | **rất cao**   |
-| Throughput            | Chưa công bố nếu chưa có benchmark tái lập | Chưa so sánh trong architecture spec | Chưa công bố nếu chưa có benchmark tái lập | Chưa đánh giá | Chưa đánh giá |
+So sánh cũ chỉ có BullMQ, pg-boss, Inngest và Temporal là thiếu nghiêm trọng. RhinoQ nằm giữa ba category đã có sản phẩm trưởng thành:
 
-**pg-boss là đối thủ gần nhất** và cũng có transactional enqueue — nên đó _không_ phải điểm khác biệt duy nhất, chỉ là điều kiện cần. Khác biệt thật nằm ở VERIFY và RECOVER.
+### 6.1 Queue library
 
-**Không dùng RhinoQ nếu:** cần topic routing / pub/sub · cần DAG · dùng MySQL/MongoDB làm storage chính (xem mục 54) · queue hiện tại đang chạy ổn và chưa từng bị đau vì dual-write hay retry mù.
+| Sản phẩm | Storage / runtime | Điều họ đã làm tốt | Ý nghĩa với RhinoQ |
+| --- | --- | --- | --- |
+| [BullMQ](https://github.com/taskforcesh/bullmq) | Redis · Node.js | queue ergonomics, retry, delayed work, rate limit, ecosystem và operational history | chuẩn parity RUN; RhinoQ không cạnh tranh bằng throughput claim |
+| [pg-boss](https://github.com/timgit/pg-boss) | PostgreSQL · Node.js | `SKIP LOCKED`, ACID enqueue, retry, scheduling, không cần Redis | transactional enqueue và “chỉ cần Postgres” không phải khác biệt |
+| [Graphile Worker](https://worker.graphile.org/docs) | PostgreSQL · Node.js | embedded/standalone, SQL enqueue, `LISTEN/NOTIFY`, cron/backfill, batch và `SKIP LOCKED` | greenfield Node/Postgres có lựa chọn đơn giản, battle-tested hơn |
+| [PGMQ](https://github.com/pgmq/pgmq) | PostgreSQL extension / SQL | visibility timeout, archive, FIFO/group/topic primitives, không cần worker server riêng | RhinoQ không nên quảng bá Postgres queue primitive là sáng tạo mới |
+
+### 6.2 Durable execution / orchestration
+
+| Sản phẩm | Mô hình | Điều họ đã làm tốt | Khoảng trống còn lại liên quan RhinoQ |
+| --- | --- | --- | --- |
+| [DBOS](https://docs.dbos.dev/) | library in-process · execution state trên Postgres | checkpoint workflow, queue, recovery, transactional DB steps, Go/TS/Python/Java; tích hợp [Databricks Lakebase](https://www.dbos.dev/blog/building-durable-agents-dbos-databricks) | external Go steps vẫn at-least-once; business invariant/reverse reconciliation là application-defined |
+| [Hatchet](https://github.com/hatchet-dev/hatchet) | Postgres-backed platform | general queue + DAG + durable task, OTel, rate limit, priority, fair scheduling, multi-tenancy và UI | rộng và vận hành như platform; invariant nghiệp vụ vẫn do ứng dụng định nghĩa |
+| [Restate](https://docs.restate.dev/foundations/key-concepts) | durable runtime/server + SDK | journal, reliable service calls, durable state, workflow, signal và recovery | mạnh hơn RhinoQ ở durable call/workflow; không thấy packaged business-record reconciliation trong official docs |
+| [Temporal](https://docs.temporal.io/) | durable workflow cluster/cloud | workflow history, activity retry, signals, timers, versioning và hệ sinh thái production | phù hợp workflow dài/phức tạp; outcome invariant vẫn là application code |
+| [Inngest](https://www.inngest.com/docs) | managed/serverless durable functions | event triggers, steps, retries, sleep/wait và observability | cloud/runtime model khác; invariant và repair vẫn application-defined |
+| [Trigger.dev](https://trigger.dev/docs/introduction) | managed/self-hosted task platform | long-running tasks, checkpoint/resume, deployment và developer experience | cạnh tranh adoption/DX; không phải packaged invariant engine |
+
+### 6.3 Kết luận cạnh tranh trung thực
+
+Ba claim **không còn đủ để định vị RhinoQ**:
+
+1. “Postgres là đủ” — pg-boss, Graphile Worker, PGMQ, DBOS và Hatchet đều đã chứng minh.
+2. “Worker crash thì resume” — durable execution platforms đã làm sâu hơn RhinoQ.
+3. “Transactional enqueue” — nhiều Postgres queue/runtime đã có.
+
+Giả thuyết khác biệt còn lại cần được kiểm chứng, không được tuyên bố như sự thật đã thắng:
+
+> **VERIFY:** khai báo và quan sát business invariant sau execution.
+> **RECOVER:** đi từ business record ngược về intent/execution/effect, tạo finding có lifecycle và đề xuất repair có precondition.
+
+Không tìm thấy primitive đóng gói tương đương trong tài liệu chính thức đã rà soát **không chứng minh thị trường cần nó**. Có ba khả năng phải thử:
+
+1. đây là product gap thật;
+2. đây là application responsibility nên team không muốn queue sở hữu;
+3. durable execution + idempotency + reconciliation riêng đã đủ tốt.
+
+Chi tiết nguồn và tiêu chí được duy trì tại [`docs/competitive-landscape.md`](docs/competitive-landscape.md).
+
+**Không dùng RhinoQ native queue nếu:** chỉ cần background jobs Node/Postgres — đánh giá pg-boss hoặc Graphile Worker trước; cần DAG/durable workflow — đánh giá Hatchet, DBOS, Restate hoặc Temporal; cần Redis queue trưởng thành — dùng BullMQ; queue hiện tại đang ổn và không cần invariant/reconciliation.
 
 RhinoQ không tối ưu cho cùng mục tiêu latency và throughput như một Redis queue. Khả năng thực tế phụ thuộc hardware, payload, worker count, durability và workload; các giới hạn sẽ được công bố bằng benchmark có thể tái lập.
 
@@ -1847,7 +1891,7 @@ Agent cấp token khi giao job:
 
 Worker báo hoàn thành phải trả token hợp lệ.
 
-**Ngăn được:** worker cũ (đã mất lease, bị coi là chết) báo `completed` sau khi lease đã chuyển cho worker khác — tình huống gây duplicate processing mà mọi queue dựa trên visibility timeout đều dính.
+**Ngăn được:** worker cũ (đã mất lease, bị coi là chết) báo `completed` sau khi lease đã chuyển cho worker khác — một failure mode phổ biến nếu hệ thống visibility-timeout không fence mọi write theo execution generation.
 
 ---
 
@@ -2762,9 +2806,22 @@ local atomic intent  +  at-least-once transfer  +  idempotent materialization
 
 # PHẦN XII — THỰC THI
 
-## 55. Scope v0.1
+## 55. Scope v0.1 — một Integrity Slice, không phải một queue foundation
 
-**24 mục. Không Reconciliation Engine đầy đủ, không Outcome Level 2, không migration suite.**
+Quyết định cũ làm v0.1 chỉ gồm queue parity + effect uncertainty tối giản là sai về chiến lược: đó là sản phẩm có switching cost cao nhưng chưa có lý do để switch. **v0.1 không được release như “pg-boss + ledger + dashboard”.**
+
+v0.1 phải chứng minh một vertical slice duy nhất:
+
+```text
+business record
+  → intent / external job correlation
+  → execution/effect observation
+  → indexed outcome invariant
+  → persistent finding
+  → operator decision + audit
+```
+
+Native RhinoQ queue là một execution adapter/reference implementation. Người dùng phải thử được VERIFY/RECOVER ở **observe-only mode trên queue hiện tại**, không cần migrate producer/worker trước.
 
 ### COMMIT
 
@@ -2791,16 +2848,26 @@ local atomic intent  +  at-least-once transfer  +  idempotent materialization
 
 ### VERIFY
 
-12. **Effect tối giản** — `pending` · `confirmed` · `uncertain` · effect irreversible **không auto-retry** · `UNIQUE (job_id, effect_name, effect_key)` (mục 10.3c)
-13. **Outcome Level 1 tối giản** — signal hoặc một indexed verifier · `deadline` · `notBefore` · `finality: 'once'` · 5 trạng thái (mục 11.5)
-    13b. **Query-cost gate** (mục 11.6e) — `outcome:explain` chặn contract thiếu index ở CI
+12. **Effect tối giản** — `pending` · `confirmed` · `uncertain` · effect irreversible **không auto-retry** · `UNIQUE (job_id, effect_name, effect_key)` (mục 10.3c). Đây là primitive hỗ trợ, không còn là differentiator duy nhất.
+13. **Outcome Level 1 dùng được thật** — một entity/ORM-aware indexed verifier · `deadline` · explicit `notBefore` · `finality: 'once'` · 5 trạng thái (mục 11.5). Không dùng stringly-typed table/field làm canonical API.
+14. **Query-cost gate** — `outcome:explain` chặn contract thiếu index ở CI.
+15. **External execution correlation** — lưu `source_system`, `source_job_id`, `business_key`; một finding phải nối được tới BullMQ/pg-boss/DBOS/worker riêng mà không cần RhinoQ sở hữu RUN.
 
 ### RECOVER
 
-14. Needs Attention list
-15. Retry hoặc manual decision
-16. Audit
-17. Business search theo correlation
+16. **Incremental reverse reconciliation tối thiểu** — đi từ một loại business record ngược về intent/execution; cursor an toàn; không full scan.
+17. **Persistent finding lifecycle** — `open → acknowledged → resolved`; suppression có expiry; resolved quay lại thành `regressed`.
+18. Needs Attention đọc từ finding bền vững, không chỉ union query tạm thời.
+19. Manual decision / guarded replay; v0.1 không auto-repair.
+20. Audit cho acknowledge, suppress, replay và resolve.
+21. Business search theo correlation và external job id.
+
+### ADOPTION PATH BẮT BUỘC
+
+22. Observe-only ingestion/API cho ứng dụng đang dùng queue khác.
+23. Một adapter/reference recipe cho BullMQ **hoặc** pg-boss; không viết hai adapter nửa vời.
+24. `rhinoq verify --business-key <id>` chạy được mà không khởi động RhinoQ worker.
+25. Không yêu cầu cutover queue để thấy finding đầu tiên.
 
 ### DEVELOPER EXPERIENCE (không phải "làm sau")
 
@@ -2825,11 +2892,15 @@ local atomic intent  +  at-least-once transfer  +  idempotent materialization
 26. **`/health/live` + `/health/ready` tách riêng** (mục 50.5)
 27. **Audit hash chain** (mục 40.1) — thêm sau khi đã có dữ liệu thì phải rewrite toàn bộ
 
-Mục 11b không phải "thêm việc" — nó là **điều kiện để người dùng thử nghiêm túc**. Thiếu graceful shutdown thì mỗi lần deploy tạo một loạt job orphaned, và người ta kết luận RhinoQ không đáng tin trước khi kịp thấy Effect hay Outcome.
+Mục 11b vẫn là release gate cho **native queue**, nhưng không phải toàn bộ product thesis. Nếu parity RUN kéo chậm VERIFY/RECOVER, observe-only mode được ưu tiên trước.
 
-**Mục 12 là giá trị lớn nhất với chi phí thấp nhất** — vài trăm dòng code, và cho ngay câu bán hàng mạnh nhất:
+Acceptance test của v0.1 không phải “enqueue rồi worker complete”. Nó phải là:
 
-> Worker chết giữa lúc charge thẻ? RhinoQ không retry mù. Nó dừng lại và hỏi bạn.
+> Một report được đánh dấu `completed` nhưng thiếu object đầu ra; RhinoQ phát hiện bằng indexed invariant, tạo đúng một finding, cho operator acknowledge/resolve, và đánh dấu regressed nếu sai lệch quay lại — dù execution ban đầu chạy trên queue khác.
+
+External effect demo vẫn cần, nhưng câu đúng là:
+
+> Worker chết quanh lúc gọi provider? RhinoQ không đoán. Nó dùng evidence/provider idempotency khi có; nếu kết quả chưa thể chứng minh, effect ở `uncertain` và không được replay tự động.
 
 ---
 
@@ -2837,15 +2908,15 @@ Mục 11b không phải "thêm việc" — nó là **điều kiện để ngư�
 
 | Version                              | Nội dung                                                                                                                                      |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| **v0.1 — Reliable Queue Foundation** | COMMIT · RUN · effect uncertainty tối giản · minimal Console · security baseline · bounded storage · resource budget · verify/doctor cơ bản   |
-| **v0.2 — Business Integrity**        | Outcome Level 2 · invariant DSL · signal-first verification · batch verifier · business mismatch UI · handler versioning                      |
-| **v0.3 — Safe Recovery**             | Resume · repair dry-run · approval · audit đầy đủ · incremental reconciliation                                                                |
-| **v0.4 — Adoption**                  | BullMQ Analyze · Observer · Protect Intent · Drain Status · migration docs                                                                    |
+| **v0.1 — Integrity Slice**           | external job correlation · Outcome Level 1 · incremental reconciliation cho một subject · persistent finding lifecycle · observe-only adoption · native queue foundation |
+| **v0.2 — Integrity Hardening**       | invariant DSL · query-cost gate · signal-first/batch verification · subject version/finality · finding dedupe/regression đầy đủ |
+| **v0.3 — Safe Recovery**             | Resume · repair dry-run · precondition · approval · audit đầy đủ |
+| **v0.4 — Adoption Expansion**        | adapter thứ hai · BullMQ Analyze · Protect Intent · Drain Status · migration docs |
 | **v0.5 — Runtime Intelligence**      | adaptive concurrency · circuit breaker · fair scheduling · error fingerprint · storage circuit breaker                                        |
 | **v0.6 — Polyglot**                  | stable protocol · Go SDK · Python SDK · Agent binary độc lập                                                                                  |
 | **Sau khi có nhu cầu thật**          | SQL Server/MongoDB Intent Bridge · Restore Guard · advanced incident workspace · native storage engine thứ hai · DAG · advanced rate limiting |
 
-**Quy tắc tự áp:** không viết dòng code nào cho v0.2 trước khi v0.1 đã publish lên npm và có ít nhất 3 người dùng ngoài bạn.
+**Quy tắc tự áp mới:** không mở rộng sang adapter thứ hai, DAG, auto-repair hoặc Outcome Level 2 trước khi ba design partner xác nhận cùng một loại finding có giá trị. Không hoãn differentiator tới sau ba user; differentiator là thứ dùng để có ba design partner.
 
 ---
 
@@ -2891,15 +2962,32 @@ RhinoQ hứa xoá boilerplate, nhưng verifier là code người dùng phải vi
 | ---------------------------------- | ---------------------- | ------------------------------------------ |
 | User tự viết                       | linh hoạt              | boilerplate mới, nhiều người sẽ không viết |
 | Adapter sẵn cho từng service       | zero-decision          | **maintenance vô hạn**                     |
-| Không verify, chỉ `needs_decision` | an toàn, 0 maintenance | cần người can thiệp mỗi lần                |
+| Không verify, chỉ `needs_decision` | an toàn, 0 maintenance | không chứng minh được product thesis       |
 
-**Quyết định:** hướng 3 ở v0.1 · primitive tổng quát (mục 11.7) ở v0.2 · adapter riêng **chỉ khi có contributor cho từng adapter**.
+**Quyết định mới:** v0.1 bắt buộc có một verifier tổng quát, type-safe/metadata-aware và một vertical adapter cho subject thật. `needs_decision` chỉ là kết quả khi evidence không đủ, không phải thay thế VERIFY. Adapter provider riêng chỉ thêm khi có maintainer/contributor.
 
-### 59.2 Hai đối tượng, một README
+### 59.2 Hai đối tượng, overlap thấp
 
 Effect/Outcome hấp dẫn team **đã** chạy production và **đã bị đau**. Zero-config hấp dẫn **app nhỏ chưa có queue**. Không thể nói với cả hai bằng một README.
 
-**Đề xuất:** v0.1 nhắm nhóm thứ hai (dễ có user đầu tiên hơn) · v0.4 mở sang nhóm thứ nhất qua Adoption tools · landing page có hai đường dẫn riêng từ đầu.
+Team đã đau thường đã có idempotency và reconciliation cron; app chưa đau chỉ cần queue đơn giản. Vì vậy:
+
+- **không nhắm app nhỏ cần queue lần đầu** — giới thiệu họ tới pg-boss, Graphile Worker hoặc BullMQ;
+- nhắm team đang có một invariant quan trọng được kiểm bằng cron/SQL/manual incident;
+- bán migration cost thấp: observe-only trước, thay RUN sau nếu có lý do;
+- landing page bắt đầu bằng finding/outcome, không bắt đầu bằng “Postgres queue”.
+
+### 59.3 Durable execution có làm RhinoQ thừa không?
+
+Có thể. Đây là giả thuyết phải falsify.
+
+Thử trên ba workload:
+
+1. database-only workflow trong DBOS transaction;
+2. external provider có idempotency key;
+3. business outcome lệch dù workflow history hoàn tất.
+
+Nếu (1) và (2) giải hết incident, RhinoQ không nên cạnh tranh ở effect execution. Nếu (3) không tạo đủ pain hoặc team luôn muốn invariant nằm trong application monitoring, product thesis không đứng.
 
 ---
 
@@ -2913,13 +3001,20 @@ Effect/Outcome hấp dẫn team **đã** chạy production và **đã bị đau*
 
 **pg-boss cũng có transactional enqueue.** Khác biệt thật nằm ở VERIFY và RECOVER. Nếu bỏ hai lớp đó, RhinoQ chỉ là pg-boss có dashboard — cuộc chiến không thắng được.
 
+**Switching cost.** Queue nằm trên critical path và được chọn bằng production evidence. Single-maintainer project không thắng bằng feature checklist. Observe-only adoption và compatibility với queue hiện tại là product requirement, không phải migration nice-to-have.
+
+**Durable-execution substitution.** DBOS, Hatchet, Restate và Temporal có thể giải cùng incident ở abstraction khác. Mọi case study phải so với cách giải tốt nhất của họ, không chỉ so với queue retry thô.
+
+**Application-layer boundary.** Outcome/reconciliation có thể thuộc domain application. RhinoQ phải chứng minh rằng contract, lifecycle, query-cost gate và operator workflow dùng chung tạo đủ giá trị để đáng có một product layer; không được chiếm ownership business rule một cách mơ hồ.
+
 **Động lực.** Câu phải tự trả lời thật: _bạn có thật sự đau vì cái này không?_ Với project open-source làm một mình, không có gì giữ bạn lại ngoài chính cái đau đó.
 
-Cách kiểm tra rẻ nhất — hỏi 3 dev đang dùng BullMQ ở production:
+Cách kiểm tra rẻ nhất — hỏi 3 dev đang có reconciliation/idempotency ở production:
 
 1. Có bao giờ business record tạo rồi mà job không chạy?
 2. Có bao giờ phải tra một job fail hôm qua mà không còn dữ liệu?
-3. Có bao giờ lo worker chết giữa lúc gọi payment API?
+3. Incident đó đã được durable execution, provider idempotency hoặc cron reconciliation giải tới mức nào?
+4. Họ có cài một observe-only invariant tool mà không thay queue không?
 
 Ba tin nhắn, một buổi tối. Nếu cả ba đều "chưa", đối tượng của bạn là nhóm khác.
 
@@ -2927,18 +3022,18 @@ Ba tin nhắn, một buổi tối. Nếu cả ba đều "chưa", đối tượng
 
 ## 61. Bước tiếp theo
 
-1. **Kiểm tra tên** — `npm view rhinoq`, GitHub, `rhinoq.dev`
-2. **Viết README trước khi viết code** — chỉ phần "5 phút đầu", **không nhắc Effect/Outcome ở trang đầu**. Nếu đọc lên mà chính bạn thấy _"cái này tôi muốn dùng"_, bạn có sản phẩm. Sửa README rẻ hơn sửa code rất nhiều
-3. **Validate với 3 dev** (mục 60)
-4. **Schema SQL** (mục 41) — chạy thật trên Postgres local, có partition ngay
-5. **Batch claim + lease + reaper** (mục 42) — test bằng `kill -9` giữa lúc chạy
-6. **Append-only attempts**
-7. **Quy tắc effect duy nhất của v0.1** (mục 55, mục 12) — vài trăm dòng, giá trị lớn nhất
-8. **Database role separation** (mục 33) — làm sớm, thêm sau rất khó
-9. **Correlation + Business Explorer** — chưa cần đẹp, cần tra được `scanId`
-10. **Publish v0.1 lên npm** dù còn thiếu
-11. **Viết 2 bài blog** — _"Worker chết giữa lúc charge thẻ: vì sao mọi job queue đều retry mù"_ và _"Job completed không có nghĩa là xong"_. Đăng dev.to / r/node / Hacker News / Viblo
-12. **Toàn bộ bằng tiếng Anh**
+1. **Phỏng vấn ba team có reconciliation cron/manual incident**, không phỏng vấn app chưa có queue.
+2. Chọn **một invariant vertical** ngoài tài chính: report output, media terminality, data sync completeness hoặc account provisioning.
+3. Hoàn thiện persistent finding store/API: acknowledge · suppress có expiry · resolve · regressed.
+4. Làm incremental reverse reconciliation cho đúng một subject, có cursor correctness test.
+5. Thêm external execution correlation để ingest BullMQ/pg-boss/custom job ID.
+6. Ship observe-only CLI/API: tìm finding mà không thay producer/worker.
+7. Hoàn thiện Outcome Level 1 type-safe + query-cost gate.
+8. Chạy comparative failure test: RhinoQ vs DBOS step vs provider idempotency trên cùng crash window.
+9. Giữ native queue parity làm reference transport; không mở rộng RUN nếu không phục vụ integrity slice.
+10. Viết README bằng finding thật và adoption không-switch; không dùng bài “mọi queue đều retry mù”.
+11. Publish preview cho design partners, chưa gọi production-ready.
+12. Toàn bộ public docs bằng tiếng Anh trước release.
 
 ---
 
@@ -2954,9 +3049,9 @@ Business invariant cần thiết đã đạt.
 Nếu chưa đạt, có đường phục hồi an toàn.
 ```
 
-RhinoQ **không cần nhiều tính năng hơn** BullMQ, Temporal hoặc các nền tảng khác. Nó cần làm **một việc sắc nét hơn**:
+RhinoQ **không cần nhiều tính năng hơn** BullMQ, DBOS, Hatchet, Restate hoặc Temporal. Nó cần chứng minh một việc sắc nét hơn và có thể dùng mà không thay toàn bộ runtime:
 
-> **Biến khoảng cách giữa "job completed" và "business state chính xác" thành một phần có thể khai báo, quan sát và phục hồi ngay trong job queue.**
+> **Biến khoảng cách giữa “execution history đã hoàn tất” và “business state thực sự đúng” thành invariant có thể khai báo, finding có lifecycle và recovery có precondition — trên cả RhinoQ native queue lẫn execution system hiện có.**
 
 Performance, storage và security **không được dùng làm điểm quảng cáo chính**. Chúng là điều kiện nền để lời hứa trên tồn tại được trong production mà không làm hại ứng dụng của người dùng.
 

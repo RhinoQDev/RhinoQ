@@ -9,8 +9,8 @@ Tài liệu này là blueprint triển khai cho RhinoQ. `RHINOQ.md` mô tả pro
 1. Domain không biết PostgreSQL, Redis, HTTP, CLI hay framework.
 2. Application chỉ điều phối use case qua port, không gọi adapter trực tiếp.
 3. Runtime chịu trách nhiệm scheduling, lease, retry, concurrency và process lifecycle.
-4. Effect Ledger là nguồn sự thật cho external effect; không suy đoán từ log.
-5. Outcome là nguồn sự thật cho business verification; không đồng nhất với execution success.
+4. Effect Ledger là nguồn evidence có thẩm quyền cho effect đã khai báo; không suy đoán confirmation từ log hoặc callback return.
+5. Outcome observation là evidence cho business verification; không đồng nhất với execution success và không chiếm ownership của business record.
 6. Control plane có quyền vận hành nhưng không được chứa business logic của worker.
 7. Mọi boundary đều có contract version, idempotency và telemetry.
 8. Scale theo bottleneck thực tế; không tách service chỉ vì thấy nhiều thư mục.

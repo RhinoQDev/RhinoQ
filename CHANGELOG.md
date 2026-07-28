@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Reframed v0.1 as an Integrity Slice: observe an existing execution system,
+  verify one indexed business invariant, persist a finding, and support an
+  audited operator lifecycle without requiring a queue cutover.
+- Added a sourced competitive landscape covering BullMQ, pg-boss, Graphile
+  Worker, PGMQ, DBOS, Hatchet, Restate, Temporal, Inngest and Trigger.dev.
+- Narrowed external-effect claims to acknowledge durable execution,
+  transactional steps and provider idempotency while preserving the explicit
+  accepted/confirmed/outcome distinction.
 - Added append-only attempt evidence for claim, release, completion, failure and
   lease expiry, exposed through the Go facade, Agent HTTP and TypeScript client.
 - Made PostgreSQL job transitions and attempt evidence atomic, and made a

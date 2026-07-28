@@ -1,15 +1,15 @@
 # RhinoQ
 
 <p align="center">
-  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — a durable business-integrity job queue" width="100%" />
+  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — business integrity for background execution" width="100%" />
 </p>
 
 <p align="center">
-  <strong>Durable background jobs with explicit effect confirmation and business outcome verification.</strong>
+  <strong>Verify business outcomes and recover inconsistencies around durable background execution.</strong>
 </p>
 
 <p align="center">
-  PostgreSQL-backed · Go runtime · TypeScript SDK in progress
+  PostgreSQL-backed integrity layer · Go runtime · reference queue included
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 </p>
 
 > [!WARNING]
-> RhinoQ is under active development. The API, storage schema, and protocol are not stable yet. The project has not completed its PostgreSQL integration, fault-testing, or reproducible benchmark release gates.
+> RhinoQ is under active development. The API, storage schema, and protocol are not stable yet. PostgreSQL contract tests are running in CI, but fault injection, retention, security review, and reproducible benchmark release gates are not complete.
 
 ## Why RhinoQ
 
@@ -44,6 +44,32 @@ That distinction matters when a provider returns `202 Accepted`, a worker crashe
 
 RhinoQ is designed for report generation, media processing, data synchronization, account provisioning, notifications, payments, credits, inventory, and other background work where execution state alone is not enough.
 
+Durable execution systems already solve a large part of crash recovery through
+checkpoints, journals, reliable calls, or transactional steps. RhinoQ does not
+claim to replace them. Its narrower hypothesis is that business-outcome
+verification and reverse reconciliation should be an operable integrity layer:
+correlate the current execution system, evaluate an indexed invariant, persist
+a finding, and make investigation or repair explicit and auditable.
+
+## Who it is for
+
+Evaluate RhinoQ when a team already has background execution but still relies
+on reconciliation cron jobs, incident SQL, or manual checks to answer questions
+such as:
+
+- a report is marked complete, but its output object is missing;
+- media processing finished, but one required rendition was never produced;
+- a synchronization job completed, but source and destination disagree;
+- an account workflow ran, but provisioning never reached the required state.
+
+RhinoQ's intended adoption path is observe-only first. A team should be able to
+correlate BullMQ, pg-boss, DBOS, or a custom worker and see a useful finding
+before considering any queue migration.
+
+If the requirement is only a mature Redis queue, a simple Node/PostgreSQL
+queue, or a durable DAG/workflow runtime, evaluate BullMQ, pg-boss, Graphile
+Worker, DBOS, Hatchet, Restate, or Temporal first.
+
 ## Integrity lifecycle
 
 RhinoQ organizes work into four explicit stages:
@@ -52,10 +78,12 @@ RhinoQ organizes work into four explicit stages:
 |---|---|---|---|
 | **COMMIT** | Was the work recorded durably? | idempotency, correlation, payload validation, outbox foundation | Foundation implemented |
 | **RUN** | Can the work execute and recover safely? | claims, leases, heartbeat, retries, cancellation, rate limits | Core implemented |
-| **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, confirmation policy, Outcome contracts | Foundation implemented |
-| **RECOVER** | Can an operator investigate and repair safely? | Needs Attention, replay policy, repair preview, audit | In progress |
+| **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, confirmation policy, Outcome contracts | Domain foundation; usable indexed verifier pending |
+| **RECOVER** | Can an operator investigate and repair safely? | persistent findings, reverse reconciliation, replay policy, audit | Domain foundation; persistence and reconciliation pending |
 
-RhinoQ is a job queue, not a message broker and not a workflow engine. Topic routing, fan-out, and general-purpose orchestration are intentionally outside the core product.
+RhinoQ includes a PostgreSQL-backed queue as a reference execution adapter. It
+is not a message broker or a general-purpose workflow engine. Topic routing,
+fan-out, and DAG orchestration are intentionally outside the core product.
 
 ## Quickstart
 
@@ -105,7 +133,7 @@ if err != nil {
 }
 ```
 
-Apply the migrations in [`internal/infrastructure/migrations/`](./internal/infrastructure/migrations/) in order before starting PostgreSQL-backed workers. A real-database integration harness is still a release blocker.
+Apply the migrations in [`internal/infrastructure/migrations/`](./internal/infrastructure/migrations/) in order before starting PostgreSQL-backed workers. The PostgreSQL contract and integrity suites run against a real database in CI; passing them is necessary but not sufficient evidence for production readiness.
 
 ## Queue operations
 
@@ -180,13 +208,18 @@ List responses intentionally exclude payloads so an operational queue view does 
 
 ### Integrity foundations
 
-- `job.Effect()` opens, runs and confirms a provider call under one declared policy
+- `job.Effect()` opens and resolves a provider call under an explicit confirmation policy
 - Work an earlier attempt confirmed is skipped; work it left uncertain stops the job
 - Effect Ledger with per-effect confirmation policy
 - Explicit effect states including uncertain and confirmed
 - Outcome records separated from execution completion
+- Finding lifecycle domain rules for deduplication, acknowledgement, suppression, resolution and regression
 - Outbox storage and publisher runtime
 - Fail-closed handling for unknown error classes
+
+The persistent finding store, reverse reconciler, observe-only adapter, and
+ORM-aware verifier API are not complete yet. The current code should not be
+presented as a finished integrity product.
 
 Using RhinoQ from another language needs one thin file, not a reimplementation. See the [Agent guide](./docs/agent.md).
 
@@ -248,17 +281,20 @@ docs/                             user and operator documentation
 
 ## Project status
 
-RhinoQ currently has a runnable Go core and testable memory adapter. PostgreSQL adapters and migrations are implemented, but production readiness still requires evidence from a real PostgreSQL integration environment.
+RhinoQ has a runnable Go core, memory adapter, PostgreSQL adapters, migrations,
+and a real-database contract suite. The RUN foundation is ahead of the product
+differentiator: production readiness still requires fault evidence, while the
+v0.1 Integrity Slice still needs persistent findings, reverse reconciliation,
+external execution correlation, and an indexed verifier API.
 
 The next engineering priorities are:
 
-1. PostgreSQL integration and fault-test harnesses
-2. Persistent finding lifecycle and safe Resume checkpoints
-3. Benchmark harness and query-cost gate
-4. Console queue view
-5. Tracing export and gRPC transport for the Agent
-6. Go and Python clients on the stable protocol
-7. Reproducible benchmark suite
+1. Persistent finding store and public lifecycle API
+2. Incremental reverse reconciliation for one non-financial business subject
+3. External queue/job correlation and observe-only ingestion
+4. ORM-aware Outcome Level 1 verifier with a query-cost gate
+5. A no-cutover integration recipe for BullMQ or pg-boss
+6. Fault-injection, retention, security, and reproducible benchmark gates
 
 RhinoQ does not publish throughput or latency claims without a repeatable benchmark that records hardware, payload, durability, worker count, and workload.
 
@@ -273,6 +309,7 @@ RhinoQ does not publish throughput or latency claims without a repeatable benchm
 | [Failure semantics](./docs/failure-semantics.md) | retry classes and effect uncertainty |
 | [Recovery](./docs/recovery.md) | Needs Attention, guarded replay, and audit semantics |
 | [Feature matrix](./docs/feature-matrix.md) | implementation status by capability |
+| [Competitive landscape](./docs/competitive-landscape.md) | category boundaries, primary sources, and falsifiable differentiation |
 | [Roadmap](./docs/roadmap.md) | milestones and release gates |
 | [Product specification](./RHINOQ.md) | complete product and architecture specification |
 

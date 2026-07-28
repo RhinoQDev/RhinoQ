@@ -47,6 +47,25 @@
 - **Rollback:** không cần; đây là ràng buộc chặt hơn ràng buộc cũ.
 - **Owner:** engine
 
+## ADR-0007 — v0.1 là Integrity Slice, native queue là reference adapter
+
+- **Status:** accepted
+- **Context:** PostgreSQL queue parity có switching cost cao và không tạo khác biệt đủ mạnh so với BullMQ, pg-boss, Graphile Worker, PGMQ hoặc các durable execution platform. Hoãn VERIFY/RECOVER tới sau khi có user tạo vòng lặp không thể đạt: sản phẩm cần differentiator để có design partner.
+- **Decision:** v0.1 phải kiểm chứng một business invariant từ record ngược về execution/effect, lưu finding bền vững và hỗ trợ operator lifecycle có audit. Ứng dụng được thử ở observe-only mode trên execution system hiện hữu; native RhinoQ queue là reference adapter, không phải điều kiện bắt buộc.
+- **Alternatives:** release queue foundation trước; yêu cầu migrate queue; chỉ trả `needs_decision` mà không có verifier/reconciliation.
+- **Consequences:** persistent finding, external correlation và reconciliation được ưu tiên trước DAG, adapter thứ hai và queue parity mở rộng. README phải nói rõ khi nào nên dùng sản phẩm khác.
+- **Rollback:** nếu ba design partner không coi invariant/finding là reusable product capability, dừng mở rộng product layer và giữ queue/runtime như research foundation.
+- **Owner:** product + engine
+
+## ADR-0008 — Durable execution là adjacent solution, không phải blind spot
+
+- **Status:** accepted
+- **Context:** DBOS, Hatchet, Restate và Temporal checkpoint hoặc journal execution, giải nhiều crash/replay window tốt hơn queue truyền thống. Tuy nhiên external API không mặc nhiên exactly-once; DBOS Go step chính thức vẫn mô tả at-least-once ngoài datasource transaction.
+- **Decision:** RhinoQ không tuyên bố độc quyền giải worker crash. Effect Ledger là evidence/confirmation primitive cho effect không nằm trọn trong transaction hoặc durable-call protocol. Mọi case study phải so với durable execution + provider idempotency + application reconciliation.
+- **Consequences:** differentiator cần được kiểm chứng ở business outcome invariant và reverse reconciliation; tài liệu cạnh tranh phải dùng nguồn chính thức và ghi ngày review.
+- **Rollback:** không áp dụng; đây là giới hạn claim, không phải coupling kỹ thuật.
+- **Owner:** product
+
 ## Template cho ADR mới
 
 ```text
