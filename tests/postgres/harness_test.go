@@ -60,6 +60,24 @@ func TestMain(m *testing.M) {
 // told to. A harness that builds its schema by hand would not catch a broken
 // migration, which is the failure that actually reaches production.
 func applyMigrations(db *sql.DB) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// Production roles often prepend an application schema. Run migrations
+	// under that hostile search_path so every authoritative table has to choose
+	// its schema explicitly; otherwise a later migration may silently create a
+	// second rhinoq_jobs in the wrong namespace.
+	if _, err := conn.ExecContext(ctx, `
+		CREATE SCHEMA IF NOT EXISTS rhinoq;
+		SET search_path = rhinoq, public`); err != nil {
+		return migrationError{file: "search_path", err: err}
+	}
+
 	pattern := filepath.Join("..", "..", "internal", "infrastructure", "migrations", "*.sql")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
@@ -74,9 +92,31 @@ func applyMigrations(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		if _, err := db.Exec(string(statements)); err != nil {
+		if _, err := conn.ExecContext(ctx, string(statements)); err != nil {
 			return migrationError{file: filepath.Base(file), err: err}
 		}
+	}
+	return validateSchemaLayout(ctx, conn)
+}
+
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func validateSchemaLayout(ctx context.Context, query queryRower) error {
+	var jobsInPublic, attemptsInPublic, duplicateJobs bool
+	err := query.QueryRowContext(ctx, `
+		SELECT to_regclass('public.rhinoq_jobs') IS NOT NULL,
+		       to_regclass('public.rhinoq_attempt_events') IS NOT NULL,
+		       to_regclass('rhinoq.rhinoq_jobs') IS NOT NULL`).
+		Scan(&jobsInPublic, &attemptsInPublic, &duplicateJobs)
+	if err != nil {
+		return migrationError{file: "schema layout", err: err}
+	}
+	if !jobsInPublic || !attemptsInPublic || duplicateJobs {
+		return migrationError{file: "schema layout", err: errString(
+			"authoritative tables must exist only in public, even with an application schema first in search_path",
+		)}
 	}
 	return nil
 }

@@ -1,9 +1,14 @@
 name: CI
+run-name: CI @ ${{ github.sha }}
 
 on:
   pull_request:
   push:
     branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -14,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Show tested revision
+        run: git show --no-patch --format='Testing commit %H'
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -42,6 +49,8 @@ jobs:
           --health-retries 15
     steps:
       - uses: actions/checkout@v4
+      - name: Show tested revision
+        run: git show --no-patch --format='Testing commit %H'
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -57,6 +66,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Show tested revision
+        run: git show --no-patch --format='Testing commit %H'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
