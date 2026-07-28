@@ -1,19 +1,43 @@
 # License strategy
 
-Chưa gắn license public ở giai đoạn private. Không tự ý thêm license hoặc public repository khi chưa có quyết định pháp lý bằng văn bản.
+Core RhinoQ dùng **Apache-2.0**, chốt bằng ADR-0013 trong
+[`.ai/DECISIONS.md`](./.ai/DECISIONS.md). Toàn văn nằm ở [`LICENSE`](./LICENSE),
+attribution nằm ở [`NOTICE`](./NOTICE).
 
-Khi mở open-core, cần chọn một trong các hướng:
+Phạm vi Apache-2.0: Go engine, domain, application, runtime, protocol, CLI,
+`sdks/node`, docs và test trong repository này.
 
-1. Apache-2.0 cho adoption rộng.
-2. AGPLv3 cho core + commercial license cho doanh nghiệp không muốn chịu nghĩa vụ AGPL.
-3. Source-available license nếu mục tiêu là hạn chế cạnh tranh SaaS, nhưng khi đó không gọi là open source.
+Không nằm trong phạm vi: product research chưa publish (`private/`), managed
+hosted service, enterprise Console và thương hiệu RhinoQ.
 
-License không ngăn việc fork. Nó chỉ quy định quyền sử dụng, phân phối, sửa đổi và nghĩa vụ tương ứng. Thương hiệu, hosted service và enterprise value phải được bảo vệ riêng.
+## Vì sao Apache-2.0
 
-Trước khi public:
+Adoption rộng nhất cho một job queue, kèm patent grant rõ ràng — điều MIT không
+có và là rủi ro không cần thiết với hạ tầng dữ liệu. AGPLv3 bị loại vì nhiều
+công ty cấm AGPL trong policy, chặn đúng nhóm design partner đang cần. BSL và
+source-available bị loại vì khi đó không được gọi là open source.
 
-- [ ] Chốt license bằng ADR.
-- [ ] Kiểm tra dependency license.
-- [ ] Tách code proprietary khỏi public packages.
-- [ ] Xác nhận không có secret hoặc customer data trong git history.
+License không ngăn việc fork, và Apache-2.0 cũng không ngăn bên khác chạy hosted
+service trên core. Nó chỉ quy định quyền sử dụng, phân phối, sửa đổi và nghĩa vụ
+tương ứng. Thương hiệu, hosted service và enterprise value phải được bảo vệ
+riêng.
 
+## Nghĩa vụ đang mở
+
+- [x] Chốt license bằng ADR.
+- [x] Đặt `LICENSE` và `NOTICE` ở repository root.
+- [x] Đưa `LICENSE` vào npm package (`sdks/node`).
+- [ ] Audit license của toàn bộ dependency và lưu bằng chứng. Hiện tại chỉ có
+      `jackc/pgx` (MIT) và `golang.org/x` (BSD-3-Clause); Node SDK không có
+      runtime dependency.
+- [ ] Xác nhận không có secret hoặc customer data trong git history trước khi
+      chuyển repository sang public. Một lần quét pattern thủ công trên toàn bộ
+      history (2026-07-28) không tìm thấy key, token hay file `.env`/`.pem` nào;
+      cần chạy thêm một secret scanner chuyên dụng để có bằng chứng đủ mạnh.
+- [ ] Chốt nơi giữ code proprietary khi bắt đầu open-core.
+
+## Ràng buộc cho thay đổi sau này
+
+Mọi dependency mới phải tương thích Apache-2.0. Không đưa GPL hoặc AGPL vào
+core. License đã public cho một commit thì không thu hồi được; chỉ có thể đổi
+license cho release về sau, và cần đồng thuận của mọi contributor giữ copyright.

@@ -110,7 +110,7 @@
   nâng Gateway thành deployment chính mà không đổi domain/port contract.
 - **Owner:** product + engine
 
-## ADR-0011 — Workbench local, read-only và embed trong Go binary
+## ADR-0012 — Workbench local, read-only và embed trong Go binary
 
 - **Status:** accepted
 - **Context:** developer cần xem job/effect/outcome nhanh nhưng một hosted
@@ -127,6 +127,35 @@
 - **Rollback:** có thể bỏ command/embedded assets mà không đổi domain, storage
   schema hoặc worker runtime.
 - **Owner:** DX + engine
+
+## ADR-0013 — Apache-2.0 và public distribution boundary
+
+- **Status:** accepted
+- **Context:** repository không có file license nên mặc định là "all rights
+  reserved": không ai được phép dùng, fork hay redistribute một cách hợp pháp,
+  kể cả khi repository ở chế độ public. Đồng thời module path khai báo
+  (`github.com/rhinoq/rhinoq`) không trùng nơi host thật, nên `go get` không
+  resolve được và mọi consumer phải dùng `replace` local.
+- **Decision:** core RhinoQ dùng **Apache-2.0** — Go engine, domain,
+  application, runtime, protocol, CLI, Node.js SDK, docs và test. Module path
+  đổi thành `github.com/madebyduy/RhinoQ` để trùng repository đang host, kèm
+  `NOTICE` theo mục 4(d) của license.
+- **Alternatives:** AGPLv3 + commercial (bị loại vì nhiều công ty cấm AGPL
+  trong policy, chặn adoption ở giai đoạn cần design partner); BSL/source-
+  available (bị loại vì không được gọi là open source, mất tín hiệu tin cậy khi
+  sản phẩm còn phải chứng minh differentiator); MIT (bị loại vì thiếu điều
+  khoản patent grant, rủi ro không cần thiết cho hạ tầng dữ liệu).
+- **Consequences:** Apache-2.0 không ngăn bên khác chạy hosted service trên
+  core. Giá trị thương mại phải nằm ở managed service, enterprise Console,
+  support/SLA và thương hiệu, đúng như `GOVERNANCE.md` đã ghi — không nằm ở
+  license. Mọi dependency mới phải tương thích Apache-2.0; GPL/AGPL không được
+  đưa vào core.
+- **Boundary:** product research chưa publish (`private/`) không đi kèm license
+  này và không được coi là implementation truth.
+- **Rollback:** không thể thu hồi license cho commit đã public. Chỉ có thể đổi
+  license cho các release về sau, và cần đồng thuận của mọi contributor giữ
+  copyright.
+- **Owner:** maintainer
 
 ## Template cho ADR mới
 

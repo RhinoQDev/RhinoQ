@@ -19,6 +19,7 @@
   <img src="https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22+" />
   <img src="https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 tested" />
   <img src="https://img.shields.io/badge/status-active_development-f59e0b" alt="Active development" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0" /></a>
 </p>
 
 > [!WARNING]
@@ -639,9 +640,14 @@ same change, or record why no README change is needed. See
 Report undisclosed vulnerabilities through [SECURITY.md](./SECURITY.md), not a
 public issue.
 
-This repository does not currently grant an open-source license. The project
-remains under private development while its open-core boundary and license are
-evaluated. See [LICENSE-STRATEGY.md](./LICENSE-STRATEGY.md).
+RhinoQ is licensed under [Apache-2.0](./LICENSE). Contributions are accepted
+under the same license, as its Section 5 provides; no separate CLA is required.
+The scope of what is open and what may stay commercial is recorded in
+[GOVERNANCE.md](./GOVERNANCE.md) and [LICENSE-STRATEGY.md](./LICENSE-STRATEGY.md).
+
+Integrity Rules run developer-written SQL. The Explain gate bounds shape, cost
+and timeout; it is not a SQL sandbox. Give Rules a dedicated read-only
+PostgreSQL role in production.
 
 ---
 

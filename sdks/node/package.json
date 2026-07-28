@@ -1,9 +1,17 @@
 {
   "name": "@rhinoq/node",
-  "private": true,
   "version": "0.1.0-dev",
   "description": "Node.js producer, worker and operator client for RhinoQ",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/madebyduy/RhinoQ.git",
+    "directory": "sdks/node"
+  },
+  "homepage": "https://github.com/madebyduy/RhinoQ/tree/main/sdks/node#readme",
+  "bugs": {
+    "url": "https://github.com/madebyduy/RhinoQ/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,7 +23,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "sideEffects": false,
   "engines": {
