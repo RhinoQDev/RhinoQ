@@ -30,18 +30,19 @@ func TestAdmissionRejectsOverflowAndKeepsCriticalRoom(t *testing.T) {
 
 	service := enqueue.NewService(store)
 	for accepted := 0; accepted < 2; accepted++ {
-		if _, err := service.Execute(ctx, ports.EnqueueInput{Name: "reports", Payload: []byte("{}")}); err != nil {
+		if _, err := service.Execute(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "reports", JobName: "reports"}, Payload: []byte("{}")}); err != nil {
 			t.Fatalf("enqueue %d below the shared budget: %v", accepted, err)
 		}
 	}
-	_, err = service.Execute(ctx, ports.EnqueueInput{Name: "reports", Payload: []byte("{}")})
+	_, err = service.Execute(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "reports", JobName: "reports"}, Payload: []byte("{}")})
 	if !errors.Is(err, admission.ErrOverCapacity) {
 		t.Fatalf("standard work must be rejected at the reserved line, got %v", err)
 	}
 	// The reserve is exactly what keeps a flooded report queue from blocking a
 	// payment.
 	if _, err := service.Execute(ctx, ports.EnqueueInput{
-		Name: "reports", Payload: []byte("{}"), Class: job.Critical,
+		Identity: job.Identity{QueueName: "reports", JobName: "reports", ResourceClass: job.Critical},
+		Payload:  []byte("{}"),
 	}); err != nil {
 		t.Fatalf("critical work must still be admitted: %v", err)
 	}
@@ -65,10 +66,10 @@ func TestAdmissionDelayModePushesRunTimeInsteadOfRejecting(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "telemetry", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "telemetry", JobName: "telemetry"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
-	delayed, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "telemetry", Payload: []byte("{}")})
+	delayed, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "telemetry", JobName: "telemetry"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatalf("delay mode must accept the job: %v", err)
 	}
@@ -95,16 +96,16 @@ func TestRemovingAdmissionRestoresUnboundedEnqueue(t *testing.T) {
 	if err := control.SetAdmission(ctx, "bulk", admission.Policy{MaxPending: 1, OnOverflow: admission.Reject}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "bulk", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "bulk", JobName: "bulk"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "bulk", Payload: []byte("{}")}); !errors.Is(err, admission.ErrOverCapacity) {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "bulk", JobName: "bulk"}, Payload: []byte("{}")}); !errors.Is(err, admission.ErrOverCapacity) {
 		t.Fatalf("expected the budget to bite, got %v", err)
 	}
 	if err := control.RemoveAdmission(ctx, "bulk"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "bulk", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "bulk", JobName: "bulk"}, Payload: []byte("{}")}); err != nil {
 		t.Fatalf("removing the budget must restore enqueue: %v", err)
 	}
 }

@@ -27,8 +27,13 @@ import (
 )
 
 type Job struct {
-	ID            string
-	Name          string
+	ID string
+	// QueueName is the execution lane this job was claimed from; JobName is the
+	// handler contract that routed it here; GroupKey is the business partition,
+	// usually a tenant or customer, and may be empty.
+	QueueName     string
+	JobName       string
+	GroupKey      string
 	Payload       []byte
 	Attempts      int
 	CorrelationID string
@@ -56,13 +61,14 @@ var (
 	ErrLeaseLost = ports.ErrLeaseLost
 )
 
-// Job classes decide which share of a queue's admission budget work may use.
+// Resource classes decide which share of a queue's admission budget work may
+// use, and what is shed first when the database is under pressure.
 const (
-	ClassCritical    = string(job.Critical)
-	ClassInteractive = string(job.Interactive)
-	ClassStandard    = string(job.Standard)
-	ClassBatch       = string(job.Batch)
-	ClassMaintenance = string(job.Maintenance)
+	ResourceCritical    = string(job.Critical)
+	ResourceInteractive = string(job.Interactive)
+	ResourceStandard    = string(job.Standard)
+	ResourceBatch       = string(job.Batch)
+	ResourceMaintenance = string(job.Maintenance)
 )
 
 // Overflow modes for admission control.
@@ -82,35 +88,52 @@ const (
 // JobRequest is the single canonical way to enqueue. Everything a job needs is
 // declared here; there is no second configuration surface.
 type JobRequest struct {
-	Name    string
-	Payload []byte
-	// IdempotencyKey is scoped to the queue name: enqueueing the same key twice
-	// returns the first job instead of creating a second one.
+	// QueueName is the execution lane. Concurrency, rate limits, pausing and
+	// admission budgets all belong to the lane, so two handlers that must share
+	// a worker pool share a lane, and a handler that needs its own limit gets
+	// its own lane.
+	QueueName string
+	// JobName is the handler contract. It decides which registered handler runs
+	// the job, and nothing else.
+	JobName string
+	// GroupKey is the business partition, usually a tenant or customer. It is
+	// stored and indexed but does not yet change scheduling.
+	GroupKey string
+	Payload  []byte
+	// IdempotencyKey is scoped to QueueName: enqueueing the same key twice into
+	// one lane returns the first job instead of creating a second one. The same
+	// key in a different lane is a different job.
 	IdempotencyKey string
 	// CorrelationID links this job to the business entity it acts on.
 	CorrelationID string
-	// Priority orders claiming inside a queue, from -100 to 100. Waiting jobs
+	// Priority orders claiming inside a lane, from -100 to 100. Waiting jobs
 	// gain priority over time, so low priority work cannot starve.
 	Priority int
-	// Class defaults to standard. Critical work may use a queue's reserved
-	// admission budget.
-	Class string
+	// ResourceClass defaults to standard. Critical work may use a lane's
+	// reserved admission budget.
+	ResourceClass string
 	// RunAfter delays the earliest run time. Zero means as soon as possible.
 	RunAfter time.Duration
 }
 
 type JobQuery struct {
-	Queue  string
-	States []string
-	Offset int
-	Limit  int
+	// QueueName, JobName and GroupKey each narrow the result; an empty field
+	// means "any".
+	QueueName string
+	JobName   string
+	GroupKey  string
+	States    []string
+	Offset    int
+	Limit     int
 }
 
 type JobSummary struct {
 	ID              string    `json:"id"`
-	Name            string    `json:"name"`
+	QueueName       string    `json:"queueName"`
+	JobName         string    `json:"jobName"`
+	GroupKey        string    `json:"groupKey,omitempty"`
 	State           string    `json:"state"`
-	Class           string    `json:"class"`
+	ResourceClass   string    `json:"resourceClass"`
 	Priority        int       `json:"priority"`
 	Attempts        int       `json:"attempts"`
 	CrashCount      int       `json:"crashCount"`
@@ -441,12 +464,16 @@ func (c *Client) Enqueue(ctx context.Context, request JobRequest) (string, error
 		return "", errors.New("rhinoq run-after delay must not be negative")
 	}
 	input := ports.EnqueueInput{
-		Name:           request.Name,
+		Identity: job.Identity{
+			QueueName:     request.QueueName,
+			JobName:       request.JobName,
+			GroupKey:      request.GroupKey,
+			ResourceClass: job.Class(request.ResourceClass),
+		},
 		Payload:        request.Payload,
 		IdempotencyKey: request.IdempotencyKey,
 		CorrelationID:  request.CorrelationID,
 		Priority:       request.Priority,
-		Class:          job.Class(request.Class),
 		RunAfter:       request.RunAfter,
 	}
 	id, err := c.store.Enqueue(ctx, input)
@@ -540,7 +567,8 @@ func (c *Client) ListJobs(ctx context.Context, query JobQuery) ([]JobSummary, er
 		return nil, err
 	}
 	records, err := inspection.List(ctx, ports.ListJobsInput{
-		Name: query.Queue, States: states, Offset: query.Offset, Limit: query.Limit,
+		QueueName: query.QueueName, JobName: query.JobName, GroupKey: query.GroupKey,
+		States: states, Offset: query.Offset, Limit: query.Limit,
 	})
 	if err != nil {
 		return nil, err
@@ -725,17 +753,24 @@ func (c *Client) AuditTrail(ctx context.Context, id string, offset, limit int) (
 	return result, nil
 }
 
-func (c *Client) Handle(name string, handler Handler) error {
+// Handle binds a handler to one job contract inside one execution lane. The
+// worker claims from queueName and dispatches by jobName, so registering the
+// same jobName in two lanes runs the same contract in both, and registering two
+// jobNames in one lane lets unrelated work share a worker pool.
+func (c *Client) Handle(queueName, jobName string, handler Handler) error {
 	if c == nil || c.handlers == nil {
 		return errors.New("rhinoq client is required")
 	}
 	if handler == nil {
 		return errors.New("rhinoq handler is required")
 	}
-	return c.handlers.Register(name, func(ctx context.Context, record job.Record) error {
+	return c.handlers.Register(queueName, jobName, func(ctx context.Context, record job.Record) error {
 		return handler(ctx, Job{
-			ID: string(record.ID), Name: record.Name,
-			Payload: append([]byte(nil), record.Payload...), Attempts: record.Attempts,
+			ID:        string(record.ID),
+			QueueName: record.QueueName,
+			JobName:   record.JobName,
+			GroupKey:  record.GroupKey,
+			Payload:   append([]byte(nil), record.Payload...), Attempts: record.Attempts,
 			CorrelationID: record.CorrelationID,
 			client:        c, lease: ports.LeaseFor(record),
 		})
@@ -794,8 +829,10 @@ func (c *Client) queueControl() (*operations.QueueControl, error) {
 
 func summarizeJob(record job.Record) JobSummary {
 	return JobSummary{
-		ID: record.ID.String(), Name: record.Name, State: record.State.String(),
-		Class: string(record.Class), Priority: record.Priority,
+		ID: record.ID.String(), QueueName: record.QueueName,
+		JobName: record.JobName, GroupKey: record.GroupKey,
+		State:         record.State.String(),
+		ResourceClass: string(record.ResourceClass), Priority: record.Priority,
 		Attempts: record.Attempts, CrashCount: record.CrashCount,
 		BlockedReason: string(record.BlockedReason), CorrelationID: record.CorrelationID,
 		CreatedAt: record.CreatedAt, NotBefore: record.NotBefore,

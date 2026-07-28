@@ -6,7 +6,6 @@ import (
 )
 
 var (
-	ErrEmptyName       = errors.New("job name is required")
 	ErrNilPayload      = errors.New("job payload is required")
 	ErrPayloadTooLarge = errors.New("job payload exceeds configured size limit")
 	ErrInvalidState    = errors.New("invalid initial job state")
@@ -47,11 +46,12 @@ const (
 )
 
 type Record struct {
-	ID              ID
-	Name            string
+	ID ID
+	// Identity is embedded, so a record exposes QueueName, JobName, GroupKey
+	// and ResourceClass directly.
+	Identity
 	Payload         []byte
 	State           State
-	Class           Class
 	Priority        int
 	Attempts        int
 	CrashCount      int
@@ -68,18 +68,18 @@ type Record struct {
 
 // Spec is the validated input required to admit a new job into storage.
 type Spec struct {
-	ID        ID
-	Name      string
+	ID ID
+	Identity
 	Payload   []byte
 	Now       time.Time
 	NotBefore time.Time
 	Priority  int
-	Class     Class
 }
 
 func NewRecord(spec Spec) (Record, error) {
-	if spec.Name == "" {
-		return Record{}, ErrEmptyName
+	identity, err := spec.Identity.Normalize()
+	if err != nil {
+		return Record{}, err
 	}
 	if err := ValidatePayload(spec.Payload, DefaultMaxPayloadBytes); err != nil {
 		return Record{}, err
@@ -90,20 +90,15 @@ func NewRecord(spec Spec) (Record, error) {
 	if spec.Priority < MinPriority || spec.Priority > MaxPriority {
 		return Record{}, ErrInvalidPriority
 	}
-	class, err := NormalizeClass(spec.Class)
-	if err != nil {
-		return Record{}, err
-	}
 	notBefore := spec.NotBefore
 	if notBefore.IsZero() {
 		notBefore = spec.Now
 	}
 	return Record{
 		ID:        spec.ID,
-		Name:      spec.Name,
+		Identity:  identity,
 		Payload:   append([]byte(nil), spec.Payload...),
 		State:     Pending,
-		Class:     class,
 		Priority:  spec.Priority,
 		CreatedAt: spec.Now,
 		NotBefore: notBefore,

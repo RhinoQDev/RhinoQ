@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -70,7 +71,7 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 	}
 
 	now := s.clock()
-	class, err := job.NormalizeClass(input.Class)
+	identity, err := input.Identity.Normalize()
 	if err != nil {
 		return "", err
 	}
@@ -78,8 +79,13 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 		return "", errors.New("run-after delay must not be negative")
 	}
 	notBefore := now.Add(input.RunAfter)
-	if policy, ok := s.admission[input.Name]; ok {
-		decision, err := policy.Decide(input.Name, s.pendingCount(input.Name), class.IsCritical())
+	// Admission belongs to the execution lane, so it is keyed by queue name.
+	if policy, ok := s.admission[identity.QueueName]; ok {
+		decision, err := policy.Decide(
+			identity.QueueName,
+			s.pendingCount(identity.QueueName),
+			identity.ResourceClass.IsCritical(),
+		)
 		if err != nil {
 			return "", err
 		}
@@ -91,8 +97,8 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 	s.nextID++
 	id := job.ID(fmt.Sprintf("job_%06d", s.nextID))
 	record, err := job.NewRecord(job.Spec{
-		ID: id, Name: input.Name, Payload: input.Payload,
-		Now: now, NotBefore: notBefore, Priority: input.Priority, Class: class,
+		ID: id, Identity: identity, Payload: input.Payload,
+		Now: now, NotBefore: notBefore, Priority: input.Priority,
 	})
 	if err != nil {
 		s.nextID--
@@ -132,7 +138,13 @@ func (s *JobStore) ListJobs(_ context.Context, input ports.ListJobsInput) ([]job
 	defer s.mu.RUnlock()
 	records := make([]job.Record, 0, len(s.jobs))
 	for _, record := range s.jobs {
-		if input.Name != "" && record.Name != input.Name {
+		if input.QueueName != "" && record.QueueName != input.QueueName {
+			continue
+		}
+		if input.JobName != "" && record.JobName != input.JobName {
+			continue
+		}
+		if input.GroupKey != "" && record.GroupKey != input.GroupKey {
 			continue
 		}
 		if len(states) > 0 && !states[record.State] {
@@ -178,12 +190,12 @@ func (s *JobStore) ListAttemptEvents(_ context.Context, id ports.JobID, offset, 
 	return result, nil
 }
 
-func (s *JobStore) JobCounts(_ context.Context, name string) (map[job.State]int64, error) {
+func (s *JobStore) JobCounts(_ context.Context, queueName string) (map[job.State]int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	counts := make(map[job.State]int64)
 	for _, record := range s.jobs {
-		if name == "" || record.Name == name {
+		if queueName == "" || record.QueueName == queueName {
 			counts[record.State]++
 		}
 	}
@@ -202,25 +214,25 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	if err := ports.ValidateClaimLimit(input.Limit); err != nil {
 		return nil, err
 	}
-	if err := ports.ValidateClaimQueues(input.Queues); err != nil {
+	if err := ports.ValidateClaimQueues(input.QueueNames); err != nil {
 		return nil, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	allowed := make(map[string]struct{}, len(input.Queues))
-	for _, queue := range input.Queues {
-		allowed[queue] = struct{}{}
+	allowed := make(map[string]struct{}, len(input.QueueNames))
+	for _, name := range input.QueueNames {
+		allowed[name] = struct{}{}
 	}
 	candidates := make([]job.Record, 0, len(s.jobs))
 	for _, record := range s.jobs {
 		if len(allowed) > 0 {
-			if _, handles := allowed[record.Name]; !handles {
+			if _, subscribed := allowed[record.QueueName]; !subscribed {
 				continue
 			}
 		}
-		if claimable(record, input.Now) && !s.paused[record.Name] {
+		if claimable(record, input.Now) && !s.paused[record.QueueName] {
 			candidates = append(candidates, record)
 		}
 	}
@@ -231,7 +243,7 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		if len(claimed) == input.Limit {
 			break
 		}
-		if !s.reserveRateSlot(record.Name, input.Now) {
+		if !s.reserveRateSlot(record.QueueName, input.Now) {
 			continue
 		}
 		record.State = job.Leased
@@ -548,10 +560,10 @@ func (s *JobStore) authoritative(lease ports.Lease, now time.Time) (job.Record, 
 	return record, nil
 }
 
-func (s *JobStore) pendingCount(name string) int {
+func (s *JobStore) pendingCount(queueName string) int {
 	count := 0
 	for _, record := range s.jobs {
-		if record.Name == name && (record.State == job.Pending || record.State == job.RetryWait) {
+		if record.QueueName == queueName && (record.State == job.Pending || record.State == job.RetryWait) {
 			count++
 		}
 	}
@@ -602,6 +614,8 @@ func cloneRecord(record job.Record) job.Record {
 	return record
 }
 
+// idempotencyScope mirrors the PostgreSQL unique constraint: a key is scoped to
+// the execution lane, not to the handler contract.
 func idempotencyScope(input ports.EnqueueInput) string {
-	return input.Name + "\x00" + input.IdempotencyKey
+	return strings.TrimSpace(input.QueueName) + "\x00" + input.IdempotencyKey
 }

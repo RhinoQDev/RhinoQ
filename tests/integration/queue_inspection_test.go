@@ -16,7 +16,7 @@ func TestQueueInspectionCountsFiltersAndPaginates(t *testing.T) {
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
 	for _, name := range []string{"email", "email", "media"} {
-		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: name, Payload: []byte("{}")}); err != nil {
+		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: name, JobName: name}, Payload: []byte("{}")}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -40,12 +40,12 @@ func TestQueueInspectionCountsFiltersAndPaginates(t *testing.T) {
 		t.Fatalf("unexpected email counts: %+v", counts)
 	}
 	page, err := inspection.List(ctx, ports.ListJobsInput{
-		Name: "email", States: []job.State{job.Pending}, Limit: 1,
+		QueueName: "email", States: []job.State{job.Pending}, Limit: 1,
 	})
 	if err != nil || len(page) != 1 || page[0].State != job.Pending {
 		t.Fatalf("unexpected filtered page: %+v err=%v", page, err)
 	}
-	empty, err := inspection.List(ctx, ports.ListJobsInput{Name: "email", Offset: 2, Limit: 1})
+	empty, err := inspection.List(ctx, ports.ListJobsInput{QueueName: "email", Offset: 2, Limit: 1})
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("offset beyond result must return empty page: %+v err=%v", empty, err)
 	}

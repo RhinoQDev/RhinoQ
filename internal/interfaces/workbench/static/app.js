@@ -271,7 +271,7 @@ function renderQueueList() {
   const snapshot = app.snapshot;
   const visibleCounts = {};
   snapshot.jobs.forEach((job) => {
-    visibleCounts[job.name] = (visibleCounts[job.name] || 0) + 1;
+    visibleCounts[job.queueName] = (visibleCounts[job.queueName] || 0) + 1;
   });
   elements["queue-list"].innerHTML = snapshot.queues.map((queue) => `
     <button class="queue-item ${queue === app.queue ? "is-active" : ""}" type="button" data-queue="${escapeAttribute(queue)}">
@@ -463,7 +463,7 @@ function tableRowForView(view, row, index) {
       <div class="cell-primary">
         <span class="state-mark" data-state="${escapeAttribute(row.state)}"></span>
         <div class="cell-stack">
-          <strong>${escapeHTML(row.name)}</strong>
+          <strong>${escapeHTML(row.jobName)}</strong>
           <small title="${escapeAttribute(row.id)}">${escapeHTML(shortID(row.id))}</small>
         </div>
       </div>
@@ -573,7 +573,7 @@ async function selectJob(id, options = {}) {
 function renderJobDetail(detail) {
   const job = detail.job;
   elements["rail-queue"].textContent = job.stage.toLocaleUpperCase();
-  elements["rail-title"].textContent = job.name;
+  elements["rail-title"].textContent = job.jobName;
   elements["rail-id"].textContent = job.id;
   elements["rail-state"].className = "state-badge";
   elements["rail-state"].dataset.state = job.state;
@@ -582,7 +582,9 @@ function renderJobDetail(detail) {
   renderTruthSeparation(detail);
   elements["job-context"].innerHTML = [
     ["Correlation", job.correlationId || "Not declared"],
-    ["Class", job.class || "standard"],
+    ["Queue", job.queueName],
+    ["Group", job.groupKey || "Not partitioned"],
+    ["Resource class", job.resourceClass || "standard"],
     ["Priority", formatPriority(job.priority)],
     ["Attempts", String(job.attempts)],
     ["Created", formatDate(job.createdAt)],

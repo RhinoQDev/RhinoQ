@@ -27,7 +27,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
       query: (text, values) => pool.query(text, values),
     });
     const committedId = await producer.enqueue({
-      name: queue,
+      jobName: queue,
       payload: { reportId: 'report_01' },
       idempotencyKey: 'node:committed',
       correlationId: 'report_01',
@@ -53,7 +53,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
         query: (text, values) => connection.query(text, values),
       });
       rolledBackId = await transactional.enqueue({
-        name: queue,
+        jobName: queue,
         payload: { reportId: 'report_rollback' },
         idempotencyKey: 'node:rolled-back',
       });

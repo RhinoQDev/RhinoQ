@@ -55,7 +55,7 @@ func runJobs(args []string, getenv func(string) string, output io.Writer) int {
 	}
 	defer closer.Close()
 	jobs, err := client.ListJobs(ctx, rhinoq.JobQuery{
-		Queue: *queue, States: splitCSV(*states), Offset: *offset, Limit: *limit,
+		QueueName: *queue, States: splitCSV(*states), Offset: *offset, Limit: *limit,
 	})
 	if err != nil {
 		return printOperationError(output, err)
@@ -64,10 +64,10 @@ func runJobs(args []string, getenv func(string) string, output io.Writer) int {
 		return printJSON(output, map[string]any{"jobs": jobs})
 	}
 	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tQUEUE\tSTATE\tATTEMPTS\tPRIORITY\tCORRELATION")
+	fmt.Fprintln(table, "ID\tQUEUE\tJOB\tSTATE\tATTEMPTS\tPRIORITY\tCORRELATION")
 	for _, job := range jobs {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%s\n",
-			job.ID, job.Name, job.State, job.Attempts, job.Priority,
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+			job.ID, job.QueueName, job.JobName, job.State, job.Attempts, job.Priority,
 			emptyDash(job.CorrelationID))
 	}
 	_ = table.Flush()

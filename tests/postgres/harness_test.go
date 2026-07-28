@@ -155,7 +155,7 @@ func enqueue(t *testing.T, client *rhinoq.Client, request rhinoq.JobRequest) str
 	t.Helper()
 	id, err := client.Enqueue(context.Background(), request)
 	if err != nil {
-		t.Fatalf("enqueue %s: %v", request.Name, err)
+		t.Fatalf("enqueue %s/%s: %v", request.QueueName, request.JobName, err)
 	}
 	return id
 }
@@ -182,7 +182,7 @@ func claimOne(t *testing.T, client *rhinoq.Client, worker string) rhinoq.LeasedJ
 
 func jobState(t *testing.T, client *rhinoq.Client, queue, jobID string) rhinoq.JobSummary {
 	t.Helper()
-	jobs, err := client.ListJobs(context.Background(), rhinoq.JobQuery{Queue: queue, Limit: 200})
+	jobs, err := client.ListJobs(context.Background(), rhinoq.JobQuery{QueueName: queue, Limit: 200})
 	if err != nil {
 		t.Fatalf("list %s: %v", queue, err)
 	}

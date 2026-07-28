@@ -44,9 +44,11 @@ export interface LeaseToken {
 
 export interface JobSummary {
   id: string;
-  name: string;
+  queueName: string;
+  jobName: string;
+  groupKey?: string;
   state: JobState;
-  class: JobClass;
+  resourceClass: JobClass;
   priority: number;
   attempts: number;
   crashCount: number;
@@ -88,17 +90,22 @@ export interface AttemptEvent {
 }
 
 export interface EnqueueRequest<T = unknown> {
-  name: string;
+  queueName: string;
+  jobName: string;
+  groupKey?: string;
   payload: T;
   idempotencyKey?: string;
   correlationId?: string;
   priority?: number;
-  class?: JobClass;
+  resourceClass?: JobClass;
   runAfterMs?: number;
 }
 
 export interface JobQuery {
-  queue?: string;
+  /** Each filter narrows the result; omit one to match any value. */
+  queueName?: string;
+  jobName?: string;
+  groupKey?: string;
   states?: JobState[];
   offset?: number;
   limit?: number;

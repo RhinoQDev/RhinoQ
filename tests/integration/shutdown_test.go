@@ -18,13 +18,13 @@ import (
 func TestShutdownLetsRunningHandlersFinish(t *testing.T) {
 	store := memory.NewJobStore()
 	ctx := context.Background()
-	id, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "slow", Payload: []byte("{}")})
+	id, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "slow", JobName: "slow"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
 	registry := worker.NewHandlerRegistry()
-	if err := registry.Register("slow", func(ctx context.Context, _ job.Record) error {
+	if err := registry.Register("slow", "slow", func(ctx context.Context, _ job.Record) error {
 		close(started)
 		select {
 		case <-time.After(150 * time.Millisecond):
@@ -62,7 +62,7 @@ func TestShutdownLetsRunningHandlersFinish(t *testing.T) {
 func TestShutdownCancelsThenAbandonsUnresponsiveHandlers(t *testing.T) {
 	store := memory.NewJobStore()
 	ctx := context.Background()
-	id, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "stubborn", Payload: []byte("{}")})
+	id, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "stubborn", JobName: "stubborn"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestShutdownCancelsThenAbandonsUnresponsiveHandlers(t *testing.T) {
 	release := make(chan struct{})
 	var cancelled atomic.Bool
 	registry := worker.NewHandlerRegistry()
-	if err := registry.Register("stubborn", func(ctx context.Context, _ job.Record) error {
+	if err := registry.Register("stubborn", "stubborn", func(ctx context.Context, _ job.Record) error {
 		close(started)
 		go func() {
 			<-ctx.Done()
@@ -113,14 +113,14 @@ func TestStoppedWorkerReleasesPrefetchedJobs(t *testing.T) {
 	store := memory.NewJobStore()
 	ctx := context.Background()
 	for count := 0; count < 3; count++ {
-		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "prefetch", Payload: []byte("{}")}); err != nil {
+		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "prefetch", JobName: "prefetch"}, Payload: []byte("{}")}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	registry := worker.NewHandlerRegistry()
-	if err := registry.Register("prefetch", func(context.Context, job.Record) error {
+	if err := registry.Register("prefetch", "prefetch", func(context.Context, job.Record) error {
 		select {
 		case started <- struct{}{}:
 		default:
@@ -161,7 +161,7 @@ func TestStoppedWorkerReleasesPrefetchedJobs(t *testing.T) {
 		}
 	}
 	waiting, err := store.ListJobs(ctx, ports.ListJobsInput{
-		Name: "prefetch", States: []job.State{job.RetryWait}, Limit: 10,
+		QueueName: "prefetch", States: []job.State{job.RetryWait}, Limit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)

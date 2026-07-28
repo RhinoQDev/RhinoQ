@@ -6,13 +6,14 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	"github.com/madebyduy/RhinoQ/internal/application/enqueue"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 func TestEnqueueIsIdempotentWithinNameScope(t *testing.T) {
 	store := memory.NewJobStore()
 	service := enqueue.NewService(store)
-	input := ports.EnqueueInput{Name: "send-email", Payload: []byte(`{"userId":"u1"}`), IdempotencyKey: "user:u1"}
+	input := ports.EnqueueInput{Identity: job.Identity{QueueName: "send-email", JobName: "send-email"}, Payload: []byte(`{"userId":"u1"}`), IdempotencyKey: "user:u1"}
 
 	first, err := service.Execute(context.Background(), input)
 	if err != nil {

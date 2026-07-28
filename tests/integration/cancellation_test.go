@@ -16,7 +16,7 @@ import (
 func TestCancelPendingJobCannotBeClaimed(t *testing.T) {
 	now := time.Now().UTC()
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
-	id, err := store.Enqueue(context.Background(), ports.EnqueueInput{Name: "report", Payload: []byte("{}")})
+	id, err := store.Enqueue(context.Background(), ports.EnqueueInput{Identity: job.Identity{QueueName: "report", JobName: "report"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +39,13 @@ func TestCancelPendingJobCannotBeClaimed(t *testing.T) {
 
 func TestWorkerCooperativelyCancelsLeasedJob(t *testing.T) {
 	store := memory.NewJobStore()
-	id, err := store.Enqueue(context.Background(), ports.EnqueueInput{Name: "long-job", Payload: []byte("{}")})
+	id, err := store.Enqueue(context.Background(), ports.EnqueueInput{Identity: job.Identity{QueueName: "long-job", JobName: "long-job"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
 	registry := worker.NewHandlerRegistry()
-	if err := registry.Register("long-job", func(ctx context.Context, _ job.Record) error {
+	if err := registry.Register("long-job", "long-job", func(ctx context.Context, _ job.Record) error {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()

@@ -13,18 +13,18 @@ import (
 type JobID = job.ID
 
 type EnqueueInput struct {
-	Name           string
+	// Identity carries the execution lane, the handler contract, the business
+	// partition and the resource class as four separate fields.
+	job.Identity
 	Payload        []byte
 	IdempotencyKey string
 	// RunAfter is a duration so the store's authoritative clock computes the
 	// eligibility timestamp. Producers never send an absolute wall-clock time.
 	RunAfter      time.Duration
 	CorrelationID string
-	// Priority orders claiming inside a queue; higher runs first. Waiting jobs
+	// Priority orders claiming inside a lane; higher runs first. Waiting jobs
 	// age upwards so a low priority job cannot starve (domain/job scheduling).
 	Priority int
-	// Class decides which admission budget the job draws from.
-	Class job.Class
 }
 
 type ClaimInput struct {
@@ -34,13 +34,15 @@ type ClaimInput struct {
 	Now           time.Time
 	Limit         int
 	LeaseDuration time.Duration
-	// Queues restricts claims to job names this worker can actually handle.
-	// Empty means all queues for backwards-compatible low-level callers.
-	Queues []string
+	// QueueNames restricts claims to the execution lanes this worker subscribes
+	// to. It is a lane filter, not a handler filter: a worker claims from a lane
+	// and then dispatches by job name. Empty means every lane, which only
+	// low-level callers should use.
+	QueueNames []string
 }
 
 const (
-	// MaxClaimQueues bounds one claim filter so an authenticated remote caller
+	// MaxClaimQueues bounds one lane filter so an authenticated remote caller
 	// cannot create an unbounded SQL statement.
 	MaxClaimQueues = 256
 	// MaxClaimLimit is the largest batch any worker may lease in one database
@@ -58,12 +60,12 @@ func ValidateClaimLimit(limit int) error {
 	return nil
 }
 
-func ValidateClaimQueues(queues []string) error {
-	if len(queues) > MaxClaimQueues {
+func ValidateClaimQueues(queueNames []string) error {
+	if len(queueNames) > MaxClaimQueues {
 		return fmt.Errorf("claim queue filter exceeds %d names", MaxClaimQueues)
 	}
-	for _, queue := range queues {
-		if queue == "" {
+	for _, name := range queueNames {
+		if name == "" {
 			return fmt.Errorf("claim queue names must not be empty")
 		}
 	}
@@ -120,10 +122,14 @@ type QueueRateLimit struct {
 }
 
 type ListJobsInput struct {
-	Name   string
-	States []job.State
-	Offset int
-	Limit  int
+	// QueueName filters by execution lane and JobName by handler contract.
+	// Either may be empty, which means "any".
+	QueueName string
+	JobName   string
+	GroupKey  string
+	States    []job.State
+	Offset    int
+	Limit     int
 }
 
 // ReapInput drives one sweep over expired leases.
@@ -161,7 +167,7 @@ type JobStore interface {
 	Get(ctx context.Context, id JobID) (job.Record, bool, error)
 	ListJobs(ctx context.Context, input ListJobsInput) ([]job.Record, error)
 	ListAttemptEvents(ctx context.Context, id JobID, offset, limit int) ([]attempt.Event, error)
-	JobCounts(ctx context.Context, name string) (map[job.State]int64, error)
+	JobCounts(ctx context.Context, queueName string) (map[job.State]int64, error)
 	Claim(ctx context.Context, input ClaimInput) ([]job.Record, error)
 	RenewLease(ctx context.Context, lease Lease, now time.Time, extension time.Duration) (LeaseStatus, error)
 	Complete(ctx context.Context, lease Lease, now time.Time) error

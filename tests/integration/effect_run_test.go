@@ -14,7 +14,7 @@ func TestEffectRunIsSkippedOnceConfirmed(t *testing.T) {
 	client := rhinoq.NewInMemory()
 	calls := 0
 	var result rhinoq.EffectResult
-	if err := client.Handle("charge", func(ctx context.Context, job rhinoq.Job) error {
+	if err := client.Handle("charge", "charge", func(ctx context.Context, job rhinoq.Job) error {
 		effect, err := job.Effect(ctx, rhinoq.EffectRequest{
 			Name: "charge-card", Key: job.ID, Irreversible: true, Confirm: rhinoq.ConfirmOnReturn,
 		}, func(context.Context) (string, error) {
@@ -39,7 +39,7 @@ func TestEffectRunTurnsUnknownResultsIntoUncertain(t *testing.T) {
 	client := rhinoq.NewInMemory()
 	calls := 0
 	failures := make(chan error, 4)
-	if err := client.Handle("charge", func(ctx context.Context, job rhinoq.Job) error {
+	if err := client.Handle("charge", "charge", func(ctx context.Context, job rhinoq.Job) error {
 		_, err := job.Effect(ctx, rhinoq.EffectRequest{
 			Name: "charge-card", Key: job.ID, Irreversible: true,
 		}, func(context.Context) (string, error) {
@@ -79,7 +79,7 @@ func TestEffectRunTurnsUnknownResultsIntoUncertain(t *testing.T) {
 func TestEffectRunKeepsNotHappenedWorkRetryable(t *testing.T) {
 	client := rhinoq.NewInMemory()
 	states := make(chan string, 4)
-	if err := client.Handle("charge", func(ctx context.Context, job rhinoq.Job) error {
+	if err := client.Handle("charge", "charge", func(ctx context.Context, job rhinoq.Job) error {
 		effect, err := job.Effect(ctx, rhinoq.EffectRequest{
 			Name: "charge-card", Key: job.ID, Irreversible: true,
 		}, func(context.Context) (string, error) {
@@ -105,7 +105,7 @@ func TestEffectRunKeepsNotHappenedWorkRetryable(t *testing.T) {
 func TestEffectRunHonoursStatusPredicate(t *testing.T) {
 	client := rhinoq.NewInMemory()
 	results := make(chan rhinoq.EffectResult, 2)
-	if err := client.Handle("transfer", func(ctx context.Context, job rhinoq.Job) error {
+	if err := client.Handle("transfer", "transfer", func(ctx context.Context, job rhinoq.Job) error {
 		effect, err := job.Effect(ctx, rhinoq.EffectRequest{
 			Name: "transfer", Key: job.ID, Irreversible: true,
 			Confirm: rhinoq.ConfirmWhenStatus, CompletedStatus: "settled",
@@ -134,7 +134,7 @@ func TestEffectRunHonoursStatusPredicate(t *testing.T) {
 func runOneJob(t *testing.T, client *rhinoq.Client, queue string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	if _, err := client.Enqueue(ctx, rhinoq.JobRequest{Name: queue, Payload: []byte("{}")}); err != nil {
+	if _, err := client.Enqueue(ctx, rhinoq.JobRequest{QueueName: queue, JobName: queue, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

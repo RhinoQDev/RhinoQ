@@ -15,17 +15,17 @@ import (
 func TestEnqueueIsIdempotentPerQueue(t *testing.T) {
 	client := newClient(t)
 	first := enqueue(t, client, rhinoq.JobRequest{
-		Name: "send-email", Payload: []byte(`{"to":"a@example.com"}`), IdempotencyKey: "user:1",
+		QueueName: "send-email", JobName: "send-email", Payload: []byte(`{"to":"a@example.com"}`), IdempotencyKey: "user:1",
 	})
 	second := enqueue(t, client, rhinoq.JobRequest{
-		Name: "send-email", Payload: []byte(`{"to":"a@example.com"}`), IdempotencyKey: "user:1",
+		QueueName: "send-email", JobName: "send-email", Payload: []byte(`{"to":"a@example.com"}`), IdempotencyKey: "user:1",
 	})
 	if first != second {
 		t.Fatalf("a repeated idempotency key must return the first job: %s vs %s", first, second)
 	}
 	// The same key in another queue is a different job.
 	other := enqueue(t, client, rhinoq.JobRequest{
-		Name: "send-sms", Payload: []byte("{}"), IdempotencyKey: "user:1",
+		QueueName: "send-sms", JobName: "send-sms", Payload: []byte("{}"), IdempotencyKey: "user:1",
 	})
 	if other == first {
 		t.Fatal("idempotency is scoped to the queue name")
@@ -43,11 +43,11 @@ func TestEnqueueIsIdempotentPerQueue(t *testing.T) {
 // first, FIFO inside a priority.
 func TestClaimOrdersByPriorityThenFirstIn(t *testing.T) {
 	client := newClient(t)
-	firstNormal := enqueue(t, client, rhinoq.JobRequest{Name: "mixed", Payload: []byte("{}")})
+	firstNormal := enqueue(t, client, rhinoq.JobRequest{QueueName: "mixed", JobName: "mixed", Payload: []byte("{}")})
 	time.Sleep(5 * time.Millisecond)
-	secondNormal := enqueue(t, client, rhinoq.JobRequest{Name: "mixed", Payload: []byte("{}")})
+	secondNormal := enqueue(t, client, rhinoq.JobRequest{QueueName: "mixed", JobName: "mixed", Payload: []byte("{}")})
 	time.Sleep(5 * time.Millisecond)
-	urgent := enqueue(t, client, rhinoq.JobRequest{Name: "mixed", Payload: []byte("{}"), Priority: 10})
+	urgent := enqueue(t, client, rhinoq.JobRequest{QueueName: "mixed", JobName: "mixed", Payload: []byte("{}"), Priority: 10})
 
 	claimed := claim(t, client, "worker-1", 3, time.Minute)
 	if len(claimed) != 3 {
@@ -70,14 +70,14 @@ func TestClaimOrdersByPriorityThenFirstIn(t *testing.T) {
 func TestClaimFiltersQueuesBeforeTakingLocks(t *testing.T) {
 	client := newClient(t)
 	emailID := enqueue(t, client, rhinoq.JobRequest{
-		Name: "send-email", Payload: []byte("{}"),
+		QueueName: "send-email", JobName: "send-email", Payload: []byte("{}"),
 	})
 	enqueue(t, client, rhinoq.JobRequest{
-		Name: "resize-image", Payload: []byte("{}"), Priority: 100,
+		QueueName: "resize-image", JobName: "resize-image", Payload: []byte("{}"), Priority: 100,
 	})
 
 	claimed, err := client.ClaimJobs(context.Background(), rhinoq.ClaimRequest{
-		Worker: "email-worker", Queues: []string{"send-email"},
+		Worker: "email-worker", QueueNames: []string{"send-email"},
 		Limit: 5, LeaseFor: time.Minute,
 	})
 	if err != nil {
@@ -97,7 +97,7 @@ func TestClaimFiltersQueuesBeforeTakingLocks(t *testing.T) {
 
 func TestDelayedJobWaitsForItsTime(t *testing.T) {
 	client := newClient(t)
-	enqueue(t, client, rhinoq.JobRequest{Name: "later", Payload: []byte("{}"), RunAfter: time.Hour})
+	enqueue(t, client, rhinoq.JobRequest{QueueName: "later", JobName: "later", Payload: []byte("{}"), RunAfter: time.Hour})
 	if jobs := claim(t, client, "worker-1", 5, time.Minute); len(jobs) != 0 {
 		t.Fatalf("a delayed job must not be claimable yet: %d", len(jobs))
 	}
@@ -107,7 +107,7 @@ func TestDelayedJobWaitsForItsTime(t *testing.T) {
 // the test that proves the SQL, not just the Go, refuses a stale execution.
 func TestStaleEpochIsRefusedByEveryWrite(t *testing.T) {
 	client := newClient(t)
-	id := enqueue(t, client, rhinoq.JobRequest{Name: "charge", Payload: []byte("{}")})
+	id := enqueue(t, client, rhinoq.JobRequest{QueueName: "charge", JobName: "charge", Payload: []byte("{}")})
 	first := claimOne(t, client, "worker-1")
 	stale := first.Lease
 
@@ -164,7 +164,7 @@ func TestStaleEpochIsRefusedByEveryWrite(t *testing.T) {
 
 func TestHeartbeatReportsCancellationInOneCall(t *testing.T) {
 	client := newClient(t)
-	id := enqueue(t, client, rhinoq.JobRequest{Name: "long", Payload: []byte("{}")})
+	id := enqueue(t, client, rhinoq.JobRequest{QueueName: "long", JobName: "long", Payload: []byte("{}")})
 	leased := claimOne(t, client, "worker-1")
 
 	state, err := client.Heartbeat(context.Background(), leased.Lease, time.Minute)
@@ -182,7 +182,7 @@ func TestHeartbeatReportsCancellationInOneCall(t *testing.T) {
 
 func TestReleasedJobGivesBackItsAttempt(t *testing.T) {
 	client := newClient(t)
-	id := enqueue(t, client, rhinoq.JobRequest{Name: "prefetched", Payload: []byte("{}")})
+	id := enqueue(t, client, rhinoq.JobRequest{QueueName: "prefetched", JobName: "prefetched", Payload: []byte("{}")})
 	leased := claimOne(t, client, "worker-1")
 	if leased.Job.Attempts != 1 {
 		t.Fatalf("a claim consumes an attempt: %+v", leased.Job)
@@ -202,7 +202,7 @@ func TestFailureClassDecidesTheOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	permanentID := enqueue(t, client, rhinoq.JobRequest{Name: "classified", Payload: []byte("{}")})
+	permanentID := enqueue(t, client, rhinoq.JobRequest{QueueName: "classified", JobName: "classified", Payload: []byte("{}")})
 	permanent := claimOne(t, client, "worker-1")
 	summary, err := client.FailJob(context.Background(), permanent.Lease, rhinoq.FailureReport{
 		Type: "UnsupportedUrlError", RetryClass: rhinoq.RetryPermanent, Message: "unsupported url",
@@ -214,7 +214,7 @@ func TestFailureClassDecidesTheOutcome(t *testing.T) {
 		t.Fatalf("expected dead, got %s", state.State)
 	}
 
-	transientID := enqueue(t, client, rhinoq.JobRequest{Name: "classified", Payload: []byte("{}")})
+	transientID := enqueue(t, client, rhinoq.JobRequest{QueueName: "classified", JobName: "classified", Payload: []byte("{}")})
 	transient := claimOne(t, client, "worker-1")
 	summary, err = client.FailJob(context.Background(), transient.Lease, rhinoq.FailureReport{
 		RetryClass: rhinoq.RetryTransient, Message: "connection reset",
@@ -235,7 +235,7 @@ func TestRateLimitIsSharedAcrossWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for count := 0; count < 4; count++ {
-		enqueue(t, client, rhinoq.JobRequest{Name: "throttled", Payload: []byte("{}")})
+		enqueue(t, client, rhinoq.JobRequest{QueueName: "throttled", JobName: "throttled", Payload: []byte("{}")})
 	}
 
 	first := claim(t, client, "worker-1", 10, time.Minute)
@@ -254,7 +254,7 @@ func TestRateLimitIsSharedAcrossWorkers(t *testing.T) {
 
 func TestPauseStopsClaimingWithoutTouchingRunningWork(t *testing.T) {
 	client := newClient(t)
-	enqueue(t, client, rhinoq.JobRequest{Name: "paused-queue", Payload: []byte("{}")})
+	enqueue(t, client, rhinoq.JobRequest{QueueName: "paused-queue", JobName: "paused-queue", Payload: []byte("{}")})
 	if err := client.Pause(context.Background(), "paused-queue"); err != nil {
 		t.Fatal(err)
 	}
@@ -279,14 +279,14 @@ func TestAdmissionRejectsOverflowAndReservesCriticalRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	for count := 0; count < 2; count++ {
-		enqueue(t, client, rhinoq.JobRequest{Name: "reports", Payload: []byte("{}")})
+		enqueue(t, client, rhinoq.JobRequest{QueueName: "reports", JobName: "reports", Payload: []byte("{}")})
 	}
-	_, err := client.Enqueue(ctx, rhinoq.JobRequest{Name: "reports", Payload: []byte("{}")})
+	_, err := client.Enqueue(ctx, rhinoq.JobRequest{QueueName: "reports", JobName: "reports", Payload: []byte("{}")})
 	if !errors.Is(err, rhinoq.ErrQueueOverCapacity) {
 		t.Fatalf("standard work must stop at the reserved line, got %v", err)
 	}
 	if _, err := client.Enqueue(ctx, rhinoq.JobRequest{
-		Name: "reports", Payload: []byte("{}"), Class: rhinoq.ClassCritical,
+		QueueName: "reports", JobName: "reports", Payload: []byte("{}"), ResourceClass: rhinoq.ResourceCritical,
 	}); err != nil {
 		t.Fatalf("critical work must still be admitted: %v", err)
 	}
@@ -300,8 +300,8 @@ func TestAdmissionDelayModeDefersInsteadOfRejecting(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	enqueue(t, client, rhinoq.JobRequest{Name: "telemetry", Payload: []byte("{}")})
-	deferred := enqueue(t, client, rhinoq.JobRequest{Name: "telemetry", Payload: []byte("{}")})
+	enqueue(t, client, rhinoq.JobRequest{QueueName: "telemetry", JobName: "telemetry", Payload: []byte("{}")})
+	deferred := enqueue(t, client, rhinoq.JobRequest{QueueName: "telemetry", JobName: "telemetry", Payload: []byte("{}")})
 
 	state := jobState(t, client, "telemetry", deferred)
 	if !state.NotBefore.After(time.Now().Add(30 * time.Minute)) {
@@ -316,7 +316,7 @@ func TestAdmissionDelayModeDefersInsteadOfRejecting(t *testing.T) {
 // the crash budget can stop it.
 func TestPoisonJobIsParkedAfterRepeatedCrashes(t *testing.T) {
 	client := newClient(t)
-	id := enqueue(t, client, rhinoq.JobRequest{Name: "poison", Payload: []byte("{}")})
+	id := enqueue(t, client, rhinoq.JobRequest{QueueName: "poison", JobName: "poison", Payload: []byte("{}")})
 	reaper, err := lease.NewReaper(lease.Config{
 		Store: mustStore(t), Interval: time.Hour,
 		Protection: job.Protection{MaxWorkerCrashesPerJob: 2},

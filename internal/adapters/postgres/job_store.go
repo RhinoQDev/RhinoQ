@@ -23,7 +23,8 @@ var (
 
 // jobColumns is the projection every read uses. Keeping it in one place stops
 // the scan order from drifting between queries.
-const jobColumns = `j.id, j.name, j.payload, j.state, j.class, j.priority, j.attempts,
+const jobColumns = `j.id, j.queue_name, j.job_name, COALESCE(j.group_key, ''),
+	j.payload, j.state, j.resource_class, j.priority, j.attempts,
 	j.crash_count, COALESCE(j.blocked_reason, ''), COALESCE(j.idempotency_key, ''),
 	COALESCE(j.correlation_id, ''), j.created_at, j.not_before,
 	COALESCE(j.lease_owner, ''), j.lease_epoch,
@@ -52,8 +53,9 @@ func NewJobStore(db *sql.DB) (*JobStore, error) {
 }
 
 func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports.JobID, error) {
-	if input.Name == "" {
-		return "", job.ErrEmptyName
+	identity, err := input.Identity.Normalize()
+	if err != nil {
+		return "", err
 	}
 	if err := job.ValidatePayload(input.Payload, job.DefaultMaxPayloadBytes); err != nil {
 		return "", err
@@ -63,10 +65,6 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 	}
 	if input.RunAfter < 0 {
 		return "", errors.New("run-after delay must not be negative")
-	}
-	class, err := job.NormalizeClass(input.Class)
-	if err != nil {
-		return "", err
 	}
 	id, err := newID("job")
 	if err != nil {
@@ -79,7 +77,9 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 	}
 	defer tx.Rollback()
 
-	deferBy, err := s.admitTx(ctx, tx, input.Name, class.IsCritical())
+	// Admission is a property of the execution lane, not of the handler
+	// contract, so it is keyed on the queue name.
+	deferBy, err := s.admitTx(ctx, tx, identity.QueueName, identity.ResourceClass.IsCritical())
 	if err != nil {
 		return "", err
 	}
@@ -93,13 +93,15 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 	var storedID string
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO rhinoq_jobs
-			(id, name, payload, state, class, priority, idempotency_key, correlation_id, not_before)
-		VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7,
-			now() + (($8::bigint + $9::bigint) * interval '1 millisecond'))
-		ON CONFLICT (name, idempotency_key)
-		DO UPDATE SET name = EXCLUDED.name
+			(id, queue_name, job_name, group_key, payload, state, resource_class,
+			 priority, idempotency_key, correlation_id, not_before)
+		VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9,
+			now() + (($10::bigint + $11::bigint) * interval '1 millisecond'))
+		ON CONFLICT (queue_name, idempotency_key)
+		DO UPDATE SET job_name = EXCLUDED.job_name
 		RETURNING id`,
-		id, input.Name, input.Payload, string(class), input.Priority,
+		id, identity.QueueName, identity.JobName, nullableString(identity.GroupKey),
+		input.Payload, string(identity.ResourceClass), input.Priority,
 		idempotency, nullableString(input.CorrelationID),
 		input.RunAfter.Milliseconds(), deferBy.Milliseconds(),
 	).Scan(&storedID)
@@ -115,13 +117,13 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 // admitTx applies producer backpressure. The pending count is bounded by the
 // capacity itself, so even a full queue costs a partial-index scan of at most
 // capacity rows instead of counting the whole backlog.
-func (s *JobStore) admitTx(ctx context.Context, tx *sql.Tx, name string, critical bool) (time.Duration, error) {
+func (s *JobStore) admitTx(ctx context.Context, tx *sql.Tx, queueName string, critical bool) (time.Duration, error) {
 	var maxPending, reserved, delayMS, retryAfterMS sql.NullInt64
 	var mode sql.NullString
 	err := tx.QueryRowContext(ctx, `
 		SELECT admission_max_pending, admission_reserved_critical, admission_overflow_mode,
 		       admission_delay_ms, admission_retry_after_ms
-		FROM rhinoq_queue_controls WHERE queue_name = $1`, name).
+		FROM rhinoq_queue_controls WHERE queue_name = $1`, queueName).
 		Scan(&maxPending, &reserved, &mode, &delayMS, &retryAfterMS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
@@ -144,12 +146,12 @@ func (s *JobStore) admitTx(ctx context.Context, tx *sql.Tx, name string, critica
 	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*) FROM (
 			SELECT 1 FROM rhinoq_jobs
-			WHERE name = $1 AND state IN ('pending', 'retry_wait')
+			WHERE queue_name = $1 AND state IN ('pending', 'retry_wait')
 			LIMIT $2
-		) capped`, name, policy.Capacity(critical)).Scan(&pending); err != nil {
+		) capped`, queueName, policy.Capacity(critical)).Scan(&pending); err != nil {
 		return 0, err
 	}
-	decision, err := policy.Decide(name, pending, critical)
+	decision, err := policy.Decide(queueName, pending, critical)
 	if err != nil {
 		return 0, err
 	}
@@ -169,9 +171,12 @@ func (s *JobStore) ListJobs(ctx context.Context, input ports.ListJobsInput) ([]j
 	if input.Offset < 0 || input.Limit <= 0 || input.Limit > 1000 {
 		return nil, errors.New("offset must be non-negative and limit must be between 1 and 1000")
 	}
-	args := []any{input.Name}
+	args := []any{input.QueueName, input.JobName, input.GroupKey}
 	var query strings.Builder
-	query.WriteString(`SELECT ` + jobColumns + ` FROM rhinoq_jobs j WHERE ($1 = '' OR j.name = $1)`)
+	query.WriteString(`SELECT ` + jobColumns + ` FROM rhinoq_jobs j
+		WHERE ($1 = '' OR j.queue_name = $1)
+		  AND ($2 = '' OR j.job_name = $2)
+		  AND ($3 = '' OR j.group_key = $3)`)
 	if len(input.States) > 0 {
 		query.WriteString(" AND j.state IN (")
 		for index, state := range input.States {
@@ -239,12 +244,12 @@ func (s *JobStore) ListAttemptEvents(ctx context.Context, id ports.JobID, offset
 	return events, rows.Err()
 }
 
-func (s *JobStore) JobCounts(ctx context.Context, name string) (map[job.State]int64, error) {
+func (s *JobStore) JobCounts(ctx context.Context, queueName string) (map[job.State]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT state, count(*)
 		FROM rhinoq_jobs
-		WHERE ($1 = '' OR name = $1)
-		GROUP BY state`, name)
+		WHERE ($1 = '' OR queue_name = $1)
+		GROUP BY state`, queueName)
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +277,7 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	if err := ports.ValidateClaimLimit(input.Limit); err != nil {
 		return nil, err
 	}
-	if err := ports.ValidateClaimQueues(input.Queues); err != nil {
+	if err := ports.ValidateClaimQueues(input.QueueNames); err != nil {
 		return nil, err
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
@@ -281,7 +286,7 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	}
 	defer tx.Rollback()
 
-	candidates, err := s.lockCandidates(ctx, tx, input.Limit, input.Queues)
+	candidates, err := s.lockCandidates(ctx, tx, input.Limit, input.QueueNames)
 	if err != nil {
 		return nil, err
 	}
@@ -291,15 +296,15 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 
 	wanted := make(map[string]int, len(candidates))
 	for _, item := range candidates {
-		wanted[item.queue]++
+		wanted[item.queueName]++
 	}
 	granted := make(map[string]int, len(wanted))
-	for queue, want := range wanted {
-		allowed, err := s.reserveRateSlotsTx(ctx, tx, queue, want)
+	for queueName, want := range wanted {
+		allowed, err := s.reserveRateSlotsTx(ctx, tx, queueName, want)
 		if err != nil {
 			return nil, err
 		}
-		granted[queue] = allowed
+		granted[queueName] = allowed
 	}
 
 	ids := make([]string, 0, input.Limit)
@@ -307,10 +312,10 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		if len(ids) == input.Limit {
 			break
 		}
-		if granted[item.queue] <= 0 {
+		if granted[item.queueName] <= 0 {
 			continue
 		}
-		granted[item.queue]--
+		granted[item.queueName]--
 		ids = append(ids, item.id)
 	}
 	if len(ids) == 0 {
@@ -371,16 +376,16 @@ func (s *JobStore) insertClaimEventsTx(ctx context.Context, tx *sql.Tx, claimed 
 	return nil
 }
 
-type claimCandidate struct{ id, queue string }
+type claimCandidate struct{ id, queueName string }
 
-// lockCandidates over-fetches on purpose: a queue whose rate window saturates
+// lockCandidates over-fetches on purpose: a lane whose rate window saturates
 // mid-batch would otherwise return an empty claim and let its jobs, which sort
-// first, starve every other queue on the next poll.
+// first, starve every other lane on the next poll.
 func (s *JobStore) lockCandidates(
 	ctx context.Context,
 	tx *sql.Tx,
 	limit int,
-	queues []string,
+	queueNames []string,
 ) ([]claimCandidate, error) {
 	candidateLimit := limit * 4
 	if candidateLimit > maxClaimCandidates {
@@ -391,21 +396,21 @@ func (s *JobStore) lockCandidates(
 	}
 	var query strings.Builder
 	query.WriteString(`
-		SELECT j.id, j.name
+		SELECT j.id, j.queue_name
 		FROM rhinoq_jobs j
-		LEFT JOIN rhinoq_queue_controls qc ON qc.queue_name = j.name
+		LEFT JOIN rhinoq_queue_controls qc ON qc.queue_name = j.queue_name
 		WHERE j.state IN ('pending', 'retry_wait')
 		  AND j.not_before <= now()
 		  AND qc.paused_at IS NULL`)
 	args := []any{candidateLimit}
-	if len(queues) > 0 {
+	if len(queueNames) > 0 {
 		query.WriteString(`
-		  AND j.name IN (`)
-		for index, queue := range queues {
+		  AND j.queue_name IN (`)
+		for index, name := range queueNames {
 			if index > 0 {
 				query.WriteString(", ")
 			}
-			args = append(args, queue)
+			args = append(args, name)
 			fmt.Fprintf(&query, "$%d", len(args))
 		}
 		query.WriteByte(')')
@@ -428,7 +433,7 @@ func (s *JobStore) lockCandidates(
 	candidates := make([]claimCandidate, 0, candidateLimit)
 	for rows.Next() {
 		var item claimCandidate
-		if err := rows.Scan(&item.id, &item.queue); err != nil {
+		if err := rows.Scan(&item.id, &item.queueName); err != nil {
 			return nil, err
 		}
 		candidates = append(candidates, item)
@@ -881,8 +886,9 @@ type scanner interface {
 
 func scanJob(row scanner) (job.Record, error) {
 	var record job.Record
-	var id, state, class, blockedReason string
-	if err := row.Scan(&id, &record.Name, &record.Payload, &state, &class, &record.Priority,
+	var id, state, resourceClass, blockedReason string
+	if err := row.Scan(&id, &record.QueueName, &record.JobName, &record.GroupKey,
+		&record.Payload, &state, &resourceClass, &record.Priority,
 		&record.Attempts, &record.CrashCount, &blockedReason, &record.IdempotencyKey,
 		&record.CorrelationID, &record.CreatedAt, &record.NotBefore,
 		&record.LeaseOwner, &record.LeaseEpoch, &record.LeaseUntil, &record.CancelRequested); err != nil {
@@ -890,7 +896,7 @@ func scanJob(row scanner) (job.Record, error) {
 	}
 	record.ID = job.ID(id)
 	record.State = job.State(state)
-	record.Class = job.Class(class)
+	record.ResourceClass = job.Class(resourceClass)
 	record.BlockedReason = job.BlockedReason(blockedReason)
 	return record, nil
 }

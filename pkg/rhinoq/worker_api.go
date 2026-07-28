@@ -43,7 +43,7 @@ type ClaimRequest struct {
 	LeaseFor time.Duration `json:"leaseForMs"`
 	// Queues restricts this worker to job names for which it has handlers.
 	// Empty keeps the low-level all-queues behavior for compatibility.
-	Queues []string `json:"queues,omitempty"`
+	QueueNames []string `json:"queueNames,omitempty"`
 }
 
 // LeaseState is what a heartbeat learns.
@@ -126,14 +126,14 @@ func (c *Client) ClaimJobs(ctx context.Context, request ClaimRequest) ([]LeasedJ
 	if request.LeaseFor <= 0 {
 		request.LeaseFor = time.Minute
 	}
-	request.Queues = uniqueStrings(request.Queues)
-	if err := ports.ValidateClaimQueues(request.Queues); err != nil {
+	request.QueueNames = uniqueStrings(request.QueueNames)
+	if err := ports.ValidateClaimQueues(request.QueueNames); err != nil {
 		return nil, err
 	}
 	records, err := c.store.Claim(ctx, ports.ClaimInput{
 		Owner: request.Worker, Now: time.Now().UTC(),
 		Limit: request.Limit, LeaseDuration: request.LeaseFor,
-		Queues: request.Queues,
+		QueueNames: request.QueueNames,
 	})
 	if err != nil {
 		return nil, err

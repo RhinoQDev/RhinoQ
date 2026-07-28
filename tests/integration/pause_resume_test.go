@@ -7,6 +7,7 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	"github.com/madebyduy/RhinoQ/internal/application/operations"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
@@ -21,7 +22,7 @@ func TestPauseResumeQueueControlsClaim(t *testing.T) {
 	if err := control.Pause(ctx, "email"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "email", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "email", JobName: "email"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})

@@ -16,12 +16,12 @@ test('PostgresProducer sends one parameterized enqueue statement', async () => {
   });
 
   const id = await producer.enqueue({
-    name: 'generate-report',
+    jobName: 'generate-report',
     payload: { reportId: 'report_01' },
     idempotencyKey: 'report:report_01',
     correlationId: 'report_01',
     priority: 5,
-    class: 'interactive',
+    resourceClass: 'interactive',
     runAfterMs: 250,
     payloadSchema: 'report:v1',
   });
@@ -38,6 +38,7 @@ test('PostgresProducer sends one parameterized enqueue statement', async () => {
     'interactive',
     250,
     'report:v1',
+    null,
   ]);
 });
 
@@ -52,7 +53,7 @@ test('PostgresProducer fails before SQL for invalid scheduling or payload', asyn
 
   await assert.rejects(
     producer.enqueue({
-      name: 'generate-report',
+      jobName: 'generate-report',
       payload: {},
       runAfterMs: -1,
     }),
@@ -63,7 +64,7 @@ test('PostgresProducer fails before SQL for invalid scheduling or payload', asyn
   circular.self = circular;
   await assert.rejects(
     producer.enqueue({
-      name: 'generate-report',
+      jobName: 'generate-report',
       payload: circular,
     }),
     /JSON serializable/,

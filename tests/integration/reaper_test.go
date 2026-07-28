@@ -15,7 +15,7 @@ func TestReaperRequeuesExpiredLease(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "reap-me", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "reap-me", JobName: "reap-me"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
@@ -49,7 +49,7 @@ func TestReaperParksPoisonJobAfterRepeatedCrashes(t *testing.T) {
 	clock := now
 	store := memory.NewJobStoreWithClock(func() time.Time { return clock })
 	ctx := context.Background()
-	id, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "poison", Payload: []byte("{}")})
+	id, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "poison", JobName: "poison"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}

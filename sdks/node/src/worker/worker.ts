@@ -61,9 +61,26 @@ export interface WorkerRunOptions {
 
 export type JobHandler<T = unknown> = (job: NodeJob<T>) => void | Promise<void>;
 
+/**
+ * Handlers are keyed by lane and contract together. NUL is the separator
+ * because the engine rejects it inside either name, so two different pairs can
+ * never produce the same key. A printable separator would let ("a b", "c") and
+ * ("a", "b c") collide and silently route work to the wrong handler.
+ */
+const ROUTE_SEPARATOR = String.fromCharCode(0);
+
+function routeKey(queueName: string, jobName: string): string {
+  return `${queueName}${ROUTE_SEPARATOR}${jobName}`;
+}
+
 export class NodeJob<T = unknown> {
   readonly id: string;
-  readonly name: string;
+  /** The execution lane this job was claimed from. */
+  readonly queueName: string;
+  /** The handler contract that routed it here. */
+  readonly jobName: string;
+  /** The business partition, usually a tenant. May be undefined. */
+  readonly groupKey?: string;
   readonly attempts: number;
   readonly correlationId?: string;
   readonly rawPayload: Uint8Array;
@@ -80,7 +97,9 @@ export class NodeJob<T = unknown> {
     client: WorkerGateway,
   ) {
     this.id = leased.job.id;
-    this.name = leased.job.name;
+    this.queueName = leased.job.queueName;
+    this.jobName = leased.job.jobName;
+    this.groupKey = leased.job.groupKey;
     this.attempts = leased.job.attempts;
     this.correlationId = leased.job.correlationId;
     this.rawPayload = leased.payload;
@@ -97,7 +116,7 @@ export class NodeJob<T = unknown> {
         this.parsedValue = JSON.parse(text) as T;
         this.parsed = true;
       } catch (error) {
-        throw new PayloadDecodeError(this.name, error);
+        throw new PayloadDecodeError(this.jobName, error);
       }
     }
     return this.parsedValue as T;
@@ -175,21 +194,38 @@ export class RhinoQWorker {
     this.onError = options.onError;
   }
 
-  handle<T>(name: string, handler: JobHandler<T>): this {
+  /**
+   * Bind a handler to one job contract inside one execution lane. The worker
+   * claims from the lane and dispatches by contract, so unrelated contracts can
+   * share a lane and one contract can be served in several lanes.
+   */
+  handle<T>(queueName: string, jobName: string, handler: JobHandler<T>): this {
     if (this.running) {
       throw new Error('handlers cannot be changed while the worker is running');
     }
-    if (!name || typeof handler !== 'function') {
-      throw new TypeError('handler name and function are required');
+    if (!queueName || !jobName || typeof handler !== 'function') {
+      throw new TypeError('handler queue name, job name and function are required');
     }
-    if (this.handlers.has(name)) {
-      throw new Error(`handler already registered: ${name}`);
+    const key = routeKey(queueName, jobName);
+    if (this.handlers.has(key)) {
+      throw new Error(`handler already registered: ${jobName} in queue ${queueName}`);
     }
-    if (this.handlers.size >= 256) {
-      throw new RangeError('a worker may register at most 256 job names');
+    // The cap is on lanes, not routes: the lane list is what becomes the claim
+    // filter on the wire, so that is what must stay bounded.
+    const lanes = this.subscribedQueues();
+    if (!lanes.includes(queueName) && lanes.length >= 256) {
+      throw new RangeError('a worker may subscribe to at most 256 queues');
     }
-    this.handlers.set(name, handler as JobHandler);
+    this.handlers.set(key, handler as JobHandler);
     return this;
+  }
+
+  private subscribedQueues(): string[] {
+    const names = new Set<string>();
+    for (const key of this.handlers.keys()) {
+      names.add(key.slice(0, key.indexOf(ROUTE_SEPARATOR)));
+    }
+    return [...names].sort();
   }
 
   /**
@@ -239,7 +275,7 @@ export class RhinoQWorker {
       const supportsQueueFilter =
         handshake.capabilities.includes('queue-filter') &&
         !handshake.disabled?.includes('queue-filter');
-      const queues = supportsQueueFilter ? [...this.handlers.keys()].sort() : [];
+      const queues = supportsQueueFilter ? this.subscribedQueues() : [];
       if (!supportsQueueFilter) {
         this.report(
           new Error(
@@ -303,10 +339,10 @@ export class RhinoQWorker {
           await this.safeRelease(job.lease);
           continue;
         }
-        if (!this.handlers.has(job.job.name)) {
+        if (!this.handlers.has(routeKey(job.job.queueName, job.job.jobName))) {
           this.report(
             new Error(
-              `Gateway returned unregistered job ${job.job.name}; releasing it without execution`,
+              `Gateway returned unregistered route ${job.job.queueName}/${job.job.jobName}; releasing it without execution`,
             ),
           );
           await this.safeRelease(job.lease);
@@ -346,7 +382,7 @@ export class RhinoQWorker {
 
     let handlerError: unknown;
     try {
-      const handler = this.handlers.get(leased.job.name);
+      const handler = this.handlers.get(routeKey(leased.job.queueName, leased.job.jobName));
       if (!handler) {
         await this.safeRelease(leased.lease);
         return;
@@ -364,7 +400,7 @@ export class RhinoQWorker {
       return;
     }
     if (outcome.cancelRequested) {
-      await this.client.fail(leased.lease, leased.job.name, new Error('job was cancelled'), {
+      await this.client.fail(leased.lease, leased.job.jobName, new Error("job was cancelled"), {
         retryClass: 'cancelled',
       });
       return;
@@ -372,7 +408,7 @@ export class RhinoQWorker {
     if (execution.forceStopped) {
       await this.client.fail(
         leased.lease,
-        leased.job.name,
+        leased.job.jobName,
         new Error('worker shutdown grace expired'),
         { retryClass: 'transient' },
       );
@@ -380,7 +416,7 @@ export class RhinoQWorker {
     }
     if (handlerError !== undefined) {
       const classified = classifyHandlerError(handlerError);
-      await this.client.fail(leased.lease, leased.job.name, handlerError, classified);
+      await this.client.fail(leased.lease, leased.job.jobName, handlerError, classified);
       return;
     }
     await this.client.complete(leased.lease);

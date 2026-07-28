@@ -8,6 +8,7 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	"github.com/madebyduy/RhinoQ/internal/application/execution"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
@@ -16,7 +17,7 @@ func TestClaimLeaseRenewAndComplete(t *testing.T) {
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
 
-	id, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "generate-report", Payload: []byte("{}")})
+	id, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "generate-report", JobName: "generate-report"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestExpiredLeaseCannotBeRenewed(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "sync-data", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "sync-data", JobName: "sync-data"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
@@ -71,7 +72,7 @@ func TestExpiredLeaseCannotComplete(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "slow-job", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "slow-job", JobName: "slow-job"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
@@ -90,7 +91,7 @@ func TestStaleEpochCannotWriteAfterRequeue(t *testing.T) {
 	clock := now
 	store := memory.NewJobStoreWithClock(func() time.Time { return clock })
 	ctx := context.Background()
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "charge-card", Payload: []byte("{}")}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "charge-card", JobName: "charge-card"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	first, err := store.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
@@ -143,7 +144,7 @@ func TestReleaseLeaseGivesBackTheAttempt(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
-	id, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "prefetched", Payload: []byte("{}")})
+	id, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "prefetched", JobName: "prefetched"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
