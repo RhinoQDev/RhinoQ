@@ -20,13 +20,14 @@ func TestSlowJobDoesNotBlockTheRestOfTheBatch(t *testing.T) {
 	store := memory.NewJobStore()
 	ctx := context.Background()
 	blocking, err := store.Enqueue(ctx, ports.EnqueueInput{
-		Name: "mixed", Payload: []byte("{}"), Priority: 10,
+		Identity: job.Identity{QueueName: "mixed", JobName: "mixed"},
+		Payload:  []byte("{}"), Priority: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for count := 0; count < 20; count++ {
-		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "mixed", Payload: []byte("{}")}); err != nil {
+		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "mixed", JobName: "mixed"}, Payload: []byte("{}")}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -34,7 +35,7 @@ func TestSlowJobDoesNotBlockTheRestOfTheBatch(t *testing.T) {
 	release := make(chan struct{})
 	var fast atomic.Int64
 	registry := worker.NewHandlerRegistry()
-	if err := registry.Register("mixed", func(_ context.Context, record job.Record) error {
+	if err := registry.Register("mixed", "mixed", func(_ context.Context, record job.Record) error {
 		if record.ID == blocking {
 			<-release
 			return nil
@@ -89,13 +90,13 @@ func TestWorkerRespectsQueueRateLimitWithoutSpinning(t *testing.T) {
 		t.Fatal(err)
 	}
 	for count := 0; count < 2; count++ {
-		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "throttled", Payload: []byte("{}")}); err != nil {
+		if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "throttled", JobName: "throttled"}, Payload: []byte("{}")}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var processed atomic.Int64
 	registry := worker.NewHandlerRegistry()
-	if err := registry.Register("throttled", func(context.Context, job.Record) error {
+	if err := registry.Register("throttled", "throttled", func(context.Context, job.Record) error {
 		processed.Add(1)
 		return nil
 	}); err != nil {

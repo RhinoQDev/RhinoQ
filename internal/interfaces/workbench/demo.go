@@ -30,7 +30,7 @@ func (d *demoReader) Snapshot(_ context.Context, query Query) (Snapshot, error) 
 		stateFilter[state] = true
 	}
 	for _, item := range d.jobs {
-		if query.Queue != "" && item.Name != query.Queue {
+		if query.Queue != "" && item.QueueName != query.Queue {
 			continue
 		}
 		if len(stateFilter) > 0 && !stateFilter[item.State] {
@@ -44,10 +44,10 @@ func (d *demoReader) Snapshot(_ context.Context, query Query) (Snapshot, error) 
 	counts := make(map[string]int64)
 	queues := make(map[string]bool)
 	for _, item := range d.jobs {
-		if query.Queue == "" || item.Name == query.Queue {
+		if query.Queue == "" || item.QueueName == query.Queue {
 			counts[item.State]++
 		}
-		queues[item.Name] = true
+		queues[item.QueueName] = true
 	}
 	queueNames := make([]string, 0, len(queues))
 	for name := range queues {
@@ -78,54 +78,65 @@ func (d *demoReader) JobDetail(_ context.Context, id string) (JobDetail, error) 
 	return detail, nil
 }
 
+// demoJobs deliberately shows the identity split at work: media-cpu carries two
+// different contracts in one lane, and process-media appears under two group
+// keys, so the browser view exercises lane, contract and partition separately.
 func demoJobs(now time.Time) []Job {
 	return []Job{
 		{
-			ID: "job_01J0REPORT7D9A", Name: "generate-report", State: "succeeded",
-			Class: "interactive", Stage: "verify", Priority: 20, Attempts: 1,
+			ID: "job_01J0REPORT7D9A", QueueName: "reports", JobName: "generate-report",
+			GroupKey: "tenant-acme", State: "succeeded",
+			ResourceClass: "interactive", Stage: "verify", Priority: 20, Attempts: 1,
 			CorrelationID: "report_8W4Q", CreatedAt: now.Add(-9 * time.Minute),
 			NotBefore: now.Add(-9 * time.Minute),
 		},
 		{
-			ID: "job_01J0MEDIA8QK2", Name: "process-media", State: "leased",
-			Class: "standard", Stage: "run", Priority: 8, Attempts: 2,
+			ID: "job_01J0MEDIA8QK2", QueueName: "media-cpu", JobName: "process-media",
+			GroupKey: "tenant-acme", State: "leased",
+			ResourceClass: "standard", Stage: "run", Priority: 8, Attempts: 2,
 			CorrelationID: "asset_41H9", CreatedAt: now.Add(-7 * time.Minute),
 			NotBefore: now.Add(-6 * time.Minute),
 		},
 		{
-			ID: "job_01J0SYNC9M4CV", Name: "sync-catalog", State: "retry_wait",
-			Class: "batch", Stage: "run", Priority: -5, Attempts: 2,
+			ID: "job_01J0SYNC9M4CV", QueueName: "catalog", JobName: "sync-catalog",
+			State:         "retry_wait",
+			ResourceClass: "batch", Stage: "run", Priority: -5, Attempts: 2,
 			CorrelationID: "sync_20260728_02", CreatedAt: now.Add(-22 * time.Minute),
 			NotBefore: now.Add(38 * time.Second),
 		},
 		{
-			ID: "job_01J0PROVISION3P", Name: "provision-account", State: "blocked",
-			Class: "critical", Stage: "recover", Priority: 65, Attempts: 3,
+			ID: "job_01J0PROVISION3P", QueueName: "accounts", JobName: "provision-account",
+			GroupKey: "tenant-globex", State: "blocked",
+			ResourceClass: "critical", Stage: "recover", Priority: 65, Attempts: 3,
 			CrashCount: 1, BlockedReason: "unclassified_error",
 			CorrelationID: "account_72KD", CreatedAt: now.Add(-34 * time.Minute),
 			NotBefore: now.Add(-31 * time.Minute),
 		},
 		{
-			ID: "job_01J0THUMB5TS7", Name: "process-media", State: "pending",
-			Class: "standard", Stage: "run", Priority: 5,
+			ID: "job_01J0THUMB5TS7", QueueName: "media-cpu", JobName: "generate-thumbnail",
+			GroupKey: "tenant-globex", State: "pending",
+			ResourceClass: "standard", Stage: "run", Priority: 5,
 			CorrelationID: "asset_8D2A", CreatedAt: now.Add(-74 * time.Second),
 			NotBefore: now.Add(4 * time.Minute),
 		},
 		{
-			ID: "job_01J0EXPORT6AZ", Name: "export-dataset", State: "dead",
-			Class: "batch", Stage: "recover", Priority: -12, Attempts: 4,
+			ID: "job_01J0EXPORT6AZ", QueueName: "reports", JobName: "export-dataset",
+			State:         "dead",
+			ResourceClass: "batch", Stage: "recover", Priority: -12, Attempts: 4,
 			CorrelationID: "export_K19F", CreatedAt: now.Add(-2 * time.Hour),
 			NotBefore: now.Add(-94 * time.Minute),
 		},
 		{
-			ID: "job_01J0EMAIL0FJQ", Name: "send-notification", State: "succeeded",
-			Class: "standard", Stage: "verify", Attempts: 1,
+			ID: "job_01J0EMAIL0FJQ", QueueName: "notifications", JobName: "send-notification",
+			GroupKey: "tenant-globex", State: "succeeded",
+			ResourceClass: "standard", Stage: "verify", Attempts: 1,
 			CorrelationID: "account_72KD", CreatedAt: now.Add(-41 * time.Minute),
 			NotBefore: now.Add(-41 * time.Minute),
 		},
 		{
-			ID: "job_01J0INDEX2N18", Name: "refresh-search-index", State: "cancelled",
-			Class: "maintenance", Stage: "recover", Priority: -20,
+			ID: "job_01J0INDEX2N18", QueueName: "catalog", JobName: "refresh-search-index",
+			State:         "cancelled",
+			ResourceClass: "maintenance", Stage: "recover", Priority: -20,
 			CorrelationID: "index_products_v42", CreatedAt: now.Add(-3 * time.Hour),
 			NotBefore: now.Add(-3 * time.Hour), CancelRequested: true,
 		},

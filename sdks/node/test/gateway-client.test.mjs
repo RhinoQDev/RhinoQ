@@ -19,7 +19,8 @@ test('Gateway client sends UTF-8 JSON safely without argument spreading limits',
   const large = `Báo cáo 🦏 ${'x'.repeat(300_000)}`;
 
   const id = await client.enqueue({
-    name: 'generate-report',
+    queueName: 'generate-report',
+    jobName: 'generate-report',
     payload: { title: large },
   });
 
@@ -30,7 +31,7 @@ test('Gateway client sends UTF-8 JSON safely without argument spreading limits',
   assert.deepEqual(JSON.parse(decoded), { title: large });
 });
 
-test('Gateway claim sends handler queues and decodes payload bytes', async () => {
+test('Gateway claim sends subscribed queues and decodes payload bytes', async () => {
   let body;
   const client = new RhinoQClient({
     url: 'http://gateway.test',
@@ -40,9 +41,10 @@ test('Gateway claim sends handler queues and decodes payload bytes', async () =>
         jobs: [{
           job: {
             id: 'job_01',
-            name: 'send-email',
+            queueName: 'send-email',
+            jobName: 'send-email',
             state: 'leased',
-            class: 'standard',
+            resourceClass: 'standard',
             priority: 0,
             attempts: 1,
             crashCount: 0,
@@ -60,7 +62,7 @@ test('Gateway claim sends handler queues and decodes payload bytes', async () =>
 
   const jobs = await client.claim('email-1', 4, 60_000, ['send-email']);
 
-  assert.deepEqual(body.queues, ['send-email']);
+  assert.deepEqual(body.queueNames, ['send-email']);
   assert.equal(new TextDecoder().decode(jobs[0].payload), '{"userId":"u1"}');
 });
 
@@ -76,7 +78,7 @@ test('Gateway claim omits queue filter for a compatible older server', async () 
 
   await client.claim('legacy-worker', 1);
 
-  assert.equal(Object.hasOwn(body, 'queues'), false);
+  assert.equal(Object.hasOwn(body, 'queueNames'), false);
 });
 
 test('Gateway client records external effect confirmation evidence', async () => {
@@ -125,7 +127,7 @@ test('Gateway client preserves typed retry information', async () => {
   });
 
   await assert.rejects(
-    client.enqueue({ name: 'reports', payload: {} }),
+    client.enqueue({ queueName: 'reports', jobName: 'reports', payload: {} }),
     (error) => {
       assert.ok(error instanceof RhinoQError);
       assert.equal(error.code, 'RHINOQ_QUEUE_OVER_CAPACITY');

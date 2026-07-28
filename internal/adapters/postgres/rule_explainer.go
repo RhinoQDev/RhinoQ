@@ -105,11 +105,19 @@ func (e *RuleExplainer) ExplainRule(
 		ExplainedAt:   e.now(),
 		QueryHash:     hex.EncodeToString(hash[:]),
 	}
-	if len(columns) != 3 || columns[0] != "subject_id" ||
-		columns[1] != "violated" || columns[2] != "evidence" {
+	// The fourth column is optional: a Rule that never reports unknown has
+	// nothing to explain about it, and requiring it would invalidate every
+	// existing Rule.
+	shapeOK := (len(columns) == 3 || len(columns) == 4) &&
+		columns[0] == "subject_id" && columns[1] == "violated" &&
+		columns[2] == "evidence"
+	if shapeOK && len(columns) == 4 && columns[3] != "unknown_reason" {
+		shapeOK = false
+	}
+	if !shapeOK {
 		explanation.Reasons = append(
 			explanation.Reasons,
-			"query must return exactly: subject_id, violated, evidence",
+			"query must return subject_id, violated, evidence and optionally unknown_reason",
 		)
 	}
 	if explanation.PlanCost > record.MaxPlanCost {

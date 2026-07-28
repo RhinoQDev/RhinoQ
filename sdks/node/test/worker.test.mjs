@@ -5,13 +5,14 @@ import {
   RhinoQWorker,
 } from '../dist/index.js';
 
-function leased(name = 'generate-report') {
+function leased(jobName = 'generate-report', queueName = 'reports') {
   return {
     job: {
       id: 'job_01',
-      name,
+      queueName,
+      jobName,
       state: 'leased',
-      class: 'standard',
+      resourceClass: 'standard',
       priority: 0,
       attempts: 1,
       crashCount: 0,
@@ -72,14 +73,14 @@ test('Worker claims only registered queues and completes the handler', async () 
     maxPollIntervalMs: 2,
     leaseForMs: 100,
   });
-  worker.handle('generate-report', async (job) => {
+  worker.handle('reports', 'generate-report', async (job) => {
     assert.equal(job.data.reportId, 'report_01');
     worker.stop();
   });
 
   await worker.run();
 
-  assert.deepEqual(calls.claimQueues, ['generate-report']);
+  assert.deepEqual(calls.claimQueues, ['reports']);
   assert.equal(calls.completed, 1);
 });
 
@@ -120,7 +121,7 @@ test('Worker turns cooperative Gateway cancellation into a cancelled failure', a
     pollIntervalMs: 1,
     maxPollIntervalMs: 2,
   });
-  worker.handle('generate-report', async (job) => {
+  worker.handle('reports', 'generate-report', async (job) => {
     await new Promise((resolve) => {
       job.signal.addEventListener('abort', resolve, { once: true });
     });
@@ -163,7 +164,7 @@ test('Worker releases an unexpected queue instead of executing it', async () => 
     maxPollIntervalMs: 2,
     leaseForMs: 100,
   });
-  worker.handle('generate-report', async () => {
+  worker.handle('reports', 'generate-report', async () => {
     handled += 1;
   });
 
@@ -193,7 +194,7 @@ test('Worker does not connect when its run signal is already aborted', async () 
     client: gateway,
     name: 'reports-1',
   });
-  worker.handle('generate-report', async () => {});
+  worker.handle('reports', 'generate-report', async () => {});
   const controller = new AbortController();
   controller.abort();
 

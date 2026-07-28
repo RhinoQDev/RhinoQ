@@ -17,48 +17,89 @@ import (
 
 type Handler func(context.Context, job.Record) error
 
+// routeKey identifies one handler registration. A handler is bound to a
+// (lane, contract) pair rather than to a bare name, so the same contract can be
+// served in more than one lane and one lane can carry unrelated contracts.
+type routeKey struct {
+	queueName string
+	jobName   string
+}
+
 type HandlerRegistry struct {
 	mu       sync.RWMutex
-	handlers map[string]Handler
+	handlers map[routeKey]Handler
+	// queueNames counts registrations per lane, so the claim filter can be built
+	// without walking every route and so the lane count stays bounded.
+	queueNames map[string]int
 }
 
 func NewHandlerRegistry() *HandlerRegistry {
-	return &HandlerRegistry{handlers: make(map[string]Handler)}
+	return &HandlerRegistry{
+		handlers:   make(map[routeKey]Handler),
+		queueNames: make(map[string]int),
+	}
 }
 
-func (r *HandlerRegistry) Register(name string, handler Handler) error {
-	if name == "" || handler == nil {
-		return errors.New("handler name and function are required")
+// Register binds a handler to one contract inside one lane. Both names are
+// required: a handler that does not say which lane it serves cannot be claimed
+// for, because claiming happens per lane.
+func (r *HandlerRegistry) Register(queueName, jobName string, handler Handler) error {
+	if queueName == "" || jobName == "" || handler == nil {
+		return errors.New("handler queue name, job name and function are required")
 	}
+	key := routeKey{queueName: queueName, jobName: jobName}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.handlers[name]; exists {
-		return fmt.Errorf("handler already registered: %s", name)
+	if _, exists := r.handlers[key]; exists {
+		return fmt.Errorf("handler already registered: %s in queue %s", jobName, queueName)
 	}
-	if len(r.handlers) >= ports.MaxClaimQueues {
-		return fmt.Errorf("worker may register at most %d handler names", ports.MaxClaimQueues)
+	// The bound is on lanes, not routes: the lane list is what becomes a SQL
+	// filter, so that is what a remote caller could otherwise inflate.
+	if _, known := r.queueNames[queueName]; !known && len(r.queueNames) >= ports.MaxClaimQueues {
+		return fmt.Errorf("worker may subscribe to at most %d queues", ports.MaxClaimQueues)
 	}
-	r.handlers[name] = handler
+	r.handlers[key] = handler
+	r.queueNames[queueName]++
 	return nil
 }
 
-func (r *HandlerRegistry) get(name string) (Handler, bool) {
+func (r *HandlerRegistry) get(queueName, jobName string) (Handler, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	handler, ok := r.handlers[name]
+	handler, ok := r.handlers[routeKey{queueName: queueName, jobName: jobName}]
 	return handler, ok
 }
 
-// Names lists the queues this worker serves.
-func (r *HandlerRegistry) Names() []string {
+// QueueNames lists the execution lanes this worker subscribes to. It is the
+// claim filter, and it is deliberately not the list of handler contracts: a
+// worker claims a lane and then dispatches by contract.
+func (r *HandlerRegistry) QueueNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	names := make([]string, 0, len(r.handlers))
-	for name := range r.handlers {
+	names := make([]string, 0, len(r.queueNames))
+	for name := range r.queueNames {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+// Routes lists every registered (queue, job) pair. It exists for diagnostics
+// and for the Gateway's capability report, not for claiming.
+func (r *HandlerRegistry) Routes() [][2]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	routes := make([][2]string, 0, len(r.handlers))
+	for key := range r.handlers {
+		routes = append(routes, [2]string{key.queueName, key.jobName})
+	}
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i][0] == routes[j][0] {
+			return routes[i][1] < routes[j][1]
+		}
+		return routes[i][0] < routes[j][0]
+	})
+	return routes
 }
 
 const (
@@ -146,7 +187,7 @@ func New(config Config) (*Worker, error) {
 	if config.Store == nil || config.Handlers == nil {
 		return nil, errors.New("worker store and handlers are required")
 	}
-	if len(config.Handlers.Names()) == 0 {
+	if len(config.Handlers.QueueNames()) == 0 {
 		return nil, errors.New("worker requires at least one registered handler")
 	}
 	if config.Owner == "" {
@@ -267,7 +308,7 @@ func (w *Worker) claim(ctx context.Context, available int) ([]job.Record, error)
 	}
 	return w.store.Claim(ctx, ports.ClaimInput{
 		Owner: w.owner, Now: w.now(), Limit: limit, LeaseDuration: w.leaseDuration,
-		Queues: w.handlers.Names(),
+		QueueNames: w.handlers.QueueNames(),
 	})
 }
 
@@ -277,7 +318,7 @@ func (w *Worker) claim(ctx context.Context, available int) ([]job.Record, error)
 func (w *Worker) idleWait(ctx context.Context, backoff time.Duration) time.Duration {
 	wait := backoff
 	now := w.now()
-	for _, name := range w.handlers.Names() {
+	for _, name := range w.handlers.QueueNames() {
 		ttl, err := w.store.QueueRateLimitTTL(ctx, name, now)
 		if err != nil {
 			w.report(err)
@@ -364,7 +405,7 @@ func (w *Worker) release(record job.Record) {
 
 func (w *Worker) runOne(record job.Record) {
 	lease := ports.LeaseFor(record)
-	handler, ok := w.handlers.get(record.Name)
+	handler, ok := w.handlers.get(record.QueueName, record.JobName)
 	if !ok {
 		w.fail(lease, retry.Permanent, 0, record.Attempts)
 		return

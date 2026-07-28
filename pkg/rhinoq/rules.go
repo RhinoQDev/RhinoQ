@@ -36,7 +36,10 @@ type RuleDefinition struct {
 	BaselineAt  time.Time
 	Every       time.Duration
 	Within      time.Duration
-	MaxRows     int
+	// OnUnknown is "retry" (default) or "finding": what an inconclusive
+	// observation does.
+	OnUnknown string
+	MaxRows   int
 
 	StatementTimeout time.Duration
 	MaxPlanCost      float64
@@ -73,10 +76,31 @@ type RuleExplanation struct {
 	QueryHash     string        `json:"queryHash"`
 }
 
+// Observation statuses. A check has three possible conclusions, not two: a
+// provider that timed out or an object RhinoQ may not read is not a pass.
+const (
+	ObservationPassed   = string(rule.Passed)
+	ObservationViolated = string(rule.Violated)
+	ObservationUnknown  = string(rule.Unknown)
+)
+
+// Unknown policies decide what an inconclusive observation does.
+const (
+	// UnknownRetries records the observation and opens nothing; the next
+	// evaluation asks again. Default.
+	UnknownRetries = string(rule.UnknownRetries)
+	// UnknownOpensFinding treats not knowing as drift needing a person.
+	UnknownOpensFinding = string(rule.UnknownOpensFinding)
+)
+
 type RuleObservation struct {
 	SubjectID string `json:"subjectId"`
-	Violated  bool   `json:"violated"`
-	Evidence  string `json:"evidence,omitempty"`
+	// Status is passed, violated or unknown.
+	Status string `json:"status"`
+	// Reason is set only when Status is unknown, and names why the check could
+	// not conclude.
+	Reason   string `json:"reason,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
 }
 
 type RuleEvaluation struct {
@@ -87,7 +111,7 @@ type RuleEvaluation struct {
 	Findings     []FindingRecord   `json:"findings"`
 }
 
-func (c *Client) RegisterRule(
+func (c *IntegrityClient) RegisterRule(
 	ctx context.Context,
 	definition RuleDefinition,
 ) (RuleRecord, error) {
@@ -99,7 +123,7 @@ func (c *Client) RegisterRule(
 	return publicRule(record), err
 }
 
-func (c *Client) ListRules(ctx context.Context, query RuleQuery) ([]RuleRecord, error) {
+func (c *IntegrityClient) ListRules(ctx context.Context, query RuleQuery) ([]RuleRecord, error) {
 	service, err := c.ruleService()
 	if err != nil {
 		return nil, err
@@ -122,7 +146,7 @@ func (c *Client) ListRules(ctx context.Context, query RuleQuery) ([]RuleRecord, 
 	return result, nil
 }
 
-func (c *Client) ExplainRule(
+func (c *IntegrityClient) ExplainRule(
 	ctx context.Context,
 	id string,
 ) (RuleRecord, RuleExplanation, error) {
@@ -134,7 +158,7 @@ func (c *Client) ExplainRule(
 	return publicRule(record), publicExplanation(explanation), err
 }
 
-func (c *Client) EnableRule(
+func (c *IntegrityClient) EnableRule(
 	ctx context.Context,
 	id string,
 ) (RuleRecord, RuleExplanation, error) {
@@ -146,7 +170,7 @@ func (c *Client) EnableRule(
 	return publicRule(record), publicExplanation(explanation), err
 }
 
-func (c *Client) DisableRule(ctx context.Context, id string) (RuleRecord, error) {
+func (c *IntegrityClient) DisableRule(ctx context.Context, id string) (RuleRecord, error) {
 	service, err := c.ruleService()
 	if err != nil {
 		return RuleRecord{}, err
@@ -155,7 +179,7 @@ func (c *Client) DisableRule(ctx context.Context, id string) (RuleRecord, error)
 	return publicRule(record), err
 }
 
-func (c *Client) EvaluateRule(
+func (c *IntegrityClient) EvaluateRule(
 	ctx context.Context,
 	id, subjectID, cursor string,
 ) (RuleEvaluation, error) {
@@ -170,8 +194,10 @@ func (c *Client) EvaluateRule(
 	observations := make([]RuleObservation, 0, len(evaluation.Observations))
 	for _, observation := range evaluation.Observations {
 		observations = append(observations, RuleObservation{
-			SubjectID: observation.SubjectID, Violated: observation.Violated,
-			Evidence: observation.Evidence,
+			SubjectID: observation.SubjectID,
+			Status:    string(observation.Status),
+			Reason:    observation.Reason,
+			Evidence:  observation.Evidence,
 		})
 	}
 	publicFindings := make([]FindingRecord, 0, len(findings))
@@ -185,7 +211,7 @@ func (c *Client) EvaluateRule(
 	}, nil
 }
 
-func (c *Client) ruleService() (*ruleapp.Service, error) {
+func (c *IntegrityClient) ruleService() (*ruleapp.Service, error) {
 	if c == nil || c.rules == nil {
 		return nil, errors.New("rhinoq rule store is not configured")
 	}
@@ -202,6 +228,7 @@ func domainRule(definition RuleDefinition) rule.Record {
 		JobName: definition.JobName, Query: definition.Query,
 		BaselineAt: definition.BaselineAt, Every: definition.Every,
 		Within: definition.Within, MaxRows: definition.MaxRows,
+		OnUnknown:        rule.UnknownPolicy(definition.OnUnknown),
 		StatementTimeout: definition.StatementTimeout,
 		MaxPlanCost:      definition.MaxPlanCost,
 		MaxSeqScanRows:   definition.MaxSeqScanRows,
@@ -215,6 +242,7 @@ func publicRule(record rule.Record) RuleRecord {
 			SubjectType: record.SubjectType, JobName: record.JobName,
 			Query: record.Query, BaselineAt: record.BaselineAt,
 			Every: record.Every, Within: record.Within, MaxRows: record.MaxRows,
+			OnUnknown:        string(record.OnUnknown),
 			StatementTimeout: record.StatementTimeout,
 			MaxPlanCost:      record.MaxPlanCost, MaxSeqScanRows: record.MaxSeqScanRows,
 		},

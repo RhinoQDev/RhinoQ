@@ -49,9 +49,11 @@ type Snapshot struct {
 
 type Job struct {
 	ID              string    `json:"id"`
-	Name            string    `json:"name"`
+	QueueName       string    `json:"queueName"`
+	JobName         string    `json:"jobName"`
+	GroupKey        string    `json:"groupKey,omitempty"`
 	State           string    `json:"state"`
-	Class           string    `json:"class"`
+	ResourceClass   string    `json:"resourceClass"`
 	Stage           string    `json:"stage"`
 	Priority        int       `json:"priority"`
 	Attempts        int       `json:"attempts"`

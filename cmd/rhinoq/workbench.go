@@ -150,7 +150,7 @@ func (r *liveWorkbenchReader) Snapshot(
 ) (workbench.Snapshot, error) {
 	queue := query.Queue
 	jobs, err := r.client.ListJobs(ctx, rhinoq.JobQuery{
-		Queue: queue, States: query.States, Limit: query.Limit,
+		QueueName: queue, States: query.States, Limit: query.Limit,
 	})
 	if err != nil {
 		return workbench.Snapshot{}, err
@@ -254,8 +254,9 @@ func publicJobs(records []rhinoq.JobSummary) []workbench.Job {
 
 func publicJob(record rhinoq.JobSummary) workbench.Job {
 	return workbench.Job{
-		ID: record.ID, Name: record.Name, State: record.State,
-		Class: record.Class, Stage: jobStage(record.State),
+		ID: record.ID, QueueName: record.QueueName, JobName: record.JobName,
+		GroupKey: record.GroupKey, State: record.State,
+		ResourceClass: record.ResourceClass, Stage: jobStage(record.State),
 		Priority: record.Priority, Attempts: record.Attempts,
 		CrashCount: record.CrashCount, BlockedReason: record.BlockedReason,
 		CorrelationID: record.CorrelationID, CreatedAt: record.CreatedAt,
@@ -356,7 +357,7 @@ func publicAudit(records []rhinoq.AuditRecord) []workbench.Audit {
 func queueNames(jobs []rhinoq.JobSummary) []string {
 	seen := make(map[string]bool)
 	for _, item := range jobs {
-		seen[item.Name] = true
+		seen[item.QueueName] = true
 	}
 	result := make([]string, 0, len(seen))
 	for name := range seen {

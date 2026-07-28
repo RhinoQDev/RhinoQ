@@ -28,7 +28,7 @@ func NewRuleStore(db *sql.DB) (*RuleStore, error) {
 
 const ruleColumns = `id, version, name, scope, status, subject_type, job_name,
 	query, baseline_at, every_ms, within_ms, max_rows, statement_timeout_ms,
-	max_plan_cost, max_seq_scan_rows, created_at, updated_at`
+	max_plan_cost, max_seq_scan_rows, on_unknown, created_at, updated_at`
 
 type ruleScanner interface {
 	Scan(dest ...any) error
@@ -38,11 +38,12 @@ func scanRule(row ruleScanner) (rule.Record, error) {
 	var record rule.Record
 	var baseline sql.NullTime
 	var everyMS, withinMS, timeoutMS int64
+	var onUnknown string
 	err := row.Scan(
 		&record.ID, &record.Version, &record.Name, &record.Scope, &record.Status,
 		&record.SubjectType, &record.JobName, &record.Query, &baseline,
 		&everyMS, &withinMS, &record.MaxRows, &timeoutMS,
-		&record.MaxPlanCost, &record.MaxSeqScanRows,
+		&record.MaxPlanCost, &record.MaxSeqScanRows, &onUnknown,
 		&record.CreatedAt, &record.UpdatedAt,
 	)
 	if baseline.Valid {
@@ -51,6 +52,7 @@ func scanRule(row ruleScanner) (rule.Record, error) {
 	record.Every = time.Duration(everyMS) * time.Millisecond
 	record.Within = time.Duration(withinMS) * time.Millisecond
 	record.StatementTimeout = time.Duration(timeoutMS) * time.Millisecond
+	record.OnUnknown = rule.UnknownPolicy(onUnknown)
 	return record, err
 }
 
@@ -64,14 +66,15 @@ func (s *RuleStore) SaveRule(ctx context.Context, record rule.Record) (rule.Reco
 			`+ruleColumns+`
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			$10, $11, $12, $13, $14, $15, $16, $17
+			$10, $11, $12, $13, $14, $15, $16, $17, $18
 		)`,
 		record.ID, record.Version, record.Name, record.Scope, record.Status,
 		record.SubjectType, record.JobName, record.Query,
 		nullableTime(record.BaselineAt), record.Every.Milliseconds(),
 		record.Within.Milliseconds(), record.MaxRows,
 		record.StatementTimeout.Milliseconds(), record.MaxPlanCost,
-		record.MaxSeqScanRows, record.CreatedAt, record.UpdatedAt,
+		record.MaxSeqScanRows, string(record.OnUnknown),
+		record.CreatedAt, record.UpdatedAt,
 	)
 	if err != nil {
 		return rule.Record{}, err

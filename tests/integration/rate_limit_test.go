@@ -7,6 +7,7 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	"github.com/madebyduy/RhinoQ/internal/application/operations"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
@@ -21,7 +22,7 @@ func TestQueueRateLimitIsGlobalAcrossClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if _, err := store.Enqueue(context.Background(), ports.EnqueueInput{Name: "media", Payload: []byte("{}")}); err != nil {
+		if _, err := store.Enqueue(context.Background(), ports.EnqueueInput{Identity: job.Identity{QueueName: "media", JobName: "media"}, Payload: []byte("{}")}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -62,7 +63,7 @@ func TestRemovingQueueRateLimitReleasesWaitingJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := store.Enqueue(context.Background(), ports.EnqueueInput{Name: "sync", Payload: []byte("{}")}); err != nil {
+		if _, err := store.Enqueue(context.Background(), ports.EnqueueInput{Identity: job.Identity{QueueName: "sync", JobName: "sync"}, Payload: []byte("{}")}); err != nil {
 			t.Fatal(err)
 		}
 	}

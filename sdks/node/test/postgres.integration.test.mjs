@@ -15,11 +15,11 @@ test('PostgresProducer works with pg and joins the caller transaction', {
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const queue = 'node-integration';
   try {
-    await pool.query('DELETE FROM public.rhinoq_jobs WHERE name = $1', [queue]);
+    await pool.query('DELETE FROM public.rhinoq_jobs WHERE job_name = $1', [queue]);
     await pool.query('DELETE FROM rhinoq.job_allowlist WHERE job_name = $1', [queue]);
     await pool.query(
-      `INSERT INTO rhinoq.job_allowlist (job_name, max_payload_bytes)
-       VALUES ($1, 262144)`,
+      `INSERT INTO rhinoq.job_allowlist (job_name, queue_name, max_payload_bytes)
+       VALUES ($1, $1, 262144)`,
       [queue],
     );
 
@@ -27,7 +27,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
       query: (text, values) => pool.query(text, values),
     });
     const committedId = await producer.enqueue({
-      name: queue,
+      jobName: queue,
       payload: { reportId: 'report_01' },
       idempotencyKey: 'node:committed',
       correlationId: 'report_01',
@@ -53,7 +53,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
         query: (text, values) => connection.query(text, values),
       });
       rolledBackId = await transactional.enqueue({
-        name: queue,
+        jobName: queue,
         payload: { reportId: 'report_rollback' },
         idempotencyKey: 'node:rolled-back',
       });
@@ -67,7 +67,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
     );
     assert.equal(rolledBack.rows[0].count, 0);
   } finally {
-    await pool.query('DELETE FROM public.rhinoq_jobs WHERE name = $1', [queue]);
+    await pool.query('DELETE FROM public.rhinoq_jobs WHERE job_name = $1', [queue]);
     await pool.query('DELETE FROM rhinoq.job_allowlist WHERE job_name = $1', [queue]);
     await pool.end();
   }

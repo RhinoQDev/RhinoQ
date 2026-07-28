@@ -16,6 +16,8 @@ Runtime config được đọc qua typed loader tại `internal/infrastructure/c
 | `RHINOQ_SHUTDOWN_GRACE` | `30s` | thời gian chờ handler tự kết thúc khi dừng |
 | `RHINOQ_CANCEL_GRACE` | `10s` | thời gian chờ handler phản hồi cancellation |
 | `RHINOQ_REAPER_INTERVAL` | `30s` | khoảng thu hồi lease hết hạn |
+| `RHINOQ_REAP_BATCH_LIMIT` | `500` | số lease hết hạn tối đa mà **một câu lệnh** thu hồi; trần cứng 1000 |
+| `RHINOQ_REAP_SWEEP_BUDGET` | nửa `RHINOQ_REAPER_INTERVAL` | thời gian tối đa một sweep tiếp tục rút backlog trước khi nhường tới tick sau |
 | `RHINOQ_MAX_WORKER_CRASHES` | `3` | số lần một job được phép làm worker chết trước khi bị park |
 | `RHINOQ_CLAIM_LIMIT` | `10` | deprecated, chỉ còn dùng làm mặc định cho `RHINOQ_MAX_CLAIM_BATCH` |
 | `RHINOQ_DATABASE_DRIVER` | `pgx` | override driver cho CLI; application embedded vẫn tự mở `*sql.DB` |

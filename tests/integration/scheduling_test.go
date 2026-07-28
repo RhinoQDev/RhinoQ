@@ -17,7 +17,7 @@ func TestClaimOrdersByPriorityThenFirstIn(t *testing.T) {
 	ctx := context.Background()
 
 	enqueue := func(name string, priority int) job.ID {
-		id, err := store.Enqueue(ctx, ports.EnqueueInput{Name: name, Payload: []byte("{}"), Priority: priority})
+		id, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: name, JobName: name}, Payload: []byte("{}"), Priority: priority})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,12 +51,12 @@ func TestWaitingWorkAgesPastFreshHigherPriorityWork(t *testing.T) {
 	store := memory.NewJobStoreWithClock(func() time.Time { return clock })
 	ctx := context.Background()
 
-	starved, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "aging", Payload: []byte("{}"), Priority: 0})
+	starved, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "aging", JobName: "aging"}, Payload: []byte("{}"), Priority: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	clock = base.Add(4 * time.Hour)
-	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "aging", Payload: []byte("{}"), Priority: 3}); err != nil {
+	if _, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "aging", JobName: "aging"}, Payload: []byte("{}"), Priority: 3}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,7 +76,8 @@ func TestDelayedJobIsNotClaimedBeforeItsTime(t *testing.T) {
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
 	if _, err := store.Enqueue(ctx, ports.EnqueueInput{
-		Name: "later", Payload: []byte("{}"), RunAfter: time.Hour,
+		Identity: job.Identity{QueueName: "later", JobName: "later"},
+		Payload:  []byte("{}"), RunAfter: time.Hour,
 	}); err != nil {
 		t.Fatal(err)
 	}

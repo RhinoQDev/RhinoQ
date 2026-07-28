@@ -46,13 +46,13 @@ func (s *RecoveryStore) ListAttention(_ context.Context, query recovery.Attentio
 
 	items := make([]recovery.AttentionItem, 0)
 	for _, record := range s.jobs.jobs {
-		if query.Queue != "" && record.Name != query.Queue {
+		if query.Queue != "" && record.QueueName != query.Queue {
 			continue
 		}
 		switch record.State {
 		case job.Dead:
 			items = append(items, recovery.AttentionItem{
-				Kind: recovery.DeadJob, JobID: record.ID, Queue: record.Name,
+				Kind: recovery.DeadJob, JobID: record.ID, Queue: record.QueueName,
 				JobState: record.State, Reason: "job exhausted its execution policy", ObservedAt: record.CreatedAt,
 			})
 		case job.Blocked:
@@ -61,7 +61,7 @@ func (s *RecoveryStore) ListAttention(_ context.Context, query recovery.Attentio
 				reason = "job repeatedly took its worker down and was parked"
 			}
 			items = append(items, recovery.AttentionItem{
-				Kind: recovery.ExecutionBlocked, JobID: record.ID, Queue: record.Name,
+				Kind: recovery.ExecutionBlocked, JobID: record.ID, Queue: record.QueueName,
 				JobState: record.State, Reason: reason, ObservedAt: record.CreatedAt,
 			})
 		}
@@ -71,11 +71,11 @@ func (s *RecoveryStore) ListAttention(_ context.Context, query recovery.Attentio
 			continue
 		}
 		jobRecord, ok := s.jobs.jobs[job.ID(record.JobID)]
-		if !ok || (query.Queue != "" && jobRecord.Name != query.Queue) {
+		if !ok || (query.Queue != "" && jobRecord.QueueName != query.Queue) {
 			continue
 		}
 		items = append(items, recovery.AttentionItem{
-			Kind: recovery.EffectUncertain, JobID: jobRecord.ID, Queue: jobRecord.Name,
+			Kind: recovery.EffectUncertain, JobID: jobRecord.ID, Queue: jobRecord.QueueName,
 			JobState: jobRecord.State, ReferenceID: string(record.ID),
 			Reason: "external effect may have happened", ObservedAt: record.CreatedAt,
 		})
@@ -85,7 +85,7 @@ func (s *RecoveryStore) ListAttention(_ context.Context, query recovery.Attentio
 			continue
 		}
 		jobRecord, ok := s.jobs.jobs[job.ID(record.JobID)]
-		if !ok || (query.Queue != "" && jobRecord.Name != query.Queue) {
+		if !ok || (query.Queue != "" && jobRecord.QueueName != query.Queue) {
 			continue
 		}
 		reason := record.Reason
@@ -93,7 +93,7 @@ func (s *RecoveryStore) ListAttention(_ context.Context, query recovery.Attentio
 			reason = "declared business outcome was not achieved"
 		}
 		items = append(items, recovery.AttentionItem{
-			Kind: recovery.OutcomeMismatch, JobID: jobRecord.ID, Queue: jobRecord.Name,
+			Kind: recovery.OutcomeMismatch, JobID: jobRecord.ID, Queue: jobRecord.QueueName,
 			JobState: jobRecord.State, ReferenceID: record.ID,
 			Reason: reason, ObservedAt: record.UpdatedAt,
 		})

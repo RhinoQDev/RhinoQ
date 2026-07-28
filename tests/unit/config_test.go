@@ -1,6 +1,7 @@
 package unit
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -44,5 +45,54 @@ func TestConfigRejectsHeartbeatLongerThanLease(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected invalid heartbeat configuration")
+	}
+}
+
+// A reaper batch above the cap would put the engine back where it started: one
+// statement whose lock time and WAL scale with the whole backlog.
+func TestConfigRejectsAnUnboundedReapBatch(t *testing.T) {
+	_, err := config.LoadFromEnv(func(key string) string {
+		if key == "RHINOQ_REAP_BATCH_LIMIT" {
+			return "5000"
+		}
+		return ""
+	})
+	if err == nil || !strings.Contains(err.Error(), "RHINOQ_REAP_BATCH_LIMIT") {
+		t.Fatalf("an unbounded reap batch must be refused, got %v", err)
+	}
+}
+
+// A sweep budget longer than the tick means the reaper never yields, so
+// recovery and live claims compete for the same rows indefinitely.
+func TestConfigRejectsASweepBudgetLongerThanItsTick(t *testing.T) {
+	_, err := config.LoadFromEnv(func(key string) string {
+		switch key {
+		case "RHINOQ_REAPER_INTERVAL":
+			return "10s"
+		case "RHINOQ_REAP_SWEEP_BUDGET":
+			return "30s"
+		}
+		return ""
+	})
+	if err == nil || !strings.Contains(err.Error(), "RHINOQ_REAP_SWEEP_BUDGET") {
+		t.Fatalf("a sweep budget longer than the tick must be refused, got %v", err)
+	}
+}
+
+func TestConfigDefaultsReapBoundsFromTheReaperInterval(t *testing.T) {
+	loaded, err := config.LoadFromEnv(func(key string) string {
+		if key == "RHINOQ_REAPER_INTERVAL" {
+			return "20s"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ReapBatchLimit != 500 {
+		t.Fatalf("default reap batch must be 500, got %d", loaded.ReapBatchLimit)
+	}
+	if loaded.ReapSweepBudget != 10*time.Second {
+		t.Fatalf("default sweep budget must be half the interval, got %s", loaded.ReapSweepBudget)
 	}
 }

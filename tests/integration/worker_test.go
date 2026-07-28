@@ -16,14 +16,14 @@ func TestWorkerCompletesClaimedJob(t *testing.T) {
 	now := time.Now().UTC()
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
-	id, err := store.Enqueue(ctx, ports.EnqueueInput{Name: "send-email", Payload: []byte("{}")})
+	id, err := store.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "send-email", JobName: "send-email"}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	registry := worker.NewHandlerRegistry()
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := registry.Register("send-email", func(context.Context, job.Record) error { cancel(); return nil }); err != nil {
+	if err := registry.Register("send-email", "send-email", func(context.Context, job.Record) error { cancel(); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	w, err := worker.New(worker.Config{Store: store, Handlers: registry, Owner: "worker-1", RetryPolicy: retry.Policy{MaxAttempts: 3, BaseDelay: time.Second}, MaxClaimBatch: 1, LeaseDuration: time.Minute, PollInterval: time.Millisecond, HeartbeatEvery: 10 * time.Millisecond, Concurrency: 1, Now: func() time.Time { return now }})
@@ -44,13 +44,15 @@ func TestWorkerClaimsOnlyQueuesWithRegisteredHandlers(t *testing.T) {
 	store := memory.NewJobStoreWithClock(func() time.Time { return now })
 	ctx := context.Background()
 	unhandledID, err := store.Enqueue(ctx, ports.EnqueueInput{
-		Name: "resize-image", Payload: []byte("{}"),
+		Identity: job.Identity{QueueName: "resize-image", JobName: "resize-image"},
+		Payload:  []byte("{}"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	handledID, err := store.Enqueue(ctx, ports.EnqueueInput{
-		Name: "send-email", Payload: []byte("{}"),
+		Identity: job.Identity{QueueName: "send-email", JobName: "send-email"},
+		Payload:  []byte("{}"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +61,7 @@ func TestWorkerClaimsOnlyQueuesWithRegisteredHandlers(t *testing.T) {
 	registry := worker.NewHandlerRegistry()
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := registry.Register("send-email", func(context.Context, job.Record) error {
+	if err := registry.Register("send-email", "send-email", func(context.Context, job.Record) error {
 		cancel()
 		return nil
 	}); err != nil {

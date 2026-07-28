@@ -25,7 +25,7 @@ func TestAgentRunsAJobEndToEnd(t *testing.T) {
 		JobID string `json:"jobId"`
 	}
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "send-report", "payload": []byte(`{"reportId":"r-1"}`),
+		"queueName": "send-report", "jobName": "send-report", "payload": []byte(`{"reportId":"r-1"}`),
 		"idempotencyKey": "report:r-1", "priority": 5,
 	}, http.StatusCreated, &enqueued)
 	if enqueued.JobID == "" {
@@ -82,20 +82,20 @@ func TestAgentRunsAJobEndToEnd(t *testing.T) {
 func TestAgentClaimCanBeRestrictedToRegisteredQueues(t *testing.T) {
 	server := newAgentServer(t)
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "send-email", "payload": []byte("{}"),
+		"queueName": "send-email", "jobName": "send-email", "payload": []byte("{}"),
 	}, http.StatusCreated, nil)
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "resize-image", "payload": []byte("{}"),
+		"queueName": "resize-image", "jobName": "resize-image", "payload": []byte("{}"),
 	}, http.StatusCreated, nil)
 
 	var claimed struct {
 		Jobs []rhinoq.LeasedJob `json:"jobs"`
 	}
 	call(t, server, http.MethodPost, "/v1/claim", map[string]any{
-		"worker": "email-worker", "queues": []string{"send-email"},
+		"worker": "email-worker", "queueNames": []string{"send-email"},
 		"limit": 5, "leaseForMs": 60000,
 	}, http.StatusOK, &claimed)
-	if len(claimed.Jobs) != 1 || claimed.Jobs[0].Job.Name != "send-email" {
+	if len(claimed.Jobs) != 1 || claimed.Jobs[0].Job.JobName != "send-email" {
 		t.Fatalf("claim must stay inside the worker's handler set: %+v", claimed.Jobs)
 	}
 
@@ -114,14 +114,14 @@ func TestAgentConfirmsAnExternalSignalEffectAfterTheHandlerReturns(t *testing.T)
 		JobID string `json:"jobId"`
 	}
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "create-video", "payload": []byte("{}"),
+		"queueName": "create-video", "jobName": "create-video", "payload": []byte("{}"),
 	}, http.StatusCreated, &enqueued)
 
 	var claimed struct {
 		Jobs []rhinoq.LeasedJob `json:"jobs"`
 	}
 	call(t, server, http.MethodPost, "/v1/claim", map[string]any{
-		"worker": "video-worker", "queues": []string{"create-video"},
+		"worker": "video-worker", "queueNames": []string{"create-video"},
 		"limit": 1, "leaseForMs": 60000,
 	}, http.StatusOK, &claimed)
 	if len(claimed.Jobs) != 1 {
@@ -159,7 +159,7 @@ func TestAgentConfirmsAnExternalSignalEffectAfterTheHandlerReturns(t *testing.T)
 func TestAgentUsesCamelCaseJobFieldsOnTheWire(t *testing.T) {
 	server := newAgentServer(t)
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "send-email", "payload": []byte("{}"),
+		"queueName": "send-email", "jobName": "send-email", "payload": []byte("{}"),
 	}, http.StatusCreated, nil)
 
 	status, raw := rawCall(t, server, http.MethodGet, "/v1/jobs?limit=1", nil, agentToken)
@@ -188,7 +188,7 @@ func TestAgentUsesCamelCaseJobFieldsOnTheWire(t *testing.T) {
 func TestAgentRefusesStaleLeaseWithATypedError(t *testing.T) {
 	server := newAgentServer(t)
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "charge", "payload": []byte("{}"),
+		"queueName": "charge", "jobName": "charge", "payload": []byte("{}"),
 	}, http.StatusCreated, nil)
 
 	var claimed struct {
@@ -224,14 +224,14 @@ func TestAgentReportsOverCapacityWithRetryAfter(t *testing.T) {
 	server := newAgentServerFor(t, client)
 
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "reports", "payload": []byte("{}"),
+		"queueName": "reports", "jobName": "reports", "payload": []byte("{}"),
 	}, http.StatusCreated, nil)
 
 	var rejection struct {
 		Error agent.ErrorBody `json:"error"`
 	}
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "reports", "payload": []byte("{}"),
+		"queueName": "reports", "jobName": "reports", "payload": []byte("{}"),
 	}, http.StatusTooManyRequests, &rejection)
 	if rejection.Error.Code != "RHINOQ_QUEUE_OVER_CAPACITY" || !rejection.Error.Retryable {
 		t.Fatalf("a full queue must tell the producer to come back: %+v", rejection.Error)
@@ -246,7 +246,7 @@ func TestAgentReportsOverCapacityWithRetryAfter(t *testing.T) {
 func TestAgentAppliesRetryClassFromTheErrorEnvelope(t *testing.T) {
 	server := newAgentServer(t)
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "sync", "payload": []byte("{}"),
+		"queueName": "sync", "jobName": "sync", "payload": []byte("{}"),
 	}, http.StatusCreated, nil)
 	var claimed struct {
 		Jobs []rhinoq.LeasedJob `json:"jobs"`
@@ -352,7 +352,7 @@ func TestAgentRefusesRequestsWithoutAToken(t *testing.T) {
 func TestAgentExportsPrometheusMetrics(t *testing.T) {
 	server := newAgentServer(t)
 	call(t, server, http.MethodPost, "/v1/jobs", map[string]any{
-		"name": "metrics-demo", "payload": []byte("{}"),
+		"queueName": "metrics-demo", "jobName": "metrics-demo", "payload": []byte("{}"),
 	}, http.StatusCreated, nil)
 
 	status, body := rawCall(t, server, http.MethodGet, "/metrics", nil, agentToken)

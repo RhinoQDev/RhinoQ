@@ -154,6 +154,7 @@ rhinoq workbench
 | `rhinoq findings list` | inspect integrity Findings | DB | No |
 | `rhinoq findings <transition>` | record a Finding decision | DB | DB |
 | `rhinoq rules list` | inspect Rules | DB | No |
+| `rhinoq scan <id>` | verify one enabled Rule against real data | DB | Findings |
 | `rhinoq explain <id>` | inspect the safety plan for one Rule | DB/Gateway | Evidence |
 | `rhinoq rules enable` | Explain and enable one Rule | DB | DB |
 | `rhinoq rules disable` | stop future claims for one Rule | DB | DB |
@@ -189,6 +190,61 @@ The generated file contains worker defaults. It does not:
 
 After reviewing the template, set the required environment variables and run
 `rhinoq migrate plan`.
+
+## `rhinoq scan`
+
+### Purpose
+
+Verify one enabled Rule against real data and fold what it finds into Findings.
+This is the shortest path to a first Finding: it needs no queue, no worker and
+no cutover.
+
+```bash
+rhinoq scan completed-report-has-output
+rhinoq scan completed-report-has-output --subject report_3912
+rhinoq scan completed-report-has-output --max-pages 5 --json
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--subject <id>` | none | verify a single business subject instead of walking all |
+| `--cursor <c>` | none | resume an incomplete scan from a previous run |
+| `--max-pages <n>` | `100` | page budget for this run, maximum 10000 |
+| `--timeout <d>` | `2m` | wall-clock budget for this run |
+| `--json` | off | print the summary as JSON |
+
+`--subject` and `--cursor` are mutually exclusive: one asks about a single
+record, the other resumes a walk.
+
+### What it does and does not do
+
+Scan opens the integrity plane only. It starts no worker, claims no jobs, runs
+no reaper and performs no repair. It reads business data and writes
+observations and Findings.
+
+The run is bounded twice, by `--max-pages` and by `--timeout`, and each page is
+bounded by the Rule's own `MaxRows`. Stopping on either budget is a result, not
+a failure: observations already made are committed, and the printed cursor
+resumes the rest.
+
+A passing recheck resolves the Finding it previously opened, so a repaired
+subject does not need a manual close.
+
+### Output
+
+```text
+Rule:              completed-report-has-output
+Pages:             12
+Observed:          5842
+Passed:            5830
+Violated:          12
+Findings touched:  12
+Duration:          1.84s
+Status:            complete
+
+Inspect what was found:
+  rhinoq findings list --rule completed-report-has-output
+```
 
 ## `rhinoq migrate`
 

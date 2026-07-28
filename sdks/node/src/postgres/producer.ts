@@ -21,12 +21,18 @@ export interface PostgresProducerOptions {
 }
 
 export interface PostgresEnqueueRequest<T = unknown> {
-  name: string;
+  /**
+   * jobName is the handler contract. The execution lane is NOT sent: it comes
+   * from rhinoq.job_allowlist, so a producer cannot place its work into a lane
+   * that was not granted to it.
+   */
+  jobName: string;
   payload: T;
   idempotencyKey?: string;
   correlationId?: string;
   priority?: number;
-  class?: JobClass;
+  resourceClass?: JobClass;
+  groupKey?: string;
   runAfterMs?: number;
   payloadSchema?: string;
 }
@@ -40,7 +46,8 @@ SELECT rhinoq.enqueue(
   priority        => $5,
   job_class       => $6,
   run_after       => ($7::bigint * interval '1 millisecond'),
-  payload_schema  => $8
+  payload_schema  => $8,
+  group_key       => $9
 ) AS job_id`;
 
 /**
@@ -73,14 +80,15 @@ export class PostgresProducer {
       );
     }
     const result = await this.executor.query<{ job_id: string }>(ENQUEUE_SQL, [
-      request.name,
+      request.jobName,
       payload,
       request.idempotencyKey ?? null,
       request.correlationId ?? null,
       request.priority ?? null,
-      request.class ?? null,
+      request.resourceClass ?? null,
       request.runAfterMs ?? null,
       request.payloadSchema ?? null,
+      request.groupKey ?? null,
     ]);
     const jobId = result.rows[0]?.job_id;
     if (!jobId) {
@@ -91,8 +99,8 @@ export class PostgresProducer {
 }
 
 function validateRequest(request: PostgresEnqueueRequest): void {
-  if (!request || !request.name) {
-    throw new TypeError('job name is required');
+  if (!request || !request.jobName) {
+    throw new TypeError('jobName is required');
   }
   if (request.priority !== undefined && (!Number.isInteger(request.priority) || request.priority < -100 || request.priority > 100)) {
     throw new RangeError('priority must be an integer between -100 and 100');

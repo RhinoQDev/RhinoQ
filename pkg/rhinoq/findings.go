@@ -78,7 +78,7 @@ type FindingEvent struct {
 	OccurredAt time.Time `json:"occurredAt"`
 }
 
-func (c *Client) ObserveFinding(
+func (c *IntegrityClient) ObserveFinding(
 	ctx context.Context,
 	observation FindingObservation,
 ) (FindingRecord, error) {
@@ -93,7 +93,7 @@ func (c *Client) ObserveFinding(
 	return summarizeFinding(record), err
 }
 
-func (c *Client) TransitionFinding(
+func (c *IntegrityClient) TransitionFinding(
 	ctx context.Context,
 	key FindingKey,
 	transition FindingTransition,
@@ -109,7 +109,7 @@ func (c *Client) TransitionFinding(
 	return summarizeFinding(record), err
 }
 
-func (c *Client) ListFindings(
+func (c *IntegrityClient) ListFindings(
 	ctx context.Context,
 	query FindingQuery,
 ) ([]FindingRecord, error) {
@@ -137,7 +137,7 @@ func (c *Client) ListFindings(
 	return result, nil
 }
 
-func (c *Client) FindingHistory(
+func (c *IntegrityClient) FindingHistory(
 	ctx context.Context,
 	key FindingKey,
 	offset, limit int,
@@ -163,7 +163,7 @@ func (c *Client) FindingHistory(
 	return result, nil
 }
 
-func (c *Client) findingService() (*findingapp.Service, error) {
+func (c *IntegrityClient) findingService() (*findingapp.Service, error) {
 	if c == nil || c.findings == nil {
 		return nil, errors.New("rhinoq finding store is not configured")
 	}

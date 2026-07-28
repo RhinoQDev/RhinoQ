@@ -195,12 +195,14 @@ func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
 }
 
 type enqueueRequest struct {
-	Name           string `json:"name"`
+	QueueName      string `json:"queueName"`
+	JobName        string `json:"jobName"`
+	GroupKey       string `json:"groupKey,omitempty"`
 	Payload        []byte `json:"payload"`
 	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 	CorrelationID  string `json:"correlationId,omitempty"`
 	Priority       int    `json:"priority,omitempty"`
-	Class          string `json:"class,omitempty"`
+	ResourceClass  string `json:"resourceClass,omitempty"`
 	RunAfterMs     int64  `json:"runAfterMs,omitempty"`
 }
 
@@ -210,9 +212,10 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.client.Enqueue(r.Context(), rhinoq.JobRequest{
-		Name: request.Name, Payload: request.Payload,
+		QueueName: request.QueueName, JobName: request.JobName,
+		GroupKey: request.GroupKey, Payload: request.Payload,
 		IdempotencyKey: request.IdempotencyKey, CorrelationID: request.CorrelationID,
-		Priority: request.Priority, Class: request.Class,
+		Priority: request.Priority, ResourceClass: request.ResourceClass,
 		RunAfter: time.Duration(request.RunAfterMs) * time.Millisecond,
 	})
 	if err != nil {
@@ -234,10 +237,12 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	jobs, err := s.client.ListJobs(r.Context(), rhinoq.JobQuery{
-		Queue:  query.Get("queue"),
-		States: splitStates(query.Get("states")),
-		Offset: intParam(query.Get("offset"), 0),
-		Limit:  intParam(query.Get("limit"), 50),
+		QueueName: query.Get("queueName"),
+		JobName:   query.Get("jobName"),
+		GroupKey:  query.Get("groupKey"),
+		States:    splitStates(query.Get("states")),
+		Offset:    intParam(query.Get("offset"), 0),
+		Limit:     intParam(query.Get("limit"), 50),
 	})
 	if err != nil {
 		s.fail(w, err)
@@ -496,7 +501,7 @@ type claimRequest struct {
 	Worker     string   `json:"worker"`
 	Limit      int      `json:"limit,omitempty"`
 	LeaseForMs int64    `json:"leaseForMs,omitempty"`
-	Queues     []string `json:"queues,omitempty"`
+	QueueNames []string `json:"queueNames,omitempty"`
 }
 
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
@@ -506,8 +511,8 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	jobs, err := s.client.ClaimJobs(r.Context(), rhinoq.ClaimRequest{
 		Worker: request.Worker, Limit: request.Limit,
-		LeaseFor: time.Duration(request.LeaseForMs) * time.Millisecond,
-		Queues:   request.Queues,
+		LeaseFor:   time.Duration(request.LeaseForMs) * time.Millisecond,
+		QueueNames: request.QueueNames,
 	})
 	if err != nil {
 		s.fail(w, err)

@@ -12,7 +12,7 @@ func TestDeveloperInspectionReadsJobEffectAndOutcomeEvidence(t *testing.T) {
 	client := newClient(t)
 	ctx := context.Background()
 	id := enqueue(t, client, rhinoq.JobRequest{
-		Name: "generate-report", Payload: []byte("{}"),
+		QueueName: "generate-report", JobName: "generate-report", Payload: []byte("{}"),
 		CorrelationID: "report_01",
 	})
 	leased := claimOne(t, client, "reports-1")

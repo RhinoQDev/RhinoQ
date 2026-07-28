@@ -29,24 +29,24 @@ func (s *RecoveryStore) ListAttention(ctx context.Context, query recovery.Attent
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT kind, job_id, queue_name, job_state, reference_id, reason, observed_at
 		FROM (
-			SELECT 'dead_job' AS kind, j.id AS job_id, j.name AS queue_name, j.state AS job_state,
+			SELECT 'dead_job' AS kind, j.id AS job_id, j.queue_name AS queue_name, j.state AS job_state,
 			       '' AS reference_id, 'job exhausted its execution policy' AS reason, j.created_at AS observed_at
 			FROM rhinoq_jobs j WHERE j.state = 'dead'
 			UNION ALL
-			SELECT 'execution_blocked', j.id, j.name, j.state, '',
+			SELECT 'execution_blocked', j.id, j.queue_name, j.state, '',
 			       CASE j.blocked_reason
 			           WHEN 'poison_job' THEN 'job repeatedly took its worker down and was parked'
 			           ELSE 'execution requires an operator decision'
 			       END, j.created_at
 			FROM rhinoq_jobs j WHERE j.state = 'blocked'
 			UNION ALL
-			SELECT 'effect_uncertain', j.id, j.name, j.state, e.id,
+			SELECT 'effect_uncertain', j.id, j.queue_name, j.state, e.id,
 			       'external effect may have happened', e.created_at
 			FROM rhinoq_effects e
 			JOIN rhinoq_jobs j ON j.id = e.job_id
 			WHERE e.state = 'uncertain'
 			UNION ALL
-			SELECT 'outcome_mismatch', j.id, j.name, j.state, o.id,
+			SELECT 'outcome_mismatch', j.id, j.queue_name, j.state, o.id,
 			       COALESCE(NULLIF(o.reason, ''), 'declared business outcome was not achieved'), o.updated_at
 			FROM rhinoq_outcomes o
 			JOIN rhinoq_jobs j ON j.id = o.job_id

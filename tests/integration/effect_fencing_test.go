@@ -9,6 +9,7 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	applicationeffect "github.com/madebyduy/RhinoQ/internal/application/effect"
 	"github.com/madebyduy/RhinoQ/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
 )
@@ -23,7 +24,7 @@ func TestStaleExecutionCannotOpenOrConfirmAnEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := jobs.Enqueue(ctx, ports.EnqueueInput{Name: "charge-card", Payload: []byte("{}")}); err != nil {
+	if _, err := jobs.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "charge-card", JobName: "charge-card"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := jobs.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
@@ -79,7 +80,7 @@ func TestReaperDowngradesEffectsLeftOpenByDeadExecutions(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := jobs.Enqueue(ctx, ports.EnqueueInput{Name: "charge-card", Payload: []byte("{}")}); err != nil {
+	if _, err := jobs.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "charge-card", JobName: "charge-card"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := jobs.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})
@@ -140,7 +141,7 @@ func TestSystemCanMarkAbandonedEffectUncertain(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := jobs.Enqueue(ctx, ports.EnqueueInput{Name: "payout", Payload: []byte("{}")}); err != nil {
+	if _, err := jobs.Enqueue(ctx, ports.EnqueueInput{Identity: job.Identity{QueueName: "payout", JobName: "payout"}, Payload: []byte("{}")}); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := jobs.Claim(ctx, ports.ClaimInput{Owner: "worker-1", Now: now, Limit: 1, LeaseDuration: time.Minute})

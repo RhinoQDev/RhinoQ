@@ -70,6 +70,14 @@ func (e *RuleEvaluator) EvaluateRule(
 		return rule.Evaluation{}, err
 	}
 	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return rule.Evaluation{}, err
+	}
+	// The fourth column is optional so existing three-column Rules keep working.
+	// It is only read when violated is NULL, because a reason on a conclusive
+	// observation would be describing something the model does not carry.
+	withReason := len(columns) == 4
 	result := rule.Evaluation{
 		Observations: make([]rule.Observation, 0, record.MaxRows),
 		EvaluatedAt:  e.now(),
@@ -78,12 +86,33 @@ func (e *RuleEvaluator) EvaluateRule(
 	for rows.Next() {
 		var observation rule.Observation
 		var evidence []byte
-		if err := rows.Scan(
-			&observation.SubjectID, &observation.Violated, &evidence,
-		); err != nil {
+		// NULL is how a query says it could not decide. Scanning into a bool
+		// would turn that into an error, which is why a check that cannot reach
+		// its provider currently has no way to say so.
+		var violated sql.NullBool
+		var reason sql.NullString
+		targets := []any{&observation.SubjectID, &violated, &evidence}
+		if withReason {
+			targets = append(targets, &reason)
+		}
+		if err := rows.Scan(targets...); err != nil {
 			return rule.Evaluation{}, err
 		}
 		observation.Evidence = string(evidence)
+		switch {
+		case !violated.Valid:
+			observation.Status = rule.Unknown
+			observation.Reason = strings.TrimSpace(reason.String)
+			if observation.Reason == "" {
+				// An unlabelled unknown is still worth keeping: dropping the
+				// observation would silently restore the boolean behaviour.
+				observation.Reason = rule.UnknownUnspecified
+			}
+		case violated.Bool:
+			observation.Status = rule.Violated
+		default:
+			observation.Status = rule.Passed
+		}
 		if err := observation.Validate(); err != nil {
 			return rule.Evaluation{}, err
 		}

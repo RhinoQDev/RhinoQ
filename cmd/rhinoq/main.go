@@ -51,6 +51,8 @@ func main() {
 		os.Exit(runQueue(os.Args[2:], os.Getenv, os.Stdout))
 	case "findings":
 		os.Exit(runFindings(os.Args[2:], os.Getenv, os.Stdout))
+	case "scan":
+		os.Exit(runScan(os.Args[2:], os.Getenv, os.Stdout))
 	case "rules":
 		os.Exit(runRules(os.Args[2:], os.Getenv, os.Stdout))
 	case "workbench", "ui":
@@ -141,6 +143,7 @@ func runDoctor(ci bool) int {
 	fmt.Printf("       concurrency=%d prefetch=%.1f max_claim_batch=%d\n", c.Concurrency, c.PrefetchFactor, c.MaxClaimBatch)
 	fmt.Printf("       lease=%s heartbeat=%s poll=%s..%s\n", c.LeaseDuration, c.HeartbeatEvery, c.PollInterval, c.MaxPollInterval)
 	fmt.Printf("       shutdown_grace=%s cancel_grace=%s reaper=%s\n", c.ShutdownGrace, c.CancelGrace, c.ReaperInterval)
+	fmt.Printf("       reap_batch=%d reap_budget=%s\n", c.ReapBatchLimit, c.ReapSweepBudget)
 
 	fmt.Println("Fencing")
 	if c.WorkerName == "" {
@@ -303,6 +306,7 @@ func printRootHelp(output io.Writer) {
 	fmt.Fprintln(output, "  attention   list work that needs a developer decision")
 	fmt.Fprintln(output, "  findings    list and triage persistent business-integrity drift")
 	fmt.Fprintln(output, "  rules       list, enable, disable or schedule integrity Rules")
+	fmt.Fprintln(output, "  scan        verify one enabled Rule against real data, bounded")
 	fmt.Fprintln(output, "  explain     inspect the PostgreSQL safety plan for one Rule")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Developer interface")
@@ -481,6 +485,36 @@ Semantics:
 
 Every transition is persisted. Resolve, ignore and false-positive require a
 reason; suppressions also require a positive duration such as 24h.`)
+	case "scan":
+		fmt.Fprintln(output, `rhinoq scan — verify one enabled Rule against real data
+
+Usage:
+  rhinoq scan <rule-id> [flags]
+
+Flags:
+  --subject <id>     verify a single business subject instead of walking all
+  --cursor <c>       resume an incomplete scan from a previous run
+  --max-pages <n>    page budget for this run (default 100, maximum 10000)
+  --timeout <d>      wall-clock budget for this run (default 2m)
+  --json             print the summary as JSON
+
+This is the shortest path to a first Finding. It needs no queue, no worker and
+no cutover: an enabled Rule and a database connection are enough.
+
+Scan reads business data and writes only observations and Findings. It starts
+no worker, claims no jobs and performs no repair. A Finding states that
+something is wrong; deciding what to do about it stays with an operator and is
+recorded through rhinoq findings.
+
+The run is bounded twice, by --max-pages and by --timeout, and each page is
+bounded by the Rule's own limit. Stopping on either budget is a result, not a
+failure: the observations already made stand, and the printed cursor resumes
+the rest.
+
+Examples:
+  rhinoq scan completed-report-has-output
+  rhinoq scan completed-report-has-output --subject report_3912
+  rhinoq scan completed-report-has-output --max-pages 5 --json`)
 	case "rules":
 		fmt.Fprintln(output, `rhinoq rules — operate deterministic integrity Rules
 

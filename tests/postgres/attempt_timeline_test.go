@@ -9,7 +9,7 @@ import (
 
 func TestAttemptTimelinePersistsTerminalEvidence(t *testing.T) {
 	client := newClient(t)
-	id := enqueue(t, client, rhinoq.JobRequest{Name: "timeline", Payload: []byte("{}")})
+	id := enqueue(t, client, rhinoq.JobRequest{QueueName: "timeline", JobName: "timeline", Payload: []byte("{}")})
 	leased := claimOne(t, client, "worker-a")
 	if err := client.CompleteJob(context.Background(), leased.Lease); err != nil {
 		t.Fatal(err)

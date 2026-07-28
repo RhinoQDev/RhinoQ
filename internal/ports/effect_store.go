@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 	"github.com/madebyduy/RhinoQ/internal/domain/effect"
 )
 
@@ -36,6 +37,23 @@ type EffectStore interface {
 // surface.
 type EffectReader interface {
 	ListEffects(ctx context.Context, jobID string, offset, limit int) ([]effect.Record, error)
+}
+
+// ExternalEffectStore is the integrity plane's half of the Effect Ledger: it
+// records and reads effects for executions RhinoQ did not run.
+//
+// It is a separate interface from EffectStore because the guarantees differ,
+// and collapsing them would hide that. EffectStore writes are fenced by a lease
+// epoch; these are not, because an execution RhinoQ never leased has no lease
+// to present. What remains is deduplication on the execution reference plus the
+// idempotency key.
+type ExternalEffectStore interface {
+	BeginExternalEffect(ctx context.Context, record effect.Record) (effect.Record, error)
+	ListSubjectEffects(
+		ctx context.Context,
+		subject correlation.SubjectRef,
+		offset, limit int,
+	) ([]effect.Record, error)
 }
 
 type EffectClock interface {

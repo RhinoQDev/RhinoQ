@@ -108,7 +108,9 @@ export class RhinoQClient {
     const response = await this.send<{ jobs: JobSummary[] }>(
       'GET',
       `/v1/jobs?${queryString({
-        queue: query.queue,
+        queueName: query.queueName,
+        jobName: query.jobName,
+        groupKey: query.groupKey,
         states: query.states?.join(','),
         offset: query.offset,
         limit: query.limit,
@@ -211,7 +213,7 @@ export class RhinoQClient {
     worker: string,
     limit: number,
     leaseForMs = 60_000,
-    queues: string[] = [],
+    queueNames: string[] = [],
   ): Promise<LeasedJob[]> {
     if (!worker) {
       throw new TypeError('worker name is required');
@@ -231,7 +233,7 @@ export class RhinoQClient {
       worker,
       limit,
       leaseForMs,
-      ...(queues.length > 0 ? { queues } : {}),
+      ...(queueNames.length > 0 ? { queueNames } : {}),
     });
     return (response.jobs ?? []).map((job) => ({
       ...job,
@@ -411,8 +413,8 @@ function isNeverHappened(error: unknown): boolean {
 }
 
 function validateEnqueue(request: EnqueueRequest): void {
-  if (!request || !request.name) {
-    throw new TypeError('job name is required');
+  if (!request || !request.queueName || !request.jobName) {
+    throw new TypeError('queueName and jobName are required');
   }
   if (request.runAfterMs !== undefined && (!Number.isFinite(request.runAfterMs) || request.runAfterMs < 0)) {
     throw new RangeError('runAfterMs must be zero or positive');

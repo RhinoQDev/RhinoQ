@@ -4,6 +4,7 @@ package rules
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -183,7 +184,8 @@ func (s *Service) evaluateRecord(
 			SubjectID:                observation.SubjectID,
 			ObservedInvariantVersion: record.Version,
 		}
-		if observation.Violated {
+		switch observation.Status {
+		case rule.Violated:
 			item, err := s.findings.ObserveFinding(ctx, finding.Observation{
 				Key: key, Evidence: observation.Evidence,
 				ObservedAt: evaluation.EvaluatedAt,
@@ -192,17 +194,55 @@ func (s *Service) evaluateRecord(
 				return evaluation, changed, err
 			}
 			changed = append(changed, item)
-			continue
-		}
-		item, didChange, err := s.findings.ObserveFindingPass(
-			ctx, key, evaluation.EvaluatedAt,
-		)
-		if err != nil {
-			return evaluation, changed, err
-		}
-		if didChange {
+
+		case rule.Unknown:
+			// An inconclusive check is not a pass. Resolving a Finding here
+			// would close real drift because a provider happened to be
+			// unreachable, which is the specific mistake a boolean forced.
+			if record.OnUnknown != rule.UnknownOpensFinding {
+				continue
+			}
+			item, err := s.findings.ObserveFinding(ctx, finding.Observation{
+				Key: key, Evidence: unknownEvidence(observation),
+				ObservedAt: evaluation.EvaluatedAt,
+			})
+			if err != nil {
+				return evaluation, changed, err
+			}
 			changed = append(changed, item)
+
+		default:
+			item, didChange, err := s.findings.ObserveFindingPass(
+				ctx, key, evaluation.EvaluatedAt,
+			)
+			if err != nil {
+				return evaluation, changed, err
+			}
+			if didChange {
+				changed = append(changed, item)
+			}
 		}
 	}
 	return evaluation, changed, nil
+}
+
+// unknownEvidence records why the check could not conclude alongside whatever
+// the query returned, so an operator reading the Finding can tell "we looked
+// and it was wrong" apart from "we could not look".
+func unknownEvidence(observation rule.Observation) string {
+	marker, err := json.Marshal(map[string]any{
+		"rhinoqObservation": string(rule.Unknown),
+		"rhinoqReason":      observation.Reason,
+		"evidence":          json.RawMessage(observation.Evidence),
+	})
+	if err != nil {
+		// Evidence that is not valid JSON must not lose the reason with it.
+		fallback, _ := json.Marshal(map[string]any{
+			"rhinoqObservation": string(rule.Unknown),
+			"rhinoqReason":      observation.Reason,
+			"evidence":          observation.Evidence,
+		})
+		return string(fallback)
+	}
+	return string(marker)
 }

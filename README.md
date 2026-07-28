@@ -54,6 +54,60 @@ RhinoQ is not an AI product. It does not need an LLM, an autonomous agent, or
 an external control plane. Rules are deterministic checks written and reviewed
 by developers.
 
+## Choose your entry point
+
+RhinoQ answers two different questions, and they have different audiences.
+Start with the one you actually have.
+
+### A. I want to verify business integrity
+
+You already run work somehow — cron, BullMQ, Temporal, a hand-written worker —
+and you want to know whether the results are actually correct. You do not need
+to adopt a queue for this.
+
+```bash
+go get github.com/madebyduy/RhinoQ/pkg/rhinoq@latest
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
+
+export RHINOQ_DATABASE_URL='postgres://…'
+rhinoq migrate apply
+```
+
+```go
+integrity, err := rhinoq.NewIntegrity(db)
+```
+
+Then: register one Rule → `rhinoq explain` it → enable it → `rhinoq scan` →
+read the Findings.
+
+`NewIntegrity` starts no worker, no claim loop, no heartbeat, no retry
+scheduler, no lease reaper and no recovery executor. Its only long-running
+operation is the Rule scheduler, which claims Rule schedules rather than jobs.
+
+See [Verify business state](./docs/rules.md).
+
+### B. I want to run background jobs
+
+You want the durable queue as well: transactional enqueue, fenced leases,
+retries, cancellation and recovery, with the same integrity layer on top.
+
+```go
+queue, err := rhinoq.NewPostgres(db)
+```
+
+A `*Client` includes everything an `*IntegrityClient` can do, so adopting the
+runtime later does not mean re-registering Rules or losing Findings — they are
+the same records in the same tables.
+
+See [the Go quick start](#go-quick-start) below.
+
+> [!NOTE]
+> `RECOVER` currently means two different things and only one of them is built.
+> **Runtime recovery** — guarded replay of a dead job, with effect checks and an
+> audit chain — exists. **Business repair** — investigate a Finding, propose a
+> fix, check preconditions, dry-run, approve, repair, re-verify — does not.
+> A Finding today tells you something is wrong; acting on it is still manual.
+
 ## Start with the smallest deployment
 
 The default architecture is one Go application and the PostgreSQL database it

@@ -17,7 +17,7 @@ import (
 func TestEffectLedgerIsFencedInSQL(t *testing.T) {
 	client := newClient(t)
 	ctx := context.Background()
-	enqueue(t, client, rhinoq.JobRequest{Name: "charge-card", Payload: []byte("{}")})
+	enqueue(t, client, rhinoq.JobRequest{QueueName: "charge-card", JobName: "charge-card", Payload: []byte("{}")})
 	leased := claimOne(t, client, "worker-1")
 
 	request := rhinoq.EffectRequest{Name: "charge", Key: "charge:1", Irreversible: true}
@@ -52,7 +52,7 @@ func TestEffectLedgerIsFencedInSQL(t *testing.T) {
 func TestAbandonedEffectBecomesUncertain(t *testing.T) {
 	client := newClient(t)
 	ctx := context.Background()
-	enqueue(t, client, rhinoq.JobRequest{Name: "payout", Payload: []byte("{}")})
+	enqueue(t, client, rhinoq.JobRequest{QueueName: "payout", JobName: "payout", Payload: []byte("{}")})
 	leased := claimOne(t, client, "worker-1")
 	request := rhinoq.EffectRequest{Name: "payout", Key: "payout:1", Irreversible: true}
 	if _, err := client.BeginEffect(ctx, leased.Lease, request); err != nil {
@@ -88,7 +88,7 @@ func TestAbandonedEffectBecomesUncertain(t *testing.T) {
 func TestReplayIsRefusedWhileAnEffectIsUncertain(t *testing.T) {
 	client := newClient(t)
 	ctx := context.Background()
-	id := enqueue(t, client, rhinoq.JobRequest{Name: "settle", Payload: []byte("{}")})
+	id := enqueue(t, client, rhinoq.JobRequest{QueueName: "settle", JobName: "settle", Payload: []byte("{}")})
 	leased := claimOne(t, client, "worker-1")
 	if _, err := client.BeginEffect(ctx, leased.Lease, rhinoq.EffectRequest{
 		Name: "settle", Key: "settle:1", Irreversible: true,
@@ -127,7 +127,7 @@ func TestReplayIsRefusedWhileAnEffectIsUncertain(t *testing.T) {
 func TestGuardedReplayWritesAChainedAudit(t *testing.T) {
 	client := newClient(t)
 	ctx := context.Background()
-	id := enqueue(t, client, rhinoq.JobRequest{Name: "report", Payload: []byte("{}")})
+	id := enqueue(t, client, rhinoq.JobRequest{QueueName: "report", JobName: "report", Payload: []byte("{}")})
 	leased := claimOne(t, client, "worker-1")
 	if _, err := client.FailJob(ctx, leased.Lease, rhinoq.FailureReport{
 		RetryClass: rhinoq.RetryPermanent, Message: "bad input",
@@ -181,8 +181,8 @@ func TestSQLEnqueueValidatesItsCaller(t *testing.T) {
 	}
 
 	if _, err := testDB.Exec(`
-		INSERT INTO rhinoq.job_allowlist (job_name, max_payload_bytes, default_priority, default_class)
-		VALUES ('settle-scan-credit', 64, 7, 'critical')`); err != nil {
+		INSERT INTO rhinoq.job_allowlist (job_name, queue_name, max_payload_bytes, default_priority, default_class)
+		VALUES ('settle-scan-credit', 'settlement', 64, 7, 'critical')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -194,8 +194,13 @@ func TestSQLEnqueueValidatesItsCaller(t *testing.T) {
 			correlation_id  => 'SCAN-1')`).Scan(&id); err != nil {
 		t.Fatalf("a registered job must be enqueued: %v", err)
 	}
-	state := jobState(t, client, "settle-scan-credit", id)
-	if state.Priority != 7 || state.Class != rhinoq.ClassCritical || state.CorrelationID != "SCAN-1" {
+	// The lane comes from the allowlist, not from the caller: a producer may
+	// choose what to enqueue, never which execution lane it lands in.
+	state := jobState(t, client, "settlement", id)
+	if state.QueueName != "settlement" || state.JobName != "settle-scan-credit" {
+		t.Fatalf("the allowlist must decide the lane, not the caller: %+v", state)
+	}
+	if state.Priority != 7 || state.ResourceClass != rhinoq.ResourceCritical || state.CorrelationID != "SCAN-1" {
 		t.Fatalf("the allowlist defaults must be applied: %+v", state)
 	}
 
@@ -217,7 +222,8 @@ func TestSQLEnqueueValidatesItsCaller(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "RHINOQ_PAYLOAD_TOO_LARGE") {
 		t.Fatalf("an oversized payload must be refused, got %v", err)
 	}
-	counts, err := client.JobCounts(ctx, "settle-scan-credit")
+	// Counts are per execution lane, and the lane came from the allowlist.
+	counts, err := client.JobCounts(ctx, "settlement")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +233,7 @@ func TestSQLEnqueueValidatesItsCaller(t *testing.T) {
 
 	// A job the SQL function created is ordinary work: a worker claims it.
 	claimed := claimOne(t, client, "worker-1")
-	if claimed.Job.Name != "settle-scan-credit" {
+	if claimed.Job.JobName != "settle-scan-credit" {
 		t.Fatalf("expected the SQL-enqueued job, got %+v", claimed.Job)
 	}
 }
@@ -241,12 +247,12 @@ func TestSQLEnqueueAuthorizesTheInvokingLogin(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testDB.Exec(`
 			REVOKE ALL ON FUNCTION rhinoq.enqueue(
-				text, jsonb, text, text, integer, text, interval, text
+				text, jsonb, text, text, integer, text, interval, text, text
 			) FROM ` + deniedRole)
 		_, _ = testDB.Exec(`REVOKE USAGE ON SCHEMA rhinoq FROM ` + deniedRole)
 		_, _ = testDB.Exec(`
 			REVOKE ALL ON FUNCTION rhinoq.enqueue(
-				text, jsonb, text, text, integer, text, interval, text
+				text, jsonb, text, text, integer, text, interval, text, text
 			) FROM ` + allowedRole)
 		_, _ = testDB.Exec(`REVOKE USAGE ON SCHEMA rhinoq FROM ` + allowedRole)
 		_, _ = testDB.Exec(`DROP ROLE IF EXISTS ` + deniedRole)
@@ -267,15 +273,15 @@ func TestSQLEnqueueAuthorizesTheInvokingLogin(t *testing.T) {
 	}
 	if _, err := testDB.Exec(`
 		GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
-			text, jsonb, text, text, integer, text, interval, text
+			text, jsonb, text, text, integer, text, interval, text, text
 		) TO ` + allowedRole + `, ` + deniedRole); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := testDB.Exec(`
 		INSERT INTO rhinoq.job_allowlist (
-			job_name, producer_role, max_payload_bytes
-		) VALUES ('restricted-report', $1, 1024)`, allowedRole); err != nil {
+			job_name, queue_name, producer_role, max_payload_bytes
+		) VALUES ('restricted-report', 'reports', $1, 1024)`, allowedRole); err != nil {
 		t.Fatal(err)
 	}
 

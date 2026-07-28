@@ -11,7 +11,7 @@ import (
 func TestAttemptTimelineIsAppendOnlyAcrossReleaseAndCompletion(t *testing.T) {
 	ctx := context.Background()
 	client := rhinoq.NewInMemory()
-	id, err := client.Enqueue(ctx, rhinoq.JobRequest{Name: "render-report", Payload: []byte("{}")})
+	id, err := client.Enqueue(ctx, rhinoq.JobRequest{QueueName: "render-report", JobName: "render-report", Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestAttemptTimelineIsAppendOnlyAcrossReleaseAndCompletion(t *testing.T) {
 func TestAttemptTimelineRecordsFailureClassification(t *testing.T) {
 	ctx := context.Background()
 	client := rhinoq.NewInMemory()
-	id, err := client.Enqueue(ctx, rhinoq.JobRequest{Name: "sync-account", Payload: []byte("{}")})
+	id, err := client.Enqueue(ctx, rhinoq.JobRequest{QueueName: "sync-account", JobName: "sync-account", Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}

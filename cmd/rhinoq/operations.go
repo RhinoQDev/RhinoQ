@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,25 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/runtime/shutdown"
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
+
+// openIntegrityClient opens only the verification plane. `rhinoq scan` uses it
+// instead of the full client so the command cannot start a worker, a claim loop
+// or a reaper as a side effect of verifying data.
+func openIntegrityClient(
+	ctx context.Context,
+	getenv func(string) string,
+) (*rhinoq.IntegrityClient, io.Closer, error) {
+	db, err := openDatabase(ctx, getenv)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := rhinoq.NewIntegrity(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
+	return client, db, nil
+}
 
 func openClient(
 	ctx context.Context,
@@ -55,7 +75,7 @@ func runJobs(args []string, getenv func(string) string, output io.Writer) int {
 	}
 	defer closer.Close()
 	jobs, err := client.ListJobs(ctx, rhinoq.JobQuery{
-		Queue: *queue, States: splitCSV(*states), Offset: *offset, Limit: *limit,
+		QueueName: *queue, States: splitCSV(*states), Offset: *offset, Limit: *limit,
 	})
 	if err != nil {
 		return printOperationError(output, err)
@@ -64,10 +84,10 @@ func runJobs(args []string, getenv func(string) string, output io.Writer) int {
 		return printJSON(output, map[string]any{"jobs": jobs})
 	}
 	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "ID\tQUEUE\tSTATE\tATTEMPTS\tPRIORITY\tCORRELATION")
+	fmt.Fprintln(table, "ID\tQUEUE\tJOB\tSTATE\tATTEMPTS\tPRIORITY\tCORRELATION")
 	for _, job := range jobs {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%s\n",
-			job.ID, job.Name, job.State, job.Attempts, job.Priority,
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+			job.ID, job.QueueName, job.JobName, job.State, job.Attempts, job.Priority,
 			emptyDash(job.CorrelationID))
 	}
 	_ = table.Flush()
@@ -465,4 +485,96 @@ func defaultProcessName(component string) string {
 		host = "localhost"
 	}
 	return fmt.Sprintf("%s-%s-%d", host, component, os.Getpid())
+}
+
+// runScan is the first useful thing an evaluator can do with RhinoQ: check one
+// declared invariant against real data and see what it finds. It needs no
+// queue, no worker and no cutover.
+//
+// It deliberately performs no repair. A Finding says something is wrong; what
+// to do about it is an operator decision with its own audit trail.
+func runScan(args []string, getenv func(string) string, output io.Writer) int {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(output, "Usage: rhinoq scan <rule-id> [--subject id] [--cursor c] [--max-pages 100] [--timeout 2m] [--json]")
+		return 2
+	}
+	ruleID := strings.TrimSpace(args[0])
+	if ruleID == "" {
+		fmt.Fprintln(output, "FAIL rule id is required")
+		return 2
+	}
+	flags := flag.NewFlagSet("scan", flag.ContinueOnError)
+	flags.SetOutput(output)
+	subject := flags.String("subject", "", "verify a single business subject")
+	cursor := flags.String("cursor", "", "resume an incomplete scan")
+	maxPages := flags.Int("max-pages", rhinoq.DefaultScanMaxPages, "page budget for this run")
+	timeout := flags.Duration("timeout", 2*time.Minute, "wall-clock budget for this run")
+	asJSON := flags.Bool("json", false, "print JSON")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(output, "FAIL scan accepts exactly one rule id")
+		return 2
+	}
+	if *timeout <= 0 {
+		fmt.Fprintln(output, "FAIL --timeout must be positive")
+		return 2
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	client, closer, err := openIntegrityClient(ctx, getenv)
+	if err != nil {
+		return printOperationError(output, err)
+	}
+	defer closer.Close()
+
+	summary, err := client.Scan(ctx, rhinoq.ScanRequest{
+		RuleID: ruleID, SubjectID: strings.TrimSpace(*subject),
+		Cursor: *cursor, MaxPages: *maxPages,
+	})
+	// A scan stopped by its own timeout is a bounded result, not a failure: the
+	// observations it already committed stand, and the cursor resumes the rest.
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return printOperationError(output, err)
+	}
+	if *asJSON {
+		return printJSON(output, map[string]any{"scan": summary})
+	}
+	printScanSummary(output, summary, errors.Is(err, context.DeadlineExceeded))
+	return 0
+}
+
+func printScanSummary(output io.Writer, summary rhinoq.ScanSummary, timedOut bool) {
+	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(table, "Rule:\t%s\n", summary.RuleID)
+	fmt.Fprintf(table, "Pages:\t%d\n", summary.Pages)
+	fmt.Fprintf(table, "Observed:\t%d\n", summary.Observed)
+	fmt.Fprintf(table, "Passed:\t%d\n", summary.Passed)
+	fmt.Fprintf(table, "Violated:\t%d\n", summary.Violated)
+	fmt.Fprintf(table, "Findings touched:\t%d\n", summary.Findings)
+	fmt.Fprintf(table, "Duration:\t%s\n", summary.FinishedAt.Sub(summary.StartedAt).Round(time.Millisecond))
+	switch {
+	case timedOut:
+		fmt.Fprintf(table, "Status:\tstopped on the time budget\n")
+	case summary.HasMore:
+		fmt.Fprintf(table, "Status:\tstopped on the page budget\n")
+	default:
+		fmt.Fprintf(table, "Status:\tcomplete\n")
+	}
+	_ = table.Flush()
+	if summary.HasMore {
+		fmt.Fprintf(output, "\nResume with:\n  rhinoq scan %s --cursor %s\n",
+			summary.RuleID, summary.NextCursor)
+	}
+	if summary.Unknown > 0 {
+		fmt.Fprintf(output,
+			"\n%d subject(s) could not be checked. Unknown is not a pass:\n"+
+				"  rhinoq scan %s --json    # every observation carries its reason\n",
+			summary.Unknown, summary.RuleID)
+	}
+	if summary.Violated > 0 {
+		fmt.Fprintf(output, "\nInspect what was found:\n  rhinoq findings list --rule %s\n", summary.RuleID)
+	}
 }

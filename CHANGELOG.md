@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- Effects no longer require a RhinoQ job. A new correlation model gives every
+  entry a `SubjectRef` and an `ExecutionRef`, and a RhinoQ job id becomes one
+  kind of execution reference rather than a precondition, so a team running
+  BullMQ, Temporal or cron can record what its worker did and read it back by
+  business subject. The external path is explicitly weaker: without a lease
+  nothing can fence it, so deduplication rests on the execution reference plus
+  the idempotency key, and recording a RhinoQ execution through it is refused
+  rather than silently accepted.
+
+- Rule observations are three-state: passed, violated and unknown. The query's
+  `violated` column is now nullable — `NULL` means the check could not decide —
+  with an optional `unknown_reason` column and a per-Rule `OnUnknown` policy
+  (`retry` by default, or `finding`). An unknown never resolves a Finding,
+  which a boolean made impossible to avoid: a provider timeout was
+  indistinguishable from a pass and silently closed real drift.
+
+- Added `rhinoq.NewIntegrity(db)` and `rhinoq scan`, an entry point that
+  verifies business invariants without adopting the queue. The facade starts no
+  worker, claim loop, heartbeat, retry scheduler, lease reaper or recovery
+  executor, and a regression test asserts its method set stays free of runtime
+  operations. `*Client` embeds it, so a deployment that adds the runtime later
+  keeps the Rules and Findings it already registered.
+- Claim now takes a batch in exactly one round trip. It previously cost three
+  statements plus one per distinct execution lane, with the per-lane rate
+  reservations running inside the window where candidate rows were already
+  locked. Rate slots are also reserved from what was actually claimed rather
+  than from the over-fetched candidate set.
+- Bounded the lease reaper. `RequeueExpired` had no LIMIT, so a mass expiry
+  locked and rewrote every expired row in one statement. It now reaps bounded
+  batches and the sweep drains them within a time budget, exposed as
+  `RHINOQ_REAP_BATCH_LIMIT` and `RHINOQ_REAP_SWEEP_BUDGET`.
+- Made the outbox set-based and fixed a durability bug it exposed: a publisher
+  that failed or died mid-batch left its events claimed and unpublished
+  forever, because the claim filter skipped claimed rows and nothing ever
+  cleared them.
+
 - Licensed the project under Apache-2.0 and recorded the decision as ADR-0013.
   The repository previously carried no license, which left it "all rights
   reserved" and made any external use, fork or redistribution legally

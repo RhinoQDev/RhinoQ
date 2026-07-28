@@ -130,7 +130,7 @@ func TestNeedsAttentionCombinesExecutionEffectAndOutcomeFindings(t *testing.T) {
 
 func leasedJobFixture(t *testing.T, jobs *memory.JobStore, now time.Time, name string) (job.ID, ports.Lease) {
 	t.Helper()
-	id, err := jobs.Enqueue(context.Background(), ports.EnqueueInput{Name: name, Payload: []byte("{}")})
+	id, err := jobs.Enqueue(context.Background(), ports.EnqueueInput{Identity: job.Identity{QueueName: name, JobName: name}, Payload: []byte("{}")})
 	if err != nil {
 		t.Fatal(err)
 	}
