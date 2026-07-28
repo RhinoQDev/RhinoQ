@@ -20,6 +20,7 @@ useful until Rules and Findings work on at least one real business subject.
 - [x] transactional SQL enqueue
 - [x] queue-filtered claims for heterogeneous worker processes
 - [x] Node.js producer/worker/operator SDK preview with automated tests
+- [x] embedded read-only developer Workbench with demo/live PostgreSQL modes
 
 ## v0.1 — Integrity Slice
 
@@ -76,7 +77,7 @@ requiring the application's current queue to be replaced.
 
 ## Later, after design-partner evidence
 
-- [ ] Console Queues and Findings screens with correlation timeline
+- [ ] business-key correlation timeline and guarded, audited browser actions
 - [ ] gRPC/Unix-socket gateway transport, only after real polyglot demand
 - [ ] NestJS lifecycle integration after the framework-neutral Node SDK is validated
 - [ ] retention and partition sweeper

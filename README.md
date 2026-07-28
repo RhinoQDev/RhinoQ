@@ -298,12 +298,38 @@ after a crash, while owner/epoch fencing prevents a stale scheduler from
 advancing the Rule. Disabling a Rule prevents future claims but allows a page
 already claimed under that immutable version to finish.
 
-## Operate without a dashboard
+## Use the developer Workbench or CLI
 
-The CLI connects directly to PostgreSQL. List commands omit job payloads by
-default so an operator view does not become an accidental data-export path.
-Bounded list and inbox commands support `--limit` and `--offset` for predictable
-pagination.
+RhinoQ includes a lightweight local developer interface embedded in the Go
+CLI. It binds to `127.0.0.1`, opens the system browser, reads through the public
+RhinoQ facade, and never sends database credentials or job payloads to the
+browser.
+
+Try the complete interface with local sample data:
+
+```bash
+go run ./cmd/rhinoq workbench --demo
+```
+
+Use the configured PostgreSQL database:
+
+```bash
+rhinoq workbench
+rhinoq workbench --queue generate-report
+rhinoq workbench --no-open --port 8787
+```
+
+The Workbench is a read-only v0 developer tool, not a hosted admin panel. Its
+Execution Worktable, COMMIT/RUN/VERIFY/RECOVER Flow Lens, Needs Attention view,
+and per-job Evidence Rail keep request acceptance, effect confirmation and
+outcome evidence visibly separate. Search, queue/state/stage lenses,
+configurable columns, table density, light/dark themes and keyboard navigation
+are included. There is no Node frontend server, external font, icon package or
+telemetry script.
+
+The CLI remains the automation and explicit-write surface. It connects directly
+to PostgreSQL; list commands omit job payloads by default and use bounded
+`--limit`/`--offset` pagination.
 
 ```bash
 rhinoq doctor --ci
@@ -423,6 +449,8 @@ Implemented and covered by automated tests:
 - unified Needs Attention inbox;
 - guarded replay and tamper-evident replay audit;
 - direct PostgreSQL migration, diagnostics, inspection, and control CLI;
+- embedded loopback-only developer Workbench with demo/live modes, payload-free
+  tables, Needs Attention, Findings, Rules and per-job evidence;
 - transactional SQL enqueue and an optional authenticated HTTP gateway;
 - Node.js producer, worker and operator preview with queue-filtered claims,
   typed errors, external effect confirmation, request timeouts and graceful
@@ -457,6 +485,7 @@ internal/
   adapters/             memory and PostgreSQL implementations
   runtime/              worker, lease, scheduler, shutdown, supervisor
   infrastructure/       configuration, health, migrations
+  interfaces/           optional HTTP gateway and local developer Workbench
 pkg/rhinoq/             public embedded Go API
 proto/rhinoq/v1/        versioned transport contracts
 sdks/node/              Node producer, worker and operator preview
@@ -478,6 +507,7 @@ boundary.
 | [Configuration](./docs/configuration.md) | environment and runtime tuning |
 | [PostgreSQL](./docs/postgres.md) | schema lifecycle, pools, query costs |
 | [Operations](./docs/operations.md) | queue controls, shutdown, rate limits |
+| [Developer Workbench](./docs/workbench.md) | local browser UI, evidence model, safety and shortcuts |
 | [Recovery](./docs/recovery.md) | Needs Attention, Findings, replay, audit |
 | [Integrity Rules](./docs/rules.md) | Rule contract, Explain, evaluation, scheduler |
 | [Failure semantics](./docs/failure-semantics.md) | retry and Effect Ledger decisions |

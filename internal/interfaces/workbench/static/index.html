@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-density="compact">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="RhinoQ Workbench — a local developer interface for background work and business integrity evidence.">
+  <title>RhinoQ Workbench</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <button class="mobile-nav-button icon-button" id="mobile-nav-button" type="button" aria-label="Open navigation">☰</button>
+      <a class="brand" href="/" aria-label="RhinoQ Workbench home">
+        <span class="brand-mark" aria-hidden="true"><span>R</span></span>
+        <span class="brand-copy">
+          <strong>RHINOQ</strong>
+          <span>WORKBENCH</span>
+        </span>
+      </a>
+      <div class="topbar-divider" aria-hidden="true"></div>
+      <div class="workspace-switcher">
+        <span class="workspace-dot"></span>
+        <span id="source-label">Connecting…</span>
+        <span class="environment-pill" id="source-mode">LOCAL</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="command-trigger" id="command-trigger" type="button" aria-haspopup="dialog">
+          <span>Jump or run a view</span>
+          <kbd>⌘ K</kbd>
+        </button>
+        <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">
+          <span aria-hidden="true" id="theme-icon">◐</span>
+        </button>
+        <a class="docs-link" href="https://github.com/madebyduy/RhinoQ" target="_blank" rel="noreferrer">Docs ↗</a>
+      </div>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-scroll">
+        <p class="sidebar-label">Workspace</p>
+        <nav class="primary-nav" aria-label="Workbench views">
+          <button class="nav-item is-active" type="button" data-view="jobs">
+            <span class="nav-symbol nav-symbol-jobs" aria-hidden="true"></span>
+            <span>Execution worktable</span>
+            <span class="nav-count" id="jobs-count">—</span>
+          </button>
+          <button class="nav-item" type="button" data-view="attention">
+            <span class="nav-symbol nav-symbol-attention" aria-hidden="true"></span>
+            <span>Needs attention</span>
+            <span class="nav-count nav-count-alert" id="attention-count">—</span>
+          </button>
+          <button class="nav-item" type="button" data-view="findings">
+            <span class="nav-symbol nav-symbol-findings" aria-hidden="true"></span>
+            <span>Integrity findings</span>
+            <span class="nav-count" id="findings-count">—</span>
+          </button>
+          <button class="nav-item" type="button" data-view="rules">
+            <span class="nav-symbol nav-symbol-rules" aria-hidden="true"></span>
+            <span>Rules</span>
+            <span class="nav-count" id="rules-count">—</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">
+            <p class="sidebar-label">Queues in view</p>
+            <button class="plain-icon-button" id="clear-queue" type="button" title="Clear queue filter" aria-label="Clear queue filter">×</button>
+          </div>
+          <div class="queue-list" id="queue-list">
+            <div class="queue-skeleton"></div>
+            <div class="queue-skeleton short"></div>
+            <div class="queue-skeleton"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="safety-note">
+          <span class="lock-mark" aria-hidden="true"></span>
+          <div>
+            <strong>Read-only session</strong>
+            <span>No payload export or silent replay</span>
+          </div>
+        </div>
+        <div class="estimate-note">
+          <span>Drain estimate</span>
+          <strong>Unavailable</strong>
+          <small>Mixed durations · no false precision</small>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <section class="page-heading">
+        <div>
+          <p class="eyebrow" id="view-eyebrow">EXECUTION</p>
+          <h1 id="view-title">Execution worktable</h1>
+          <p id="view-description">Trace queued work from durable commit to business evidence.</p>
+        </div>
+        <div class="heading-actions">
+          <span class="connection-state"><span class="connection-dot"></span><span id="connection-label">Local connection</span></span>
+          <button class="secondary-button" id="refresh-button" type="button">
+            <span class="refresh-glyph" aria-hidden="true">↻</span>
+            Refresh
+          </button>
+        </div>
+      </section>
+
+      <section class="flow-lens" aria-label="RhinoQ execution and integrity stages">
+        <button class="flow-step" type="button" data-stage="commit">
+          <span class="flow-index">01</span>
+          <span class="flow-copy"><strong>COMMIT</strong><small>Durable intent</small></span>
+          <span class="flow-value" id="flow-commit">—</span>
+        </button>
+        <span class="flow-connector" aria-hidden="true"></span>
+        <button class="flow-step" type="button" data-stage="run">
+          <span class="flow-index">02</span>
+          <span class="flow-copy"><strong>RUN</strong><small>Execution state</small></span>
+          <span class="flow-value" id="flow-run">—</span>
+        </button>
+        <span class="flow-connector" aria-hidden="true"></span>
+        <button class="flow-step" type="button" data-stage="verify">
+          <span class="flow-index">03</span>
+          <span class="flow-copy"><strong>VERIFY</strong><small>Business evidence</small></span>
+          <span class="flow-value" id="flow-verify">—</span>
+        </button>
+        <span class="flow-connector" aria-hidden="true"></span>
+        <button class="flow-step" type="button" data-stage="recover">
+          <span class="flow-index">04</span>
+          <span class="flow-copy"><strong>RECOVER</strong><small>Human decision</small></span>
+          <span class="flow-value attention-value" id="flow-recover">—</span>
+        </button>
+      </section>
+
+      <section class="worktable">
+        <div class="worktable-toolbar">
+          <div class="search-wrap">
+            <span class="search-glyph" aria-hidden="true"></span>
+            <input id="search-input" type="search" autocomplete="off" placeholder="Search job, queue, correlation…" aria-label="Search current view">
+            <kbd>/</kbd>
+          </div>
+          <div class="filter-row" id="state-filters" aria-label="State filters">
+            <button class="filter-chip is-active" type="button" data-state="">All</button>
+            <button class="filter-chip" type="button" data-state="active">Active</button>
+            <button class="filter-chip" type="button" data-state="succeeded">Succeeded</button>
+            <button class="filter-chip" type="button" data-state="attention">Attention</button>
+          </div>
+          <div class="toolbar-spacer"></div>
+          <div class="toolbar-menu-wrap">
+            <button class="toolbar-button" id="density-button" type="button" aria-expanded="false">
+              Density <span aria-hidden="true">⌄</span>
+            </button>
+            <div class="toolbar-menu" id="density-menu" hidden>
+              <button type="button" data-density-value="compact"><span>Compact</span><small>More rows</small></button>
+              <button type="button" data-density-value="comfortable"><span>Comfortable</span><small>More context</small></button>
+            </div>
+          </div>
+          <div class="toolbar-menu-wrap">
+            <button class="toolbar-button" id="columns-button" type="button" aria-expanded="false">
+              Columns <span aria-hidden="true">⌄</span>
+            </button>
+            <div class="toolbar-menu columns-menu" id="columns-menu" hidden>
+              <p>Visible columns</p>
+              <label><input type="checkbox" data-column-toggle="correlation" checked> Correlation</label>
+              <label><input type="checkbox" data-column-toggle="stage" checked> Stage</label>
+              <label><input type="checkbox" data-column-toggle="attempts" checked> Attempts</label>
+              <label><input type="checkbox" data-column-toggle="priority" checked> Priority</label>
+              <label><input type="checkbox" data-column-toggle="created" checked> Created</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="active-context" id="active-context" hidden>
+          <span id="active-context-copy"></span>
+          <button id="clear-context" type="button">Clear filter</button>
+        </div>
+
+        <div class="table-scroll" id="table-scroll">
+          <table class="data-table" id="data-table">
+            <thead id="table-head"></thead>
+            <tbody id="table-body"></tbody>
+          </table>
+          <div class="table-state" id="table-loading">
+            <span class="loading-mark"></span>
+            <strong>Loading local evidence</strong>
+            <small>RhinoQ never exports payloads into this view.</small>
+          </div>
+          <div class="table-state" id="table-empty" hidden>
+            <span class="empty-mark" aria-hidden="true">Q</span>
+            <strong>No rows match this lens</strong>
+            <small>Clear the filter or search another correlation id.</small>
+            <button class="secondary-button" id="empty-clear" type="button">Clear filters</button>
+          </div>
+        </div>
+
+        <footer class="table-footer">
+          <span id="row-summary">Loading…</span>
+          <span class="keyboard-help"><kbd>J</kbd><kbd>K</kbd> move <kbd>Enter</kbd> inspect <kbd>Esc</kbd> close</span>
+          <span id="generated-at">—</span>
+        </footer>
+      </section>
+    </main>
+
+    <aside class="evidence-rail" id="evidence-rail" aria-label="Selected job evidence">
+      <div class="rail-empty" id="rail-empty">
+        <span class="rail-horn" aria-hidden="true"></span>
+        <p class="eyebrow">EVIDENCE RAIL</p>
+        <h2>Select a row to inspect</h2>
+        <p>Execution facts, effects and business outcomes stay separate here.</p>
+        <div class="rail-shortcuts">
+          <span><kbd>J</kbd><kbd>K</kbd> select</span>
+          <span><kbd>Enter</kbd> open</span>
+        </div>
+      </div>
+      <div class="rail-content" id="rail-content" hidden>
+        <header class="rail-header">
+          <div>
+            <p class="eyebrow" id="rail-queue">QUEUE</p>
+            <h2 id="rail-title">Job details</h2>
+          </div>
+          <button class="icon-button rail-close" id="rail-close" type="button" aria-label="Close evidence rail">×</button>
+        </header>
+        <div class="rail-id-row">
+          <code id="rail-id"></code>
+          <button class="copy-button" id="copy-job-id" type="button">Copy ID</button>
+        </div>
+        <div class="rail-scroll">
+          <section class="truth-separation" aria-label="Request, effect and outcome separation">
+            <div class="truth-node">
+              <span class="truth-status" id="truth-request"></span>
+              <div><strong>Request accepted</strong><small id="truth-request-copy">Recorded durably</small></div>
+            </div>
+            <span class="truth-not-equal">≠</span>
+            <div class="truth-node">
+              <span class="truth-status" id="truth-effect"></span>
+              <div><strong>Effect confirmed</strong><small id="truth-effect-copy">Not declared</small></div>
+            </div>
+            <span class="truth-not-equal">≠</span>
+            <div class="truth-node">
+              <span class="truth-status" id="truth-outcome"></span>
+              <div><strong>Outcome achieved</strong><small id="truth-outcome-copy">Not declared</small></div>
+            </div>
+          </section>
+
+          <section class="rail-section">
+            <div class="rail-section-heading">
+              <h3>Job context</h3>
+              <span class="state-badge" id="rail-state"></span>
+            </div>
+            <dl class="detail-grid" id="job-context"></dl>
+          </section>
+
+          <section class="rail-section">
+            <div class="rail-section-heading">
+              <h3>Execution timeline</h3>
+              <span id="attempt-total">0 events</span>
+            </div>
+            <ol class="timeline" id="attempt-timeline"></ol>
+          </section>
+
+          <section class="rail-section">
+            <div class="rail-section-heading">
+              <h3>Declared effects</h3>
+              <span id="effect-total">0 effects</span>
+            </div>
+            <div class="evidence-list" id="effect-list"></div>
+          </section>
+
+          <section class="rail-section">
+            <div class="rail-section-heading">
+              <h3>Outcome evidence</h3>
+              <span id="outcome-total">0 observations</span>
+            </div>
+            <div class="evidence-list" id="outcome-list"></div>
+          </section>
+
+          <section class="rail-section" id="audit-section">
+            <div class="rail-section-heading">
+              <h3>Decision audit</h3>
+              <span id="audit-total">0 entries</span>
+            </div>
+            <div class="evidence-list" id="audit-list"></div>
+          </section>
+
+          <div class="rail-notice" id="rail-notice"></div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="mobile-scrim" id="mobile-scrim" hidden></div>
+  </div>
+
+  <dialog class="command-palette" id="command-palette">
+    <form method="dialog">
+      <div class="palette-search">
+        <span class="search-glyph" aria-hidden="true"></span>
+        <input id="palette-input" type="search" autocomplete="off" placeholder="Type a view or action…">
+        <kbd>Esc</kbd>
+      </div>
+      <div class="palette-results" id="palette-results"></div>
+      <footer>
+        <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+        <span><kbd>Enter</kbd> run</span>
+        <span>Local, read-only</span>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

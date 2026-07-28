@@ -13,6 +13,7 @@ import (
 )
 
 var _ ports.EffectStore = (*EffectStore)(nil)
+var _ ports.EffectReader = (*EffectStore)(nil)
 
 type EffectStore struct {
 	db *sql.DB
@@ -86,6 +87,40 @@ func (s *EffectStore) GetEffect(ctx context.Context, jobID, name, idempotencyKey
 		return effect.Record{}, false, nil
 	}
 	return record, err == nil, err
+}
+
+func (s *EffectStore) ListEffects(
+	ctx context.Context,
+	jobID string,
+	offset, limit int,
+) ([]effect.Record, error) {
+	if jobID == "" || offset < 0 || limit <= 0 || limit > 1000 {
+		return nil, errors.New("job id, non-negative offset and limit between 1 and 1000 are required")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, job_id, name, idempotency_key, state, irreversible,
+		       COALESCE(external_ref, ''), created_at, lease_epoch
+		FROM rhinoq_effects
+		WHERE job_id = $1
+		ORDER BY created_at, id
+		LIMIT $2 OFFSET $3`, jobID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := make([]effect.Record, 0, limit)
+	for rows.Next() {
+		var record effect.Record
+		if err := rows.Scan(
+			&record.ID, &record.JobID, &record.Name, &record.IdempotencyKey,
+			&record.State, &record.Irreversible, &record.ExternalRef,
+			&record.CreatedAt, &record.LeaseEpoch,
+		); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 // ConfirmEffect records a worker-authored transition and is fenced for the same

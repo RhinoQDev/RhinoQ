@@ -29,5 +29,6 @@ RhinoQ là PostgreSQL job queue có business-integrity workflow: tương quan in
 Đã có Go engine/domain/application/ports, PostgreSQL adapter, worker runtime,
 Rule scheduler, Finding inbox và CLI vận hành trực tiếp. Node SDK preview có
 producer SQL, typed Gateway client và high-level worker với queue-filtered
-claim. Package npm, Console, scan/correlation và protocol generation chưa hoàn
-thiện.
+claim. Local read-only Workbench đã có jobs, evidence, Needs Attention,
+Findings và Rules. Package npm, production Console, scan/correlation và protocol
+generation chưa hoàn thiện.

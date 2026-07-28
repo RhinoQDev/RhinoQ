@@ -201,6 +201,19 @@ rhinoq explain ready-report-has-output
 Các list command không trả payload mặc định. `attention` gộp lỗi execution,
 effect uncertain, outcome mismatch và Finding đang sống.
 
+Mở Workbench local để xem cùng dữ liệu theo bảng dành cho developer:
+
+```bash
+rhinoq workbench
+
+# Không cần PostgreSQL khi chỉ muốn thử giao diện:
+rhinoq workbench --demo
+```
+
+Workbench chỉ bind `127.0.0.1`, tự mở browser mặc định, không trả payload và
+hiện chỉ read-only. CLI vẫn là bề mặt automation và write action có chủ ý.
+Xem [workbench.md](./workbench.md).
+
 ## Hai đường tích hợp khác
 
 - Chỉ cần enqueue từ service khác ngôn ngữ: dùng hàm SQL

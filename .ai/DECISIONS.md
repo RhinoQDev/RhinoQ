@@ -110,6 +110,24 @@
   nâng Gateway thành deployment chính mà không đổi domain/port contract.
 - **Owner:** product + engine
 
+## ADR-0011 — Workbench local, read-only và embed trong Go binary
+
+- **Status:** accepted
+- **Context:** developer cần xem job/effect/outcome nhanh nhưng một hosted
+  Console tạo thêm process, auth, deployment và frontend dependency trước khi có
+  design-partner evidence.
+- **Decision:** `rhinoq workbench` bind `127.0.0.1`, embed static assets và gọi
+  public application facade qua một Reader read-only. Browser contract bounded,
+  không chứa payload/credential; v0 không có write action.
+- **Alternatives:** React/Vite service riêng bị loại ở v0 vì tăng install/runtime
+  cost; query trực tiếp PostgreSQL từ HTTP bị loại vì phá layer boundary.
+- **Consequences:** Go CLI là cách mở UI cho cả Go và Node adopter; production
+  Console/auth/RBAC vẫn là scope riêng. Browser mutation tương lai phải đi qua
+  application use case với actor, reason và audit.
+- **Rollback:** có thể bỏ command/embedded assets mà không đổi domain, storage
+  schema hoặc worker runtime.
+- **Owner:** DX + engine
+
 ## Template cho ADR mới
 
 ```text

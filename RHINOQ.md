@@ -1455,6 +1455,13 @@ Parse cron dùng `cron-parser`, không tự viết.
 
 Bản trước nói _"không có queue depth, chỉ có việc cần xử lý"_ — **hơi cực đoan**. Người vận hành vẫn cần biết queue có đang nghẽn hay không, và nếu Console không trả lời được thì họ phải cài thêm một dashboard chỉ để biết điều đó.
 
+> **Trạng thái implementation:** `rhinoq workbench` hiện là local developer UI
+> read-only, bind `127.0.0.1`, với Execution Worktable, Needs Attention,
+> Findings, Rules và Evidence Rail theo từng job. Nó chưa phải production
+> Console trong đặc tả bên dưới: chưa có remote hosting/auth/RBAC, queue
+> throughput/drain telemetry, business-key timeline hoặc browser write action.
+> Xem `docs/workbench.md`.
+
 | Màn hình                 | Trả lời câu gì                      | Ai dùng      |
 | ------------------------ | ----------------------------------- | ------------ |
 | **1. Queues**            | Hệ thống có đang nghẽn không?       | ops, dev     |
@@ -1905,6 +1912,10 @@ thế database fencing counter.
 ---
 
 ## 36. Console auth và RBAC
+
+Phần này áp dụng cho production Console có thể remote/multi-user trong tương
+lai. Workbench v0 chỉ bind loopback và read-only nên không được quảng bá như một
+Console đã giải quyết auth/RBAC; nó không có browser write action.
 
 Production thiếu auth → **Console không mount** + security error rõ ràng trong log. **Application vẫn boot bình thường.**
 

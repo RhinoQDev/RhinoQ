@@ -15,6 +15,7 @@ import (
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
 	"github.com/rhinoq/rhinoq/internal/domain/attempt"
 	"github.com/rhinoq/rhinoq/internal/domain/job"
+	"github.com/rhinoq/rhinoq/internal/domain/outcome"
 	"github.com/rhinoq/rhinoq/internal/domain/recovery"
 	"github.com/rhinoq/rhinoq/internal/domain/retry"
 	"github.com/rhinoq/rhinoq/internal/domain/rule"
@@ -41,6 +42,7 @@ type Job struct {
 type Handler func(context.Context, Job) error
 
 var (
+	ErrJobNotFound            = ports.ErrJobNotFound
 	ErrReplayInvalidRequest   = recovery.ErrInvalidReplayRequest
 	ErrReplayInvalidState     = recovery.ErrReplayState
 	ErrReplayConfirmedEffect  = recovery.ErrConfirmedEffect
@@ -154,6 +156,30 @@ type AttemptEvent struct {
 	OccurredAt    time.Time `json:"occurredAt"`
 }
 
+// EffectEvidence is one declared external effect attached to a job.
+type EffectEvidence struct {
+	ID             string    `json:"id"`
+	JobID          string    `json:"jobId"`
+	Name           string    `json:"name"`
+	IdempotencyKey string    `json:"idempotencyKey"`
+	State          string    `json:"state"`
+	Irreversible   bool      `json:"irreversible"`
+	ExternalRef    string    `json:"externalRef,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	LeaseEpoch     int64     `json:"leaseEpoch"`
+}
+
+// OutcomeEvidence is one versioned observation of a declared business result.
+type OutcomeEvidence struct {
+	ID              string    `json:"id"`
+	JobID           string    `json:"jobId"`
+	ContractVersion int       `json:"contractVersion"`
+	State           string    `json:"state"`
+	Reason          string    `json:"reason,omitempty"`
+	ObservedVersion int64     `json:"observedVersion"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
 // AdmissionPolicy is the producer backpressure budget for one queue.
 type AdmissionPolicy struct {
 	// MaxPending is how many pending and retrying jobs the queue may hold.
@@ -247,6 +273,7 @@ func (c WorkerConfig) withDefaults() WorkerConfig {
 type Client struct {
 	store         ports.JobStore
 	effects       ports.EffectStore
+	outcomes      ports.OutcomeStore
 	recovery      ports.RecoveryStore
 	findings      ports.FindingStore
 	rules         ports.RuleStore
@@ -286,7 +313,7 @@ func NewInMemory() *Client {
 		panic(err)
 	}
 	return &Client{
-		store: jobs, effects: effects, recovery: recoveryStore,
+		store: jobs, effects: effects, outcomes: outcomes, recovery: recoveryStore,
 		findings: findingStore, rules: ruleStore,
 		ruleSchedules: ruleStore,
 		handlers:      worker.NewHandlerRegistry(),
@@ -299,6 +326,10 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 		return nil, err
 	}
 	effects, err := postgres.NewEffectStore(db)
+	if err != nil {
+		return nil, err
+	}
+	outcomes, err := postgres.NewOutcomeStore(db)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +354,7 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		store: store, effects: effects, recovery: recoveryStore,
+		store: store, effects: effects, outcomes: outcomes, recovery: recoveryStore,
 		findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
 		ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
 		handlers: worker.NewHandlerRegistry(),
@@ -334,6 +365,9 @@ func NewWithStore(store ports.JobStore) *Client {
 	client := &Client{store: store, handlers: worker.NewHandlerRegistry()}
 	if recoveryStore, ok := store.(ports.RecoveryStore); ok {
 		client.recovery = recoveryStore
+	}
+	if outcomeStore, ok := store.(ports.OutcomeStore); ok {
+		client.outcomes = outcomeStore
 	}
 	if findingStore, ok := store.(ports.FindingStore); ok {
 		client.findings = findingStore
@@ -518,6 +552,24 @@ func (c *Client) ListJobs(ctx context.Context, query JobQuery) ([]JobSummary, er
 	return summaries, nil
 }
 
+// GetJob returns one payload-free job summary for inspection.
+func (c *Client) GetJob(ctx context.Context, id string) (JobSummary, error) {
+	if c == nil || c.store == nil {
+		return JobSummary{}, errors.New("rhinoq store is required")
+	}
+	if id == "" {
+		return JobSummary{}, errors.New("job id is required")
+	}
+	record, found, err := c.store.Get(ctx, ports.JobID(id))
+	if err != nil {
+		return JobSummary{}, err
+	}
+	if !found {
+		return JobSummary{}, ports.ErrJobNotFound
+	}
+	return summarizeJob(record), nil
+}
+
 func (c *Client) JobCounts(ctx context.Context, queue string) (map[string]int64, error) {
 	if c == nil || c.store == nil {
 		return nil, errors.New("rhinoq store is required")
@@ -552,6 +604,60 @@ func (c *Client) AttemptTimeline(ctx context.Context, id string, offset, limit i
 	result := make([]AttemptEvent, 0, len(events))
 	for _, event := range events {
 		result = append(result, summarizeAttempt(event))
+	}
+	return result, nil
+}
+
+// ListEffectEvidence returns bounded Effect Ledger entries in creation order.
+// It reports current ledger state; effect transition history is not implied.
+func (c *Client) ListEffectEvidence(ctx context.Context, id string, offset, limit int) ([]EffectEvidence, error) {
+	if c == nil || c.effects == nil {
+		return nil, ErrEffectLedgerMissing
+	}
+	if limit == 0 {
+		limit = 50
+	}
+	reader, ok := c.effects.(ports.EffectReader)
+	if !ok {
+		return nil, errors.New("rhinoq effect inspection is not configured")
+	}
+	records, err := reader.ListEffects(ctx, id, offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]EffectEvidence, 0, len(records))
+	for _, record := range records {
+		result = append(result, EffectEvidence{
+			ID: string(record.ID), JobID: record.JobID, Name: record.Name,
+			IdempotencyKey: record.IdempotencyKey, State: string(record.State),
+			Irreversible: record.Irreversible, ExternalRef: record.ExternalRef,
+			CreatedAt: record.CreatedAt, LeaseEpoch: record.LeaseEpoch,
+		})
+	}
+	return result, nil
+}
+
+// ListOutcomeEvidence returns bounded current verification evidence ordered by
+// contract version. Execution success is intentionally not treated as an
+// achieved outcome, and this API does not imply append-only observation history.
+func (c *Client) ListOutcomeEvidence(ctx context.Context, id string, offset, limit int) ([]OutcomeEvidence, error) {
+	if c == nil || c.outcomes == nil {
+		return nil, errors.New("rhinoq outcome store is not configured")
+	}
+	if limit == 0 {
+		limit = 50
+	}
+	reader, ok := c.outcomes.(ports.OutcomeReader)
+	if !ok {
+		return nil, errors.New("rhinoq outcome inspection is not configured")
+	}
+	records, err := reader.ListOutcomes(ctx, id, offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]OutcomeEvidence, 0, len(records))
+	for _, record := range records {
+		result = append(result, summarizeOutcome(record))
 	}
 	return result, nil
 }
@@ -712,5 +818,14 @@ func summarizeAttempt(event attempt.Event) AttemptEvent {
 		Kind: string(event.Kind), ResultState: event.ResultState.String(),
 		FailureClass: event.FailureClass, BlockedReason: string(event.BlockedReason),
 		OccurredAt: event.OccurredAt,
+	}
+}
+
+func summarizeOutcome(record outcome.Record) OutcomeEvidence {
+	return OutcomeEvidence{
+		ID: record.ID, JobID: record.JobID,
+		ContractVersion: record.ContractVersion, State: string(record.State),
+		Reason: record.Reason, ObservedVersion: record.ObservedVersion,
+		UpdatedAt: record.UpdatedAt,
 	}
 }

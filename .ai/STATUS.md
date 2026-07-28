@@ -11,7 +11,7 @@ differentiator.
 | VERIFY | 4/5 | fenced Effect Ledger, versioned Rules, Explain gate, bounded evaluation and crash-safe periodic scheduling exist; external execution correlation and signal-first verification remain |
 | RECOVER | 5/6 | Rule observations manage persistent Findings and Needs Attention merges live Findings with execution/effect/outcome attention; the business-key timeline remains |
 | ADOPTION | 0/4 | observe-only ingestion, an existing-queue recipe, business-key verification command and no-cutover quickstart remain |
-| DX | 7/9 | embedded Go quickstart, direct PostgreSQL migration/doctor/operations CLI, `rhinoq explain`, optional HTTP Gateway, and tested Node producer/worker/operator preview exist; npm/CLI releases, scan, Console and framework integration remain |
+| DX | 8/10 | embedded Go quickstart, direct PostgreSQL migration/doctor/operations CLI, `rhinoq explain`, optional HTTP Gateway, tested Node producer/worker/operator preview, and a local read-only Workbench exist; npm/CLI releases, scan, business-key timeline and framework integration remain |
 | Infrastructure | 9/11 | configuration, health, metrics, checksum-tracked migration runner, real PostgreSQL tests, Rule budgets, audit chain, DB clock and SQL enqueue exist; fault injection, retention/partitioning, restricted Rule role and benchmark evidence remain |
 
 ## Estimates

@@ -30,6 +30,14 @@ type EffectStore interface {
 	MarkPendingUncertain(ctx context.Context, expired []ExpiredLease) (int, error)
 }
 
+// EffectReader is the bounded, read-only evidence capability used by
+// developer tooling. It stays separate from EffectStore so a runtime adapter
+// can implement correctness writes without also promising an inspection
+// surface.
+type EffectReader interface {
+	ListEffects(ctx context.Context, jobID string, offset, limit int) ([]effect.Record, error)
+}
+
 type EffectClock interface {
 	Now() time.Time
 }

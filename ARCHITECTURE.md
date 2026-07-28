@@ -274,6 +274,19 @@ Ledger. Node SDK chỉ điều phối wire lifecycle và không tự quyết đ�
 Tách module bằng code boundary trước, chỉ thêm network boundary khi worker
 không viết bằng Go.
 
+### Workbench local dành cho developer
+
+Workbench nằm tại `internal/interfaces/workbench` và được composition root
+`cmd/rhinoq` khởi tạo. HTTP handler chỉ biết `Reader` read-only; nó không import
+PostgreSQL adapter và không query bảng trực tiếp. Live reader dịch dữ liệu từ
+public `rhinoq.Client`, còn demo reader dùng cùng contract.
+
+Static HTML/CSS/JavaScript được embed trong binary Go và chỉ bind
+`127.0.0.1`. Browser không nhận database credential hoặc payload. Khi cần scale
+read, `Reader` có thể chuyển sang read model/read replica mà không đổi browser
+contract. Mọi action ghi trong tương lai vẫn phải đi qua application use case
+với actor, reason và audit; Console không được bypass boundary này.
+
 ### V0.2 — Scale Go worker
 
 Scale ngang worker theo queue/resource class. Mỗi worker gửi danh sách handler;

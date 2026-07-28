@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added RhinoQ Workbench, an embedded loopback-only developer interface with
+  demo/live PostgreSQL modes, a dense execution table, Needs Attention,
+  Findings, Rules, command navigation and a per-job Evidence Rail.
+- Added bounded public inspection for one job plus its attempt, Effect Ledger,
+  outcome and replay-audit evidence. The browser contract remains payload-free,
+  same-origin and read-only.
+- Added CSP and local-interface security headers, responsive light/dark layouts,
+  keyboard/table preferences and a tested 160 KiB embedded frontend budget with
+  no JavaScript runtime dependency.
 - Added the development-preview `@rhinoq/node` SDK with a dependency-free
   PostgreSQL producer, typed/timeout-bounded Gateway client, high-level worker,
   explicit failure classification, operator reads/controls and Node test suite,

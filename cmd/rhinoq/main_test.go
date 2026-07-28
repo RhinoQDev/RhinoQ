@@ -45,3 +45,22 @@ func TestRunExplainFallsBackToEmbeddedPostgresWithoutGateway(t *testing.T) {
 		t.Fatalf("failure should say how to fix configuration: %s", output.String())
 	}
 }
+
+func TestWorkbenchRejectsInvalidPortBeforeStartingServer(t *testing.T) {
+	var output bytes.Buffer
+	code := runWorkbench(
+		[]string{"--demo", "--port", "70000", "--no-open"},
+		func(string) string { return "" },
+		&output,
+	)
+	if code != 2 || !strings.Contains(output.String(), "--port must be between") {
+		t.Fatalf("unexpected result: code=%d output=%s", code, output.String())
+	}
+}
+
+func TestDatabaseSourceLabelNeverIncludesCredentials(t *testing.T) {
+	label := databaseSourceLabel("postgres://secret-user:secret-pass@db.internal:5432/app?sslmode=require")
+	if label != "db.internal/app" {
+		t.Fatalf("unexpected safe source label %q", label)
+	}
+}

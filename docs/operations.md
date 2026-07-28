@@ -98,6 +98,16 @@ List output không chứa payload; thêm `--json` khi cần machine-readable out
 Các lệnh danh sách và inbox hỗ trợ `--limit` cùng `--offset` để phân trang có
 giới hạn.
 
+Developer có thể mở cùng read model bằng Workbench local:
+
+```bash
+rhinoq workbench
+```
+
+Workbench chỉ bind loopback, không trả payload và hiện không có write action.
+Xem [workbench.md](./workbench.md) để biết demo mode, phím tắt và security
+boundary.
+
 ## Khi provider trả 202
 
 Không coi request accepted là effect confirmed. Chọn confirmation policy phù hợp: external signal, verify hoặc predicate.

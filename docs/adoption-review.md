@@ -14,7 +14,7 @@ RhinoQ.
 | Go producer + worker | documented embedded API, migrations and doctor | usable for repository evaluation |
 | Node producer | tested `PostgresProducer`, but package is source-only | technically usable, distribution not ready |
 | Node worker | tested high-level worker, but requires Gateway and source-only package | preview |
-| Operations | direct CLI for counts, jobs, pause/resume, attention, findings and Rules | useful without a dashboard |
+| Operations | direct CLI plus an embedded read-only Workbench for jobs, evidence, attention, findings and Rules | useful for local development; browser writes remain intentionally absent |
 | First integrity finding | Rule path exists, but no no-cutover starter workload | adoption blocker |
 | Production evidence | real PostgreSQL contracts exist; benchmark/fault/restore evidence incomplete | not production-ready |
 
@@ -55,8 +55,8 @@ a Node team outside this repository.
    protocol negotiation, queue-filtered claim, heartbeat and shutdown.
 3. Correctness remains in Go. The SDK reports intent and observations; it does
    not calculate retry schedules or mutate job state locally.
-4. Operator control works before a Console exists. CLI and Node client both
-   expose bounded inspection and explicit controls without payload export.
+4. Developer inspection works without a hosted Console. The Workbench exposes
+   bounded payload-free evidence; CLI and Node client retain explicit controls.
 5. Documentation says “preview” until installation is genuinely public.
 
 ## Remaining adoption blockers
@@ -79,8 +79,8 @@ a Node team outside this repository.
 
 1. `rhinoq init --node` should generate a plan, never overwrite silently, and
    create package scripts only after confirmation.
-2. Add a read-only local operator web view or TUI for queues, Findings and the
-   business timeline. Keep the CLI authoritative for automation.
+2. Extend the current local Workbench with a cross-job business-key timeline.
+   Add browser mutations only with actor/reason confirmation and application-use-case audit.
 3. Add NestJS lifecycle hooks only after the framework-neutral worker is
    validated by a real user.
 4. Add `LISTEN/NOTIFY` as an optional wake-up hint while retaining polling as

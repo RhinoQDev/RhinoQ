@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 var ErrEffectConflict = errors.New("effect already exists with different identity")
 
 var _ ports.EffectStore = (*EffectStore)(nil)
+var _ ports.EffectReader = (*EffectStore)(nil)
 
 type EffectStore struct {
 	mu      sync.RWMutex
@@ -60,6 +62,35 @@ func (s *EffectStore) GetEffect(_ context.Context, jobID, name, idempotencyKey s
 	defer s.mu.RUnlock()
 	record, ok := s.effects[effectKey(jobID, name, idempotencyKey)]
 	return record, ok, nil
+}
+
+func (s *EffectStore) ListEffects(
+	_ context.Context,
+	jobID string,
+	offset, limit int,
+) ([]effect.Record, error) {
+	if jobID == "" || offset < 0 || limit <= 0 || limit > 1000 {
+		return nil, errors.New("job id, non-negative offset and limit between 1 and 1000 are required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	records := make([]effect.Record, 0, len(s.effects))
+	for _, record := range s.effects {
+		if record.JobID == jobID {
+			records = append(records, record)
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].ID < records[j].ID
+		}
+		return records[i].CreatedAt.Before(records[j].CreatedAt)
+	})
+	if offset >= len(records) {
+		return []effect.Record{}, nil
+	}
+	end := min(offset+limit, len(records))
+	return append([]effect.Record(nil), records[offset:end]...), nil
 }
 
 func (s *EffectStore) ConfirmEffect(ctx context.Context, lease ports.Lease, now time.Time, record effect.Record) error {

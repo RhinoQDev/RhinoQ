@@ -39,6 +39,8 @@ func main() {
 		os.Exit(runFindings(os.Args[2:], os.Getenv, os.Stdout))
 	case "rules":
 		os.Exit(runRules(os.Args[2:], os.Getenv, os.Stdout))
+	case "workbench", "ui":
+		os.Exit(runWorkbench(os.Args[2:], os.Getenv, os.Stdout))
 	case "explain":
 		os.Exit(runExplain(os.Args[2:], os.Getenv, os.Stdout))
 	case "version":
@@ -259,6 +261,7 @@ func printHelp() {
 	fmt.Println("  rhinoq attention                    show the operator inbox")
 	fmt.Println("  rhinoq findings [action]            list or triage business drift")
 	fmt.Println("  rhinoq rules <list|enable|disable|run>  manage integrity Rules")
+	fmt.Println("  rhinoq workbench [--demo]          open the local developer interface")
 	fmt.Println("  rhinoq explain <id>                 Explain a Rule using PostgreSQL")
 	fmt.Println("  rhinoq version                      print version")
 }
