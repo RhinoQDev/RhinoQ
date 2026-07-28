@@ -1,6 +1,6 @@
 # RhinoQ — Kiến trúc chuẩn
 
-Tài liệu này là blueprint triển khai cho RhinoQ. `RHINOQ.md` mô tả product/architecture spec; file này mô tả cách chia module, dependency, runtime và lộ trình scale để hệ thống còn dễ sửa chữa, nâng cấp.
+Tài liệu này là blueprint triển khai cho RhinoQ: cách chia module, dependency, runtime và lộ trình scale để hệ thống còn dễ sửa chữa, nâng cấp. Product contract và trạng thái thực thi nằm ở [`README.md`](./README.md) và [`docs/`](./docs/).
 
 **Quyết định ngôn ngữ:** Go là authoritative engine/runtime và cũng là nơi
 triển khai CLI chính thức. Node.js/TypeScript là SDK preview cho producer,

@@ -601,7 +601,7 @@ boundary.
 | [Optional HTTP gateway](./docs/agent.md) | non-Go worker integration; no AI/LLM |
 | [Competitive landscape](./docs/competitive-landscape.md) | product boundaries and primary sources |
 | [Adoption review](./docs/adoption-review.md) | installability, first-run UX and remaining blockers |
-| [Product specification](./RHINOQ.md) | detailed product and architecture contract |
+| [Architecture](./ARCHITECTURE.md) | module boundaries, dependency rules and runtime layout |
 
 ## Development
 
