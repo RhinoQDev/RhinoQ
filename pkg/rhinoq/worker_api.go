@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/domain/retry"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/retry"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 // LeaseToken is what a remote worker holds for one execution. It is opaque to

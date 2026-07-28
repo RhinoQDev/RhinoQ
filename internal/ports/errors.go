@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/rhinoq/rhinoq/internal/contracts/diagnostic"
+	"github.com/madebyduy/RhinoQ/internal/contracts/diagnostic"
 )
 
 var (

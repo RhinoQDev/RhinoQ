@@ -17,13 +17,19 @@ The CLI is not a generic job producer and it is not a standalone Go worker:
 
 ## Run the preview CLI
 
-Prebuilt binaries have not been released yet. From a repository checkout,
-install the CLI into Go's binary directory:
+Install the CLI into Go's binary directory:
 
 ```bash
-go install ./cmd/rhinoq
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
 rhinoq version
 ```
+
+From a repository checkout, `go install ./cmd/rhinoq` does the same.
+
+No tag has been published yet, so prebuilt binaries are not downloadable. The
+release pipeline that produces them for Linux, macOS and Windows is committed at
+[`.goreleaser.yaml`](../.goreleaser.yaml); it runs on a `v*` tag push and
+publishes a signed `checksums.txt`.
 
 If the shell cannot find `rhinoq`, inspect the install locations:
 
@@ -55,7 +61,7 @@ go run ./cmd/rhinoq workbench --demo
 Once a tagged release exists, the intended installation command is:
 
 ```bash
-go install github.com/rhinoq/rhinoq/cmd/rhinoq@<version>
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@<version>
 ```
 
 Do not put `@latest` into production automation until RhinoQ publishes its
@@ -604,7 +610,8 @@ shorter than the requested limit. Do not request unbounded exports.
 
 ## Current preview boundary
 
-- No tagged CLI release or prebuilt binaries exist.
+- No tag has been pushed, so no prebuilt binaries are downloadable yet. The
+  release pipeline exists and is unproven until the first tag runs it.
 - The CLI has no `enqueue` command.
 - Go handlers run through the embedded library, not a dynamic CLI plugin.
 - Job replay/cancel is available through public Go/Node/Gateway APIs, but not

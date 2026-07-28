@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 // The provider must be called once no matter how many attempts the job takes.

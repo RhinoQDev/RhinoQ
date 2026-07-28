@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 func TestClaimOrdersByPriorityThenFirstIn(t *testing.T) {

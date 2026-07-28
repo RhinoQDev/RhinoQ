@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/effect"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var ErrEffectConflict = errors.New("effect already exists with different identity")

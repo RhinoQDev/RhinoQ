@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/retry"
+	"github.com/madebyduy/RhinoQ/internal/domain/retry"
 )
 
 func TestRetryPolicyClassifiesFailures(t *testing.T) {

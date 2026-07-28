@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/ports"
-	"github.com/rhinoq/rhinoq/internal/runtime/lease"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func TestEnqueueIsIdempotentPerQueue(t *testing.T) {

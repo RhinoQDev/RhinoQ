@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/domain/effect"
 )
 
 func TestEffectConfirmationPolicy(t *testing.T) {

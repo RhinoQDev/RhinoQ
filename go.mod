@@ -1,4 +1,4 @@
-module github.com/rhinoq/rhinoq
+module github.com/madebyduy/RhinoQ
 
 go 1.22
 

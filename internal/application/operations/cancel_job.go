@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 type JobCancellation struct{ store ports.JobStore }

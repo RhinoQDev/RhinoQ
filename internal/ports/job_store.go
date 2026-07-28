@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/admission"
-	"github.com/rhinoq/rhinoq/internal/domain/attempt"
-	"github.com/rhinoq/rhinoq/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/admission"
+	"github.com/madebyduy/RhinoQ/internal/domain/attempt"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 )
 
 type JobID = job.ID

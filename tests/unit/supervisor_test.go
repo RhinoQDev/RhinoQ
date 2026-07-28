@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhinoq/rhinoq/internal/runtime/supervisor"
+	"github.com/madebyduy/RhinoQ/internal/runtime/supervisor"
 )
 
 type runnerFunc func(context.Context) error

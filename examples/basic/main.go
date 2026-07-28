@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func main() {

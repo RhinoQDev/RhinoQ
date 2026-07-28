@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/infrastructure/config"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/config"
 )
 
 func TestConfigDefaultsAndValidation(t *testing.T) {

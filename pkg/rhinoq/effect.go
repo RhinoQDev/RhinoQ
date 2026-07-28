@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	applicationeffect "github.com/rhinoq/rhinoq/internal/application/effect"
-	domaineffect "github.com/rhinoq/rhinoq/internal/domain/effect"
+	applicationeffect "github.com/madebyduy/RhinoQ/internal/application/effect"
+	domaineffect "github.com/madebyduy/RhinoQ/internal/domain/effect"
 )
 
 // ConfirmPolicy is what counts as proof that an external effect finished. A

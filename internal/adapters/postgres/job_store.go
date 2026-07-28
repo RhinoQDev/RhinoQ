@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/admission"
-	"github.com/rhinoq/rhinoq/internal/domain/attempt"
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/admission"
+	"github.com/madebyduy/RhinoQ/internal/domain/attempt"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var (

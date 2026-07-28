@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	postgresadapter "github.com/rhinoq/rhinoq/internal/adapters/postgres"
-	"github.com/rhinoq/rhinoq/internal/domain/rule"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	postgresadapter "github.com/madebyduy/RhinoQ/internal/adapters/postgres"
+	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func TestRuleMustPassPostgreSQLExplainBeforeEnable(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/admission"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/admission"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 type QueueControl struct{ store ports.JobStore }

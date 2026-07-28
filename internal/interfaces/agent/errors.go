@@ -4,12 +4,12 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/rhinoq/rhinoq/internal/contracts/diagnostic"
-	"github.com/rhinoq/rhinoq/internal/domain/admission"
-	"github.com/rhinoq/rhinoq/internal/domain/recovery"
-	"github.com/rhinoq/rhinoq/internal/domain/rule"
-	"github.com/rhinoq/rhinoq/internal/ports"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/internal/contracts/diagnostic"
+	"github.com/madebyduy/RhinoQ/internal/domain/admission"
+	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
+	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/internal/ports"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 // ErrorBody is the single error shape every endpoint returns. An SDK maps it

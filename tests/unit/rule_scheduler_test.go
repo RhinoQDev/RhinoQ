@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	"github.com/rhinoq/rhinoq/internal/domain/rule"
-	"github.com/rhinoq/rhinoq/internal/runtime/rulescheduler"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/internal/runtime/rulescheduler"
 )
 
 type schedulerEvaluator struct {

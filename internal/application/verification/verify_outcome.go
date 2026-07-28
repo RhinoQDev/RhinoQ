@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/outcome"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var ErrVerificationDependencyMissing = errors.New("outcome store, verifier and clock are required")

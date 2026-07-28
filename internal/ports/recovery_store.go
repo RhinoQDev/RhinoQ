@@ -3,8 +3,8 @@ package ports
 import (
 	"context"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/domain/recovery"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 )
 
 type RecoveryStore interface {

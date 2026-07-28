@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/admission"
+	"github.com/madebyduy/RhinoQ/internal/domain/admission"
 )
 
 func TestAdmissionReservesCapacityForCriticalWork(t *testing.T) {

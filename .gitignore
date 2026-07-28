@@ -27,3 +27,8 @@ Thumbs.db
 *.sqlite3
 tmp/
 storage/
+
+# Unpublished product research. These are strategy inputs, not implementation
+# truth, and they are deliberately excluded from the public repository. The
+# published sources are README.md, ARCHITECTURE.md, docs/ and the tests.
+private/

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/domain/recovery"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 type Recovery struct{ store ports.RecoveryStore }

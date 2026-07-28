@@ -1,6 +1,6 @@
 # Implementation status
 
-This assessment tracks the current v0.1 Integrity Slice in `RHINOQ.md`. It
+This assessment tracks the current v0.1 Integrity Slice. It
 separates a mature queue foundation from the still-incomplete product
 differentiator.
 
@@ -34,9 +34,9 @@ its code, tests, documentation and evidence agree.
   and HTTP-layer job RBAC.
 - The Node SDK is tested from source but has no tagged npm release; non-Go
   adopters still need a separately distributed `rhinoq` CLI binary.
-- The declared canonical Go module path is not hosted at the repository's
-  current GitHub location; external consumers need a local `replace` until the
-  repository path is finalized or the module declaration changes.
+- The Go module path now matches the hosting repository, so `go get` resolves
+  without a local `replace`, but no semver tag exists yet. Consumers resolve a
+  branch pseudo-version and have no stability guarantee.
 - Needs Attention is unified, but business Findings still have no explicit
   source-system/job/queue correlation and therefore cannot be safely included
   in a queue-filtered view.

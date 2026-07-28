@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	"github.com/rhinoq/rhinoq/internal/application/execution"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	"github.com/madebyduy/RhinoQ/internal/application/execution"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 func TestClaimLeaseRenewAndComplete(t *testing.T) {

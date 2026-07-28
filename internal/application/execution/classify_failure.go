@@ -3,7 +3,7 @@ package execution
 import (
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/retry"
+	"github.com/madebyduy/RhinoQ/internal/domain/retry"
 )
 
 type FailureClassifier struct {

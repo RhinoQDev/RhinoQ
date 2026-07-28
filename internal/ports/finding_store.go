@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/finding"
+	"github.com/madebyduy/RhinoQ/internal/domain/finding"
 )
 
 // FindingStore owns the atomic fold from observations/operator decisions into

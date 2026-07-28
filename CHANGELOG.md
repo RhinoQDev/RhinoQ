@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Licensed the project under Apache-2.0 and recorded the decision as ADR-0013.
+  The repository previously carried no license, which left it "all rights
+  reserved" and made any external use, fork or redistribution legally
+  impossible. `LICENSE`, `NOTICE`, the Node package manifest and the
+  contribution, governance and security policies now agree on that boundary.
+- Changed the Go module path from `github.com/rhinoq/rhinoq` to
+  `github.com/madebyduy/RhinoQ` so it matches the repository that hosts it.
+  `go get github.com/madebyduy/RhinoQ/pkg/rhinoq` and
+  `go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest` now resolve
+  directly; the documented local `replace` workaround is gone. Applications
+  that already vendored the old path must update their imports.
+- Moved unpublished product research (`RHINOQ.md`, `files/`) into an ignored
+  `private/` directory. The published sources of truth are `README.md`,
+  `ARCHITECTURE.md`, `docs/` and the tests.
+- Added a tag-triggered release pipeline that cross-compiles the `rhinoq` CLI
+  for Linux, macOS and Windows on amd64/arm64 and publishes a cosign-signed
+  `checksums.txt`. `rhinoq version` is now stamped from the release tag and
+  still reports the development version when built from source. The pipeline
+  remains unproven until the first `v*` tag runs it.
+
 - Added a complete CLI reference covering every implemented command, action,
   flag, exit code, read/write boundary, JSON/pagination behavior and common
   failure, plus topic-aware `rhinoq help <command>` output with regression

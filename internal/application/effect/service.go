@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	domaineffect "github.com/rhinoq/rhinoq/internal/domain/effect"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	domaineffect "github.com/madebyduy/RhinoQ/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var ErrEffectStoreRequired = errors.New("effect store is required")

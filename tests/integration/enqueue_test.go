@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	"github.com/rhinoq/rhinoq/internal/application/enqueue"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	"github.com/madebyduy/RhinoQ/internal/application/enqueue"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 func TestEnqueueIsIdempotentWithinNameScope(t *testing.T) {

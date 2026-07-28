@@ -15,9 +15,9 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/rhinoq/rhinoq/internal/interfaces/agent"
-	"github.com/rhinoq/rhinoq/internal/runtime/shutdown"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/internal/interfaces/agent"
+	"github.com/madebyduy/RhinoQ/internal/runtime/shutdown"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func main() {

@@ -3,7 +3,7 @@ package unit
 import (
 	"testing"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 )
 
 func TestJobStateTransitions(t *testing.T) {

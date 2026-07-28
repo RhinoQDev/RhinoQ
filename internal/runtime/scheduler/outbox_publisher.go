@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 type OutboxPublisher struct {

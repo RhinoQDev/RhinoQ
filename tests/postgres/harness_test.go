@@ -22,10 +22,10 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/postgres"
-	"github.com/rhinoq/rhinoq/internal/infrastructure/migrations"
-	"github.com/rhinoq/rhinoq/internal/ports"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/internal/adapters/postgres"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/migrations"
+	"github.com/madebyduy/RhinoQ/internal/ports"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 var testDB *sql.DB

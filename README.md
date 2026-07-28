@@ -19,6 +19,7 @@
   <img src="https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white" alt="Node.js 22+" />
   <img src="https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 tested" />
   <img src="https://img.shields.io/badge/status-active_development-f59e0b" alt="Active development" />
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0" /></a>
 </p>
 
 > [!WARNING]
@@ -107,33 +108,24 @@ smoke test only; the next steps switch to durable PostgreSQL storage.
 
 ### 1. Install
 
-From a RhinoQ repository checkout, install the preview CLI:
+Add the library to an existing application:
 
 ```bash
-go install ./cmd/rhinoq
+go get github.com/madebyduy/RhinoQ/pkg/rhinoq@latest
+go get github.com/jackc/pgx/v5
+```
+
+Install the CLI, which applies migrations and runs the diagnostics:
+
+```bash
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
 rhinoq version
 ```
 
-The canonical Go module distribution is not published from its final repository
-path yet. To evaluate the library from this checkout inside a target
-application, use an explicit local replacement:
-
-```bash
-go mod edit -replace=github.com/rhinoq/rhinoq=/absolute/path/to/rhinoq
-go get github.com/rhinoq/rhinoq/pkg/rhinoq
-go get github.com/jackc/pgx/v5
-```
-
-Windows PowerShell example:
-
-```powershell
-go mod edit "-replace=github.com/rhinoq/rhinoq=C:\src\RhinoQ"
-go get github.com/rhinoq/rhinoq/pkg/rhinoq
-go get github.com/jackc/pgx/v5
-```
-
-Do not commit this machine-specific replacement in a shared application.
-Versioned remote installation remains a release blocker.
+Until a semver tag is published, `@latest` resolves to a pseudo-version of the
+default branch. Pin the exact pseudo-version `go get` writes into `go.mod`
+rather than re-resolving it on every build, because the public API is still
+unstable.
 
 ### 2. Configure and prepare PostgreSQL
 
@@ -165,7 +157,7 @@ import (
     "syscall"
 
     _ "github.com/jackc/pgx/v5/stdlib"
-    "github.com/rhinoq/rhinoq/pkg/rhinoq"
+    "github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func main() {
@@ -609,7 +601,7 @@ boundary.
 | [Optional HTTP gateway](./docs/agent.md) | non-Go worker integration; no AI/LLM |
 | [Competitive landscape](./docs/competitive-landscape.md) | product boundaries and primary sources |
 | [Adoption review](./docs/adoption-review.md) | installability, first-run UX and remaining blockers |
-| [Product specification](./RHINOQ.md) | detailed product and architecture contract |
+| [Architecture](./ARCHITECTURE.md) | module boundaries, dependency rules and runtime layout |
 
 ## Development
 
@@ -639,9 +631,14 @@ same change, or record why no README change is needed. See
 Report undisclosed vulnerabilities through [SECURITY.md](./SECURITY.md), not a
 public issue.
 
-This repository does not currently grant an open-source license. The project
-remains under private development while its open-core boundary and license are
-evaluated. See [LICENSE-STRATEGY.md](./LICENSE-STRATEGY.md).
+RhinoQ is licensed under [Apache-2.0](./LICENSE). Contributions are accepted
+under the same license, as its Section 5 provides; no separate CLA is required.
+The scope of what is open and what may stay commercial is recorded in
+[GOVERNANCE.md](./GOVERNANCE.md) and [LICENSE-STRATEGY.md](./LICENSE-STRATEGY.md).
+
+Integrity Rules run developer-written SQL. The Explain gate bounds shape, cost
+and timeout; it is not a SQL sandbox. Give Rules a dedicated read-only
+PostgreSQL role in production.
 
 ---
 
