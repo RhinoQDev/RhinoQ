@@ -15,6 +15,11 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/infrastructure/migrations"
 )
 
+// version is stamped by the release build with
+// -ldflags "-X main.version=<tag>". A build from source keeps the development
+// value, so `rhinoq version` never claims to be a release it is not.
+var version = "0.1.0-dev"
+
 func main() {
 	command := "help"
 	if len(os.Args) > 1 {
@@ -53,7 +58,7 @@ func main() {
 	case "explain":
 		os.Exit(runExplain(os.Args[2:], os.Getenv, os.Stdout))
 	case "version":
-		fmt.Println("rhinoq 0.1.0-dev")
+		fmt.Println("rhinoq " + version)
 	default:
 		fmt.Fprintf(os.Stderr, "FAIL unknown command %q\n\n", command)
 		_ = runHelp(nil, os.Stderr)
@@ -543,8 +548,9 @@ Examples:
 Usage:
   rhinoq version
 
-The current source build reports a development version. A tagged release and
-prebuilt CLI distribution do not exist yet.`)
+A build from source reports the development version. A release build stamps its
+tag instead. No tag has been published yet, so a downloaded prebuilt binary is
+not yet available.`)
 	default:
 		return false
 	}

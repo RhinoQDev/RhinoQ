@@ -1,0 +1,63 @@
+# Prebuilt `rhinoq` binaries. A Node.js or Python team must be able to apply
+# migrations and run doctor without installing a Go toolchain.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: rhinoq
+    main: ./cmd/rhinoq
+    binary: rhinoq
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: rhinoq
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# Release provenance. The workflow requests an OIDC token so cosign can sign
+# the checksum file without a long-lived key.
+signs:
+  - cmd: cosign
+    signature: ${artifact}.bundle
+    args:
+      - sign-blob
+      - --yes
+      - --output-signature=${signature}
+      - ${artifact}
+    artifacts: checksum
+    output: true
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
+  header: |
+    RhinoQ is in active development. Public APIs, migrations and protocols are
+    not stable. Verify `checksums.txt` before running a downloaded binary.

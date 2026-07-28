@@ -12,6 +12,7 @@ RhinoQ.
 | Journey | Current state | Verdict |
 |---|---|---|
 | Go producer + worker | documented embedded API, migrations and doctor | usable for repository evaluation |
+| Go library install | Apache-2.0 licensed, module path matches the repository, `go get` resolves a branch pseudo-version | usable; no semver tag yet |
 | Node producer | tested `PostgresProducer`, but package is source-only | technically usable, distribution not ready |
 | Node worker | tested high-level worker, but requires Gateway and source-only package | preview |
 | Operations | direct CLI plus an embedded read-only Workbench for jobs, evidence, attention, findings and Rules | useful for local development; browser writes remain intentionally absent |
@@ -63,13 +64,16 @@ a Node team outside this repository.
 
 ### P0 — required before recruiting Node design partners
 
-1. Choose the distribution/license boundary, publish a tagged
-   `@rhinoq/node`, and provide checksums/provenance. Reserve or prove ownership
-   of the `@rhinoq` npm scope first; the package currently returns `404`, which
-   proves it is unpublished but not that this project can publish under that
-   scope.
+1. The license boundary is now decided: core is Apache-2.0 (ADR-0013), and the
+   Go module path matches the hosting repository, so `go get` works without a
+   `replace`. What remains is a tagged `@rhinoq/node` with checksums and
+   provenance. Reserve or prove ownership of the `@rhinoq` npm scope first; the
+   package currently returns `404`, which proves it is unpublished but not that
+   this project can publish under that scope.
 2. Publish prebuilt `rhinoq` CLI binaries for Linux, macOS and Windows so a
-   Node user does not need a Go toolchain.
+   Node user does not need a Go toolchain. The GoReleaser pipeline and the
+   tag-triggered workflow are committed, and the CLI version is stamped from the
+   tag; the first `v*` tag has not been pushed, so the pipeline is unproven.
 3. Ship one end-to-end Node starter that starts PostgreSQL, applies reviewed
    migrations, enqueues a job, runs a handler and shows Needs Attention.
 4. Complete external execution correlation and a no-cutover first Finding.
