@@ -18,10 +18,8 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
 	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 	"github.com/madebyduy/RhinoQ/internal/domain/retry"
-	"github.com/madebyduy/RhinoQ/internal/domain/rule"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
-	"github.com/madebyduy/RhinoQ/internal/runtime/rulescheduler"
 	"github.com/madebyduy/RhinoQ/internal/runtime/supervisor"
 	"github.com/madebyduy/RhinoQ/internal/runtime/worker"
 )
@@ -308,17 +306,20 @@ func (c WorkerConfig) withDefaults() WorkerConfig {
 	return c
 }
 
+// Client is the full RhinoQ surface: the runtime plane (enqueue, workers,
+// leases, effects, recovery) plus the integrity plane it embeds.
+//
+// Embedding rather than duplicating means a Client can do everything an
+// IntegrityClient can - RegisterRule, Scan, ListFindings and the rest are
+// promoted - while a team that only needs verification can take
+// NewIntegrity(db) and never see a queue.
 type Client struct {
-	store         ports.JobStore
-	effects       ports.EffectStore
-	outcomes      ports.OutcomeStore
-	recovery      ports.RecoveryStore
-	findings      ports.FindingStore
-	rules         ports.RuleStore
-	ruleExplainer ports.RuleExplainer
-	ruleEvaluator ports.RuleEvaluator
-	ruleSchedules ports.RuleScheduleStore
-	handlers      *worker.HandlerRegistry
+	*IntegrityClient
+	store    ports.JobStore
+	effects  ports.EffectStore
+	outcomes ports.OutcomeStore
+	recovery ports.RecoveryStore
+	handlers *worker.HandlerRegistry
 	// retry is the policy applied to failures reported through the remote
 	// worker API, where no in-process worker owns a policy.
 	retry retry.Policy
@@ -352,9 +353,11 @@ func NewInMemory() *Client {
 	}
 	return &Client{
 		store: jobs, effects: effects, outcomes: outcomes, recovery: recoveryStore,
-		findings: findingStore, rules: ruleStore,
-		ruleSchedules: ruleStore,
-		handlers:      worker.NewHandlerRegistry(),
+		IntegrityClient: &IntegrityClient{
+			findings: findingStore, rules: ruleStore, ruleSchedules: ruleStore,
+		},
+
+		handlers: worker.NewHandlerRegistry(),
 	}
 }
 
@@ -393,14 +396,23 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	}
 	return &Client{
 		store: store, effects: effects, outcomes: outcomes, recovery: recoveryStore,
-		findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
-		ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
+		IntegrityClient: &IntegrityClient{
+			findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
+			ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
+		},
+
 		handlers: worker.NewHandlerRegistry(),
 	}, nil
 }
 
 func NewWithStore(store ports.JobStore) *Client {
-	client := &Client{store: store, handlers: worker.NewHandlerRegistry()}
+	// The embedded facade must exist before anything assigns through it:
+	// promoted field writes on a nil embedded pointer compile and then panic.
+	client := &Client{
+		IntegrityClient: &IntegrityClient{},
+		store:           store,
+		handlers:        worker.NewHandlerRegistry(),
+	}
 	if recoveryStore, ok := store.(ports.RecoveryStore); ok {
 		client.recovery = recoveryStore
 	}
@@ -437,36 +449,18 @@ type RuleSchedulerConfig struct {
 // RunRuleScheduler evaluates enabled table Rules from durable bounded cursors.
 // Multiple processes may run it; owner/epoch fencing lets only the current
 // schedule lease advance or complete a page.
+// RunRuleScheduler is the runtime-plane name for IntegrityClient.RunScheduler.
+// It is kept so an application that already runs it through *Client does not
+// have to change, and it deliberately shares one implementation: a second copy
+// of the scheduler wiring would be a second place for fencing to drift.
 func (c *Client) RunRuleScheduler(
 	ctx context.Context,
 	config RuleSchedulerConfig,
 ) error {
-	if c == nil || c.ruleSchedules == nil {
+	if c == nil || c.IntegrityClient == nil {
 		return errors.New("rhinoq rule scheduler store is not configured")
 	}
-	service, err := c.ruleService()
-	if err != nil {
-		return err
-	}
-	scheduler, err := rulescheduler.New(rulescheduler.Config{
-		Store: c.ruleSchedules,
-		Evaluate: func(
-			ctx context.Context, id string, version int, subjectID, cursor string,
-		) (rule.Evaluation, error) {
-			evaluation, _, err := service.EvaluateVersion(
-				ctx, id, version, subjectID, cursor,
-			)
-			return evaluation, err
-		},
-		Owner:        config.Owner,
-		PollInterval: config.PollInterval, Lease: config.Lease,
-		ErrorBackoff: config.ErrorBackoff, ClaimBatch: config.ClaimBatch,
-		OnError: config.OnError,
-	})
-	if err != nil {
-		return err
-	}
-	return scheduler.Run(ctx)
+	return c.IntegrityClient.RunScheduler(ctx, config)
 }
 
 // Enqueue admits one job. It returns ErrQueueOverCapacity when the queue has an

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Added `rhinoq.NewIntegrity(db)` and `rhinoq scan`, an entry point that
+  verifies business invariants without adopting the queue. The facade starts no
+  worker, claim loop, heartbeat, retry scheduler, lease reaper or recovery
+  executor, and a regression test asserts its method set stays free of runtime
+  operations. `*Client` embeds it, so a deployment that adds the runtime later
+  keeps the Rules and Findings it already registered.
+- Claim now takes a batch in exactly one round trip. It previously cost three
+  statements plus one per distinct execution lane, with the per-lane rate
+  reservations running inside the window where candidate rows were already
+  locked. Rate slots are also reserved from what was actually claimed rather
+  than from the over-fetched candidate set.
+- Bounded the lease reaper. `RequeueExpired` had no LIMIT, so a mass expiry
+  locked and rewrote every expired row in one statement. It now reaps bounded
+  batches and the sweep drains them within a time budget, exposed as
+  `RHINOQ_REAP_BATCH_LIMIT` and `RHINOQ_REAP_SWEEP_BUDGET`.
+- Made the outbox set-based and fixed a durability bug it exposed: a publisher
+  that failed or died mid-batch left its events claimed and unpublished
+  forever, because the claim filter skipped claimed rows and nothing ever
+  cleared them.
+
 - Licensed the project under Apache-2.0 and recorded the decision as ADR-0013.
   The repository previously carried no license, which left it "all rights
   reserved" and made any external use, fork or redistribution legally

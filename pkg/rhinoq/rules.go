@@ -87,7 +87,7 @@ type RuleEvaluation struct {
 	Findings     []FindingRecord   `json:"findings"`
 }
 
-func (c *Client) RegisterRule(
+func (c *IntegrityClient) RegisterRule(
 	ctx context.Context,
 	definition RuleDefinition,
 ) (RuleRecord, error) {
@@ -99,7 +99,7 @@ func (c *Client) RegisterRule(
 	return publicRule(record), err
 }
 
-func (c *Client) ListRules(ctx context.Context, query RuleQuery) ([]RuleRecord, error) {
+func (c *IntegrityClient) ListRules(ctx context.Context, query RuleQuery) ([]RuleRecord, error) {
 	service, err := c.ruleService()
 	if err != nil {
 		return nil, err
@@ -122,7 +122,7 @@ func (c *Client) ListRules(ctx context.Context, query RuleQuery) ([]RuleRecord, 
 	return result, nil
 }
 
-func (c *Client) ExplainRule(
+func (c *IntegrityClient) ExplainRule(
 	ctx context.Context,
 	id string,
 ) (RuleRecord, RuleExplanation, error) {
@@ -134,7 +134,7 @@ func (c *Client) ExplainRule(
 	return publicRule(record), publicExplanation(explanation), err
 }
 
-func (c *Client) EnableRule(
+func (c *IntegrityClient) EnableRule(
 	ctx context.Context,
 	id string,
 ) (RuleRecord, RuleExplanation, error) {
@@ -146,7 +146,7 @@ func (c *Client) EnableRule(
 	return publicRule(record), publicExplanation(explanation), err
 }
 
-func (c *Client) DisableRule(ctx context.Context, id string) (RuleRecord, error) {
+func (c *IntegrityClient) DisableRule(ctx context.Context, id string) (RuleRecord, error) {
 	service, err := c.ruleService()
 	if err != nil {
 		return RuleRecord{}, err
@@ -155,7 +155,7 @@ func (c *Client) DisableRule(ctx context.Context, id string) (RuleRecord, error)
 	return publicRule(record), err
 }
 
-func (c *Client) EvaluateRule(
+func (c *IntegrityClient) EvaluateRule(
 	ctx context.Context,
 	id, subjectID, cursor string,
 ) (RuleEvaluation, error) {
@@ -185,7 +185,7 @@ func (c *Client) EvaluateRule(
 	}, nil
 }
 
-func (c *Client) ruleService() (*ruleapp.Service, error) {
+func (c *IntegrityClient) ruleService() (*ruleapp.Service, error) {
 	if c == nil || c.rules == nil {
 		return nil, errors.New("rhinoq rule store is not configured")
 	}
