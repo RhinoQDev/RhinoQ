@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Rule observations are three-state: passed, violated and unknown. The query's
+  `violated` column is now nullable — `NULL` means the check could not decide —
+  with an optional `unknown_reason` column and a per-Rule `OnUnknown` policy
+  (`retry` by default, or `finding`). An unknown never resolves a Finding,
+  which a boolean made impossible to avoid: a provider timeout was
+  indistinguishable from a pass and silently closed real drift.
+
 - Added `rhinoq.NewIntegrity(db)` and `rhinoq scan`, an entry point that
   verifies business invariants without adopting the queue. The facade starts no
   worker, claim loop, heartbeat, retry scheduler, lease reaper or recovery

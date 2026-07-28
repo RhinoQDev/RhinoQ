@@ -57,8 +57,17 @@ var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 var queryStartPattern = regexp.MustCompile(`(?is)^(select|with)\s`)
 
 // Record is one versioned Rule. Query returns candidate observations with
-// exactly three canonical columns: subject_id (text), violated (boolean), and
-// evidence (json/jsonb or text).
+// three canonical columns, plus an optional fourth:
+//
+//	subject_id      text
+//	violated        boolean, nullable: true violated, false passed, NULL unknown
+//	evidence        json/jsonb or text
+//	unknown_reason  text, optional; only read when violated IS NULL
+//
+// violated is nullable because SQL already has the three-valued logic this
+// needs. A query that cannot decide - the provider timed out, the object could
+// not be read, the confirmation deadline has not passed - returns NULL instead
+// of guessing, and RhinoQ applies the Rule's UnknownPolicy.
 //
 // Job scope receives $1 = business subject ID.
 // Table scope receives $1 = baseline timestamp, $2 = the last subject cursor,
@@ -76,6 +85,9 @@ type Record struct {
 	Every       time.Duration
 	Within      time.Duration
 	MaxRows     int
+	// OnUnknown decides what an inconclusive observation does. Defaults to
+	// UnknownRetries.
+	OnUnknown UnknownPolicy
 
 	StatementTimeout time.Duration
 	MaxPlanCost      float64
@@ -86,6 +98,9 @@ type Record struct {
 }
 
 func (r Record) WithDefaults() Record {
+	if r.OnUnknown == "" {
+		r.OnUnknown = UnknownRetries
+	}
 	if r.Status == "" {
 		r.Status = Draft
 	}
@@ -131,7 +146,7 @@ func (r Record) Validate() error {
 	}
 	if r.Within < 0 || r.MaxRows <= 0 || r.MaxRows > MaximumMaxRows ||
 		r.StatementTimeout <= 0 || r.StatementTimeout > MaximumStatementLimit ||
-		r.MaxPlanCost <= 0 || r.MaxSeqScanRows <= 0 {
+		r.MaxPlanCost <= 0 || r.MaxSeqScanRows <= 0 || !r.OnUnknown.Valid() {
 		return ErrInvalidRule
 	}
 	return ValidateQuery(r.Query)
@@ -192,15 +207,79 @@ type Explanation struct {
 	QueryHash     string
 }
 
+// ObservationStatus is what one check concluded about one subject.
+//
+// A boolean cannot express this. A provider that timed out, a bucket RhinoQ
+// may not read, evidence that has not arrived yet and a confirmation whose
+// deadline has not passed are all cases where the answer is genuinely unknown.
+// Forced into a boolean, false reads as "this subject is fine" - which silently
+// hides drift - and true invents a violation that may not exist.
+type ObservationStatus string
+
+const (
+	Passed   ObservationStatus = "passed"
+	Violated ObservationStatus = "violated"
+	Unknown  ObservationStatus = "unknown"
+)
+
+func (s ObservationStatus) Valid() bool {
+	return s == Passed || s == Violated || s == Unknown
+}
+
+// UnknownPolicy decides what an inconclusive observation does. It belongs to
+// the Rule because the right answer depends on the invariant: a missing S3
+// object may mean "ask again in a minute", while a permission RhinoQ never
+// regains means a human has to look.
+type UnknownPolicy string
+
+const (
+	// UnknownRetries records the observation and opens nothing. The next
+	// evaluation asks again. This is the default because most unknowns are
+	// transient, and an alert per transient failure trains operators to ignore
+	// alerts.
+	UnknownRetries UnknownPolicy = "retry"
+	// UnknownOpensFinding treats an inconclusive check as drift needing a
+	// person. Use it when not knowing is itself the problem.
+	UnknownOpensFinding UnknownPolicy = "finding"
+)
+
+func (p UnknownPolicy) Valid() bool {
+	return p == UnknownRetries || p == UnknownOpensFinding
+}
+
+// MaxUnknownReasonBytes bounds the reason code a query may return.
+const MaxUnknownReasonBytes = 128
+
+// UnknownUnspecified is recorded when a query reports unknown without saying
+// why. It is deliberately not an error: losing the observation would be worse
+// than recording an unlabelled one.
+const UnknownUnspecified = "unspecified"
+
 type Observation struct {
 	SubjectID string
-	Violated  bool
+	Status    ObservationStatus
 	Evidence  string
+	// Reason names why a check could not conclude. It is meaningful only when
+	// Status is Unknown, and is what makes an unknown actionable rather than
+	// just absent: provider_timeout, permission_denied, evidence_missing,
+	// awaiting_confirmation.
+	Reason string
 }
 
 func (o Observation) Validate() error {
 	if strings.TrimSpace(o.SubjectID) == "" || len(o.SubjectID) > 256 ||
 		len(o.Evidence) > 64<<10 {
+		return ErrInvalidRule
+	}
+	if !o.Status.Valid() {
+		return ErrInvalidRule
+	}
+	if len(o.Reason) > MaxUnknownReasonBytes {
+		return ErrInvalidRule
+	}
+	if o.Status != Unknown && o.Reason != "" {
+		// A reason on a conclusive observation means the query is reporting
+		// something the model cannot carry, which is worth failing loudly.
 		return ErrInvalidRule
 	}
 	return nil

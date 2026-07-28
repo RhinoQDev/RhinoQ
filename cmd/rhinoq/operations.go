@@ -568,6 +568,12 @@ func printScanSummary(output io.Writer, summary rhinoq.ScanSummary, timedOut boo
 		fmt.Fprintf(output, "\nResume with:\n  rhinoq scan %s --cursor %s\n",
 			summary.RuleID, summary.NextCursor)
 	}
+	if summary.Unknown > 0 {
+		fmt.Fprintf(output,
+			"\n%d subject(s) could not be checked. Unknown is not a pass:\n"+
+				"  rhinoq scan %s --json    # every observation carries its reason\n",
+			summary.Unknown, summary.RuleID)
+	}
 	if summary.Violated > 0 {
 		fmt.Fprintf(output, "\nInspect what was found:\n  rhinoq findings list --rule %s\n", summary.RuleID)
 	}

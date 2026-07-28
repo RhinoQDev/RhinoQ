@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -339,5 +340,146 @@ func TestScanStopsOnItsPageBudgetAndResumes(t *testing.T) {
 	}
 	if total := first.Observed + rest.Observed; total != 50 {
 		t.Fatalf("the two runs together must cover every subject exactly once, got %d", total)
+	}
+}
+
+// A check that cannot conclude must not be recorded as a pass. This is the
+// specific failure a boolean forced: a provider timeout looked identical to
+// "this subject is fine", so real drift was silently resolved.
+func TestUnknownObservationDoesNotResolveAnOpenFinding(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	createRuleFixture(t)
+
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// First version: every paid order violates, opening Findings.
+	violating := rhinoq.RuleDefinition{
+		ID: "three-state-order", Name: "Three state order",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "order",
+		Query: `SELECT id::text AS subject_id,
+			status = 'paid' AS violated,
+			jsonb_build_object('status', status) AS evidence
+			FROM rhinoq_rule_test_orders
+			WHERE created_at >= $1 AND id::text > $2
+			ORDER BY id::text LIMIT $3`,
+		BaselineAt: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Every:      10 * time.Minute,
+	}
+	if _, err := integrity.RegisterRule(ctx, violating); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := integrity.EnableRule(ctx, violating.ID); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := integrity.Scan(ctx, rhinoq.ScanRequest{RuleID: violating.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Violated != 25 {
+		t.Fatalf("the fixture must open 25 findings first: %+v", opened)
+	}
+
+	// Second version of the same Rule: the check can no longer reach whatever
+	// it needs, so it returns NULL with a reason instead of guessing.
+	inconclusive := violating
+	inconclusive.Query = `SELECT id::text AS subject_id,
+		NULL::boolean AS violated,
+		jsonb_build_object('status', status) AS evidence,
+		'provider_timeout'::text AS unknown_reason
+		FROM rhinoq_rule_test_orders
+		WHERE created_at >= $1 AND id::text > $2
+		ORDER BY id::text LIMIT $3`
+	if _, err := integrity.RegisterRule(ctx, inconclusive); err != nil {
+		t.Fatalf("a four column query must be accepted: %v", err)
+	}
+	if _, explanation, err := integrity.EnableRule(ctx, inconclusive.ID); err != nil {
+		t.Fatalf("unknown_reason must pass the explain gate: %+v %v", explanation, err)
+	}
+
+	unknown, err := integrity.Scan(ctx, rhinoq.ScanRequest{RuleID: inconclusive.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown.Unknown != 50 || unknown.Passed != 0 || unknown.Violated != 0 {
+		t.Fatalf("every row must be reported as unknown, not passed: %+v", unknown)
+	}
+
+	// The Findings opened by the previous version must still be open. Under the
+	// default retry policy an unknown opens nothing and resolves nothing.
+	open, err := integrity.ListFindings(ctx, rhinoq.FindingQuery{
+		Statuses: []string{rhinoq.FindingOpen}, Limit: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 25 {
+		t.Fatalf("an unreachable provider must not close real drift: %d findings still open", len(open))
+	}
+	if unknown.Findings != 0 {
+		t.Fatalf("the default policy opens nothing on unknown: %+v", unknown)
+	}
+}
+
+// With the opposite policy, not knowing is itself the problem and opens a
+// Finding that records why the check could not conclude.
+func TestUnknownOpensAFindingWhenThePolicySaysSo(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	createRuleFixture(t)
+
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	definition := rhinoq.RuleDefinition{
+		ID: "unknown-is-drift", Name: "Unknown is drift",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "order",
+		Query: `SELECT id::text AS subject_id,
+			NULL::boolean AS violated,
+			jsonb_build_object('status', status) AS evidence,
+			'permission_denied'::text AS unknown_reason
+			FROM rhinoq_rule_test_orders
+			WHERE created_at >= $1 AND id::text > $2
+			ORDER BY id::text LIMIT $3`,
+		BaselineAt: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Every:      10 * time.Minute,
+		OnUnknown:  rhinoq.UnknownOpensFinding,
+	}
+	if _, err := integrity.RegisterRule(ctx, definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := integrity.EnableRule(ctx, definition.ID); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := integrity.Scan(ctx, rhinoq.ScanRequest{RuleID: definition.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Unknown != 50 || summary.Findings != 50 {
+		t.Fatalf("the finding policy must open one per unknown subject: %+v", summary)
+	}
+	findings, err := integrity.ListFindings(ctx, rhinoq.FindingQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 50 {
+		t.Fatalf("expected 50 findings, got %d", len(findings))
+	}
+	if !strings.Contains(findings[0].LatestEvidence, "permission_denied") {
+		t.Fatalf("a finding opened by an unknown must record why: %s", findings[0].LatestEvidence)
+	}
+	if !strings.Contains(findings[0].LatestEvidence, string(rhinoq.ObservationUnknown)) {
+		t.Fatalf("an operator must be able to tell 'could not look' from 'looked and it was wrong': %s",
+			findings[0].LatestEvidence)
 	}
 }

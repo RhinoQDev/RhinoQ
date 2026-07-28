@@ -10,11 +10,31 @@ table reconciliation do not have separate public DSLs.
 - `table` evaluates a bounded page of business subjects. `$1` is the baseline
   timestamp, `$2` is the last subject cursor, and `$3` is the maximum row count.
 
-Every query returns exactly:
+Every query returns three columns, plus an optional fourth:
 
 ```text
-subject_id text | violated boolean | evidence jsonb/text
+subject_id text | violated boolean NULL | evidence jsonb/text | unknown_reason text
 ```
+
+`violated` is **nullable on purpose**. A check has three possible conclusions,
+not two:
+
+| `violated` | Meaning |
+|---|---|
+| `true` | the invariant is broken for this subject |
+| `false` | the invariant holds |
+| `NULL` | the check could not decide |
+
+Return `NULL` when the provider timed out, the object could not be read, a
+permission is missing, evidence has not arrived, or a confirmation deadline has
+not passed. Do not guess. `false` means "this subject is fine", so answering
+`false` because a dependency was unreachable silently closes real drift — that
+is precisely the failure a boolean forces.
+
+`unknown_reason` is optional and read only when `violated IS NULL`. It is what
+makes an unknown actionable: `provider_timeout`, `permission_denied`,
+`evidence_missing`, `awaiting_confirmation`. Omitting it records
+`unspecified` rather than dropping the observation.
 
 Table queries must return `subject_id` in strict ascending cursor order. RhinoQ
 wraps the query with a hard `LIMIT`, even when the query already uses `$3`.
@@ -99,7 +119,35 @@ For every observation:
 - `violated = true` opens or deduplicates a persistent Finding;
 - `violated = false` auto-resolves an existing Finding and appends a `passed`
   event;
+- `violated IS NULL` follows the Rule's `OnUnknown` policy;
 - a healthy subject without a Finding creates no record.
+
+An unknown **never** resolves a Finding. `OnUnknown` chooses between:
+
+| `OnUnknown` | Behaviour |
+|---|---|
+| `retry` (default) | record the observation, open nothing, ask again next evaluation |
+| `finding` | open a Finding whose evidence records `unknown` and the reason |
+
+The default is `retry` because most unknowns are transient, and an alert per
+transient failure teaches operators to ignore alerts. Choose `finding` when not
+knowing is itself the problem — a permission RhinoQ will not regain on its own,
+for instance.
+
+```go
+_, err := integrity.RegisterRule(ctx, rhinoq.RuleDefinition{
+    // …
+    OnUnknown: rhinoq.UnknownOpensFinding,
+})
+```
+
+`rhinoq scan` reports unknown as its own count, never folded into passed.
+
+> [!NOTE]
+> There is no escalation after a grace period yet: a subject that stays unknown
+> under `retry` stays unknown indefinitely and never becomes a Finding on its
+> own. Tracking how long a subject has been inconclusive needs storage that does
+> not exist, so it is deliberately absent rather than half-built.
 
 Periodic table evaluation uses a durable cursor and an owner/epoch-fenced
 schedule lease. A crash leaves the last completed page cursor in PostgreSQL;

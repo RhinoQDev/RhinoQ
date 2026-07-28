@@ -106,11 +106,15 @@ type ScanSummary struct {
 	RuleID  string `json:"ruleId"`
 	Version int    `json:"version"`
 	Pages   int    `json:"pages"`
-	// Observed is how many subjects the Rule looked at; Passed and Violated
-	// partition it.
+	// Observed is how many subjects the Rule looked at; Passed, Violated and
+	// Unknown partition it.
 	Observed int `json:"observed"`
 	Passed   int `json:"passed"`
 	Violated int `json:"violated"`
+	// Unknown counts subjects the check could not conclude about. It is
+	// reported separately because folding it into Passed is exactly how drift
+	// hides behind an unreachable provider.
+	Unknown int `json:"unknown"`
 	// Findings counts the Findings this pass touched, whether it opened,
 	// reopened or resolved them.
 	Findings int `json:"findings"`
@@ -174,9 +178,12 @@ func (c *IntegrityClient) Scan(ctx context.Context, request ScanRequest) (ScanSu
 		summary.Findings += len(findings)
 		for _, observation := range evaluation.Observations {
 			summary.Observed++
-			if observation.Violated {
+			switch observation.Status {
+			case rule.Violated:
 				summary.Violated++
-			} else {
+			case rule.Unknown:
+				summary.Unknown++
+			default:
 				summary.Passed++
 			}
 		}
