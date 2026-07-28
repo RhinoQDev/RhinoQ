@@ -25,6 +25,22 @@ func NewEffectStore(db *sql.DB) (*EffectStore, error) {
 	return &EffectStore{db: db}, nil
 }
 
+func (s *EffectStore) CheckLease(ctx context.Context, lease ports.Lease, _ time.Time) error {
+	if !lease.Valid() {
+		return ports.LeaseLost(lease, "the presented lease is incomplete")
+	}
+	var alive bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT true FROM rhinoq_jobs
+		WHERE id = $1 AND state = 'leased' AND lease_owner = $2
+		  AND lease_epoch = $3 AND lease_until > now()`,
+		string(lease.JobID), lease.Owner, lease.Epoch).Scan(&alive)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ports.LeaseLost(lease, "the stored owner, epoch or expiry no longer matches")
+	}
+	return err
+}
+
 // BeginEffect opens the ledger entry only if the caller still owns the job. The
 // fence lives inside the INSERT, so there is no window between checking the
 // lease and recording that money is about to move (specification 41.3).

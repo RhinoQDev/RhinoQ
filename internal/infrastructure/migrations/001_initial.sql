@@ -1,4 +1,5 @@
 -- RhinoQ authoritative storage. Run migrations in order.
+SET search_path = public;
 
 CREATE TABLE IF NOT EXISTS rhinoq_jobs (
     id                 text PRIMARY KEY,

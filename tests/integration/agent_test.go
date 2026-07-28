@@ -68,6 +68,15 @@ func TestAgentRunsAJobEndToEnd(t *testing.T) {
 	if counts.Counts["succeeded"] != 1 {
 		t.Fatalf("the job should be recorded as succeeded: %+v", counts.Counts)
 	}
+
+	var timeline struct {
+		Attempts []rhinoq.AttemptEvent `json:"attempts"`
+	}
+	call(t, server, http.MethodGet, "/v1/jobs/"+enqueued.JobID+"/attempts", nil, http.StatusOK, &timeline)
+	if len(timeline.Attempts) != 2 || timeline.Attempts[0].Kind != "claimed" ||
+		timeline.Attempts[1].Kind != "succeeded" {
+		t.Fatalf("the Agent must expose immutable execution evidence: %+v", timeline.Attempts)
+	}
 }
 
 // A second worker that presents a stale token must be refused, and the answer

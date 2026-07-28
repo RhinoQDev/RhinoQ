@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
+	"github.com/rhinoq/rhinoq/internal/domain/attempt"
 	"github.com/rhinoq/rhinoq/internal/domain/job"
 )
 
@@ -71,6 +72,9 @@ type FailureTransition struct {
 	State         job.State
 	RetryIn       time.Duration
 	BlockedReason job.BlockedReason
+	// FailureClass is language-neutral evidence (transient, permanent,
+	// rate_limited, dependency_down, cancelled or unknown).
+	FailureClass string
 }
 
 type QueueRateLimit struct {
@@ -119,6 +123,7 @@ type JobStore interface {
 	Enqueue(ctx context.Context, input EnqueueInput) (JobID, error)
 	Get(ctx context.Context, id JobID) (job.Record, bool, error)
 	ListJobs(ctx context.Context, input ListJobsInput) ([]job.Record, error)
+	ListAttemptEvents(ctx context.Context, id JobID, offset, limit int) ([]attempt.Event, error)
 	JobCounts(ctx context.Context, name string) (map[job.State]int64, error)
 	Claim(ctx context.Context, input ClaimInput) ([]job.Record, error)
 	RenewLease(ctx context.Context, lease Lease, now time.Time, extension time.Duration) (LeaseStatus, error)

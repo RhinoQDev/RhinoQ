@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added append-only attempt evidence for claim, release, completion, failure and
+  lease expiry, exposed through the Go facade, Agent HTTP and TypeScript client.
+- Made PostgreSQL job transitions and attempt evidence atomic, and made a
+  terminal failed attempt atomically downgrade its pending effects to uncertain.
+- Fixed PostgreSQL batch claim ordering, stale-effect fence precedence, SQL
+  enqueue ambiguity and migration schema drift found by the real-database suite.
+- Removed the legacy TypeScript state machine/store exports so the SDK remains
+  a thin Agent client and correctness has one authoritative Go implementation.
+- Added implementation-linked layer and runtime sequence diagrams.
 - Added a real-PostgreSQL integration harness and CI service covering migrations,
   storage contracts, fencing, effect uncertainty, admission, recovery, and SQL
   enqueue behavior.
@@ -44,4 +53,6 @@
 - `EffectStore.BeginEffect` and the new `ConfirmEffect` require a lease; `SaveEffect` remains for RhinoQ-authored transitions.
 - Migration `002_fencing_scheduling_admission.sql` must be applied; `lease_id` is left in place for a later contract migration.
 - `EffectStore` gained `MarkPendingUncertain`; `RequeueExpired` returns the expired leases it swept.
+- `EffectStore` gained `CheckLease`; `JobStore` gained `ListAttemptEvents`; and
+  `FailureTransition` now carries a language-neutral failure class.
 - `lease.NewReaper` takes a `lease.Config` instead of positional arguments.

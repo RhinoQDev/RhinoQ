@@ -46,6 +46,27 @@ export interface LeasedJob {
   expiresAt: string;
 }
 
+export interface AttemptEvent {
+  sequence: number;
+  jobId: string;
+  attempt: number;
+  leaseOwner: string;
+  leaseEpoch: number;
+  kind:
+    | 'claimed'
+    | 'succeeded'
+    | 'retry_scheduled'
+    | 'dead'
+    | 'blocked'
+    | 'cancelled'
+    | 'released'
+    | 'lease_expired';
+  resultState?: string;
+  failureClass?: RetryClass;
+  blockedReason?: string;
+  occurredAt: string;
+}
+
 export interface EnqueueRequest {
   name: string;
   payload: unknown;
@@ -142,6 +163,14 @@ export class RhinoqClient {
       `/v1/queues/${encodeURIComponent(queue)}/counts`,
     );
     return response.counts;
+  }
+
+  async attempts(jobId: string, offset = 0, limit = 50): Promise<AttemptEvent[]> {
+    const response = await this.send<{ attempts: AttemptEvent[] }>(
+      'GET',
+      `/v1/jobs/${encodeURIComponent(jobId)}/attempts?offset=${offset}&limit=${limit}`,
+    );
+    return response.attempts;
   }
 
   async claim(worker: string, limit: number, leaseForMs = 60_000): Promise<LeasedJob[]> {

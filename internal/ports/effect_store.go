@@ -12,6 +12,9 @@ import (
 // that already lost its lease must not be able to start spending real money
 // (specification 41.3 and 50.2).
 type EffectStore interface {
+	// CheckLease lets the application reject stale executions before applying
+	// domain transitions whose error would otherwise hide the lost fence.
+	CheckLease(ctx context.Context, lease Lease, now time.Time) error
 	BeginEffect(ctx context.Context, lease Lease, now time.Time, record effect.Record) (effect.Record, error)
 	GetEffect(ctx context.Context, jobID, name, idempotencyKey string) (effect.Record, bool, error)
 	ConfirmEffect(ctx context.Context, lease Lease, now time.Time, record effect.Record) error

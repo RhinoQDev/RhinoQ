@@ -21,6 +21,8 @@
 - [x] admission control
 - [x] DLQ and derived Needs Attention read API
 - [x] guarded manual replay with transactional audit
+- [x] append-only attempt timeline for claim, release, completion, failure and lease expiry
+- [x] transactional SQL enqueue executed by the PostgreSQL contract suite
 - [ ] persistent finding acknowledge/resolve/regressed lifecycle (domain state machine implemented)
 
 ## Milestone 1 — Developer experience

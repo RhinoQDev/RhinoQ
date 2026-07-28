@@ -38,6 +38,10 @@ func (s *Service) Confirm(ctx context.Context, lease ports.Lease, record domaine
 	if s == nil || s.store == nil || s.clock == nil {
 		return record, ErrEffectStoreRequired
 	}
+	now := s.clock()
+	if err := s.store.CheckLease(ctx, lease, now); err != nil {
+		return record, err
+	}
 	updated, err := record.Confirm(policy, status)
 	if err != nil {
 		return record, err
@@ -45,7 +49,7 @@ func (s *Service) Confirm(ctx context.Context, lease ports.Lease, record domaine
 	if updated.State == record.State {
 		return updated, nil
 	}
-	if err := s.store.ConfirmEffect(ctx, lease, s.clock(), updated); err != nil {
+	if err := s.store.ConfirmEffect(ctx, lease, now, updated); err != nil {
 		return record, err
 	}
 	return updated, nil

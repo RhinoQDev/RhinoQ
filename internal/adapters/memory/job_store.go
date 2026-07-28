@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
+	"github.com/rhinoq/rhinoq/internal/domain/attempt"
 	"github.com/rhinoq/rhinoq/internal/domain/job"
 	"github.com/rhinoq/rhinoq/internal/ports"
 )
@@ -20,7 +21,9 @@ var _ ports.JobStore = (*JobStore)(nil)
 type JobStore struct {
 	mu         sync.RWMutex
 	nextID     uint64
+	nextEvent  int64
 	jobs       map[job.ID]job.Record
+	attempts   map[job.ID][]attempt.Event
 	byIdem     map[string]job.ID
 	paused     map[string]bool
 	rateLimits map[string]queueRateLimitState
@@ -41,6 +44,7 @@ func NewJobStore() *JobStore {
 func NewJobStoreWithClock(clock func() time.Time) *JobStore {
 	return &JobStore{
 		jobs:       make(map[job.ID]job.Record),
+		attempts:   make(map[job.ID][]attempt.Event),
 		byIdem:     make(map[string]job.ID),
 		paused:     make(map[string]bool),
 		rateLimits: make(map[string]queueRateLimitState),
@@ -152,6 +156,28 @@ func (s *JobStore) ListJobs(_ context.Context, input ports.ListJobsInput) ([]job
 	return records[input.Offset:end], nil
 }
 
+func (s *JobStore) ListAttemptEvents(_ context.Context, id ports.JobID, offset, limit int) ([]attempt.Event, error) {
+	if id == "" || offset < 0 || limit <= 0 || limit > 1000 {
+		return nil, errors.New("job id, non-negative offset and limit between 1 and 1000 are required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.jobs[id]; !ok {
+		return nil, ports.ErrJobNotFound
+	}
+	events := s.attempts[id]
+	if offset >= len(events) {
+		return []attempt.Event{}, nil
+	}
+	end := offset + limit
+	if end > len(events) {
+		end = len(events)
+	}
+	result := make([]attempt.Event, end-offset)
+	copy(result, events[offset:end])
+	return result, nil
+}
+
 func (s *JobStore) JobCounts(_ context.Context, name string) (map[job.State]int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -200,6 +226,11 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 		record.LeaseEpoch++
 		record.LeaseUntil = input.Now.Add(input.LeaseDuration)
 		s.jobs[record.ID] = record
+		s.appendAttempt(attempt.Event{
+			JobID: record.ID, Attempt: record.Attempts, LeaseOwner: record.LeaseOwner,
+			LeaseEpoch: record.LeaseEpoch, Kind: attempt.Claimed, ResultState: job.Leased,
+			OccurredAt: input.Now,
+		})
 		claimed = append(claimed, cloneRecord(record))
 	}
 	return claimed, nil
@@ -327,6 +358,11 @@ func (s *JobStore) Complete(_ context.Context, lease ports.Lease, now time.Time)
 	record.LeaseOwner = ""
 	record.LeaseUntil = time.Time{}
 	s.jobs[record.ID] = record
+	s.appendAttempt(attempt.Event{
+		JobID: record.ID, Attempt: record.Attempts, LeaseOwner: lease.Owner,
+		LeaseEpoch: lease.Epoch, Kind: attempt.Succeeded, ResultState: job.Succeeded,
+		OccurredAt: now,
+	})
 	return nil
 }
 
@@ -340,6 +376,7 @@ func (s *JobStore) ReleaseLease(_ context.Context, lease ports.Lease, now time.T
 	if err != nil {
 		return err
 	}
+	releasedAttempt := record.Attempts
 	record.State = job.RetryWait
 	record.NotBefore = now
 	record.LeaseOwner = ""
@@ -348,6 +385,11 @@ func (s *JobStore) ReleaseLease(_ context.Context, lease ports.Lease, now time.T
 		record.Attempts--
 	}
 	s.jobs[record.ID] = record
+	s.appendAttempt(attempt.Event{
+		JobID: record.ID, Attempt: releasedAttempt, LeaseOwner: lease.Owner,
+		LeaseEpoch: lease.Epoch, Kind: attempt.Released, ResultState: job.RetryWait,
+		OccurredAt: now,
+	})
 	return nil
 }
 
@@ -380,6 +422,13 @@ func (s *JobStore) Fail(_ context.Context, lease ports.Lease, now time.Time, tra
 	record.LeaseOwner = ""
 	record.LeaseUntil = time.Time{}
 	s.jobs[record.ID] = record
+	kind, _ := attempt.ResultKind(transition.State)
+	s.appendAttempt(attempt.Event{
+		JobID: record.ID, Attempt: record.Attempts, LeaseOwner: lease.Owner,
+		LeaseEpoch: lease.Epoch, Kind: kind, ResultState: transition.State,
+		FailureClass: transition.FailureClass, BlockedReason: record.BlockedReason,
+		OccurredAt: now,
+	})
 	return nil
 }
 
@@ -429,6 +478,7 @@ func (s *JobStore) RequeueExpired(_ context.Context, input ports.ReapInput) (por
 		if record.State != job.Leased || record.LeaseUntil.IsZero() || record.LeaseUntil.After(input.Now) {
 			continue
 		}
+		owner := record.LeaseOwner
 		result.Expired = append(result.Expired, ports.ExpiredLease{JobID: id, Epoch: record.LeaseEpoch})
 		record.CrashCount++
 		record.LeaseOwner = ""
@@ -443,8 +493,22 @@ func (s *JobStore) RequeueExpired(_ context.Context, input ports.ReapInput) (por
 			result.Requeued++
 		}
 		s.jobs[id] = record
+		s.appendAttempt(attempt.Event{
+			JobID: id, Attempt: record.Attempts, LeaseOwner: owner,
+			LeaseEpoch: record.LeaseEpoch, Kind: attempt.LeaseExpired,
+			ResultState: record.State, BlockedReason: record.BlockedReason,
+			OccurredAt: input.Now,
+		})
 	}
 	return result, nil
+}
+
+// appendAttempt is called only while s.mu is held, making the evidence update
+// atomic with the corresponding hot-state transition.
+func (s *JobStore) appendAttempt(event attempt.Event) {
+	s.nextEvent++
+	event.Sequence = s.nextEvent
+	s.attempts[event.JobID] = append(s.attempts[event.JobID], event)
 }
 
 // authoritative resolves a fencing token to the live record. Owner and epoch

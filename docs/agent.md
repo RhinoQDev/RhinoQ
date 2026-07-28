@@ -90,7 +90,7 @@ Ba kết quả, phân biệt rõ:
 | Producer | `POST /v1/jobs` · `GET /v1/jobs` · `POST /v1/jobs/{id}/cancel` |
 | Worker | `POST /v1/claim` · `POST /v1/leases/heartbeat` · `POST /v1/leases/complete` · `POST /v1/leases/fail` · `POST /v1/leases/release` |
 | Effect | `POST /v1/effects/begin` · `POST /v1/effects/resolve` |
-| Operator | `GET /v1/queues/{name}/counts` · `POST /v1/queues/{name}/pause` · `POST /v1/queues/{name}/resume` · `GET /v1/attention` · `POST /v1/jobs/{id}/replay` · `GET /v1/jobs/{id}/audit` |
+| Operator | `GET /v1/queues/{name}/counts` · `POST /v1/queues/{name}/pause` · `POST /v1/queues/{name}/resume` · `GET /v1/attention` · `POST /v1/jobs/{id}/replay` · `GET /v1/jobs/{id}/audit` · `GET /v1/jobs/{id}/attempts` |
 | Vận hành | `GET /health/live` · `GET /health/ready` · `GET /metrics` |
 
 ### Vòng đời một job qua HTTP

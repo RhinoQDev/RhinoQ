@@ -114,12 +114,12 @@ BEGIN
 
     job_id := 'job_' || encode(gen_random_bytes(16), 'hex');
 
-    INSERT INTO rhinoq_jobs
+    INSERT INTO public.rhinoq_jobs
         (id, name, payload, state, class, priority, idempotency_key, correlation_id, not_before)
     VALUES
         (job_id, job_name, encoded, 'pending', use_class, use_prio,
          idempotency_key, correlation_id, now() + COALESCE(run_after, interval '0'))
-    ON CONFLICT (name, idempotency_key)
+    ON CONFLICT ON CONSTRAINT rhinoq_jobs_idempotency_unique
     DO UPDATE SET name = EXCLUDED.name
     RETURNING id INTO job_id;
 

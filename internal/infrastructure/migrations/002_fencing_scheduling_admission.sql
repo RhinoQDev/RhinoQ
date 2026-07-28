@@ -1,6 +1,7 @@
 -- RhinoQ migration 002: lease fencing, priority scheduling, poison protection
 -- and producer admission control. Expand only: every column is added with a
 -- default, so an older binary keeps working against this schema.
+SET search_path = public;
 
 -- Fencing. lease_owner replaces the per-claim random lease_id: the owner says
 -- who holds the job and lease_epoch says which execution, so a worker that lost

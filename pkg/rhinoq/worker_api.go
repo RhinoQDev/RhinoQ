@@ -200,8 +200,16 @@ func (c *Client) FailJob(ctx context.Context, token LeaseToken, report FailureRe
 	case report.class() == retry.Cancelled:
 		transition = ports.FailureTransition{State: job.Cancelled}
 	}
+	transition.FailureClass = string(report.class())
 	if err := c.store.Fail(ctx, leaseOf(token), time.Now().UTC(), transition); err != nil {
 		return JobSummary{}, err
+	}
+	if c.effects != nil {
+		if _, err := c.effects.MarkPendingUncertain(ctx, []ports.ExpiredLease{{
+			JobID: ports.JobID(token.JobID), Epoch: token.Epoch,
+		}}); err != nil {
+			return JobSummary{}, err
+		}
 	}
 	record, found, err := c.store.Get(ctx, ports.JobID(token.JobID))
 	if err != nil || !found {

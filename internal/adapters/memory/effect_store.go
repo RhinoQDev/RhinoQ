@@ -30,6 +30,10 @@ func NewEffectStore(fence ports.LeaseFence) (*EffectStore, error) {
 	return &EffectStore{fence: fence, effects: make(map[string]effect.Record)}, nil
 }
 
+func (s *EffectStore) CheckLease(ctx context.Context, lease ports.Lease, now time.Time) error {
+	return s.fence.CheckLease(ctx, lease, now)
+}
+
 func (s *EffectStore) BeginEffect(ctx context.Context, lease ports.Lease, now time.Time, record effect.Record) (effect.Record, error) {
 	if err := s.fence.CheckLease(ctx, lease, now); err != nil {
 		return effect.Record{}, err

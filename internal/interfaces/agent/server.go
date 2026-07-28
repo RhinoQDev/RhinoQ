@@ -105,6 +105,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /v1/jobs/{id}/cancel", s.guard(s.handleCancel))
 	mux.HandleFunc("POST /v1/jobs/{id}/replay", s.guard(s.handleReplay))
 	mux.HandleFunc("GET /v1/jobs/{id}/audit", s.guard(s.handleAudit))
+	mux.HandleFunc("GET /v1/jobs/{id}/attempts", s.guard(s.handleAttempts))
 
 	// Worker surface: the four things an SDK does.
 	mux.HandleFunc("POST /v1/claim", s.guard(s.handleClaim))
@@ -297,6 +298,17 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"audit": records})
+}
+
+func (s *Server) handleAttempts(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	events, err := s.client.AttemptTimeline(r.Context(), r.PathValue("id"),
+		intParam(query.Get("offset"), 0), intParam(query.Get("limit"), 50))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"attempts": events})
 }
 
 type claimRequest struct {

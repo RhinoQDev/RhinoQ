@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
+	"github.com/rhinoq/rhinoq/internal/domain/attempt"
 	"github.com/rhinoq/rhinoq/internal/domain/job"
 	"github.com/rhinoq/rhinoq/internal/ports"
 )
@@ -201,6 +202,40 @@ func (s *JobStore) ListJobs(ctx context.Context, input ports.ListJobsInput) ([]j
 	return records, rows.Err()
 }
 
+func (s *JobStore) ListAttemptEvents(ctx context.Context, id ports.JobID, offset, limit int) ([]attempt.Event, error) {
+	if id == "" || offset < 0 || limit <= 0 || limit > 1000 {
+		return nil, errors.New("job id, non-negative offset and limit between 1 and 1000 are required")
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM rhinoq_jobs WHERE id = $1)`, string(id)).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ports.ErrJobNotFound
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sequence, job_id, attempt_number, lease_owner, lease_epoch, kind,
+		       COALESCE(result_state, ''), COALESCE(failure_class, ''),
+		       COALESCE(blocked_reason, ''), occurred_at
+		FROM rhinoq_attempt_events
+		WHERE job_id = $1
+		ORDER BY sequence
+		LIMIT $2 OFFSET $3`, string(id), limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := make([]attempt.Event, 0, limit)
+	for rows.Next() {
+		event, err := scanAttemptEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+
 func (s *JobStore) JobCounts(ctx context.Context, name string) (map[job.State]int64, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT state, count(*)
@@ -277,10 +312,54 @@ func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Rec
 	if err != nil {
 		return nil, err
 	}
+	// UPDATE ... RETURNING has no ordering guarantee. Restore the order chosen
+	// by lockCandidates before exposing the batch to a worker or writing its
+	// evidence timeline.
+	byID := make(map[string]job.Record, len(claimed))
+	for _, record := range claimed {
+		byID[string(record.ID)] = record
+	}
+	ordered := make([]job.Record, 0, len(claimed))
+	for _, id := range ids {
+		if record, ok := byID[id]; ok {
+			ordered = append(ordered, record)
+		}
+	}
+	claimed = ordered
+	if err := s.insertClaimEventsTx(ctx, tx, claimed); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return claimed, nil
+}
+
+func (s *JobStore) insertClaimEventsTx(ctx context.Context, tx *sql.Tx, claimed []job.Record) error {
+	if len(claimed) == 0 {
+		return nil
+	}
+	var query strings.Builder
+	query.WriteString(`INSERT INTO rhinoq_attempt_events
+		(job_id, attempt_number, lease_owner, lease_epoch, kind, result_state) VALUES `)
+	args := make([]any, 0, len(claimed)*4)
+	for index, record := range claimed {
+		if index > 0 {
+			query.WriteString(", ")
+		}
+		base := len(args)
+		fmt.Fprintf(&query, "($%d, $%d, $%d, $%d, 'claimed', 'leased')",
+			base+1, base+2, base+3, base+4)
+		args = append(args, string(record.ID), record.Attempts, record.LeaseOwner, record.LeaseEpoch)
+	}
+	if _, err := tx.ExecContext(ctx, query.String(), args...); err != nil {
+		ids := make([]string, 0, len(claimed))
+		for _, record := range claimed {
+			ids = append(ids, string(record.ID))
+		}
+		return fmt.Errorf("append claimed attempt events for jobs %s: %w", strings.Join(ids, ", "), err)
+	}
+	return nil
 }
 
 type claimCandidate struct{ id, queue string }
@@ -530,10 +609,17 @@ func (s *JobStore) Complete(ctx context.Context, lease ports.Lease, _ time.Time)
 		return ports.LeaseLost(lease, "the presented lease is incomplete")
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE rhinoq_jobs
-		SET state = 'succeeded', lease_owner = NULL, lease_until = NULL
-		WHERE id = $1 AND state = 'leased' AND lease_owner = $2
-		  AND lease_epoch = $3 AND lease_until > now()`,
+		WITH transitioned AS (
+			UPDATE rhinoq_jobs
+			SET state = 'succeeded', lease_owner = NULL, lease_until = NULL
+			WHERE id = $1 AND state = 'leased' AND lease_owner = $2
+			  AND lease_epoch = $3 AND lease_until > now()
+			RETURNING id, attempts, lease_epoch
+		)
+		INSERT INTO rhinoq_attempt_events
+			(job_id, attempt_number, lease_owner, lease_epoch, kind, result_state)
+		SELECT id, attempts, $2, lease_epoch, 'succeeded', 'succeeded'
+		FROM transitioned`,
 		string(lease.JobID), lease.Owner, lease.Epoch)
 	if err != nil {
 		return err
@@ -552,14 +638,21 @@ func (s *JobStore) ReleaseLease(ctx context.Context, lease ports.Lease, _ time.T
 		return ports.LeaseLost(lease, "the presented lease is incomplete")
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE rhinoq_jobs
-		SET state = 'retry_wait',
-		    attempts = GREATEST(attempts - 1, 0),
-		    not_before = now(),
-		    lease_owner = NULL,
-		    lease_until = NULL
-		WHERE id = $1 AND state = 'leased' AND lease_owner = $2
-		  AND lease_epoch = $3 AND lease_until > now()`,
+		WITH transitioned AS (
+			UPDATE rhinoq_jobs
+			SET state = 'retry_wait',
+			    attempts = GREATEST(attempts - 1, 0),
+			    not_before = now(),
+			    lease_owner = NULL,
+			    lease_until = NULL
+			WHERE id = $1 AND state = 'leased' AND lease_owner = $2
+			  AND lease_epoch = $3 AND lease_until > now()
+			RETURNING id, attempts + 1 AS released_attempt, lease_epoch
+		)
+		INSERT INTO rhinoq_attempt_events
+			(job_id, attempt_number, lease_owner, lease_epoch, kind, result_state)
+		SELECT id, released_attempt, $2, lease_epoch, 'released', 'retry_wait'
+		FROM transitioned`,
 		string(lease.JobID), lease.Owner, lease.Epoch)
 	if err != nil {
 		return err
@@ -588,17 +681,37 @@ func (s *JobStore) Fail(ctx context.Context, lease ports.Lease, _ time.Time, tra
 	if retryIn < 0 {
 		retryIn = 0
 	}
+	eventKind, err := attempt.ResultKind(transition.State)
+	if err != nil {
+		return err
+	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE rhinoq_jobs
-		SET state = $1,
-		    not_before = now() + ($2 * interval '1 millisecond'),
-		    blocked_reason = $3,
-		    lease_owner = NULL,
-		    lease_until = NULL
-		WHERE id = $4 AND state = 'leased' AND lease_owner = $5
-		  AND lease_epoch = $6 AND lease_until > now()`,
+		WITH transitioned AS (
+			UPDATE rhinoq_jobs
+			SET state = $1,
+			    not_before = now() + ($2 * interval '1 millisecond'),
+			    blocked_reason = $3,
+			    lease_owner = NULL,
+			    lease_until = NULL
+			WHERE id = $4 AND state = 'leased' AND lease_owner = $5
+			  AND lease_epoch = $6 AND lease_until > now()
+			RETURNING id, attempts, lease_epoch, state, blocked_reason
+		), uncertain_effects AS (
+			UPDATE rhinoq_effects e
+			SET state = 'uncertain'
+			FROM transitioned t
+			WHERE e.job_id = t.id AND e.state = 'pending'
+			  AND e.lease_epoch <= t.lease_epoch
+			RETURNING e.id
+		)
+		INSERT INTO rhinoq_attempt_events
+			(job_id, attempt_number, lease_owner, lease_epoch, kind, result_state,
+			 failure_class, blocked_reason)
+		SELECT id, attempts, $5, lease_epoch, $7, state, $8, blocked_reason
+		FROM transitioned`,
 		string(transition.State), retryIn.Milliseconds(), nullableString(string(reason)),
-		string(lease.JobID), lease.Owner, lease.Epoch)
+		string(lease.JobID), lease.Owner, lease.Epoch, string(eventKind),
+		nullableString(transition.FailureClass))
 	if err != nil {
 		return err
 	}
@@ -644,7 +757,7 @@ func (s *JobStore) RequeueExpired(ctx context.Context, input ports.ReapInput) (p
 	var result ports.ReapResult
 	rows, err := s.db.QueryContext(ctx, `
 		WITH expired AS (
-			SELECT id, lease_epoch FROM rhinoq_jobs
+			SELECT id, attempts, lease_owner, lease_epoch FROM rhinoq_jobs
 			WHERE state = 'leased' AND lease_until <= now()
 			FOR UPDATE SKIP LOCKED
 		), reaped AS (
@@ -657,9 +770,20 @@ func (s *JobStore) RequeueExpired(ctx context.Context, input ports.ReapInput) (p
 			    lease_until = NULL
 			FROM expired
 			WHERE j.id = expired.id
-			RETURNING j.id, j.lease_epoch, j.state AS new_state
+			RETURNING j.id, j.attempts, expired.lease_owner, j.lease_epoch,
+			          j.state AS new_state, j.blocked_reason
+		), evidence AS (
+			INSERT INTO rhinoq_attempt_events
+				(job_id, attempt_number, lease_owner, lease_epoch, kind,
+				 result_state, blocked_reason)
+			SELECT id, attempts, lease_owner, lease_epoch, 'lease_expired',
+			       new_state, blocked_reason
+			FROM reaped
+			RETURNING job_id
 		)
-		SELECT id, lease_epoch, new_state FROM reaped`, protection.MaxWorkerCrashesPerJob)
+		SELECT r.id, r.lease_epoch, r.new_state
+		FROM reaped r
+		LEFT JOIN evidence e ON e.job_id = r.id`, protection.MaxWorkerCrashesPerJob)
 	if err != nil {
 		return ports.ReapResult{}, err
 	}
@@ -739,6 +863,21 @@ func scanJob(row scanner) (job.Record, error) {
 	record.Class = job.Class(class)
 	record.BlockedReason = job.BlockedReason(blockedReason)
 	return record, nil
+}
+
+func scanAttemptEvent(row scanner) (attempt.Event, error) {
+	var event attempt.Event
+	var id, kind, state, blockedReason string
+	if err := row.Scan(&event.Sequence, &id, &event.Attempt, &event.LeaseOwner,
+		&event.LeaseEpoch, &kind, &state, &event.FailureClass, &blockedReason,
+		&event.OccurredAt); err != nil {
+		return attempt.Event{}, err
+	}
+	event.JobID = job.ID(id)
+	event.Kind = attempt.Kind(kind)
+	event.ResultState = job.State(state)
+	event.BlockedReason = job.BlockedReason(blockedReason)
+	return event, nil
 }
 
 func nullableString(value string) any {

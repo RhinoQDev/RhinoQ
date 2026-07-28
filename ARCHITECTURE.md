@@ -35,11 +35,14 @@ flowchart TB
   APP --> RUN
   RUN --> PORTS
   DOM --> PORTS
-  PORTS --> ADP
+  ADP -. implements .-> PORTS
   ADP --> DATA
   ADP --> EXT
   OPS --> API
-  OPS --> RUN
+  INF[Infrastructure / Composition Root]
+  INF --> ADP
+  INF --> APP
+  INF --> RUN
 ```
 
 ### Tầng 1 — Public Contracts (Protocol)
@@ -156,18 +159,17 @@ Infrastructure là nơi duy nhất biết framework, environment variable và c�
 ## 3. Dependency rule bắt buộc
 
 ```text
-contracts  ← domain ← application ← runtime
-                         ↑       ↑
-                       ports  infrastructure
-                                  ↓
-                              adapters
+interfaces → public facade → application → domain
+                         └→ runtime     → domain
+application/runtime → ports ← adapters
+infrastructure → composition root + adapters
 ```
 
 Quy tắc import:
 
 - `domain` chỉ import `contracts`.
 - `application` import `domain`, `contracts`, `ports`.
-- `runtime` import `application`, `contracts`, `ports`.
+- `runtime` import `domain`, `contracts`, `ports`; public facade/composition root khởi tạo runtime.
 - `adapters` implement `ports`; không được import ngược `application` để gọi use case nội bộ.
 - `console`, `cli`, `sdk` gọi public application facade, không truy cập store trực tiếp.
 - Không dùng shared utility để phá dependency rule; utility phải thuộc đúng tầng.
@@ -203,6 +205,8 @@ tests/
 ```
 
 Mỗi feature nên đi theo vertical slice bên trong các tầng: `enqueue`, `effect`, `outcome`, `recovery`. Không tạo một thư mục khổng lồ kiểu `services/` chứa mọi logic.
+
+Sơ đồ sequence chuẩn để review implementation và vẽ Console nằm tại [`docs/runtime-flows.md`](docs/runtime-flows.md).
 
 ## 5. Luồng dữ liệu chuẩn
 

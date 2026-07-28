@@ -70,6 +70,7 @@ const (
 
 type Config struct {
 	Store    ports.JobStore
+	Effects  ports.EffectStore
 	Handlers *HandlerRegistry
 	// Owner identifies this worker in every lease it takes. Two workers sharing
 	// an owner cannot be told apart by the fencing check.
@@ -108,6 +109,7 @@ type Config struct {
 
 type Worker struct {
 	store           ports.JobStore
+	effects         ports.EffectStore
 	handlers        *HandlerRegistry
 	policy          retry.Policy
 	owner           string
@@ -176,7 +178,7 @@ func New(config Config) (*Worker, error) {
 		config.Now = time.Now
 	}
 	worker := &Worker{
-		store: config.Store, handlers: config.Handlers, policy: config.RetryPolicy,
+		store: config.Store, effects: config.Effects, handlers: config.Handlers, policy: config.RetryPolicy,
 		owner: config.Owner, concurrency: config.Concurrency, prefetch: config.PrefetchFactor,
 		maxClaimBatch: config.MaxClaimBatch, leaseDuration: config.LeaseDuration,
 		heartbeatEvery: config.HeartbeatEvery, pollInterval: config.PollInterval,
@@ -446,6 +448,7 @@ func (w *Worker) fail(lease ports.Lease, class retry.Class, retryAfter time.Dura
 	case class == retry.Cancelled:
 		transition = ports.FailureTransition{State: job.Cancelled}
 	}
+	transition.FailureClass = string(class)
 	w.transition(lease, transition)
 }
 
@@ -454,6 +457,14 @@ func (w *Worker) transition(lease ports.Lease, transition ports.FailureTransitio
 	defer cancel()
 	if err := w.store.Fail(ctx, lease, w.now(), transition); err != nil {
 		w.report(err)
+		return
+	}
+	if w.effects != nil {
+		if _, err := w.effects.MarkPendingUncertain(ctx, []ports.ExpiredLease{{
+			JobID: lease.JobID, Epoch: lease.Epoch,
+		}}); err != nil {
+			w.report(err)
+		}
 	}
 }
 

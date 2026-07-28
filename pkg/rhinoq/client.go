@@ -12,6 +12,7 @@ import (
 	"github.com/rhinoq/rhinoq/internal/adapters/postgres"
 	"github.com/rhinoq/rhinoq/internal/application/operations"
 	"github.com/rhinoq/rhinoq/internal/domain/admission"
+	"github.com/rhinoq/rhinoq/internal/domain/attempt"
 	"github.com/rhinoq/rhinoq/internal/domain/job"
 	"github.com/rhinoq/rhinoq/internal/domain/recovery"
 	"github.com/rhinoq/rhinoq/internal/domain/retry"
@@ -133,6 +134,20 @@ type AuditRecord struct {
 	OccurredAt time.Time
 	PrevHash   string
 	RowHash    string
+}
+
+// AttemptEvent is one immutable fact in a job's execution timeline.
+type AttemptEvent struct {
+	Sequence      int64     `json:"sequence"`
+	JobID         string    `json:"jobId"`
+	Attempt       int       `json:"attempt"`
+	LeaseOwner    string    `json:"leaseOwner"`
+	LeaseEpoch    int64     `json:"leaseEpoch"`
+	Kind          string    `json:"kind"`
+	ResultState   string    `json:"resultState,omitempty"`
+	FailureClass  string    `json:"failureClass,omitempty"`
+	BlockedReason string    `json:"blockedReason,omitempty"`
+	OccurredAt    time.Time `json:"occurredAt"`
 }
 
 // AdmissionPolicy is the producer backpressure budget for one queue.
@@ -427,6 +442,25 @@ func (c *Client) JobCounts(ctx context.Context, queue string) (map[string]int64,
 	return result, nil
 }
 
+// AttemptTimeline returns append-only execution evidence in sequence order.
+func (c *Client) AttemptTimeline(ctx context.Context, id string, offset, limit int) ([]AttemptEvent, error) {
+	if c == nil || c.store == nil {
+		return nil, errors.New("rhinoq store is required")
+	}
+	if limit == 0 {
+		limit = 50
+	}
+	events, err := c.store.ListAttemptEvents(ctx, ports.JobID(id), offset, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AttemptEvent, 0, len(events))
+	for _, event := range events {
+		result = append(result, summarizeAttempt(event))
+	}
+	return result, nil
+}
+
 func (c *Client) ListAttention(ctx context.Context, queue string, offset, limit int) ([]AttentionItem, error) {
 	if c == nil || c.recovery == nil {
 		return nil, errors.New("rhinoq recovery store is not configured")
@@ -519,7 +553,7 @@ func (c *Client) RunWorker(ctx context.Context, config WorkerConfig) error {
 	}
 	settings := config.withDefaults()
 	runtime, err := worker.New(worker.Config{
-		Store: c.store, Handlers: c.handlers, Owner: settings.Name,
+		Store: c.store, Effects: c.effects, Handlers: c.handlers, Owner: settings.Name,
 		RetryPolicy: retry.Policy{
 			MaxAttempts: settings.MaxAttempts, BaseDelay: settings.RetryBaseDelay,
 			MaxDelay: settings.RetryMaxDelay, Jitter: 0.2,
@@ -571,5 +605,15 @@ func summarizeAudit(record recovery.AuditRecord) AuditRecord {
 		ID: record.ID, JobID: record.JobID.String(), Action: record.Action,
 		Actor: record.Actor, Reason: record.Reason, OccurredAt: record.OccurredAt,
 		PrevHash: record.PrevHash, RowHash: record.RowHash,
+	}
+}
+
+func summarizeAttempt(event attempt.Event) AttemptEvent {
+	return AttemptEvent{
+		Sequence: event.Sequence, JobID: event.JobID.String(), Attempt: event.Attempt,
+		LeaseOwner: event.LeaseOwner, LeaseEpoch: event.LeaseEpoch,
+		Kind: string(event.Kind), ResultState: event.ResultState.String(),
+		FailureClass: event.FailureClass, BlockedReason: string(event.BlockedReason),
+		OccurredAt: event.OccurredAt,
 	}
 }
