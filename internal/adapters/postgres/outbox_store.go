@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
@@ -34,26 +38,47 @@ func (s *OutboxStore) Append(ctx context.Context, event ports.OutboxEvent) error
 	return err
 }
 
-func (s *OutboxStore) ClaimUnpublished(ctx context.Context, limit int) ([]ports.OutboxEvent, error) {
+// ClaimUnpublished takes a batch in a single statement. The previous
+// implementation selected the batch and then issued one UPDATE per event inside
+// the loop, so claiming N events cost N+1 round trips while holding a
+// transaction open over all of them.
+//
+// It also reclaims batches whose claim went stale. The claim filter skips
+// claimed rows, so a publisher that died between claiming and marking used to
+// strand its batch permanently: nothing would ever look at those rows again.
+func (s *OutboxStore) ClaimUnpublished(
+	ctx context.Context,
+	limit int,
+	reclaimAfter time.Duration,
+) ([]ports.OutboxEvent, error) {
 	if limit <= 0 {
 		return nil, errors.New("outbox claim limit must be positive")
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		return nil, err
+	if reclaimAfter <= 0 {
+		reclaimAfter = ports.DefaultOutboxReclaimAfter
 	}
-	defer tx.Rollback()
 	claimID, err := newID("outbox")
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, aggregate_type, aggregate_id, event_type, payload
-		FROM rhinoq_outbox
-		WHERE published_at IS NULL
-		  AND claimed_at IS NULL
-		ORDER BY created_at, id
-		FOR UPDATE SKIP LOCKED LIMIT $1`, limit)
+	rows, err := s.db.QueryContext(ctx, `
+		WITH candidates AS (
+			SELECT id FROM rhinoq_outbox
+			WHERE published_at IS NULL
+			  AND (
+			      claimed_at IS NULL
+			      OR claimed_at <= now() - ($3::bigint * interval '1 millisecond')
+			  )
+			ORDER BY created_at, id
+			FOR UPDATE SKIP LOCKED
+			LIMIT $2
+		)
+		UPDATE rhinoq_outbox o
+		SET claimed_at = now(), claim_id = $1
+		FROM candidates c
+		WHERE o.id = c.id
+		RETURNING o.id, o.aggregate_type, o.aggregate_id, o.event_type, o.payload`,
+		claimID, limit, reclaimAfter.Milliseconds())
 	if err != nil {
 		return nil, err
 	}
@@ -65,33 +90,68 @@ func (s *OutboxStore) ClaimUnpublished(ctx context.Context, limit int) ([]ports.
 			return nil, err
 		}
 		event.ClaimID = claimID
-		if _, err := tx.ExecContext(ctx, `UPDATE rhinoq_outbox SET claimed_at = now(), claim_id = $1 WHERE id = $2`, claimID, event.ID); err != nil {
-			return nil, err
-		}
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
+	// UPDATE ... RETURNING has no ordering guarantee, but publication order must
+	// follow creation order for a consumer reading an aggregate's timeline.
+	sort.Slice(events, func(i, j int) bool { return events[i].ID < events[j].ID })
 	return events, nil
 }
 
-func (s *OutboxStore) MarkPublished(ctx context.Context, eventID int64, claimID string) error {
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE rhinoq_outbox SET published_at = now()
-		WHERE id = $1 AND claim_id = $2 AND published_at IS NULL`, eventID, claimID)
+func (s *OutboxStore) MarkPublishedBatch(ctx context.Context, claimID string, ids []int64) (int, error) {
+	return s.settleBatch(ctx, claimID, ids, `
+		UPDATE rhinoq_outbox
+		SET published_at = now()
+		WHERE claim_id = $1 AND published_at IS NULL AND id = ANY($2::bigint[])`)
+}
+
+// MarkFailedBatch releases a claim without publishing. Without it a failed
+// publish would leave the batch claimed until the reclaim timeout, delaying
+// every event behind a transient transport error.
+func (s *OutboxStore) MarkFailedBatch(ctx context.Context, claimID string, ids []int64) (int, error) {
+	return s.settleBatch(ctx, claimID, ids, `
+		UPDATE rhinoq_outbox
+		SET claimed_at = NULL, claim_id = NULL
+		WHERE claim_id = $1 AND published_at IS NULL AND id = ANY($2::bigint[])`)
+}
+
+// settleBatch applies one statement to a whole claimed batch. The claim id is
+// part of the predicate, so a publisher that lost its claim to the reclaim
+// sweep cannot settle rows another publisher now owns.
+func (s *OutboxStore) settleBatch(ctx context.Context, claimID string, ids []int64, query string) (int, error) {
+	if claimID == "" {
+		return 0, errors.New("outbox claim id is required")
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result, err := s.db.ExecContext(ctx, query, claimID, int64ArrayLiteral(ids))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if affected == 0 {
-		return ErrNotFound
+	return int(affected), nil
+}
+
+// int64ArrayLiteral renders a PostgreSQL array literal. The store accepts any
+// database/sql driver, so it cannot depend on a driver-specific array type such
+// as pq.Int64Array or pgx's encoder. Formatting int64 values cannot inject:
+// strconv only ever produces digits and a leading minus.
+func int64ArrayLiteral(ids []int64) string {
+	var buf strings.Builder
+	buf.WriteByte('{')
+	for index, id := range ids {
+		if index > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(strconv.FormatInt(id, 10))
 	}
-	return nil
+	buf.WriteByte('}')
+	return buf.String()
 }
