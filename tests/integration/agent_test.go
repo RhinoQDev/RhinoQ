@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/interfaces/agent"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/internal/interfaces/agent"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 const agentToken = "test-token"

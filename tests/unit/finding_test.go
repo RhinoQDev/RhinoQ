@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/finding"
+	"github.com/madebyduy/RhinoQ/internal/domain/finding"
 )
 
 func TestFindingObservationDeduplicatesAndRegresses(t *testing.T) {

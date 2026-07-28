@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 // Config wires one Agent process.

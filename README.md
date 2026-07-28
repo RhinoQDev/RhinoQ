@@ -108,33 +108,24 @@ smoke test only; the next steps switch to durable PostgreSQL storage.
 
 ### 1. Install
 
-From a RhinoQ repository checkout, install the preview CLI:
+Add the library to an existing application:
 
 ```bash
-go install ./cmd/rhinoq
+go get github.com/madebyduy/RhinoQ/pkg/rhinoq@latest
+go get github.com/jackc/pgx/v5
+```
+
+Install the CLI, which applies migrations and runs the diagnostics:
+
+```bash
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
 rhinoq version
 ```
 
-The canonical Go module distribution is not published from its final repository
-path yet. To evaluate the library from this checkout inside a target
-application, use an explicit local replacement:
-
-```bash
-go mod edit -replace=github.com/rhinoq/rhinoq=/absolute/path/to/rhinoq
-go get github.com/rhinoq/rhinoq/pkg/rhinoq
-go get github.com/jackc/pgx/v5
-```
-
-Windows PowerShell example:
-
-```powershell
-go mod edit "-replace=github.com/rhinoq/rhinoq=C:\src\RhinoQ"
-go get github.com/rhinoq/rhinoq/pkg/rhinoq
-go get github.com/jackc/pgx/v5
-```
-
-Do not commit this machine-specific replacement in a shared application.
-Versioned remote installation remains a release blocker.
+Until a semver tag is published, `@latest` resolves to a pseudo-version of the
+default branch. Pin the exact pseudo-version `go get` writes into `go.mod`
+rather than re-resolving it on every build, because the public API is still
+unstable.
 
 ### 2. Configure and prepare PostgreSQL
 
@@ -166,7 +157,7 @@ import (
     "syscall"
 
     _ "github.com/jackc/pgx/v5/stdlib"
-    "github.com/rhinoq/rhinoq/pkg/rhinoq"
+    "github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func main() {

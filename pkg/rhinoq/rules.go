@@ -5,9 +5,9 @@ import (
 	"errors"
 	"time"
 
-	ruleapp "github.com/rhinoq/rhinoq/internal/application/rules"
-	"github.com/rhinoq/rhinoq/internal/domain/rule"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	ruleapp "github.com/madebyduy/RhinoQ/internal/application/rules"
+	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 const (

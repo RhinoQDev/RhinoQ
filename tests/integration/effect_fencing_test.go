@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	applicationeffect "github.com/rhinoq/rhinoq/internal/application/effect"
-	"github.com/rhinoq/rhinoq/internal/domain/effect"
-	"github.com/rhinoq/rhinoq/internal/ports"
-	"github.com/rhinoq/rhinoq/internal/runtime/lease"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	applicationeffect "github.com/madebyduy/RhinoQ/internal/application/effect"
+	"github.com/madebyduy/RhinoQ/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
 )
 
 // Opening an effect is the last point at which RhinoQ can stop a worker that

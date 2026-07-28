@@ -2,15 +2,15 @@
 // a real database harness. The embedded library accepts database/sql so
 // applications still own their pool and driver; the official root CLI bundles
 // pgx separately.
-module github.com/rhinoq/rhinoq/tests/postgres
+module github.com/madebyduy/RhinoQ/tests/postgres
 
 go 1.22
 
-replace github.com/rhinoq/rhinoq => ../..
+replace github.com/madebyduy/RhinoQ => ../..
 
 require (
 	github.com/jackc/pgx/v5 v5.7.2
-	github.com/rhinoq/rhinoq v0.0.0-00010101000000-000000000000
+	github.com/madebyduy/RhinoQ v0.0.0-00010101000000-000000000000
 )
 
 require (

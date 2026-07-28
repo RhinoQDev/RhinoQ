@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/effect"
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/domain/recovery"
+	"github.com/madebyduy/RhinoQ/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 )
 
 func TestReplayValidationFailsClosedForEffects(t *testing.T) {

@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	"github.com/rhinoq/rhinoq/internal/application/operations"
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/domain/retry"
-	"github.com/rhinoq/rhinoq/internal/ports"
-	"github.com/rhinoq/rhinoq/internal/runtime/worker"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	"github.com/madebyduy/RhinoQ/internal/application/operations"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/retry"
+	"github.com/madebyduy/RhinoQ/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/runtime/worker"
 )
 
 func TestCancelPendingJobCannotBeClaimed(t *testing.T) {

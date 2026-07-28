@@ -55,7 +55,7 @@ go run ./cmd/rhinoq workbench --demo
 Once a tagged release exists, the intended installation command is:
 
 ```bash
-go install github.com/rhinoq/rhinoq/cmd/rhinoq@<version>
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@<version>
 ```
 
 Do not put `@latest` into production automation until RhinoQ publishes its

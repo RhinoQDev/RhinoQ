@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func TestAttemptTimelinePersistsTerminalEvidence(t *testing.T) {

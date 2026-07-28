@@ -20,33 +20,23 @@ Gateway; chỉ Node worker mới cần Gateway.
 
 ## 1. Cài library và CLI
 
-Từ checkout của repository RhinoQ:
+Thêm library vào application đang có:
 
 ```bash
-go install ./cmd/rhinoq
+go get github.com/madebyduy/RhinoQ/pkg/rhinoq@latest
+go get github.com/jackc/pgx/v5
+```
+
+Cài CLI để migrate, kiểm tra và vận hành:
+
+```bash
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
 rhinoq version
 ```
 
-Canonical Go module chưa được publish từ repository path cuối cùng. Để thử
-library từ checkout hiện tại trong application khác, dùng local replacement
-explicit:
-
-```bash
-go mod edit -replace=github.com/rhinoq/rhinoq=/absolute/path/to/rhinoq
-go get github.com/rhinoq/rhinoq/pkg/rhinoq
-go get github.com/jackc/pgx/v5
-```
-
-PowerShell:
-
-```powershell
-go mod edit "-replace=github.com/rhinoq/rhinoq=C:\src\RhinoQ"
-go get github.com/rhinoq/rhinoq/pkg/rhinoq
-go get github.com/jackc/pgx/v5
-```
-
-Không commit local path này vào application dùng chung. Remote versioned
-install vẫn là release blocker.
+Chưa có semver tag, nên `@latest` trả về pseudo-version của default branch.
+Hãy pin đúng pseudo-version mà `go get` ghi vào `go.mod` thay vì resolve lại
+mỗi lần build, vì public API còn chưa ổn định.
 
 Nếu chưa cài CLI, có thể chạy trực tiếp ngay trong repository:
 
@@ -90,7 +80,7 @@ import (
     "os"
 
     _ "github.com/jackc/pgx/v5/stdlib"
-    "github.com/rhinoq/rhinoq/pkg/rhinoq"
+    "github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func Open(ctx context.Context) (*rhinoq.Client, *sql.DB, error) {

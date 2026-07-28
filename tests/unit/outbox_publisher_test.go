@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/ports"
-	"github.com/rhinoq/rhinoq/internal/runtime/scheduler"
+	"github.com/madebyduy/RhinoQ/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/runtime/scheduler"
 )
 
 type fakeOutbox struct {

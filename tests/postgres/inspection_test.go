@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func TestDeveloperInspectionReadsJobEffectAndOutcomeEvidence(t *testing.T) {

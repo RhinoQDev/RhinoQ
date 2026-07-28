@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	findingapp "github.com/rhinoq/rhinoq/internal/application/findings"
-	"github.com/rhinoq/rhinoq/internal/domain/finding"
+	findingapp "github.com/madebyduy/RhinoQ/internal/application/findings"
+	"github.com/madebyduy/RhinoQ/internal/domain/finding"
 )
 
 const (

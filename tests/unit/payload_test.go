@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 )
 
 func TestPayloadLimit(t *testing.T) {

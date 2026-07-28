@@ -12,8 +12,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/runtime/shutdown"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/internal/runtime/shutdown"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func openClient(

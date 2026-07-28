@@ -8,9 +8,9 @@ import (
 	"sort"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/finding"
-	"github.com/rhinoq/rhinoq/internal/domain/recovery"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/finding"
+	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 type Service struct {

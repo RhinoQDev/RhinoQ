@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/rhinoq/rhinoq/internal/infrastructure/health"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/health"
 )
 
 type healthCheck struct {

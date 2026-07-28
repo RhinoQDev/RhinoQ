@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func TestAttemptTimelineIsAppendOnlyAcrossReleaseAndCompletion(t *testing.T) {

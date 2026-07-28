@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/effect"
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/domain/outcome"
-	"github.com/rhinoq/rhinoq/internal/domain/recovery"
+	"github.com/madebyduy/RhinoQ/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
+	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 )
 
 type RecoveryStore struct {

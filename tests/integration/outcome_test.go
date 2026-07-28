@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	"github.com/rhinoq/rhinoq/internal/application/verification"
-	"github.com/rhinoq/rhinoq/internal/domain/outcome"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	"github.com/madebyduy/RhinoQ/internal/application/verification"
+	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
 )
 
 type fixedVerifier struct {

@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/adapters/memory"
-	"github.com/rhinoq/rhinoq/internal/application/operations"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
+	"github.com/madebyduy/RhinoQ/internal/application/operations"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 func TestQueueRateLimitIsGlobalAcrossClaims(t *testing.T) {

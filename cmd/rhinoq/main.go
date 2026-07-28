@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/infrastructure/config"
-	"github.com/rhinoq/rhinoq/internal/infrastructure/migrations"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/config"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/migrations"
 )
 
 func main() {

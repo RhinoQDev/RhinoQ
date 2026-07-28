@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/interfaces/workbench"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/internal/interfaces/workbench"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 const workbenchVersion = "0.1.0-dev"

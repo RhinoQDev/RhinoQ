@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 )
 
 func TestEffectivePriorityAgesWaitingWorkWithinACap(t *testing.T) {

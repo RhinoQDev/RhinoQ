@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 func TestRuleDefinitionsAreVersionedAndStartAsDraft(t *testing.T) {

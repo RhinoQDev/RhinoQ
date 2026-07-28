@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	domaineffect "github.com/rhinoq/rhinoq/internal/domain/effect"
-	"github.com/rhinoq/rhinoq/internal/runtime/lease"
-	"github.com/rhinoq/rhinoq/pkg/rhinoq"
+	domaineffect "github.com/madebyduy/RhinoQ/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
 // Opening an effect is the last place a duplicate charge can be stopped, so the

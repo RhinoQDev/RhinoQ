@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/rhinoq/rhinoq/internal/domain/outcome"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var _ ports.OutcomeReader = (*OutcomeStore)(nil)

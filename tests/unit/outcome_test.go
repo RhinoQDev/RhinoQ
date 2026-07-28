@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/outcome"
+	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
 )
 
 func TestOutcomeApplyPreservesBusinessMeaning(t *testing.T) {

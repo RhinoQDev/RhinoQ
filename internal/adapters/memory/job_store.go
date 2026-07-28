@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/admission"
-	"github.com/rhinoq/rhinoq/internal/domain/attempt"
-	"github.com/rhinoq/rhinoq/internal/domain/job"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/admission"
+	"github.com/madebyduy/RhinoQ/internal/domain/attempt"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 // JobStore implements the full job port; the assertion keeps a missing method

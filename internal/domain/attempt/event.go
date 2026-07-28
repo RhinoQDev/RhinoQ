@@ -9,7 +9,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/job"
+	"github.com/madebyduy/RhinoQ/internal/domain/job"
 )
 
 // Kind describes one fact in an execution lifecycle.

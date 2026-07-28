@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/contracts/diagnostic"
+	"github.com/madebyduy/RhinoQ/internal/contracts/diagnostic"
 )
 
 // Mode is what RhinoQ does with work that arrives at a full queue.

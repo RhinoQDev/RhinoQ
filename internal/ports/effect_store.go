@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/effect"
+	"github.com/madebyduy/RhinoQ/internal/domain/effect"
 )
 
 // EffectStore records external side effects. Opening and confirming an effect

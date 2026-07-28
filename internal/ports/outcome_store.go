@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/outcome"
+	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
 )
 
 type OutcomeStore interface {

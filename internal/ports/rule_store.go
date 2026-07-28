@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/internal/domain/rule"
 )
 
 type RuleStore interface {

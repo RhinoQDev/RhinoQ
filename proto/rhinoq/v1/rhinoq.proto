@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package rhinoq.v1;
 
-option go_package = "github.com/rhinoq/rhinoq/gen/rhinoq/v1";
+option go_package = "github.com/madebyduy/RhinoQ/gen/rhinoq/v1";
 
 service RhinoQAgent {
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);

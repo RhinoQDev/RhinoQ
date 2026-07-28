@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rhinoq/rhinoq/internal/domain/finding"
-	"github.com/rhinoq/rhinoq/internal/ports"
+	"github.com/madebyduy/RhinoQ/internal/domain/finding"
+	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var _ ports.FindingStore = (*FindingStore)(nil)
