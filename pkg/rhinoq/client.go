@@ -16,8 +16,10 @@ import (
 	"github.com/rhinoq/rhinoq/internal/domain/job"
 	"github.com/rhinoq/rhinoq/internal/domain/recovery"
 	"github.com/rhinoq/rhinoq/internal/domain/retry"
+	"github.com/rhinoq/rhinoq/internal/domain/rule"
 	"github.com/rhinoq/rhinoq/internal/ports"
 	"github.com/rhinoq/rhinoq/internal/runtime/lease"
+	"github.com/rhinoq/rhinoq/internal/runtime/rulescheduler"
 	"github.com/rhinoq/rhinoq/internal/runtime/supervisor"
 	"github.com/rhinoq/rhinoq/internal/runtime/worker"
 )
@@ -247,6 +249,7 @@ type Client struct {
 	rules         ports.RuleStore
 	ruleExplainer ports.RuleExplainer
 	ruleEvaluator ports.RuleEvaluator
+	ruleSchedules ports.RuleScheduleStore
 	handlers      *worker.HandlerRegistry
 	// retry is the policy applied to failures reported through the remote
 	// worker API, where no in-process worker owns a policy.
@@ -282,7 +285,8 @@ func NewInMemory() *Client {
 	return &Client{
 		store: jobs, effects: effects, recovery: recoveryStore,
 		findings: findingStore, rules: ruleStore,
-		handlers: worker.NewHandlerRegistry(),
+		ruleSchedules: ruleStore,
+		handlers:      worker.NewHandlerRegistry(),
 	}
 }
 
@@ -318,7 +322,8 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	return &Client{
 		store: store, effects: effects, recovery: recoveryStore,
 		findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
-		ruleEvaluator: ruleEvaluator, handlers: worker.NewHandlerRegistry(),
+		ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
+		handlers: worker.NewHandlerRegistry(),
 	}, nil
 }
 
@@ -339,7 +344,52 @@ func NewWithStore(store ports.JobStore) *Client {
 	if evaluator, ok := store.(ports.RuleEvaluator); ok {
 		client.ruleEvaluator = evaluator
 	}
+	if schedules, ok := store.(ports.RuleScheduleStore); ok {
+		client.ruleSchedules = schedules
+	}
 	return client
+}
+
+type RuleSchedulerConfig struct {
+	Owner        string
+	PollInterval time.Duration
+	Lease        time.Duration
+	ErrorBackoff time.Duration
+	ClaimBatch   int
+	OnError      func(error)
+}
+
+// RunRuleScheduler evaluates enabled table Rules from durable bounded cursors.
+// Multiple processes may run it; owner/epoch fencing lets only the current
+// schedule lease advance or complete a page.
+func (c *Client) RunRuleScheduler(
+	ctx context.Context,
+	config RuleSchedulerConfig,
+) error {
+	if c == nil || c.ruleSchedules == nil {
+		return errors.New("rhinoq rule scheduler store is not configured")
+	}
+	service, err := c.ruleService()
+	if err != nil {
+		return err
+	}
+	scheduler, err := rulescheduler.New(rulescheduler.Config{
+		Store: c.ruleSchedules,
+		Evaluate: func(
+			ctx context.Context, id, subjectID, cursor string,
+		) (rule.Evaluation, error) {
+			evaluation, _, err := service.Evaluate(ctx, id, subjectID, cursor)
+			return evaluation, err
+		},
+		Owner:        config.Owner,
+		PollInterval: config.PollInterval, Lease: config.Lease,
+		ErrorBackoff: config.ErrorBackoff, ClaimBatch: config.ClaimBatch,
+		OnError: config.OnError,
+	})
+	if err != nil {
+		return err
+	}
+	return scheduler.Run(ctx)
 }
 
 // Enqueue admits one job. It returns ErrQueueOverCapacity when the queue has an

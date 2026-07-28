@@ -3,7 +3,9 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,12 +19,21 @@ type RuleStore struct {
 	mu           sync.RWMutex
 	records      map[string]map[int]rule.Record
 	explanations map[string]map[int]rule.Explanation
+	schedules    map[string]memoryRuleSchedule
+}
+
+type memoryRuleSchedule struct {
+	cursor, owner string
+	epoch         int64
+	nextRunAt     time.Time
+	expiresAt     time.Time
 }
 
 func NewRuleStore() *RuleStore {
 	return &RuleStore{
 		records:      make(map[string]map[int]rule.Record),
 		explanations: make(map[string]map[int]rule.Explanation),
+		schedules:    make(map[string]memoryRuleSchedule),
 	}
 }
 
@@ -175,4 +186,103 @@ func (s *RuleStore) GetRuleExplanation(
 	defer s.mu.RUnlock()
 	explanation, found := s.explanations[id][version]
 	return explanation, found, nil
+}
+
+func scheduleKey(id string, version int) string {
+	return id + ":" + fmt.Sprint(version)
+}
+
+func (s *RuleStore) ClaimDueRules(
+	_ context.Context, owner string, now time.Time, leaseFor time.Duration, limit int,
+) ([]rule.ScheduleLease, error) {
+	if owner == "" || now.IsZero() || leaseFor <= 0 || limit <= 0 || limit > 100 {
+		return nil, rule.ErrInvalidRule
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidates := make([]rule.Record, 0)
+	for _, versions := range s.records {
+		for _, record := range versions {
+			if record.Scope != rule.TableScope || record.Status != rule.Enabled {
+				continue
+			}
+			state := s.schedules[scheduleKey(record.ID, record.Version)]
+			if (state.nextRunAt.IsZero() || !state.nextRunAt.After(now)) &&
+				(state.expiresAt.IsZero() || !state.expiresAt.After(now)) {
+				candidates = append(candidates, record)
+			}
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].ID < candidates[j].ID
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	leases := make([]rule.ScheduleLease, 0, len(candidates))
+	for _, record := range candidates {
+		key := scheduleKey(record.ID, record.Version)
+		state := s.schedules[key]
+		state.owner = owner
+		state.epoch++
+		state.expiresAt = now.Add(leaseFor)
+		s.schedules[key] = state
+		leases = append(leases, rule.ScheduleLease{
+			RuleID: record.ID, Version: record.Version, Owner: owner,
+			Epoch: state.epoch, Cursor: state.cursor, Every: record.Every,
+			ClaimedAt: now, ExpiresAt: state.expiresAt,
+		})
+	}
+	return leases, nil
+}
+
+func (s *RuleStore) AdvanceRuleCursor(
+	_ context.Context, lease rule.ScheduleLease, cursor string,
+) error {
+	if strings.TrimSpace(cursor) == "" {
+		return rule.ErrInvalidRule
+	}
+	return s.updateSchedule(lease, func(state *memoryRuleSchedule) {
+		state.cursor, state.nextRunAt = cursor, lease.ClaimedAt
+		state.owner, state.expiresAt = "", time.Time{}
+	})
+}
+
+func (s *RuleStore) CompleteRuleRun(
+	_ context.Context, lease rule.ScheduleLease,
+) error {
+	return s.updateSchedule(lease, func(state *memoryRuleSchedule) {
+		state.cursor, state.nextRunAt = "", lease.ClaimedAt.Add(lease.Every)
+		state.owner, state.expiresAt = "", time.Time{}
+	})
+}
+
+func (s *RuleStore) FailRuleRun(
+	_ context.Context, lease rule.ScheduleLease, retryAfter time.Duration, _ string,
+) error {
+	if retryAfter <= 0 {
+		return rule.ErrInvalidRule
+	}
+	return s.updateSchedule(lease, func(state *memoryRuleSchedule) {
+		state.nextRunAt = lease.ClaimedAt.Add(retryAfter)
+		state.owner, state.expiresAt = "", time.Time{}
+	})
+}
+
+func (s *RuleStore) updateSchedule(
+	lease rule.ScheduleLease, update func(*memoryRuleSchedule),
+) error {
+	if err := lease.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := scheduleKey(lease.RuleID, lease.Version)
+	state, found := s.schedules[key]
+	if !found || state.owner != lease.Owner || state.epoch != lease.Epoch {
+		return rule.ErrScheduleLeaseLost
+	}
+	update(&state)
+	s.schedules[key] = state
+	return nil
 }

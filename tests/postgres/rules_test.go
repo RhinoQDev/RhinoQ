@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	postgresadapter "github.com/rhinoq/rhinoq/internal/adapters/postgres"
+	"github.com/rhinoq/rhinoq/internal/domain/rule"
 	"github.com/rhinoq/rhinoq/pkg/rhinoq"
 )
 
@@ -106,6 +108,55 @@ func TestRuleExplainBlocksCostAndResultShapeViolations(t *testing.T) {
 	if explanation.Safe || len(explanation.Reasons) < 2 ||
 		record.Status != rhinoq.RuleDraft {
 		t.Fatalf("shape and cost violations must keep draft with reasons: rule=%+v explain=%+v", record, explanation)
+	}
+}
+
+func TestRuleScheduleCursorSurvivesCrashAndRejectsStaleOwner(t *testing.T) {
+	client := newClient(t)
+	createRuleFixture(t)
+	_, err := client.RegisterRule(context.Background(), rhinoq.RuleDefinition{
+		ID: "scheduled-order-rule", Name: "Scheduled order rule",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "order",
+		Query: `SELECT id::text AS subject_id, status = 'paid' AS violated,
+			'{}'::jsonb AS evidence FROM rhinoq_rule_test_orders
+			WHERE created_at >= $1 AND id::text > $2
+			ORDER BY id::text LIMIT $3`,
+		BaselineAt: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Every:      time.Minute, MaxRows: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.EnableRule(context.Background(), "scheduled-order-rule"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := postgresadapter.NewRuleStore(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	first, err := store.ClaimDueRules(
+		context.Background(), "scheduler-a", now, time.Second, 1,
+	)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first scheduler must claim the due rule: leases=%+v err=%v", first, err)
+	}
+	if err := store.AdvanceRuleCursor(
+		context.Background(), first[0], "10",
+	); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ClaimDueRules(
+		context.Background(), "scheduler-b", now, time.Second, 1,
+	)
+	if err != nil || len(second) != 1 || second[0].Cursor != "10" ||
+		second[0].Epoch <= first[0].Epoch {
+		t.Fatalf("replacement scheduler must resume a fenced cursor: leases=%+v err=%v", second, err)
+	}
+	if err := store.CompleteRuleRun(
+		context.Background(), first[0],
+	); !errors.Is(err, rule.ErrScheduleLeaseLost) {
+		t.Fatalf("stale scheduler must not complete a newer lease: %v", err)
 	}
 }
 

@@ -23,3 +23,12 @@ type RuleExplainer interface {
 type RuleEvaluator interface {
 	EvaluateRule(ctx context.Context, record rule.Record, subjectID, cursor string) (rule.Evaluation, error)
 }
+
+// RuleScheduleStore owns durable scheduler cursors and fenced run leases.
+// Advancing and completing require the exact owner/epoch returned by Claim.
+type RuleScheduleStore interface {
+	ClaimDueRules(ctx context.Context, owner string, now time.Time, leaseFor time.Duration, limit int) ([]rule.ScheduleLease, error)
+	AdvanceRuleCursor(ctx context.Context, lease rule.ScheduleLease, cursor string) error
+	CompleteRuleRun(ctx context.Context, lease rule.ScheduleLease) error
+	FailRuleRun(ctx context.Context, lease rule.ScheduleLease, retryAfter time.Duration, message string) error
+}

@@ -94,5 +94,19 @@ For every observation:
   event;
 - a healthy subject without a Finding creates no record.
 
-The current implementation exposes bounded manual pages. Persistent scheduler
-cursors, periodic execution and crash recovery between pages are still pending.
+Periodic table evaluation uses a durable cursor and an owner/epoch-fenced
+schedule lease. A crash leaves the last completed page cursor in PostgreSQL;
+after lease expiry another scheduler resumes there. A completed full scan
+clears the cursor and schedules the next run from the Rule's `Every` interval.
+
+```go
+err := queue.RunRuleScheduler(ctx, rhinoq.RuleSchedulerConfig{
+    Owner:        "integrity-1",
+    PollInterval: time.Second,
+    Lease:        time.Minute,
+    ClaimBatch:   4,
+})
+```
+
+Each claim evaluates one bounded page. Failures release the lease with a
+backoff, while a stale owner or epoch cannot advance or complete the schedule.

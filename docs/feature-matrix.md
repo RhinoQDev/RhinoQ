@@ -30,7 +30,7 @@ execution platforms.
 | Flow/dependency graph | supported | intentionally not v0.1 |
 | Effect uncertainty | not external-effect aware by default | Effect Ledger implemented |
 | Business outcome | not native | Outcome contract implemented |
-| Integrity Rules | application-specific | versioned job/table SQL contract, read-only evaluator and Explain gate implemented; periodic scheduler pending |
+| Integrity Rules | application-specific | versioned job/table SQL contract, read-only evaluator, Explain gate and fenced periodic scheduler implemented |
 | Metrics export | Prometheus exporters | `/metrics` text format implemented, no client library dependency |
 | Health probes | not applicable | `/health/live` and `/health/ready` implemented separately |
 | Polyglot workers | Node only | Agent HTTP surface with protocol negotiation and a language-neutral error envelope implemented |

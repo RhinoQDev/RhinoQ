@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added crash-safe periodic table Rule evaluation with migration
+  `007_rule_schedules.sql`, bounded page cursors, database-clock scheduling,
+  owner/epoch fencing, failure backoff, and a public `RunRuleScheduler` runtime.
 - Added append-only job/table integrity Rules with memory/PostgreSQL stores,
   draft/enable/disable lifecycle, Agent/Go APIs and migration `006_rules.sql`.
 - Added PostgreSQL read-only Rule Explain and evaluation: statement timeout,

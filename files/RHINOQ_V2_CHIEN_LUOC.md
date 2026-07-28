@@ -3,12 +3,11 @@
 > Tài liệu này **thay thế** các mục 6, 51, 55, 56, 57, 59, 60, 61, 62 của `RHINOQ.md`.
 > Toàn bộ phần kỹ thuật (mục 8–50) **giữ nguyên** — xem mục 12 để biết chính xác phần nào sống, phần nào chết.
 > Nó cũng thay thế `RHINOQ_NANG_CAP.md` (bản đề xuất bỏ hẳn queue layer — bản đó sai, xem mục 2.3).
-
-> **Trạng thái review 2026-07-28:** hướng chiến lược “giữ queue, đưa
-> differentiator lên sớm” được chấp nhận. Các claim tuyệt đối về đối thủ đã
-> được hạ xuống thành giả thuyết kiểm chứng. Đặc biệt, pg-boss hiện có
-> `@pg-boss/dashboard`, dependency workflows, rate limiting, priority và DLQ;
-> vì vậy “pg-boss không có console/flow” không còn là premise hợp lệ.
+>
+> **Review 2026-07-28:** bốn lớp COMMIT · RUN · VERIFY · RECOVER đều là sản
+> phẩm; RECOVER chỉ là cửa vào dễ demo. Các claim tuyệt đối phía dưới về đối thủ
+> được thay bằng giả thuyết cần kiểm chứng. pg-boss hiện có dashboard,
+> dependency workflows, rate limiting, priority và DLQ.
 
 ---
 
@@ -16,14 +15,14 @@
 
 RhinoQ **vẫn là job queue**. Không đổi thành công cụ audit, không đổi thành integrity layer đứng cạnh queue khác.
 
-RhinoQ là job queue bốn lớp: **COMMIT · RUN · VERIFY · RECOVER**. COMMIT và
-RUN là giá trị nền tảng; VERIFY và RECOVER là giá trị nhìn thấy được. RECOVER
-được ưu tiên làm cửa vào vì demo nhanh, không phải vì phần queue chỉ là cái vỏ.
+RhinoQ là job queue bốn lớp. COMMIT và RUN là giá trị nền tảng; VERIFY và
+RECOVER là giá trị nhìn thấy được. RECOVER được ưu tiên làm cửa vào vì demo
+nhanh, không phải vì ba lớp còn lại chỉ là “cái vỏ”.
 
 | | Vai trò | Bar phải đạt |
 | --- | --- | --- |
-| COMMIT + RUN | intent bền vững và execution đúng | đạt release gates đã công bố |
-| VERIFY + RECOVER | business integrity và safe recovery | chứng minh tốt hơn cron/SQL/admin nội bộ trên một workload thật |
+| COMMIT + RUN | queue foundation — intent bền vững và execution đúng | đạt release gates đã công bố |
+| VERIFY + RECOVER | business integrity — phát hiện, giải thích và xử lý sai lệch | tốt hơn cron/SQL/admin rời rạc trên workload thật |
 
 Sai lầm lớn nhất của `RHINOQ.md` bản gốc không phải chọn sai tính năng. Là **thứ tự**: differentiator nằm ở v0.2–v0.3, sau 12–18 tháng xây queue. Với một người làm ngoài giờ, thứ tự đó nghĩa là dự án chết trước khi khác biệt kịp xuất hiện.
 
@@ -38,28 +37,28 @@ Sai lầm lớn nhất của `RHINOQ.md` bản gốc không phải chọn sai t�
 | Sản phẩm | Hạ tầng | Trong DB của bạn? | Điểm mạnh | Điểm yếu khai thác được |
 | --- | --- | --- | --- | --- |
 | **BullMQ** | Redis | ❌ | flows/DAG, telemetry, hệ sinh thái chín muồi, có bản Pro | business join cần application/telemetry integration qua hai data store |
-| **pg-boss** | Postgres | ✅ | transactional enqueue, dashboard package, workflows, priority, rate limit, DLQ | chưa thấy packaged outside-in business rule + finding lifecycle trong official docs |
-| **Graphile Worker** | Postgres | ✅ | gọn, SQL/ORM-friendly, cron/backfill | business invariant và operator finding vẫn do application tự xây |
-| **DBOS** | Postgres | ✅ | durable execution in-process, nhiều SDK, Conductor UI | theo dõi workflow đã được start; missing-intent detection cần application rule/reconciliation |
-| **Hatchet** | Postgres-backed platform | tuỳ deployment | queue + DAG + durable execution + OTel + multi-tenant | business join cần explicit integration khi application data và engine data tách store/schema |
-| **Temporal / Restate** | cluster / service | ❌ | mạnh cho orchestration phức tạp | business invariant/reverse reconciliation vẫn là application-defined |
-| **Inngest / Trigger.dev** | cloud/self-host | tuỳ mode | DX tốt, durable task, hosted operations | data boundary và ownership phụ thuộc deployment/configuration |
+| **pg-boss** | Postgres | ✅ | transactional enqueue, dashboard, workflows, priority, rate limit, DLQ | official docs chưa đóng gói outside-in business Rule + Finding lifecycle |
+| **Graphile Worker** | Postgres | ✅ | rất nhanh, gọn | không UI, không business context |
+| **DBOS** | Postgres | ✅ | durable execution in-process, có Go SDK, hậu thuẫn mạnh | chỉ biết workflow **đã start** — không thấy việc chưa bao giờ được gọi |
+| **Hatchet** | Postgres | ❌ (DB riêng) | queue + DAG + durable execution + OTel + multi-tenant | DB tách biệt → mất khả năng join business |
+| **Temporal / Restate** | cluster / service | ❌ | mạnh nhất cho orchestration phức tạp | nặng, và cùng mù như trên |
+| **Inngest / Trigger.dev** | cloud | ❌ | DX tốt, serverless | payload rời khỏi hạ tầng của bạn |
 
-### 2.2 Product gap cần kiểm chứng — không phải moat không thể copy
+### 2.2 Product gap cần kiểm chứng, không phải moat không thể copy
 
-> Execution engine mặc định nhìn inside-out: những gì đã được enqueue/start.
-> RhinoQ đóng gói outside-in scan: từ business table ngược về intent/job.
+> **Tất cả bọn họ đều inside-out: chỉ biết những gì đã đi vào hệ thống của họ.**
+> RhinoQ nằm **trong chính database chứa business data** → có thể đi **outside-in**: từ business table ngược về job.
 
 Hệ quả cụ thể:
 
-- BullMQ ở Redis không có relational join trực tiếp; application vẫn có thể nối qua correlation/telemetry.
-- Hatchet, Temporal hoặc Restate có thể tích hợp business data, nhưng phải định nghĩa boundary rõ.
-- DBOS biết workflow đã start; order đáng lẽ có workflow nhưng chưa start cần một outside-in rule.
-- pg-boss ở cùng Postgres nên có nền tảng kỹ thuật tương tự; RhinoQ phải thắng bằng product packaging và operator lifecycle, không phải khả năng SQL độc quyền.
+- BullMQ ở Redis không có relational join trực tiếp; application vẫn có thể nối qua correlation/telemetry
+- Hatchet dùng DB riêng → cùng vấn đề
+- Durable workflow engine mặc định theo dõi execution đã start; missing intent vẫn cần application rule hoặc reconciliation
+- pg-boss ở trong Postgres nên *có thể* làm, nhưng triết lý của nó là tối giản — 8 năm qua chưa làm và sẽ không làm
 
-Đây là lợi thế về **default architecture và packaging**, không phải thứ đối thủ
-không thể copy. Moat chỉ hình thành nếu schema, baseline, dedup, timeline và
-repair workflow tốt hơn đáng kể so với application tự viết.
+Đây là lợi thế về default architecture và product packaging. pg-boss hoặc
+application code trong cùng Postgres có thể xây khả năng tương tự; RhinoQ phải
+thắng bằng baseline, evidence, dedup, lifecycle và safe recovery.
 
 ### 2.3 Vì sao không bỏ hẳn queue layer
 
@@ -74,23 +73,19 @@ Bản `RHINOQ_NANG_CAP.md` đề xuất bỏ queue, làm library đứng cạnh 
 
 Không có đường phân phối thì sản phẩm hay đến đâu cũng không ai thấy. Giữ queue.
 
-### 2.4 Reference gần nhất là pg-boss, nhưng không giả định feature set cũ
+### 2.4 Bar thật là pg-boss, không phải BullMQ
 
 Mục 9.1 của bản gốc đặt bar ở BullMQ. Sai — và chính cái sai đó làm scope phình gấp ba.
 
-Người dùng mục tiêu là **team ưu tiên Postgres và muốn giảm số data store**. Họ
-vẫn có thể so với BullMQ, DBOS hoặc Hatchet, nhưng pg-boss là reference gần
-nhất cho queue ergonomics.
+Người dùng mục tiêu là **team đã chọn Postgres, đã từ chối Redis**. Họ không so bạn với BullMQ; họ đã loại BullMQ rồi. Họ so bạn với pg-boss.
 
-Nghĩa là **không cần** ở v0.1: DAG đầy đủ, sandboxed processor, group rate
-limiting hoặc repeatable-job surface phức tạp. Không dùng lý do “pg-boss không
-có”; pg-boss hiện đã có dependency workflows, rate limiting và priorities.
-Lý do cắt là chúng không phục vụ integrity slice đầu tiên.
+Nghĩa là **không cần** ở v0.1: DAG đầy đủ, sandboxed processor hoặc
+repeatable-job surface phức tạp. Lý do cắt là chúng không phục vụ integrity
+slice đầu tiên, không phải vì pg-boss thiếu các capability đó.
 
-pg-boss hiện có [`@pg-boss/dashboard`](https://timgit.github.io/pg-boss/).
-Console queue list vì vậy chỉ là parity/DX, không phải differentiator. Cửa vào
-thị trường của RhinoQ phải là timeline theo business correlation, Rule và
-Finding—những thứ dashboard queue thông thường không tự biết.
+pg-boss hiện có `@pg-boss/dashboard`. Queue Console vì vậy là parity/DX; cửa
+vào của RhinoQ phải là business correlation, Rule evidence và Finding
+lifecycle.
 
 ---
 
@@ -118,7 +113,7 @@ order_4821                                          14:02:11 → 14:09:40
 **Vì sao đây là tính năng số một:**
 
 - Chuyển RhinoQ từ *"thứ chạy nền, thỉnh thoảng mở"* thành *"thứ mở mỗi khi khách hàng phàn nàn"*. Dùng hàng ngày = retention.
-- Queue dashboard không mặc nhiên có business semantic. RhinoQ có thể đóng gói việc ghép ba nguồn rẻ hơn khi dùng cùng Postgres; hệ thống khác vẫn có thể làm qua telemetry/integration.
+- Không ai copy được. BullMQ không có cột `business`. Hatchet không có. Datadog thấy log nhưng không hiểu semantic job. **Chỉ thứ nằm trong database mới ghép được ba nguồn.**
 - Bằng chứng nhu cầu mức A: công ty nào cũng có một trang admin nội bộ "tra order → xem trạng thái", viết đi viết lại, luôn tệ.
 - Chi phí thấp: dữ liệu đã có sẵn từ `correlation`, chỉ cần render.
 
@@ -162,7 +157,7 @@ Dùng SQL thật, không DSL. Dev đã biết SQL. Đổi lại **bắt buộc**
 
 Phản biện mạnh nhất: *"query đó tôi tự viết 50 dòng, cần gì library?"*
 
-Đúng. Query là phần dễ. Đây mới là phần nhiều team phải tự viết lại và thường thiếu lifecycle nhất quán:
+Đúng. Query là phần dễ. Đây mới là phần không ai tự viết tử tế:
 
 | Vấn đề | Script tự viết | RhinoQ |
 | --- | --- | --- |
@@ -244,7 +239,7 @@ Kéo người quay lại mà không cần họ nhớ. Chỉ bắn webhook — **
 | Reconciliation Engine như subsystem riêng | gộp vào Rule |
 | Effect adapter (Stripe/S3/HTTP) | **xem mục 6** |
 | Resource Governor, adaptive concurrency, circuit breaker, fair scheduling, error fingerprint | toàn bộ v0.5 cũ. 0 user thì tối ưu cho ai? |
-| Tenant isolation nâng cao, policy enterprise, WORM/signed audit | enterprise feature ở thời điểm 0 user |
+| Tenant isolation, RBAC, payload classification, audit hash chain, SSRF guard | enterprise feature ở thời điểm 0 user |
 | Agent protocol, Go/Python SDK, Intent Bridge cho DB khác | v0.6 cũ. Cắt |
 | Handler versioning, durable scheduler | pg_cron và cron thường đã đủ |
 | Repair với approval workflow, state hash, plan version/expiry | `--dry-run` + `--limit` + audit log đủ 90% |
@@ -255,13 +250,6 @@ Kéo người quay lại mà không cần họ nhớ. Chỉ bắn webhook — **
 | Auto-repair không giới hạn | người dùng cần cảm giác kiểm soát |
 
 **Ngoại lệ giữ lại dù nghe như over-engineering:** `lease_epoch` fencing, graceful shutdown 6 bước, clock authority = DB time, không partition hot table. Bốn thứ này **sửa sau rất khó hoặc không sửa được**, và thiếu chúng thì mọi thứ khác vô nghĩa.
-
-**Security baseline không được cắt:** Agent authentication, bounded query/result,
-parameterized SQL, read-only database role cho scan/rule, statement timeout,
-identifier allowlist và SSRF guard cho webhook vẫn là release gate. Rule/scan
-chạm trực tiếp production database nên đây không phải “enterprise feature”.
-Audit hash chain đã implement thì giữ; không xoá code an toàn chỉ để giảm số
-dòng roadmap.
 
 ---
 
@@ -289,10 +277,7 @@ Phạm vi thật còn hai trường hợp:
 
 Ví dụ nên dùng: gọi provisioning API nội bộ · gửi SMS qua nhà mạng · ghi file S3 rồi update DB · POST webhook cho khách hàng.
 
-Bản v0.1 của Effect: ghi `pending` trước, `confirmed` sau, crash ở giữa →
-`uncertain` → không auto-retry → tạo finding. API confirmation policy hiện có
-được giữ vì đã implement và test; README chỉ giới thiệu flow tối giản. Không
-thêm provider adapter trước khi có nhu cầu thật.
+Bản v0.1 của Effect: ghi `pending` trước, `confirmed` sau, crash ở giữa → `uncertain` → không auto-retry → tạo finding. Không callback `confirm()`, không adapter. Chờ có người xin.
 
 ---
 
@@ -341,9 +326,7 @@ thêm provider adapter trước khi có nhu cầu thật.
 - **Ma trận crash test công khai** — `kill -9` ở từng điểm vòng đời, kỳ vọng vs thực tế, chạy lại bằng một lệnh. pg-boss và BullMQ không publish cái này. Với lib mới, đây là thứ thay thế một phần cho "8 năm production"
 - **Benchmark trung thực vs pg-boss** — kể cả khi chậm hơn. Nói thẳng tạo niềm tin hơn im lặng
 
-**Ước lượng ban đầu: 14–16 tuần ngoài giờ**, cần hiệu chỉnh sau mỗi vertical
-slice. Đây không phải deadline cam kết; persistent Findings, query safety và
-Console có thể làm ước lượng thay đổi đáng kể.
+**Tổng: 14–16 tuần ngoài giờ.** So với 12–18 tháng của scope cũ.
 
 ---
 
@@ -381,14 +364,11 @@ Câu 4 kiểm tra giả định ở 2.4 — rằng người dùng pg-boss đang 
 
 Nói thẳng để sau này không thất vọng:
 
-- Không dùng download count không có nguồn và ngày đo làm baseline chiến lược.
-- Trần download của RhinoQ chưa thể ước lượng trước khi có retention từ Rule/Findings.
+- Không dùng download count hoặc market-share estimate không có nguồn và ngày đo làm baseline chiến lược.
+- Trần adoption của RhinoQ chưa thể ước lượng trước khi có retention từ Rule/Findings.
 - ICP là team có business state có thể lệch: report generation, media processing, provisioning, data sync, payment, credit hoặc inventory.
 
-Đổi lại: queue infrastructure thường được đánh giá bằng độ tin cậy và mức ít
-phải chú ý, còn RhinoQ muốn tạo giá trị lặp lại ở workflow chẩn đoán. Giả thuyết
-thương mại là nhóm dùng Rules/Findings có cường độ sử dụng cao hơn; chưa có dữ
-liệu để kết luận tỷ lệ người dùng hay khả năng trả tiền.
+Đổi lại: BullMQ không có khoảnh khắc nào khiến người ta thấy "hay". Nó là ống nước — cài, chạy, quên, không ai kể cho bạn bè, gần như không ai trả tiền. RhinoQ ở nhóm công cụ chẩn đoán (Sentry, dbt, Snyk): ít người dùng hơn 10–50 lần, nhưng cường độ và khả năng thương mại hoá cao hơn hẳn.
 
 Đó là đánh đổi đúng cho một người làm — vì ở nhóm ống nước bạn không có cửa thắng.
 
@@ -398,7 +378,7 @@ liệu để kết luận tỷ lệ người dùng hay khả năng trả tiền.
 
 Không đến từ nhiều tính năng. Ba thứ, và bản gốc đã có sẵn hai:
 
-- **Đúng và có căn cứ.** Tối thiểu false positive, hiển thị evidence và confidence; không hứa “zero” khi `scan` dùng heuristic.
+- **Đúng và có căn cứ.** Tối thiểu false positive, luôn hiện evidence và confidence; không hứa “zero” khi `scan` dùng heuristic
 - **Tiết chế.** `--dry-run` mặc định, `--limit`, `init` chỉ tạo plan cần `--apply` (nguyên tắc 21, 22). Tool cho thấy nó chọn cách an toàn = tool trưởng thành
 - **Output đọc được.** Cái timeline ở 3.1. Terminal output **là** UI của bạn ở giai đoạn đầu
 
@@ -486,13 +466,13 @@ Bản này mô tả cùng một sản phẩm, nhưng:
 
 - **Queue chỉ cần bằng pg-boss**, không cần bằng BullMQ — cắt phần lớn scope
 - **Differentiator lên sóng tuần 8**, không phải tháng 12
-- **Ba tính năng khác biệt** khai thác lợi thế chạy gần business data và đóng gói outside-in workflow tốt hơn cron/SQL rời rạc
+- **Ba tính năng cửa vào** khai thác lợi thế chạy gần business data và đóng gói outside-in workflow tốt hơn cron/SQL rời rạc
 - **`scan` chạy được mà không cần cài**, phá được rào cản adoption lớn nhất
 
 > Job queue biết những gì đã đi vào nó.
 > RhinoQ biết những gì lẽ ra phải đi vào nó, và những gì đi ra không đúng.
-> Nó nói được điều đó bằng outside-in rule chạy gần business data và một
-> finding lifecycle được đóng gói sẵn—không phải vì đối thủ về mặt kỹ thuật
-> không thể đứng ở đó.
+> Nó nói được điều đó bằng outside-in Rule chạy gần business data và một
+> Finding lifecycle đóng gói sẵn—không phải vì đối thủ về mặt kỹ thuật không
+> thể đứng ở đó.
 
 Mọi tính năng không phục vụ câu đó đều bị cắt, kể cả những tính năng đã được viết rất kỹ trong 2990 dòng trước.

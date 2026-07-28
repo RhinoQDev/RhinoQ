@@ -78,7 +78,7 @@ RhinoQ organizes work into four explicit stages:
 |---|---|---|---|
 | **COMMIT** | Was the work recorded durably? | idempotency, correlation, payload validation, outbox foundation | Foundation implemented |
 | **RUN** | Can the work execute and recover safely? | claims, leases, heartbeat, retries, cancellation, rate limits | Core implemented |
-| **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, versioned job/table Rules, PostgreSQL Explain gate | Manual bounded evaluation implemented; scheduling pending |
+| **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, versioned job/table Rules, PostgreSQL Explain gate | Bounded evaluation and fenced periodic scheduling implemented |
 | **RECOVER** | Can an operator investigate and repair safely? | persistent findings, rule pass/regression, replay policy, audit | Rule-to-Finding lifecycle implemented; timeline pending |
 
 RhinoQ's PostgreSQL-backed queue is part of the core product, but queue parity
@@ -224,9 +224,9 @@ List responses intentionally exclude payloads so an operational queue view does 
 - Outbox storage and publisher runtime
 - Fail-closed handling for unknown error classes
 
-Persistent Rule scheduling, correlation timeline and the scan workflow are not
-complete yet. The current code should not be presented as a finished integrity
-product.
+Correlation timeline and the scan workflow are not complete yet. Periodic table
+Rules now use persisted cursors and fenced scheduler leases. The current code
+should not be presented as a finished integrity product.
 
 Using RhinoQ from another language needs one thin file, not a reimplementation. See the [Agent guide](./docs/agent.md).
 
@@ -291,17 +291,17 @@ docs/                             user and operator documentation
 RhinoQ has a runnable Go core, memory adapter, PostgreSQL adapters, migrations,
 and a real-database contract suite. The RUN foundation is ahead of the product
 differentiator: production readiness still requires fault evidence, while the
-v0.1 Integrity Slice now has versioned Rules, an Explain safety gate and
-Rule-to-Finding evaluation. It still needs crash-safe periodic scheduling,
+v0.1 Integrity Slice now has versioned Rules, an Explain safety gate,
+Rule-to-Finding evaluation and crash-safe periodic scheduling. It still needs
 scan/from-scan onboarding and the correlation timeline.
 
 The next engineering priorities are:
 
-1. Persistent scheduler cursor and crash-safe periodic Rule execution
-2. Needs Attention backed by persistent Findings
+1. Needs Attention backed by persistent Findings
+2. External execution correlation and business-key search
 3. Correlation timeline across job, attempt, effect, Rule, Finding and business state
 4. A bounded `rhinoq scan` workflow and `init --from-scan` plan
-5. Fault-injection, retention, security, and reproducible benchmark gates
+5. Typed Go Rule authoring after the SQL IR is validated
 
 RhinoQ does not publish throughput or latency claims without a repeatable benchmark that records hardware, payload, durability, worker count, and workload.
 

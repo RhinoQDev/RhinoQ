@@ -45,11 +45,12 @@ const (
 )
 
 var (
-	ErrInvalidRule      = errors.New("invalid integrity rule")
-	ErrUnsafeQuery      = errors.New("rule query is not a single read-only SELECT")
-	ErrBaselineRequired = errors.New("table-scoped rule requires an explicit baseline")
-	ErrIntervalRequired = errors.New("table-scoped rule requires a positive interval")
-	ErrRuleUnsafe       = errors.New("rule explain exceeded its query safety budget")
+	ErrInvalidRule       = errors.New("invalid integrity rule")
+	ErrUnsafeQuery       = errors.New("rule query is not a single read-only SELECT")
+	ErrBaselineRequired  = errors.New("table-scoped rule requires an explicit baseline")
+	ErrIntervalRequired  = errors.New("table-scoped rule requires a positive interval")
+	ErrRuleUnsafe        = errors.New("rule explain exceeded its query safety budget")
+	ErrScheduleLeaseLost = errors.New("rule schedule lease was lost")
 )
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -210,4 +211,27 @@ type Evaluation struct {
 	NextCursor   string
 	HasMore      bool
 	EvaluatedAt  time.Time
+}
+
+// ScheduleLease fences one scheduler execution. Cursor is the last completely
+// evaluated subject, so a replacement process can resume without skipping a
+// page after a crash.
+type ScheduleLease struct {
+	RuleID    string
+	Version   int
+	Owner     string
+	Epoch     int64
+	Cursor    string
+	Every     time.Duration
+	ClaimedAt time.Time
+	ExpiresAt time.Time
+}
+
+func (l ScheduleLease) Validate() error {
+	if l.RuleID == "" || l.Version < 1 || strings.TrimSpace(l.Owner) == "" ||
+		l.Epoch < 1 || l.Every <= 0 || l.ClaimedAt.IsZero() ||
+		l.ExpiresAt.IsZero() {
+		return ErrInvalidRule
+	}
+	return nil
 }

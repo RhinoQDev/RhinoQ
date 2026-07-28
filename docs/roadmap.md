@@ -32,7 +32,7 @@ requiring the application's current queue to be replaced.
 - [x] one canonical, append-only Rule contract with `job` and `table` scopes
 - [x] parameterized SQL executor with read-only transaction, statement timeout and
   bounded results
-- [ ] persisted scheduler cursor and crash recovery (manual bounded cursor pages implemented)
+- [x] persisted scheduler cursor, fenced claims and crash recovery between bounded pages
 - [x] query-cost, result-shape and large sequential-scan gate
 - [ ] external execution correlation:
   `source_system`, `source_job_id`, `business_key`

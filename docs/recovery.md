@@ -46,8 +46,8 @@ Evidence is capped at 64 KiB and should contain a redacted fact summary or
 reference, not a payload copy or secret.
 Rule evaluation now populates this store: violations open/deduplicate Findings
 and passing observations append `passed` while auto-resolving existing drift.
-The next integration step is to make Needs Attention read from this inbox and
-persist periodic Rule scheduler cursors.
+Periodic Rule scheduler cursors are now persistent and fenced. The next
+integration step is to make Needs Attention read from this inbox.
 
 ## Guarded replay
 
