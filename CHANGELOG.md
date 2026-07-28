@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Table Rules can page on `(changed_at, subject_id)` instead of `subject_id`
+  alone, via `Cursor: rhinoq.CursorChanged` and migration 014. A row that just
+  moved is then seen on the next page rather than after a full pass. The
+  composite is enforced, not assumed: paging on a timestamp alone skips rows
+  that share one, which for an integrity checker means reporting a table clean
+  because it never looked at part of it. Explain refuses a changed-since Rule
+  that cannot return `changed_at`, since it could never resume.
+
+- Added a business-subject investigation view to the Workbench:
+  `/api/v1/subjects/{type}/{id}` and a rail that merges findings, operator
+  decisions and Effect Ledger entries into one time-ordered narrative, with the
+  executions that touched the subject listed whether or not RhinoQ ran them.
+  Clicking a Finding now opens it instead of showing a "timeline is planned"
+  toast.
+
 - Effects no longer require a RhinoQ job. A new correlation model gives every
   entry a `SubjectRef` and an `ExecutionRef`, and a RhinoQ job id becomes one
   kind of execution reference rather than a precondition, so a team running

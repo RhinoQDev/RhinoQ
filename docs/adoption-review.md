@@ -15,8 +15,8 @@ RhinoQ.
 | Go library install | Apache-2.0 licensed, module path matches the repository, `go get` resolves a branch pseudo-version | usable; no semver tag yet |
 | Node producer | tested `PostgresProducer`, but package is source-only | technically usable, distribution not ready |
 | Node worker | tested high-level worker, but requires Gateway and source-only package | preview |
-| Operations | direct CLI plus an embedded read-only Workbench for jobs, evidence, attention, findings and Rules | useful for local development; browser writes remain intentionally absent |
-| First integrity finding | Rule path exists, but no no-cutover starter workload | adoption blocker |
+| Operations | direct CLI plus an embedded read-only Workbench for jobs, evidence, attention, Findings, Rules and business-subject investigation | useful for local development; browser writes remain intentionally absent |
+| First integrity finding | integrity-only facade, bounded `scan` and a runnable missing-report-output workload | repository evaluation path exists; package distribution is still preview |
 | Production evidence | real PostgreSQL contracts exist; benchmark/fault/restore evidence incomplete | not production-ready |
 
 The product is easier to evaluate than before, but not yet easy to install for
@@ -76,15 +76,17 @@ a Node team outside this repository.
    tag; the first `v*` tag has not been pushed, so the pipeline is unproven.
 3. Ship one end-to-end Node starter that starts PostgreSQL, applies reviewed
    migrations, enqueues a job, runs a handler and shows Needs Attention.
-4. Complete external execution correlation and a no-cutover first Finding.
-   Without this, RhinoQ still looks like a younger pg-boss/Graphile Worker.
+4. Validate the implemented external execution correlation and no-cutover first
+   Finding with a design partner. Reverse lookup from an external job or
+   business key remains incomplete.
 
 ### P1 — improve activation and daily control
 
 1. `rhinoq init --node` should generate a plan, never overwrite silently, and
    create package scripts only after confirmation.
-2. Extend the current local Workbench with a cross-job business-key timeline.
-   Add browser mutations only with actor/reason confirmation and application-use-case audit.
+2. Extend the current subject investigation view with reverse business-key and
+   external-job search. Add browser mutations only with actor/reason
+   confirmation and application-use-case audit.
 3. Add NestJS lifecycle hooks only after the framework-neutral worker is
    validated by a real user.
 4. Add `LISTEN/NOTIFY` as an optional wake-up hint while retaining polling as

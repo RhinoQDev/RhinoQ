@@ -97,6 +97,7 @@ func (s *RuleStore) ListRules(_ context.Context, query rule.Query) ([]rule.Recor
 		if len(query.Statuses) > 0 {
 			for _, record := range versions {
 				if (query.Scope == "" || record.Scope == query.Scope) &&
+					(query.SubjectType == "" || record.SubjectType == query.SubjectType) &&
 					ruleStatusMatches(record.Status, query.Statuses) {
 					records = append(records, record)
 				}
@@ -104,7 +105,8 @@ func (s *RuleStore) ListRules(_ context.Context, query rule.Query) ([]rule.Recor
 			continue
 		}
 		record, found, _ := latestRule(versions)
-		if !found || (query.Scope != "" && record.Scope != query.Scope) {
+		if !found || (query.Scope != "" && record.Scope != query.Scope) ||
+			(query.SubjectType != "" && record.SubjectType != query.SubjectType) {
 			continue
 		}
 		records = append(records, record)

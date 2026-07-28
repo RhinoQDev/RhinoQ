@@ -228,7 +228,7 @@
           <button class="copy-button" id="copy-job-id" type="button">Copy ID</button>
         </div>
         <div class="rail-scroll">
-          <section class="truth-separation" aria-label="Request, effect and outcome separation">
+          <section class="truth-separation" data-rail-mode="job" aria-label="Request, effect and outcome separation">
             <div class="truth-node">
               <span class="truth-status" id="truth-request"></span>
               <div><strong>Request accepted</strong><small id="truth-request-copy">Recorded durably</small></div>
@@ -245,7 +245,7 @@
             </div>
           </section>
 
-          <section class="rail-section">
+          <section class="rail-section" data-rail-mode="job">
             <div class="rail-section-heading">
               <h3>Job context</h3>
               <span class="state-badge" id="rail-state"></span>
@@ -253,7 +253,7 @@
             <dl class="detail-grid" id="job-context"></dl>
           </section>
 
-          <section class="rail-section">
+          <section class="rail-section" data-rail-mode="job">
             <div class="rail-section-heading">
               <h3>Execution timeline</h3>
               <span id="attempt-total">0 events</span>
@@ -261,7 +261,7 @@
             <ol class="timeline" id="attempt-timeline"></ol>
           </section>
 
-          <section class="rail-section">
+          <section class="rail-section" data-rail-mode="job">
             <div class="rail-section-heading">
               <h3>Declared effects</h3>
               <span id="effect-total">0 effects</span>
@@ -269,7 +269,7 @@
             <div class="evidence-list" id="effect-list"></div>
           </section>
 
-          <section class="rail-section">
+          <section class="rail-section" data-rail-mode="job">
             <div class="rail-section-heading">
               <h3>Outcome evidence</h3>
               <span id="outcome-total">0 observations</span>
@@ -277,13 +277,15 @@
             <div class="evidence-list" id="outcome-list"></div>
           </section>
 
-          <section class="rail-section" id="audit-section">
+          <section class="rail-section" id="audit-section" data-rail-mode="job">
             <div class="rail-section-heading">
               <h3>Decision audit</h3>
               <span id="audit-total">0 entries</span>
             </div>
             <div class="evidence-list" id="audit-list"></div>
           </section>
+
+          <div class="rail-subject" id="rail-subject" data-rail-mode="subject" hidden></div>
 
           <div class="rail-notice" id="rail-notice"></div>
         </div>

@@ -352,6 +352,8 @@ func NewInMemory() *Client {
 	outcomes := memory.NewOutcomeStore()
 	findingStore := memory.NewFindingStore()
 	ruleStore := memory.NewRuleStore()
+	subjectOutcomes := memory.NewSubjectOutcomeStore()
+	changeStore := memory.NewChangeStore()
 	recoveryStore, err := memory.NewRecoveryStore(jobs, effects, outcomes)
 	if err != nil {
 		panic(err)
@@ -360,6 +362,8 @@ func NewInMemory() *Client {
 		store: jobs, effects: effects, outcomes: outcomes, recovery: recoveryStore,
 		IntegrityClient: &IntegrityClient{
 			findings: findingStore, rules: ruleStore, ruleSchedules: ruleStore,
+			subjectOutcomes: subjectOutcomes,
+			changes:         changeStore,
 		},
 
 		handlers: worker.NewHandlerRegistry(),
@@ -399,11 +403,21 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	subjectOutcomes, err := postgres.NewSubjectOutcomeStore(db)
+	if err != nil {
+		return nil, err
+	}
+	changeStore, err := postgres.NewChangeStore(db)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		store: store, effects: effects, outcomes: outcomes, recovery: recoveryStore,
 		IntegrityClient: &IntegrityClient{
 			findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
 			ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
+			subjectOutcomes: subjectOutcomes,
+			changes:         changeStore,
 		},
 
 		handlers: worker.NewHandlerRegistry(),
@@ -438,6 +452,12 @@ func NewWithStore(store ports.JobStore) *Client {
 	}
 	if schedules, ok := store.(ports.RuleScheduleStore); ok {
 		client.ruleSchedules = schedules
+	}
+	if outcomes, ok := store.(ports.SubjectOutcomeStore); ok {
+		client.subjectOutcomes = outcomes
+	}
+	if changes, ok := store.(ports.ChangeStore); ok {
+		client.changes = changes
 	}
 	return client
 }

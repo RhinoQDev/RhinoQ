@@ -28,7 +28,8 @@ func NewRuleStore(db *sql.DB) (*RuleStore, error) {
 
 const ruleColumns = `id, version, name, scope, status, subject_type, job_name,
 	query, baseline_at, every_ms, within_ms, max_rows, statement_timeout_ms,
-	max_plan_cost, max_seq_scan_rows, on_unknown, created_at, updated_at`
+	max_plan_cost, max_seq_scan_rows, on_unknown, unknown_grace_ms, cursor_mode,
+	created_at, updated_at`
 
 type ruleScanner interface {
 	Scan(dest ...any) error
@@ -37,13 +38,15 @@ type ruleScanner interface {
 func scanRule(row ruleScanner) (rule.Record, error) {
 	var record rule.Record
 	var baseline sql.NullTime
-	var everyMS, withinMS, timeoutMS int64
+	var everyMS, withinMS, timeoutMS, unknownGraceMS int64
+	var cursorMode string
 	var onUnknown string
 	err := row.Scan(
 		&record.ID, &record.Version, &record.Name, &record.Scope, &record.Status,
 		&record.SubjectType, &record.JobName, &record.Query, &baseline,
 		&everyMS, &withinMS, &record.MaxRows, &timeoutMS,
-		&record.MaxPlanCost, &record.MaxSeqScanRows, &onUnknown,
+		&record.MaxPlanCost, &record.MaxSeqScanRows, &onUnknown, &unknownGraceMS,
+		&cursorMode,
 		&record.CreatedAt, &record.UpdatedAt,
 	)
 	if baseline.Valid {
@@ -53,6 +56,8 @@ func scanRule(row ruleScanner) (rule.Record, error) {
 	record.Within = time.Duration(withinMS) * time.Millisecond
 	record.StatementTimeout = time.Duration(timeoutMS) * time.Millisecond
 	record.OnUnknown = rule.UnknownPolicy(onUnknown)
+	record.UnknownGrace = time.Duration(unknownGraceMS) * time.Millisecond
+	record.Cursor = rule.CursorMode(cursorMode)
 	return record, err
 }
 
@@ -66,7 +71,7 @@ func (s *RuleStore) SaveRule(ctx context.Context, record rule.Record) (rule.Reco
 			`+ruleColumns+`
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			$10, $11, $12, $13, $14, $15, $16, $17, $18
+			$10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
 		)`,
 		record.ID, record.Version, record.Name, record.Scope, record.Status,
 		record.SubjectType, record.JobName, record.Query,
@@ -74,6 +79,7 @@ func (s *RuleStore) SaveRule(ctx context.Context, record rule.Record) (rule.Reco
 		record.Within.Milliseconds(), record.MaxRows,
 		record.StatementTimeout.Milliseconds(), record.MaxPlanCost,
 		record.MaxSeqScanRows, string(record.OnUnknown),
+		record.UnknownGrace.Milliseconds(), string(record.Cursor),
 		record.CreatedAt, record.UpdatedAt,
 	)
 	if err != nil {
@@ -128,6 +134,10 @@ func (s *RuleStore) ListRules(
 	if query.Scope != "" {
 		args = append(args, query.Scope)
 		where = append(where, fmt.Sprintf("scope = $%d", len(args)))
+	}
+	if query.SubjectType != "" {
+		args = append(args, query.SubjectType)
+		where = append(where, fmt.Sprintf("subject_type = $%d", len(args)))
 	}
 	if len(query.Statuses) > 0 {
 		holders := make([]string, 0, len(query.Statuses))

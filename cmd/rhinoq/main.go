@@ -40,7 +40,7 @@ func main() {
 	case "doctor":
 		os.Exit(runDoctor(ciMode()))
 	case "init":
-		runInit()
+		os.Exit(runInit(os.Args[2:], os.Stdout))
 	case "migrate":
 		os.Exit(runMigrate(os.Args[2:], os.Getenv, os.Stdout))
 	case "jobs":
@@ -222,49 +222,71 @@ func runDoctor(ci bool) int {
 	return 0
 }
 
-func runInit() {
-	apply := len(os.Args) > 2 && os.Args[2] == "--apply"
-	fmt.Println("RhinoQ initialization plan")
-	fmt.Println("  - create rhinoq.config.env.example")
-	fmt.Println("  - configure embedded worker, scheduler and PostgreSQL settings")
-	fmt.Println("  - next: rhinoq migrate plan")
-	if !apply {
-		fmt.Println("No files changed. Re-run with --apply to apply this plan.")
-		return
+func runInit(args []string, output io.Writer) int {
+	apply := false
+	integrityOnly := false
+	for _, arg := range args {
+		switch arg {
+		case "--apply":
+			apply = true
+		case "--integrity-only":
+			integrityOnly = true
+		default:
+			fmt.Fprintf(output, "FAIL unknown init option %q\n", arg)
+			fmt.Fprintln(output, "Usage: rhinoq init [--integrity-only] [--apply]")
+			return 2
+		}
 	}
-	content := "RHINOQ_DATABASE_URL=\n" +
-		"RHINOQ_WORKER_NAME=worker-1\n" +
-		"RHINOQ_CONCURRENCY=4\n" +
-		"RHINOQ_PREFETCH_FACTOR=1.5\n" +
-		"RHINOQ_MAX_CLAIM_BATCH=50\n" +
-		"RHINOQ_LEASE_DURATION=1m\n" +
-		"RHINOQ_HEARTBEAT_EVERY=20s\n" +
-		"RHINOQ_POLL_INTERVAL=100ms\n" +
-		"RHINOQ_MAX_POLL_INTERVAL=2s\n" +
-		"RHINOQ_SHUTDOWN_GRACE=30s\n" +
-		"RHINOQ_CANCEL_GRACE=10s\n" +
-		"RHINOQ_REAPER_INTERVAL=30s\n" +
-		"RHINOQ_MAX_WORKER_CRASHES=3\n"
+	fmt.Fprintln(output, "RhinoQ initialization plan")
+	fmt.Fprintln(output, "  - create rhinoq.config.env.example")
+	if integrityOnly {
+		fmt.Fprintln(output, "  - configure PostgreSQL for Rules, scans and Findings")
+		fmt.Fprintln(output, "  - do not configure or start a queue worker")
+		fmt.Fprintln(output, "  - next: migrate, register one Rule, then run rhinoq scan")
+	} else {
+		fmt.Fprintln(output, "  - configure embedded worker, scheduler and PostgreSQL settings")
+		fmt.Fprintln(output, "  - next: rhinoq migrate plan")
+	}
+	if !apply {
+		fmt.Fprintln(output, "No files changed. Re-run with --apply to apply this plan.")
+		return 0
+	}
+	content := "RHINOQ_DATABASE_URL=\n"
+	if !integrityOnly {
+		content += "RHINOQ_WORKER_NAME=worker-1\n" +
+			"RHINOQ_CONCURRENCY=4\n" +
+			"RHINOQ_PREFETCH_FACTOR=1.5\n" +
+			"RHINOQ_MAX_CLAIM_BATCH=50\n" +
+			"RHINOQ_LEASE_DURATION=1m\n" +
+			"RHINOQ_HEARTBEAT_EVERY=20s\n" +
+			"RHINOQ_POLL_INTERVAL=100ms\n" +
+			"RHINOQ_MAX_POLL_INTERVAL=2s\n" +
+			"RHINOQ_SHUTDOWN_GRACE=30s\n" +
+			"RHINOQ_CANCEL_GRACE=10s\n" +
+			"RHINOQ_REAPER_INTERVAL=30s\n" +
+			"RHINOQ_MAX_WORKER_CRASHES=3\n"
+	}
 	file, err := os.OpenFile(
 		"rhinoq.config.env.example",
 		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
 		0644,
 	)
 	if err != nil {
-		fmt.Printf("FAIL apply: %v\n", err)
-		fmt.Println("No file was overwritten. Move the existing file or merge the template manually.")
-		os.Exit(1)
+		fmt.Fprintf(output, "FAIL apply: %v\n", err)
+		fmt.Fprintln(output, "No file was overwritten. Move the existing file or merge the template manually.")
+		return 1
 	}
 	if _, err := file.WriteString(content); err != nil {
 		_ = file.Close()
-		fmt.Printf("FAIL apply: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(output, "FAIL apply: %v\n", err)
+		return 1
 	}
 	if err := file.Close(); err != nil {
-		fmt.Printf("FAIL apply: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(output, "FAIL apply: %v\n", err)
+		return 1
 	}
-	fmt.Println("Created rhinoq.config.env.example")
+	fmt.Fprintln(output, "Created rhinoq.config.env.example")
+	return 0
 }
 
 func runHelp(args []string, output io.Writer) int {
@@ -341,12 +363,18 @@ Help never connects to PostgreSQL and never changes files or data.`)
 
 Usage:
   rhinoq init
+  rhinoq init --integrity-only
   rhinoq init --apply
+  rhinoq init --integrity-only --apply
 
 Without --apply, prints the files and next steps it would use. With --apply,
 creates rhinoq.config.env.example in the current directory using safe defaults.
 It never overwrites an existing file and does not create a database or apply
 migrations.
+
+--integrity-only writes only the PostgreSQL setting used by Rules, scans and
+Findings. It does not configure a worker, claim loop, lease reaper or recovery
+executor.
 
 Next:
   copy the values into your environment

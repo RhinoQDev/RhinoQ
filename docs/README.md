@@ -3,6 +3,7 @@
 ## Bắt đầu
 
 - [Getting started](./getting-started.md)
+- [Integrity-only example](../examples/integrity-only/)
 - [CLI command reference](./cli.md)
 - [Node.js integration](./nodejs.md)
 - [Configuration](./configuration.md)

@@ -191,6 +191,18 @@ The generated file contains worker defaults. It does not:
 After reviewing the template, set the required environment variables and run
 `rhinoq migrate plan`.
 
+Use the integrity-only plan when the existing application keeps its current
+queue, cron or workflow engine:
+
+```bash
+rhinoq init --integrity-only
+rhinoq init --integrity-only --apply
+```
+
+That template contains only `RHINOQ_DATABASE_URL`. It does not configure a
+worker, claim loop, heartbeat, retry scheduler, lease reaper or recovery
+executor.
+
 ## `rhinoq scan`
 
 ### Purpose

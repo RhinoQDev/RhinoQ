@@ -71,6 +71,15 @@ func (e *RuleExplainer) ExplainRule(
 	parameters := []any{"rhinoq-explain-subject"}
 	if record.Scope == rule.TableScope {
 		parameters = []any{record.BaselineAt, "", record.MaxRows}
+		if strings.Contains(record.Query, "$4") {
+			parameters = append(parameters, "")
+		}
+		if strings.Contains(record.Query, "$5") {
+			// Explain plans the first page, so the cursor timestamp is the
+			// baseline: that is the plan a scheduler actually executes when it
+			// starts a walk.
+			parameters = append(parameters, record.BaselineAt)
+		}
 	}
 	wrapped := `SELECT * FROM (` + record.Query + `) AS rhinoq_rule_result LIMIT ` +
 		fmt.Sprint(record.MaxRows)
@@ -105,19 +114,36 @@ func (e *RuleExplainer) ExplainRule(
 		ExplainedAt:   e.now(),
 		QueryHash:     hex.EncodeToString(hash[:]),
 	}
-	// The fourth column is optional: a Rule that never reports unknown has
-	// nothing to explain about it, and requiring it would invalidate every
-	// existing Rule.
-	shapeOK := (len(columns) == 3 || len(columns) == 4) &&
+	// The first three columns are positional; anything after them is optional
+	// and matched by name. A Rule that never reports unknown has nothing to say
+	// about unknown_reason, and one that walks by subject id has nothing to say
+	// about changed_at, so requiring either would invalidate the other.
+	shapeOK := len(columns) >= 3 &&
 		columns[0] == "subject_id" && columns[1] == "violated" &&
 		columns[2] == "evidence"
-	if shapeOK && len(columns) == 4 && columns[3] != "unknown_reason" {
-		shapeOK = false
+	seen := make(map[string]bool, len(columns))
+	if shapeOK {
+		for _, name := range columns[3:] {
+			if (name != "unknown_reason" && name != "changed_at") || seen[name] {
+				shapeOK = false
+				break
+			}
+			seen[name] = true
+		}
 	}
 	if !shapeOK {
 		explanation.Reasons = append(
 			explanation.Reasons,
-			"query must return subject_id, violated, evidence and optionally unknown_reason",
+			"query must return subject_id, violated, evidence and optionally unknown_reason and changed_at",
+		)
+	}
+	// A changed-since Rule that cannot report when a subject changed cannot
+	// resume, so it would silently restart its walk on every page and never
+	// finish. Catching that at enable time is the whole purpose of this gate.
+	if record.Cursor == rule.CursorChanged && !seen["changed_at"] {
+		explanation.Reasons = append(
+			explanation.Reasons,
+			"changed-since rule must return changed_at, and page on ($5, $2) in that order",
 		)
 	}
 	if explanation.PlanCost > record.MaxPlanCost {

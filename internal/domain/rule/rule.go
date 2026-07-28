@@ -42,6 +42,7 @@ const (
 	MaximumStatementLimit = 30 * time.Second
 	DefaultMaxPlanCost    = 100_000
 	DefaultMaxSeqScanRows = 10_000
+	MaximumUnknownGrace   = 30 * 24 * time.Hour
 )
 
 var (
@@ -88,6 +89,12 @@ type Record struct {
 	// OnUnknown decides what an inconclusive observation does. Defaults to
 	// UnknownRetries.
 	OnUnknown UnknownPolicy
+	// UnknownGrace delays a finding for an inconclusive observation. It is
+	// meaningful only with UnknownOpensFinding; zero escalates immediately.
+	UnknownGrace time.Duration
+	// Cursor decides how a table Rule walks its subjects. Defaults to
+	// CursorSubject.
+	Cursor CursorMode
 
 	StatementTimeout time.Duration
 	MaxPlanCost      float64
@@ -98,6 +105,9 @@ type Record struct {
 }
 
 func (r Record) WithDefaults() Record {
+	if r.Cursor == "" {
+		r.Cursor = CursorSubject
+	}
 	if r.OnUnknown == "" {
 		r.OnUnknown = UnknownRetries
 	}
@@ -146,7 +156,10 @@ func (r Record) Validate() error {
 	}
 	if r.Within < 0 || r.MaxRows <= 0 || r.MaxRows > MaximumMaxRows ||
 		r.StatementTimeout <= 0 || r.StatementTimeout > MaximumStatementLimit ||
-		r.MaxPlanCost <= 0 || r.MaxSeqScanRows <= 0 || !r.OnUnknown.Valid() {
+		r.MaxPlanCost <= 0 || r.MaxSeqScanRows <= 0 || !r.OnUnknown.Valid() ||
+		r.UnknownGrace < 0 || r.UnknownGrace > MaximumUnknownGrace ||
+		(r.OnUnknown != UnknownOpensFinding && r.UnknownGrace > 0) ||
+		!r.Cursor.Valid() {
 		return ErrInvalidRule
 	}
 	return ValidateQuery(r.Query)
@@ -171,14 +184,18 @@ func ValidateQuery(query string) error {
 }
 
 type Query struct {
-	Scope    Scope
-	Statuses []Status
-	Offset   int
-	Limit    int
+	Scope       Scope
+	SubjectType string
+	Statuses    []Status
+	Offset      int
+	Limit       int
 }
 
 func (q Query) Validate() error {
 	if q.Scope != "" && !q.Scope.Valid() {
+		return ErrInvalidRule
+	}
+	if len(q.SubjectType) > MaxSubjectTypeBytes {
 		return ErrInvalidRule
 	}
 	if q.Offset < 0 || q.Limit <= 0 || q.Limit > 1000 {
@@ -313,4 +330,65 @@ func (l ScheduleLease) Validate() error {
 		return ErrInvalidRule
 	}
 	return nil
+}
+
+// CursorMode decides how a table Rule walks its subjects.
+//
+// The two modes answer different questions and a deployment usually wants both.
+// A subject walk asks "is every record still correct" and is what catches drift
+// nobody signalled: an out-of-band edit, a forgotten verify call, an external
+// object that vanished after it once passed. A changed-since walk asks "what
+// moved recently" and is what keeps a million-row table verifiable without
+// re-reading all of it on every pass.
+type CursorMode string
+
+const (
+	// CursorSubject walks by subject id. Bounded, complete, and blind to
+	// recency: a record updated a second ago waits for its turn.
+	CursorSubject CursorMode = "subject"
+	// CursorChanged walks by (changed_at, subject_id). A record that just moved
+	// is seen on the next page rather than after a full pass.
+	//
+	// The composite is not optional. Ordering by a timestamp alone is unstable
+	// when rows share one, and paging on an unstable order silently skips
+	// records - which for an integrity checker means reporting a table as clean
+	// because it never looked.
+	CursorChanged CursorMode = "changed"
+)
+
+func (m CursorMode) Valid() bool {
+	return m == CursorSubject || m == CursorChanged
+}
+
+// cursorSeparator joins the two halves of a changed-since cursor. RFC3339Nano
+// never contains it, so splitting on the first occurrence is unambiguous even
+// when a subject id contains one.
+const cursorSeparator = "|"
+
+// EncodeCursor renders a resume token. The cursor stays one opaque string
+// through the schedule table, the scan command and the public API, so adding a
+// second dimension does not become a second column in six places.
+func EncodeCursor(changedAt time.Time, subjectID string) string {
+	if changedAt.IsZero() && subjectID == "" {
+		return ""
+	}
+	return changedAt.UTC().Format(time.RFC3339Nano) + cursorSeparator + subjectID
+}
+
+// DecodeCursor reads a resume token. A token without a timestamp is a plain
+// subject cursor, which is what every Rule written before changed-since mode
+// existed will present.
+func DecodeCursor(cursor string) (time.Time, string) {
+	stamp, subject, found := strings.Cut(cursor, cursorSeparator)
+	if !found {
+		return time.Time{}, cursor
+	}
+	changedAt, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		// An unparsable token is treated as a subject cursor rather than an
+		// error: refusing to resume would strand a schedule, and restarting the
+		// walk is safe because observations are idempotent.
+		return time.Time{}, cursor
+	}
+	return changedAt, subject
 }
