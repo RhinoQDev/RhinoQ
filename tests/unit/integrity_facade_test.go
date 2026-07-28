@@ -33,7 +33,8 @@ func TestIntegrityClientExposesNoRuntimeSurface(t *testing.T) {
 func TestIntegrityClientExposesTheVerificationSurface(t *testing.T) {
 	required := []string{
 		"RegisterRule", "ListRules", "ExplainRule", "EnableRule", "DisableRule",
-		"Scan", "ListFindings", "FindingHistory", "TransitionFinding", "RunScheduler",
+		"Scan", "Changed", "DrainChanges", "GetIntegrityState",
+		"ListFindings", "FindingHistory", "TransitionFinding", "RunScheduler",
 	}
 	methods := methodNames(reflect.TypeOf(&rhinoq.IntegrityClient{}))
 	for _, name := range required {
@@ -72,6 +73,16 @@ func TestScanRefusesAnUnboundedPageBudget(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "page budget") {
 		t.Fatalf("a mistyped budget must not become an unbounded scan: %v", err)
+	}
+}
+
+func TestScanRefusesANegativePageBudget(t *testing.T) {
+	integrity := rhinoq.NewInMemoryIntegrity()
+	_, err := integrity.Scan(context.Background(), rhinoq.ScanRequest{
+		RuleID: "any", MaxPages: -1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "page budget") {
+		t.Fatalf("a negative budget is invalid, not a request for defaults: %v", err)
 	}
 }
 

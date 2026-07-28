@@ -8,6 +8,8 @@ import (
 	"time"
 
 	postgresadapter "github.com/madebyduy/RhinoQ/internal/adapters/postgres"
+	"github.com/madebyduy/RhinoQ/internal/domain/change"
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
@@ -236,6 +238,9 @@ func TestIntegrityOnlyScanProducesFindingsWithoutAQueue(t *testing.T) {
 	}
 	if summary.Observed != 50 || summary.Violated != 25 || summary.Passed != 25 {
 		t.Fatalf("the fixture has 25 violating orders of 50: %+v", summary)
+	}
+	if summary.Version != 1 {
+		t.Fatalf("the scan summary must name the immutable Rule version: %+v", summary)
 	}
 	if summary.HasMore {
 		t.Fatalf("a 50 row fixture must complete inside the default page budget: %+v", summary)
@@ -481,5 +486,429 @@ func TestUnknownOpensAFindingWhenThePolicySaysSo(t *testing.T) {
 	if !strings.Contains(findings[0].LatestEvidence, string(rhinoq.ObservationUnknown)) {
 		t.Fatalf("an operator must be able to tell 'could not look' from 'looked and it was wrong': %s",
 			findings[0].LatestEvidence)
+	}
+}
+
+func TestUnknownEscalatesOnlyAfterItsGracePeriod(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	createRuleFixture(t)
+
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	definition := rhinoq.RuleDefinition{
+		ID: "unknown-with-grace", Name: "Unknown with grace",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "order",
+		Query: `SELECT id::text AS subject_id,
+			NULL::boolean AS violated,
+			jsonb_build_object('status', status) AS evidence,
+			'provider_timeout'::text AS unknown_reason
+			FROM rhinoq_rule_test_orders
+			WHERE created_at >= $1 AND id::text > $2
+			ORDER BY id::text LIMIT $3`,
+		BaselineAt:   time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Every:        10 * time.Minute,
+		OnUnknown:    rhinoq.UnknownOpensFinding,
+		UnknownGrace: 10 * time.Minute,
+	}
+	if _, err := integrity.RegisterRule(ctx, definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := integrity.EnableRule(ctx, definition.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := integrity.Scan(ctx, rhinoq.ScanRequest{RuleID: definition.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Unknown != 50 || first.Findings != 0 {
+		t.Fatalf("unknowns inside grace must be materialized without alerting: %+v", first)
+	}
+	state, found, err := integrity.GetIntegrityState(ctx, definition.ID, 1, rhinoq.SubjectRef{
+		Type: "order", ID: "1",
+	})
+	if err != nil || !found {
+		t.Fatalf("the canonical subject outcome must exist: found=%v err=%v", found, err)
+	}
+	if state.Status != rhinoq.ObservationUnknown || state.Finding != nil ||
+		state.UnknownCount != 1 || state.FirstUnknownAt.IsZero() {
+		t.Fatalf("finding is only a projection after grace: %+v", state)
+	}
+
+	// Move the stored streak back instead of sleeping: the second observation
+	// must preserve FirstUnknownAt and project the now-due Finding.
+	if _, err := testDB.Exec(`
+		UPDATE rhinoq_subject_outcomes
+		SET first_unknown_at = first_unknown_at - interval '11 minutes'
+		WHERE rule_id = $1 AND rule_version = 1`, definition.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := integrity.Scan(ctx, rhinoq.ScanRequest{RuleID: definition.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Findings != 50 {
+		t.Fatalf("a continuous unknown beyond grace must escalate: %+v", second)
+	}
+	state, found, err = integrity.GetIntegrityState(ctx, definition.ID, 1, rhinoq.SubjectRef{
+		Type: "order", ID: "1",
+	})
+	if err != nil || !found || state.Finding == nil {
+		t.Fatalf("the due outcome must project one finding: %+v found=%v err=%v",
+			state, found, err)
+	}
+}
+
+func TestChangedEvaluatesOneSubjectAndKeepsOutcomeCanonical(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	createRuleFixture(t)
+
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	definition := rhinoq.RuleDefinition{
+		ID: "signal-order", Name: "Signal-first order check",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "order",
+		Query: `SELECT id::text AS subject_id,
+			status = 'paid' AS violated,
+			jsonb_build_object('status', status) AS evidence
+			FROM rhinoq_rule_test_orders
+			WHERE created_at >= $1
+			  AND (($4::text = '' AND id::text > $2) OR id::text = $4)
+			ORDER BY id::text LIMIT $3`,
+		BaselineAt: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Every:      10 * time.Minute,
+	}
+	if _, err := integrity.RegisterRule(ctx, definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := integrity.EnableRule(ctx, definition.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	changedAt := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	opened, err := integrity.Changed(ctx, rhinoq.ChangeRequest{
+		Subject:   rhinoq.SubjectRef{Type: "order", ID: "2"},
+		ChangedAt: changedAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Processed != 1 || opened.RulesEvaluated != 1 ||
+		opened.FindingsTouched != 1 {
+		t.Fatalf("one signal must evaluate only its matching subject: %+v", opened)
+	}
+	state, found, err := integrity.GetIntegrityState(ctx, definition.ID, 1, rhinoq.SubjectRef{
+		Type: "order", ID: "2",
+	})
+	if err != nil || !found || state.Status != rhinoq.ObservationViolated ||
+		state.Finding == nil || state.Finding.Status != rhinoq.FindingOpen {
+		t.Fatalf("violated Outcome must project an open Finding: %+v found=%v err=%v",
+			state, found, err)
+	}
+
+	if _, err := testDB.Exec(`
+		UPDATE rhinoq_rule_test_orders SET status = 'pending' WHERE id = 2`); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := integrity.Changed(ctx, rhinoq.ChangeRequest{
+		Subject:   rhinoq.SubjectRef{Type: "order", ID: "2"},
+		ChangedAt: changedAt.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.FindingsTouched != 1 {
+		t.Fatalf("the passing signal must resolve the projected Finding: %+v", resolved)
+	}
+	state, found, err = integrity.GetIntegrityState(ctx, definition.ID, 1, rhinoq.SubjectRef{
+		Type: "order", ID: "2",
+	})
+	if err != nil || !found || state.Status != rhinoq.ObservationPassed ||
+		state.Finding == nil || state.Finding.Status != rhinoq.FindingResolved {
+		t.Fatalf("Outcome is canonical and Finding follows it: %+v found=%v err=%v",
+			state, found, err)
+	}
+
+	var processed int
+	if err := testDB.QueryRow(`
+		SELECT count(*) FROM rhinoq_subject_changes
+		WHERE subject_type = 'order' AND subject_id = '2'
+		  AND processed_at IS NOT NULL`).Scan(&processed); err != nil {
+		t.Fatal(err)
+	}
+	if processed != 2 {
+		t.Fatalf("both durable change signals must be completed, got %d", processed)
+	}
+}
+
+func TestDrainChangesResumesWithCompositeCursor(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	store, err := postgresadapter.NewChangeStore(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	at := time.Date(2026, 7, 28, 13, 0, 0, 0, time.UTC)
+	for _, subjectID := range []string{"b", "a", "a"} {
+		if _, err := store.PublishChange(ctx, change.Record{
+			Subject:   correlation.SubjectRef{Type: "report", ID: subjectID},
+			ChangedAt: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := integrity.DrainChanges(ctx, rhinoq.ChangeCursor{}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Processed != 2 || first.NextCursor.SubjectID != "a" ||
+		first.NextCursor.Sequence == 0 {
+		t.Fatalf("the first bounded drain must end on the second a: %+v", first)
+	}
+	second, err := integrity.DrainChanges(ctx, first.NextCursor, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Processed != 1 || second.NextCursor.SubjectID != "b" {
+		t.Fatalf("the composite cursor must resume at b: %+v", second)
+	}
+}
+
+// createChangedFixture gives several rows an identical updated_at on purpose.
+// A cursor that pages on the timestamp alone skips all but one of them, and an
+// integrity checker that skips rows reports a table clean because it never
+// looked at part of it.
+func createChangedFixture(t *testing.T) {
+	t.Helper()
+	if _, err := testDB.Exec(`
+		DROP TABLE IF EXISTS rhinoq_changed_test_reports;
+		CREATE TABLE rhinoq_changed_test_reports (
+			id bigint PRIMARY KEY,
+			status text NOT NULL,
+			created_at timestamptz NOT NULL,
+			updated_at timestamptz NOT NULL
+		);
+		CREATE INDEX rhinoq_changed_test_reports_changed_idx
+			ON rhinoq_changed_test_reports (updated_at, id);
+		INSERT INTO rhinoq_changed_test_reports (id, status, created_at, updated_at)
+		SELECT number,
+		       CASE WHEN number % 2 = 0 THEN 'ready' ELSE 'draft' END,
+		       now() - interval '1 day',
+		       -- Three distinct instants over twelve rows: four rows share each.
+		       now() - interval '1 hour' + ((number - 1) / 4) * interval '1 minute'
+		FROM generate_series(1, 12) AS number`); err != nil {
+		t.Fatalf("create changed fixture: %v", err)
+	}
+}
+
+const changedSinceQuery = `SELECT id::text AS subject_id,
+	status = 'ready' AS violated,
+	jsonb_build_object('status', status) AS evidence,
+	updated_at AS changed_at
+	FROM rhinoq_changed_test_reports
+	WHERE created_at >= $1
+	  AND (($4::text = '' AND (updated_at, id::text) > ($5, $2)) OR id::text = $4)
+	ORDER BY updated_at, id::text
+	LIMIT $3`
+
+// A changed-since walk must page on the composite key and cover every row
+// exactly once, including rows that share a timestamp.
+func TestChangedSinceCursorCoversRowsSharingATimestamp(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	createChangedFixture(t)
+
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	definition := rhinoq.RuleDefinition{
+		ID: "changed-since-report", Name: "Changed since report",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "report",
+		Query:      changedSinceQuery,
+		BaselineAt: time.Now().Add(-48 * time.Hour),
+		Every:      10 * time.Minute,
+		MaxRows:    3,
+		Cursor:     rhinoq.CursorChanged,
+	}
+	if _, err := integrity.RegisterRule(ctx, definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, explanation, err := integrity.EnableRule(ctx, definition.ID); err != nil {
+		t.Fatalf("a changed-since rule must pass explain: %+v %v", explanation, err)
+	}
+
+	// Page three rows at a time through twelve rows whose timestamps repeat.
+	seen := map[string]int{}
+	cursor := ""
+	for page := 0; page < 10; page++ {
+		evaluation, err := integrity.EvaluateRule(ctx, definition.ID, "", cursor)
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		for _, observation := range evaluation.Observations {
+			seen[observation.SubjectID]++
+		}
+		if !evaluation.HasMore {
+			break
+		}
+		if evaluation.NextCursor == cursor {
+			t.Fatalf("cursor did not advance on page %d: %q", page, cursor)
+		}
+		cursor = evaluation.NextCursor
+	}
+	if len(seen) != 12 {
+		t.Fatalf("every row must be observed exactly once, saw %d distinct of 12: %v", len(seen), seen)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("row %s observed %d times; paging must not repeat rows", id, count)
+		}
+	}
+
+	// The cursor carries both halves, which is what lets it resume inside a
+	// group of rows sharing one timestamp.
+	if !strings.Contains(cursor, "|") {
+		t.Fatalf("a changed-since cursor must carry (changed_at, subject_id): %q", cursor)
+	}
+}
+
+// A row that changes after a completed walk is picked up on the next pass
+// without re-reading the table. This is the reason the mode exists.
+func TestChangedSinceCursorPicksUpALaterUpdate(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	createChangedFixture(t)
+
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	definition := rhinoq.RuleDefinition{
+		ID: "changed-since-followup", Name: "Changed since follow-up",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "report",
+		Query:      changedSinceQuery,
+		BaselineAt: time.Now().Add(-48 * time.Hour),
+		Every:      10 * time.Minute,
+		MaxRows:    100,
+		Cursor:     rhinoq.CursorChanged,
+	}
+	if _, err := integrity.RegisterRule(ctx, definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := integrity.EnableRule(ctx, definition.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := integrity.EvaluateRule(ctx, definition.ID, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Observations) != 12 {
+		t.Fatalf("the first pass must cover the table, got %d", len(first.Observations))
+	}
+	cursor := first.NextCursor
+
+	// Nothing changed: the walk is caught up and reads nothing.
+	caughtUp, err := integrity.EvaluateRule(ctx, definition.ID, "", cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caughtUp.Observations) != 0 {
+		t.Fatalf("a caught-up changed-since walk must read nothing, got %d",
+			len(caughtUp.Observations))
+	}
+
+	// One row moves. Only that row comes back.
+	if _, err := testDB.Exec(`
+		UPDATE rhinoq_changed_test_reports
+		SET status = 'ready', updated_at = now() + interval '1 minute'
+		WHERE id = 7`); err != nil {
+		t.Fatal(err)
+	}
+	followUp, err := integrity.EvaluateRule(ctx, definition.ID, "", cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(followUp.Observations) != 1 || followUp.Observations[0].SubjectID != "7" {
+		t.Fatalf("only the changed row must be re-read: %+v", followUp.Observations)
+	}
+	if followUp.Observations[0].Status != rhinoq.ObservationViolated {
+		t.Fatalf("the updated row now violates the invariant: %+v", followUp.Observations[0])
+	}
+}
+
+// The Explain gate must refuse a changed-since rule that cannot resume, rather
+// than letting it restart its walk forever at runtime.
+func TestChangedSinceRuleWithoutChangedAtIsRefused(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	createChangedFixture(t)
+
+	integrity, err := rhinoq.NewIntegrity(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	definition := rhinoq.RuleDefinition{
+		ID: "changed-since-broken", Name: "Changed since without changed_at",
+		Scope: rhinoq.RuleScopeTable, SubjectType: "report",
+		Query: `SELECT id::text AS subject_id,
+			status = 'ready' AS violated,
+			jsonb_build_object('status', status) AS evidence
+			FROM rhinoq_changed_test_reports
+			WHERE created_at >= $1
+			  AND (($4::text = '' AND (updated_at, id::text) > ($5, $2)) OR id::text = $4)
+			ORDER BY updated_at, id::text
+			LIMIT $3`,
+		BaselineAt: time.Now().Add(-48 * time.Hour),
+		Every:      10 * time.Minute,
+		Cursor:     rhinoq.CursorChanged,
+	}
+	if _, err := integrity.RegisterRule(ctx, definition); err != nil {
+		t.Fatal(err)
+	}
+	_, explanation, err := integrity.EnableRule(ctx, definition.ID)
+	if err == nil {
+		t.Fatal("a changed-since rule that cannot resume must not enable")
+	}
+	if explanation.Safe {
+		t.Fatalf("explain must mark it unsafe: %+v", explanation)
+	}
+	var mentioned bool
+	for _, reason := range explanation.Reasons {
+		if strings.Contains(reason, "changed_at") {
+			mentioned = true
+		}
+	}
+	if !mentioned {
+		t.Fatalf("the refusal must name the missing column: %+v", explanation.Reasons)
 	}
 }

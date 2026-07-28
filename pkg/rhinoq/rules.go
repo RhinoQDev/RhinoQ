@@ -6,7 +6,9 @@ import (
 	"time"
 
 	ruleapp "github.com/madebyduy/RhinoQ/internal/application/rules"
+	"github.com/madebyduy/RhinoQ/internal/domain/finding"
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/internal/domain/subjectoutcome"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
@@ -36,10 +38,17 @@ type RuleDefinition struct {
 	BaselineAt  time.Time
 	Every       time.Duration
 	Within      time.Duration
+	// Cursor is "subject" (default) or "changed": how a table Rule walks its
+	// subjects. A changed-since Rule must accept $5, the cursor timestamp, and
+	// return a changed_at column.
+	Cursor string
 	// OnUnknown is "retry" (default) or "finding": what an inconclusive
 	// observation does.
 	OnUnknown string
-	MaxRows   int
+	// UnknownGrace waits for a continuous unknown streak before opening a
+	// Finding. Zero opens immediately when OnUnknown is "finding".
+	UnknownGrace time.Duration
+	MaxRows      int
 
 	StatementTimeout time.Duration
 	MaxPlanCost      float64
@@ -55,10 +64,11 @@ type RuleRecord struct {
 }
 
 type RuleQuery struct {
-	Scope    string
-	Statuses []string
-	Offset   int
-	Limit    int
+	Scope       string
+	SubjectType string
+	Statuses    []string
+	Offset      int
+	Limit       int
 }
 
 type RuleSeqScan struct {
@@ -93,6 +103,15 @@ const (
 	UnknownOpensFinding = string(rule.UnknownOpensFinding)
 )
 
+// Cursor modes decide how a table Rule walks its subjects.
+const (
+	// CursorSubject pages by subject id: bounded, complete, blind to recency.
+	CursorSubject = string(rule.CursorSubject)
+	// CursorChanged pages by (changed_at, subject_id), so a row that just moved
+	// is seen on the next page rather than after a full pass.
+	CursorChanged = string(rule.CursorChanged)
+)
+
 type RuleObservation struct {
 	SubjectID string `json:"subjectId"`
 	// Status is passed, violated or unknown.
@@ -109,6 +128,66 @@ type RuleEvaluation struct {
 	HasMore      bool              `json:"hasMore"`
 	EvaluatedAt  time.Time         `json:"evaluatedAt"`
 	Findings     []FindingRecord   `json:"findings"`
+}
+
+// IntegrityState is the canonical integrity state for one immutable Rule
+// version and one business subject. Outcome always records the latest
+// observation. Finding is present only when that Outcome currently needs
+// operational attention (or has lifecycle history).
+type IntegrityState struct {
+	RuleID         string         `json:"ruleId"`
+	RuleVersion    int            `json:"ruleVersion"`
+	Subject        SubjectRef     `json:"subject"`
+	Status         string         `json:"status"`
+	Reason         string         `json:"reason,omitempty"`
+	Evidence       string         `json:"evidence,omitempty"`
+	FirstUnknownAt time.Time      `json:"firstUnknownAt,omitempty"`
+	LastObservedAt time.Time      `json:"lastObservedAt"`
+	UnknownCount   int            `json:"unknownCount"`
+	Finding        *FindingRecord `json:"finding,omitempty"`
+}
+
+// GetIntegrityState reads Outcome first and joins the optional Finding by the
+// same canonical key. Findings are a workflow projection, never a second
+// source of truth for whether the invariant passed, violated or was unknown.
+func (c *IntegrityClient) GetIntegrityState(
+	ctx context.Context,
+	ruleID string,
+	ruleVersion int,
+	subject SubjectRef,
+) (IntegrityState, bool, error) {
+	if c == nil || c.subjectOutcomes == nil || c.findings == nil {
+		return IntegrityState{}, false, errors.New(
+			"rhinoq integrity state stores are not configured",
+		)
+	}
+	key := subjectoutcome.Key{
+		RuleID: ruleID, RuleVersion: ruleVersion,
+		SubjectType: subject.Type, SubjectID: subject.ID,
+	}
+	outcome, found, err := c.subjectOutcomes.GetSubjectOutcome(ctx, key)
+	if err != nil || !found {
+		return IntegrityState{}, found, err
+	}
+	state := IntegrityState{
+		RuleID: outcome.RuleID, RuleVersion: outcome.RuleVersion,
+		Subject: SubjectRef{Type: outcome.SubjectType, ID: outcome.SubjectID},
+		Status:  string(outcome.Status), Reason: outcome.Reason,
+		Evidence: outcome.Evidence, FirstUnknownAt: outcome.FirstUnknownAt,
+		LastObservedAt: outcome.LastObservedAt, UnknownCount: outcome.UnknownCount,
+	}
+	item, hasFinding, err := c.findings.GetFinding(ctx, finding.Key{
+		RuleID: ruleID, ObservedInvariantVersion: ruleVersion,
+		SubjectType: subject.Type, SubjectID: subject.ID,
+	})
+	if err != nil {
+		return IntegrityState{}, false, err
+	}
+	if hasFinding {
+		public := summarizeFinding(item)
+		state.Finding = &public
+	}
+	return state, true, nil
 }
 
 func (c *IntegrityClient) RegisterRule(
@@ -133,8 +212,9 @@ func (c *IntegrityClient) ListRules(ctx context.Context, query RuleQuery) ([]Rul
 		statuses = append(statuses, rule.Status(status))
 	}
 	records, err := service.List(ctx, rule.Query{
-		Scope: rule.Scope(query.Scope), Statuses: statuses,
-		Offset: query.Offset, Limit: query.Limit,
+		Scope: rule.Scope(query.Scope), SubjectType: query.SubjectType,
+		Statuses: statuses,
+		Offset:   query.Offset, Limit: query.Limit,
 	})
 	if err != nil {
 		return nil, err
@@ -217,6 +297,7 @@ func (c *IntegrityClient) ruleService() (*ruleapp.Service, error) {
 	}
 	return ruleapp.New(
 		c.rules, c.ruleExplainer, c.ruleEvaluator, c.findings,
+		c.subjectOutcomes,
 		func() time.Time { return time.Now().UTC() },
 	)
 }
@@ -229,6 +310,8 @@ func domainRule(definition RuleDefinition) rule.Record {
 		BaselineAt: definition.BaselineAt, Every: definition.Every,
 		Within: definition.Within, MaxRows: definition.MaxRows,
 		OnUnknown:        rule.UnknownPolicy(definition.OnUnknown),
+		UnknownGrace:     definition.UnknownGrace,
+		Cursor:           rule.CursorMode(definition.Cursor),
 		StatementTimeout: definition.StatementTimeout,
 		MaxPlanCost:      definition.MaxPlanCost,
 		MaxSeqScanRows:   definition.MaxSeqScanRows,
@@ -243,6 +326,8 @@ func publicRule(record rule.Record) RuleRecord {
 			Query: record.Query, BaselineAt: record.BaselineAt,
 			Every: record.Every, Within: record.Within, MaxRows: record.MaxRows,
 			OnUnknown:        string(record.OnUnknown),
+			Cursor:           string(record.Cursor),
+			UnknownGrace:     record.UnknownGrace,
 			StatementTimeout: record.StatementTimeout,
 			MaxPlanCost:      record.MaxPlanCost, MaxSeqScanRows: record.MaxSeqScanRows,
 		},

@@ -10,6 +10,7 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/domain/finding"
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/internal/domain/subjectoutcome"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
@@ -18,6 +19,7 @@ type Service struct {
 	explainer ports.RuleExplainer
 	evaluator ports.RuleEvaluator
 	findings  ports.FindingStore
+	outcomes  ports.SubjectOutcomeStore
 	now       func() time.Time
 }
 
@@ -26,6 +28,7 @@ func New(
 	explainer ports.RuleExplainer,
 	evaluator ports.RuleEvaluator,
 	findings ports.FindingStore,
+	outcomes ports.SubjectOutcomeStore,
 	now func() time.Time,
 ) (*Service, error) {
 	if store == nil {
@@ -36,7 +39,7 @@ func New(
 	}
 	return &Service{
 		store: store, explainer: explainer, evaluator: evaluator,
-		findings: findings, now: now,
+		findings: findings, outcomes: outcomes, now: now,
 	}, nil
 }
 
@@ -168,9 +171,9 @@ func (s *Service) evaluateRecord(
 	record rule.Record,
 	subjectID, cursor string,
 ) (rule.Evaluation, []finding.Record, error) {
-	if s.evaluator == nil || s.findings == nil {
+	if s.evaluator == nil || s.findings == nil || s.outcomes == nil {
 		return rule.Evaluation{}, nil, errors.New(
-			"PostgreSQL rule evaluator and finding store are required",
+			"Rule evaluator, subject outcome store and finding store are required",
 		)
 	}
 	evaluation, err := s.evaluator.EvaluateRule(ctx, record, subjectID, cursor)
@@ -179,6 +182,32 @@ func (s *Service) evaluateRecord(
 	}
 	changed := make([]finding.Record, 0, len(evaluation.Observations))
 	for _, observation := range evaluation.Observations {
+		outcomeKey := subjectoutcome.Key{
+			RuleID: record.ID, RuleVersion: record.Version,
+			SubjectType: record.SubjectType, SubjectID: observation.SubjectID,
+		}
+		existingOutcome, found, err := s.outcomes.GetSubjectOutcome(
+			ctx, outcomeKey,
+		)
+		if err != nil {
+			return evaluation, changed, err
+		}
+		materialized, err := subjectoutcome.Apply(
+			existingOutcome, found, outcomeKey, observation,
+			evaluation.EvaluatedAt,
+		)
+		if err != nil {
+			return evaluation, changed, err
+		}
+		applied, err := s.outcomes.SaveSubjectOutcome(ctx, materialized)
+		if err != nil {
+			return evaluation, changed, err
+		}
+		if !applied {
+			// Scan and Changed may overlap. A stale observation is evidence
+			// about the past and must not mutate today's Finding projection.
+			continue
+		}
 		key := finding.Key{
 			RuleID: record.ID, SubjectType: record.SubjectType,
 			SubjectID:                observation.SubjectID,
@@ -200,6 +229,11 @@ func (s *Service) evaluateRecord(
 			// would close real drift because a provider happened to be
 			// unreachable, which is the specific mistake a boolean forced.
 			if record.OnUnknown != rule.UnknownOpensFinding {
+				continue
+			}
+			if !materialized.UnknownEscalationDue(
+				record.UnknownGrace, evaluation.EvaluatedAt,
+			) {
 				continue
 			}
 			item, err := s.findings.ObserveFinding(ctx, finding.Observation{

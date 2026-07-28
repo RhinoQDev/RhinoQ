@@ -362,7 +362,7 @@ record, err := queue.RegisterRule(ctx, rhinoq.RuleDefinition{
             jsonb_build_object('status', status) AS evidence
         FROM reports
         WHERE created_at >= $1
-          AND id::text > $2
+          AND (($4::text = '' AND id::text > $2) OR id::text = $4)
         ORDER BY id::text
         LIMIT $3`,
     BaselineAt: time.Now().Add(-24 * time.Hour),
@@ -409,6 +409,25 @@ Its cursor and lease are persisted. Another process can resume a bounded page
 after a crash, while owner/epoch fencing prevents a stale scheduler from
 advancing the Rule. Disabling a Rule prevents future claims but allows a page
 already claimed under that immutable version to finish.
+
+The optional `$4` makes this Rule signal-capable. After the application commits
+a report change, verify just that subject:
+
+```go
+_, err := queue.Changed(ctx, rhinoq.ChangeRequest{
+    Subject: rhinoq.SubjectRef{Type: "report", ID: reportID},
+})
+```
+
+The signal is persisted before evaluation. Failed signals can be retried in
+bounded batches with `DrainChanges`; ordering uses the composite
+`(changed_at, subject_id, sequence)` cursor. Periodic scans remain the fallback
+for missed signals.
+
+Each observation first materializes one canonical Subject Outcome. A Finding
+is only its operational projection for triage and lifecycle history, not a
+second truth model. Rules may also set `UnknownGrace` so a continuous
+inconclusive state becomes a Finding only after its grace period.
 
 ## Use the developer Workbench or CLI
 
@@ -583,14 +602,22 @@ Implemented and covered by automated tests:
 - idempotent enqueue, delayed work, priority, admission, rate limits;
 - fenced claims, heartbeat, cancellation, retries, reaping, graceful shutdown;
 - per-effect confirmation policies and uncertain-effect fail-closed behavior;
-- versioned job/table Rules with Explain and bounded evaluation;
+- integrity-only facade that starts no queue runtime;
+- versioned job/table Rules with Explain, tri-state observations and bounded
+  `scan` evaluation;
+- canonical subject Outcomes with Findings as their operational projection;
+- durable signal-first `Changed()` verification, composite incremental cursor,
+  bounded drain batches, and continuous-unknown grace escalation;
 - persistent Findings with acknowledgement, suppression, resolution, and regression;
+- external execution/effect correlation for an existing BullMQ, Temporal,
+  cron or application runtime;
 - crash-safe periodic Rule scheduling;
 - unified Needs Attention inbox;
 - guarded replay and tamper-evident replay audit;
 - direct PostgreSQL migration, diagnostics, inspection, and control CLI;
 - embedded loopback-only developer Workbench with demo/live modes, payload-free
-  tables, Needs Attention, Findings, Rules and per-job evidence;
+  tables, Needs Attention, Findings, Rules, per-job evidence and a
+  business-subject investigation view;
 - transactional SQL enqueue and an optional authenticated HTTP gateway;
 - Node.js producer, worker and operator preview with queue-filtered claims,
   typed errors, external effect confirmation, request timeouts and graceful
@@ -598,9 +625,9 @@ Implemented and covered by automated tests:
 
 Still required before a stable release:
 
-- observe-only correlation with an existing execution system;
-- business-key timeline across execution, effects, Rules, and Findings;
-- bounded `scan` onboarding;
+- reverse lookup from an external execution or business key into a subject;
+- typed/template Rule authoring beyond the current guarded SQL contract;
+- guarded business repair with preconditions, dry-run, approval and re-verify;
 - retention/partition guidance, restore tests, fault-injection evidence;
 - reproducible performance benchmarks and external production evidence;
 - tagged `@rhinoq/node` package and prebuilt cross-platform CLI binaries;
@@ -608,6 +635,9 @@ Still required before a stable release:
 
 See the [feature matrix](./docs/feature-matrix.md) and
 [roadmap](./docs/roadmap.md) for the maintained status.
+
+The runnable [integrity-only example](./examples/integrity-only/) creates one
+real Finding without enqueueing or claiming a job.
 
 ## Architecture and repository
 

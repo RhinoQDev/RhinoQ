@@ -23,14 +23,14 @@ execution platforms.
 | Producer backpressure | not native | admission control with reserved critical budget implemented; `route` and `sample` overflow modes pending |
 | Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
 | DLQ / Needs Attention | failed-job and operational views | one bounded inbox merges execution attention and live persistent Findings; resolved/suppressed Findings are excluded |
-| Reverse reconciliation | application-specific | planned for one v0.1 business subject; not implemented |
-| Observe-only correlation | application-specific | external source/job/business-key contract pending |
+| Reverse reconciliation | application-specific | bounded `scan` plus durable `Changed()` signals; stable `(changed_at, subject_id, sequence)` cursor; scheduled scans remain the missed-signal fallback |
+| Observe-only correlation | application-specific | external source/job/business-key and subject references implemented; reverse search by external execution remains pending |
 | Manual replay | retry failed work | guarded dead/blocked replay with effect safety checks and transactional audit |
 | Audit trail | operational events | replay events use a per-job SHA-256 hash chain; signed checkpoints pending |
 | Flow/dependency graph | supported | intentionally not v0.1 |
 | Effect uncertainty | not external-effect aware by default | Effect Ledger implemented |
-| Business outcome | not native | Outcome contract implemented |
-| Integrity Rules | application-specific | versioned job/table SQL contract, read-only evaluator, Explain gate and fenced periodic scheduler implemented |
+| Business outcome | not native | canonical per-Rule/per-subject Outcome implemented; Findings are its operational projection, with stale-observation protection and unknown grace escalation |
+| Integrity Rules | application-specific | integrity-only facade, versioned job/table SQL contract, tri-state read-only evaluator, Explain gate, bounded CLI scan and fenced periodic scheduler implemented |
 | Metrics export | Prometheus exporters | `/metrics` text format implemented, no client library dependency |
 | Health probes | not applicable | `/health/live` and `/health/ready` implemented separately |
 | Embedded operation | application-specific | Go library and direct PostgreSQL CLI are the default; no RhinoQ server, AI agent or LLM is required |
@@ -38,7 +38,7 @@ execution platforms.
 | Polyglot workers | Node only | Node worker preview adds protocol negotiation, handler-filtered claim, heartbeat, cancellation and graceful shutdown through the optional HTTP gateway |
 | Transactional enqueue from any language | not applicable | `rhinoq.enqueue()` SQL function with job allowlist implemented and executed by the PostgreSQL suite |
 | Migration/diagnostics CLI | application-specific | read-only plan/status/SQL, explicit checksum-locked apply and database-aware doctor implemented |
-| Developer UI | separate product | embedded loopback-only Workbench preview implemented: payload-free jobs, Needs Attention, Findings, Rules and per-job attempt/effect/outcome/audit evidence; read-only, no remote hosting |
+| Developer UI | separate product | embedded loopback-only Workbench preview implemented: payload-free jobs, Needs Attention, Findings, Rules, per-job evidence and business-subject investigation; read-only, no remote hosting |
 
 BullMQ is a mature Redis-based queue with worker, events, delayed jobs,
 concurrency and operational features. RhinoQ uses it as one RUN reference, but

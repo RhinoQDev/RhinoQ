@@ -517,8 +517,16 @@ func runScan(args []string, getenv func(string) string, output io.Writer) int {
 		fmt.Fprintln(output, "FAIL scan accepts exactly one rule id")
 		return 2
 	}
+	if *maxPages < 0 || *maxPages > rhinoq.MaxScanPages {
+		fmt.Fprintf(output, "FAIL --max-pages must be between 0 and %d\n", rhinoq.MaxScanPages)
+		return 2
+	}
 	if *timeout <= 0 {
 		fmt.Fprintln(output, "FAIL --timeout must be positive")
+		return 2
+	}
+	if strings.TrimSpace(*subject) != "" && *cursor != "" {
+		fmt.Fprintln(output, "FAIL --subject and --cursor cannot be combined")
 		return 2
 	}
 
@@ -553,6 +561,7 @@ func printScanSummary(output io.Writer, summary rhinoq.ScanSummary, timedOut boo
 	fmt.Fprintf(table, "Observed:\t%d\n", summary.Observed)
 	fmt.Fprintf(table, "Passed:\t%d\n", summary.Passed)
 	fmt.Fprintf(table, "Violated:\t%d\n", summary.Violated)
+	fmt.Fprintf(table, "Unknown:\t%d\n", summary.Unknown)
 	fmt.Fprintf(table, "Findings touched:\t%d\n", summary.Findings)
 	fmt.Fprintf(table, "Duration:\t%s\n", summary.FinishedAt.Sub(summary.StartedAt).Round(time.Millisecond))
 	switch {

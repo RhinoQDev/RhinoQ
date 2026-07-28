@@ -3,12 +3,16 @@
 Rules are the canonical verification contract in RhinoQ. Outcome checks and
 table reconciliation do not have separate public DSLs.
 
+For a complete no-queue walkthrough, run the
+[integrity-only missing-report example](../examples/integrity-only/).
+
 ## Scopes
 
 - `job` evaluates one business subject after an execution. `$1` is the subject
   ID.
 - `table` evaluates a bounded page of business subjects. `$1` is the baseline
   timestamp, `$2` is the last subject cursor, and `$3` is the maximum row count.
+  A signal-capable query also accepts `$4`, an optional exact subject ID.
 
 Every query returns three columns, plus an optional fourth:
 
@@ -48,10 +52,13 @@ SELECT
     jsonb_build_object('status', status, 'outputKey', output_key) AS evidence
 FROM reports
 WHERE created_at >= $1
-  AND id::text > $2
+  AND (($4::text = '' AND id::text > $2) OR id::text = $4)
 ORDER BY id::text
 LIMIT $3
 ```
+
+With `$4`, scheduled scans pass `''` and walk the table, while `Changed()`
+passes one exact subject ID. Both paths use the same immutable Rule.
 
 ## Lifecycle
 
@@ -114,20 +121,28 @@ page, err := queue.EvaluateRule(ctx, ruleID, "", cursor)
 cursor = page.NextCursor
 ```
 
-For every observation:
+For every observation RhinoQ first updates one canonical Subject Outcome keyed
+by `(rule_id, rule_version, subject_type, subject_id)`. It then projects that
+state into the optional Finding with the same key:
 
 - `violated = true` opens or deduplicates a persistent Finding;
 - `violated = false` auto-resolves an existing Finding and appends a `passed`
   event;
 - `violated IS NULL` follows the Rule's `OnUnknown` policy;
-- a healthy subject without a Finding creates no record.
+- a healthy subject has a passed Outcome even when it has no Finding.
+
+Outcome answers what the latest verification concluded. Finding owns triage,
+suppression, resolution and regression history. It is not a parallel truth
+model. `GetIntegrityState` reads the Outcome and joins its optional Finding.
+An older concurrent observation cannot overwrite a newer Outcome or mutate its
+Finding projection.
 
 An unknown **never** resolves a Finding. `OnUnknown` chooses between:
 
 | `OnUnknown` | Behaviour |
 |---|---|
 | `retry` (default) | record the observation, open nothing, ask again next evaluation |
-| `finding` | open a Finding whose evidence records `unknown` and the reason |
+| `finding` | open a Finding after `UnknownGrace`; evidence records `unknown` and the reason |
 
 The default is `retry` because most unknowns are transient, and an alert per
 transient failure teaches operators to ignore alerts. Choose `finding` when not
@@ -137,17 +152,45 @@ for instance.
 ```go
 _, err := integrity.RegisterRule(ctx, rhinoq.RuleDefinition{
     // …
-    OnUnknown: rhinoq.UnknownOpensFinding,
+    OnUnknown:    rhinoq.UnknownOpensFinding,
+    UnknownGrace: 10 * time.Minute,
 })
 ```
 
 `rhinoq scan` reports unknown as its own count, never folded into passed.
 
-> [!NOTE]
-> There is no escalation after a grace period yet: a subject that stays unknown
-> under `retry` stays unknown indefinitely and never becomes a Finding on its
-> own. Tracking how long a subject has been inconclusive needs storage that does
-> not exist, so it is deliberately absent rather than half-built.
+`UnknownGrace` measures one continuous unknown streak. A pass or violation
+resets the streak. Zero keeps immediate escalation for Rules that intentionally
+want it. `OnUnknown: retry` never escalates, so combining it with a grace value
+is rejected instead of silently ignoring configuration.
+
+## Signal-first verification
+
+Call `Changed()` at a business-state boundary after the application's
+transaction commits:
+
+```go
+summary, err := integrity.Changed(ctx, rhinoq.ChangeRequest{
+    Subject: rhinoq.SubjectRef{Type: "report", ID: reportID},
+    BusinessKey: tenantID + ":" + reportID,
+})
+```
+
+RhinoQ persists the signal before evaluation. Matching enabled table Rules that
+opt into `$4` run immediately; ordinary Rules remain scan-only. If verification
+fails, the signal stays pending:
+
+```go
+summary, err := integrity.DrainChanges(ctx, cursor, 250)
+cursor = summary.NextCursor
+```
+
+The durable incremental order is
+`(changed_at, subject_id, sequence)`, not `updated_at` alone. The final sequence
+breaks ties when one subject changes more than once at the same timestamp.
+Scheduled scans remain the correctness fallback for missed application
+signals; Changed reduces detection latency and scan volume but does not replace
+reconciliation.
 
 Periodic table evaluation uses a durable cursor and an owner/epoch-fenced
 schedule lease. A crash leaves the last completed page cursor in PostgreSQL;
@@ -222,3 +265,56 @@ would be worse than saying so.
 Recording a RhinoQ execution through `RecordExternalEffect` is refused rather
 than silently accepted: the runtime has a fence, and skipping it would throw
 away the protection the job already had.
+
+## Walking a large table: subject or changed-since
+
+A table Rule pages on `subject_id` by default. That is bounded and complete, and
+blind to recency: a row updated a second ago waits for the walk to reach its id.
+
+Set `Cursor: rhinoq.CursorChanged` to page on `(changed_at, subject_id)`
+instead. The query then takes `$5`, the cursor timestamp, and must return a
+`changed_at` column:
+
+```go
+_, err := integrity.RegisterRule(ctx, rhinoq.RuleDefinition{
+    ID:     "ready-report-has-output",
+    Scope:  rhinoq.RuleScopeTable,
+    Cursor: rhinoq.CursorChanged,
+    Query: `SELECT id::text AS subject_id,
+        output_key IS NULL AS violated,
+        jsonb_build_object('status', status) AS evidence,
+        updated_at AS changed_at
+        FROM reports
+        WHERE created_at >= $1
+          AND (($4::text = '' AND (updated_at, id::text) > ($5, $2)) OR id::text = $4)
+        ORDER BY updated_at, id::text
+        LIMIT $3`,
+})
+```
+
+Index `(updated_at, id)` to match.
+
+### The composite key is not a detail
+
+Ordering by a timestamp alone is unstable when rows share one, and paging an
+unstable order **skips rows**. For an integrity checker that means reporting a
+table clean because it never looked at part of it. RhinoQ enforces strict
+ascending `(changed_at, subject_id)` at evaluation time and refuses a
+changed-since Rule at Explain time if it cannot return `changed_at` — a Rule
+that cannot resume would silently restart its walk on every page and never
+finish.
+
+The cursor stays one opaque string, encoded `RFC3339Nano|subject_id`, so
+`rhinoq scan --cursor` and the durable schedule cursor are unchanged.
+
+### Use all three together
+
+| Mechanism | Catches |
+|---|---|
+| `Changed()` signal | what the application remembers to announce |
+| changed-since walk | what it forgot to announce, without re-reading everything |
+| periodic subject walk | out-of-band edits, and objects that vanish after passing |
+
+Signal-first is fastest and least complete; the subject walk is slowest and most
+complete. A changed-since walk sits between them, and none of the three replaces
+the others.

@@ -37,35 +37,40 @@ requiring the application's current queue to be replaced.
   bounded results
 - [x] persisted scheduler cursor, fenced claims and crash recovery between bounded pages
 - [x] query-cost, result-shape and large sequential-scan gate
-- [ ] external execution correlation:
+- [x] external execution correlation:
   `source_system`, `source_job_id`, `business_key`
 
 ### RECOVER
 
 - [x] finding domain lifecycle and deduplication rules
+- [x] canonical per-subject Outcome state with Finding as the operational projection
+- [x] configurable continuous-unknown grace escalation
 - [x] persistent memory/PostgreSQL finding store and public Go/Agent API
 - [x] manual table-scoped Rule evaluation folds violations/passes into Findings
 - [x] Needs Attention backed by persistent findings
 - [x] acknowledge, suppress, resolve and regressed operations with append-only events
 - [x] guarded manual replay and transactional audit hash chain
-- [ ] correlation timeline and business-key/external-job search
+- [x] business-subject investigation timeline
+- [ ] reverse business-key/external-job search into a subject
 
 ### Adoption
 
-- [ ] bounded `rhinoq scan` over tables with job/correlation references
+- [x] bounded `rhinoq scan` over enabled table Rules
 - [ ] `rhinoq init --from-scan` plan with baseline by default
-- [ ] one non-financial reference workload, such as a completed report whose
+- [x] one non-financial reference workload: a completed report whose
   output object is missing
-- [ ] no-cutover quickstart that produces the first finding
+- [x] no-cutover quickstart that produces the first Finding
 - [ ] tagged npm release and prebuilt CLI binaries for Node adopters
 
 ## v0.2 — Integrity Hardening
 
 - [x] versioned Rule contracts
 - [x] crash-safe scheduled Rule evaluation
-- [ ] signal-first Rule evaluation
+- [x] durable signal-first Rule evaluation with optional exact-subject query
+- [x] tri-state Rule observations: passed, violated and unknown
 - [x] finding suppression, deduplication and regression lifecycle
-- [ ] reconciliation cursors, budgets and backpressure
+- [x] composite change cursor and bounded drain batches
+- [ ] adaptive reconciliation budgets and producer backpressure
 - [ ] handler and verifier version evidence
 
 ## v0.3 — Safe Recovery
@@ -77,7 +82,7 @@ requiring the application's current queue to be replaced.
 
 ## Later, after design-partner evidence
 
-- [ ] business-key correlation timeline and guarded, audited browser actions
+- [ ] guarded, audited browser actions after read-only investigation is validated
 - [ ] gRPC/Unix-socket gateway transport, only after real polyglot demand
 - [ ] NestJS lifecycle integration after the framework-neutral Node SDK is validated
 - [ ] retention and partition sweeper

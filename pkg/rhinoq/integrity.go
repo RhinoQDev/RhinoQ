@@ -6,10 +6,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	"github.com/madebyduy/RhinoQ/internal/adapters/postgres"
+	"github.com/madebyduy/RhinoQ/internal/domain/change"
 	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 	"github.com/madebyduy/RhinoQ/internal/domain/effect"
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
@@ -31,11 +33,13 @@ import (
 // uses the same RuleStore, RuleEvaluator and FindingStore as *Client, so a
 // deployment can adopt the runtime later without re-registering anything.
 type IntegrityClient struct {
-	findings      ports.FindingStore
-	rules         ports.RuleStore
-	ruleExplainer ports.RuleExplainer
-	ruleEvaluator ports.RuleEvaluator
-	ruleSchedules ports.RuleScheduleStore
+	findings        ports.FindingStore
+	rules           ports.RuleStore
+	ruleExplainer   ports.RuleExplainer
+	ruleEvaluator   ports.RuleEvaluator
+	ruleSchedules   ports.RuleScheduleStore
+	subjectOutcomes ports.SubjectOutcomeStore
+	changes         ports.ChangeStore
 	// externalEffects records and reads Effect Ledger entries for executions
 	// RhinoQ did not run. It is nil for the in-memory facade, which has no
 	// ledger.
@@ -73,11 +77,21 @@ func NewIntegrity(db *sql.DB) (*IntegrityClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	subjectOutcomes, err := postgres.NewSubjectOutcomeStore(db)
+	if err != nil {
+		return nil, err
+	}
+	changeStore, err := postgres.NewChangeStore(db)
+	if err != nil {
+		return nil, err
+	}
 	return &IntegrityClient{
 		findings: findingStore, rules: ruleStore,
 		ruleExplainer: ruleExplainer, ruleEvaluator: ruleEvaluator,
 		externalEffects: effectStore,
 		ruleSchedules:   ruleStore,
+		subjectOutcomes: subjectOutcomes,
+		changes:         changeStore,
 	}, nil
 }
 
@@ -87,8 +101,134 @@ func NewInMemoryIntegrity() *IntegrityClient {
 	ruleStore := memory.NewRuleStore()
 	return &IntegrityClient{
 		findings: memory.NewFindingStore(), rules: ruleStore,
-		ruleSchedules: ruleStore,
+		ruleSchedules: ruleStore, subjectOutcomes: memory.NewSubjectOutcomeStore(),
+		changes: memory.NewChangeStore(),
 	}
+}
+
+// ChangeRequest is a durable hint that one business subject changed. Rules
+// whose table query accepts $4 as an optional subject filter are evaluated
+// immediately; scheduled scans remain the fallback.
+type ChangeRequest struct {
+	Subject     SubjectRef
+	BusinessKey string
+	ChangedAt   time.Time
+}
+
+type ChangeCursor struct {
+	ChangedAt time.Time `json:"changedAt"`
+	SubjectID string    `json:"subjectId"`
+	Sequence  int64     `json:"sequence"`
+}
+
+type ChangeSummary struct {
+	Published       int          `json:"published"`
+	Processed       int          `json:"processed"`
+	RulesEvaluated  int          `json:"rulesEvaluated"`
+	FindingsTouched int          `json:"findingsTouched"`
+	NextCursor      ChangeCursor `json:"nextCursor"`
+}
+
+// Changed persists and immediately processes one signal. Persistence comes
+// first, so a failed verification remains available to DrainChanges.
+func (c *IntegrityClient) Changed(
+	ctx context.Context,
+	request ChangeRequest,
+) (ChangeSummary, error) {
+	if c == nil || c.changes == nil {
+		return ChangeSummary{}, errors.New("rhinoq change store is not configured")
+	}
+	changedAt := request.ChangedAt
+	if changedAt.IsZero() {
+		changedAt = time.Now().UTC()
+	}
+	record, err := c.changes.PublishChange(ctx, change.Record{
+		Subject: correlation.SubjectRef{
+			Type: request.Subject.Type, ID: request.Subject.ID,
+		},
+		BusinessKey: request.BusinessKey, ChangedAt: changedAt,
+	})
+	if err != nil {
+		return ChangeSummary{}, err
+	}
+	summary := ChangeSummary{Published: 1}
+	if err := c.processChange(ctx, record, &summary); err != nil {
+		_ = c.changes.FailChange(ctx, record.ID, err.Error())
+		return summary, err
+	}
+	return summary, nil
+}
+
+// DrainChanges retries durable signals in stable
+// (changed_at, subject_id, sequence) order.
+func (c *IntegrityClient) DrainChanges(
+	ctx context.Context,
+	cursor ChangeCursor,
+	limit int,
+) (ChangeSummary, error) {
+	if c == nil || c.changes == nil {
+		return ChangeSummary{}, errors.New("rhinoq change store is not configured")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	records, err := c.changes.ListPendingChanges(ctx, change.Cursor{
+		ChangedAt: cursor.ChangedAt, SubjectID: cursor.SubjectID,
+		Sequence: cursor.Sequence,
+	}, limit)
+	if err != nil {
+		return ChangeSummary{}, err
+	}
+	summary := ChangeSummary{}
+	for _, record := range records {
+		if err := c.processChange(ctx, record, &summary); err != nil {
+			_ = c.changes.FailChange(ctx, record.ID, err.Error())
+			return summary, err
+		}
+		summary.NextCursor = ChangeCursor{
+			ChangedAt: record.ChangedAt, SubjectID: record.Subject.ID,
+			Sequence: record.ID,
+		}
+	}
+	return summary, nil
+}
+
+func (c *IntegrityClient) processChange(
+	ctx context.Context,
+	record change.Record,
+	summary *ChangeSummary,
+) error {
+	service, err := c.ruleService()
+	if err != nil {
+		return err
+	}
+	rules, err := service.List(ctx, rule.Query{
+		Scope: rule.TableScope, SubjectType: record.Subject.Type,
+		Statuses: []rule.Status{rule.Enabled}, Limit: 1000,
+	})
+	if err != nil {
+		return err
+	}
+	for _, candidate := range rules {
+		// Existing table Rules remain valid but rely on scheduled scans. A Rule
+		// opts into signal-first evaluation with an explicit $4 subject filter.
+		if !strings.Contains(candidate.Query, "$4") {
+			continue
+		}
+		_, findings, err := service.EvaluateVersion(
+			ctx, candidate.ID, candidate.Version, record.Subject.ID, "",
+		)
+		if err != nil {
+			return err
+		}
+		summary.RulesEvaluated++
+		summary.FindingsTouched += len(findings)
+	}
+	if err := c.changes.CompleteChange(ctx, record.ID); err != nil {
+		return err
+	}
+	summary.Processed++
+	return nil
 }
 
 // ScanRequest asks for one bounded pass over a Rule's subjects.
@@ -163,7 +303,10 @@ func (c *IntegrityClient) Scan(ctx context.Context, request ScanRequest) (ScanSu
 			"rhinoq scan takes either a subject or a cursor: one asks about a single record, the other resumes a walk")
 	}
 	maxPages := request.MaxPages
-	if maxPages <= 0 {
+	if maxPages < 0 {
+		return ScanSummary{}, errors.New("rhinoq scan page budget must not be negative")
+	}
+	if maxPages == 0 {
 		maxPages = DefaultScanMaxPages
 	}
 	if maxPages > MaxScanPages {
@@ -173,8 +316,18 @@ func (c *IntegrityClient) Scan(ctx context.Context, request ScanRequest) (ScanSu
 	if err != nil {
 		return ScanSummary{}, err
 	}
+	record, found, err := service.Get(ctx, request.RuleID)
+	if err != nil {
+		return ScanSummary{}, err
+	}
+	if !found {
+		return ScanSummary{}, ErrRuleNotFound
+	}
 
-	summary := ScanSummary{RuleID: request.RuleID, StartedAt: time.Now().UTC()}
+	summary := ScanSummary{
+		RuleID: request.RuleID, Version: record.Version,
+		StartedAt: time.Now().UTC(),
+	}
 	cursor := request.Cursor
 	for summary.Pages < maxPages {
 		if err := ctx.Err(); err != nil {
@@ -185,6 +338,9 @@ func (c *IntegrityClient) Scan(ctx context.Context, request ScanRequest) (ScanSu
 		}
 		evaluation, findings, err := service.Evaluate(ctx, request.RuleID, request.SubjectID, cursor)
 		if err != nil {
+			summary.HasMore = true
+			summary.NextCursor = cursor
+			summary.FinishedAt = time.Now().UTC()
 			return summary, err
 		}
 		summary.Pages++
@@ -200,7 +356,6 @@ func (c *IntegrityClient) Scan(ctx context.Context, request ScanRequest) (ScanSu
 				summary.Passed++
 			}
 		}
-		cursor = evaluation.NextCursor
 		if !evaluation.HasMore {
 			summary.FinishedAt = time.Now().UTC()
 			return summary, nil
@@ -210,6 +365,15 @@ func (c *IntegrityClient) Scan(ctx context.Context, request ScanRequest) (ScanSu
 		if request.SubjectID != "" {
 			break
 		}
+		if evaluation.NextCursor == "" || evaluation.NextCursor == cursor {
+			summary.HasMore = true
+			summary.NextCursor = cursor
+			summary.FinishedAt = time.Now().UTC()
+			return summary, errors.New(
+				"rhinoq scan cannot continue because the Rule cursor did not advance",
+			)
+		}
+		cursor = evaluation.NextCursor
 	}
 	summary.HasMore = true
 	summary.NextCursor = cursor

@@ -65,10 +65,56 @@ func TestDatabaseSourceLabelNeverIncludesCredentials(t *testing.T) {
 	}
 }
 
+func TestInitIntegrityOnlyPlansNoWorker(t *testing.T) {
+	var output bytes.Buffer
+	if code := runInit([]string{"--integrity-only"}, &output); code != 0 {
+		t.Fatalf("init returned %d: %s", code, output.String())
+	}
+	text := output.String()
+	if !strings.Contains(text, "Rules, scans and Findings") ||
+		!strings.Contains(text, "do not configure or start a queue worker") {
+		t.Fatalf("integrity plan is unclear: %s", text)
+	}
+	if strings.Contains(text, "embedded worker, scheduler") {
+		t.Fatalf("integrity-only plan leaked runtime setup: %s", text)
+	}
+}
+
+func TestInitRejectsUnknownOption(t *testing.T) {
+	var output bytes.Buffer
+	if code := runInit([]string{"--surprise"}, &output); code != 2 {
+		t.Fatalf("expected usage error, got %d: %s", code, output.String())
+	}
+}
+
+func TestScanRejectsInvalidBoundsBeforeOpeningDatabase(t *testing.T) {
+	var output bytes.Buffer
+	code := runScan(
+		[]string{"report-output", "--max-pages", "-1"},
+		func(string) string { return "" },
+		&output,
+	)
+	if code != 2 || !strings.Contains(output.String(), "--max-pages") {
+		t.Fatalf("unexpected scan result: code=%d output=%s", code, output.String())
+	}
+}
+
+func TestScanRejectsSubjectWithCursorBeforeOpeningDatabase(t *testing.T) {
+	var output bytes.Buffer
+	code := runScan(
+		[]string{"report-output", "--subject", "report_1", "--cursor", "report_0"},
+		func(string) string { return "" },
+		&output,
+	)
+	if code != 2 || !strings.Contains(output.String(), "cannot be combined") {
+		t.Fatalf("unexpected scan result: code=%d output=%s", code, output.String())
+	}
+}
+
 func TestHelpDocumentsEveryPublicCommand(t *testing.T) {
 	for _, topic := range []string{
 		"help", "init", "migrate", "doctor", "jobs", "queue",
-		"attention", "findings", "rules", "explain", "workbench",
+		"attention", "findings", "rules", "scan", "explain", "workbench",
 		"ui", "version",
 	} {
 		t.Run(topic, func(t *testing.T) {
