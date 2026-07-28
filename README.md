@@ -96,16 +96,44 @@ Current language support is explicit:
 
 ## Go quick start
 
-### 1. Install
+To verify the embedded worker with no database or configuration:
 
 ```bash
-go get github.com/rhinoq/rhinoq
-go get github.com/jackc/pgx/v5
-go install github.com/rhinoq/rhinoq/cmd/rhinoq@latest
+go run ./examples/basic
 ```
 
-During active development, pin the exact pseudo-version written to `go.mod`
-instead of silently upgrading production builds.
+This runs two in-memory jobs, prints their execution order and exits. It is a
+smoke test only; the next steps switch to durable PostgreSQL storage.
+
+### 1. Install
+
+From a RhinoQ repository checkout, install the preview CLI:
+
+```bash
+go install ./cmd/rhinoq
+rhinoq version
+```
+
+The canonical Go module distribution is not published from its final repository
+path yet. To evaluate the library from this checkout inside a target
+application, use an explicit local replacement:
+
+```bash
+go mod edit -replace=github.com/rhinoq/rhinoq=/absolute/path/to/rhinoq
+go get github.com/rhinoq/rhinoq/pkg/rhinoq
+go get github.com/jackc/pgx/v5
+```
+
+Windows PowerShell example:
+
+```powershell
+go mod edit "-replace=github.com/rhinoq/rhinoq=C:\src\RhinoQ"
+go get github.com/rhinoq/rhinoq/pkg/rhinoq
+go get github.com/jackc/pgx/v5
+```
+
+Do not commit this machine-specific replacement in a shared application.
+Versioned remote installation remains a release blocker.
 
 ### 2. Configure and prepare PostgreSQL
 
@@ -133,13 +161,20 @@ import (
     "errors"
     "log"
     "os"
+    "os/signal"
+    "syscall"
 
     _ "github.com/jackc/pgx/v5/stdlib"
     "github.com/rhinoq/rhinoq/pkg/rhinoq"
 )
 
 func main() {
-    ctx := context.Background()
+    ctx, stop := signal.NotifyContext(
+        context.Background(),
+        os.Interrupt,
+        syscall.SIGTERM,
+    )
+    defer stop()
 
     db, err := sql.Open("pgx", os.Getenv("RHINOQ_DATABASE_URL"))
     if err != nil {
@@ -153,8 +188,9 @@ func main() {
     }
 
     if err := queue.Handle("generate-report", func(ctx context.Context, job rhinoq.Job) error {
-        // Decode job.Payload and call application code here.
-        return reports.Generate(ctx, job.Payload)
+        log.Printf("generate report payload=%s", job.Payload)
+        // Replace this log with application code and pass ctx to downstream I/O.
+        return nil
     }); err != nil {
         log.Fatal(err)
     }
@@ -181,9 +217,28 @@ job when the process exits. Use `NewPostgres()` for durable work.
 
 ## Node.js quick start
 
-After applying the migrations and registering the job name in
+`@rhinoq/node` is not published yet. To evaluate the exact source package:
+
+```bash
+cd sdks/node
+npm ci
+npm test
+npm run pack:check
+npm pack
+```
+
+These commands install locked development dependencies, build and test the
+SDK, inspect package contents, then create
+`rhinoq-node-0.1.0-dev.tgz`. Install that archive plus `pg` in the target
+application. Do not use `npm --prefix sdks/node pack`; npm's built-in `pack`
+command must run from the package directory.
+
+After applying migrations and registering the job name in
 `rhinoq.job_allowlist`, reuse the application's PostgreSQL pool. A Node
-producer needs no Gateway:
+producer needs no Gateway. The allowlist checks the invoking PostgreSQL login,
+not the owner of the `SECURITY DEFINER` function. A separately owned database
+needs only schema `USAGE` and function `EXECUTE`; producers never need direct
+queue-table writes:
 
 ```ts
 import pg from 'pg';
@@ -222,15 +277,26 @@ const worker = new RhinoQWorker({
 });
 
 worker.handle<{ reportId: string }>('generate-report', async (job) => {
-  await reports.generate(job.data.reportId, { signal: job.signal });
+  console.log(`generate report ${job.data.reportId}`);
+  // Pass job.signal to downstream I/O that supports AbortSignal.
 });
 
-await worker.run({ signal: shutdown.signal });
+const stopping = new AbortController();
+process.once('SIGTERM', () => stopping.abort());
+process.once('SIGINT', () => stopping.abort());
+await worker.run({ signal: stopping.signal });
 ```
 
 The Node worker negotiates protocol compatibility, heartbeats fenced leases,
 shuts down gracefully, and sends its exact handler names with every claim. It
 will not take jobs belonging to another worker type.
+
+The full [Node.js guide](./docs/nodejs.md) explains what every build command
+does, Windows/Unix environment setup, producer fields, worker options, all
+public `RhinoQClient` methods, the four-terminal end-to-end flow and
+troubleshooting. The [runnable Node example](./examples/nodejs) generates a
+fresh business ID by default or accepts an explicit ID to demonstrate
+idempotent enqueue.
 
 ## Verify business state
 
@@ -331,6 +397,28 @@ The CLI remains the automation and explicit-write surface. It connects directly
 to PostgreSQL; list commands omit job payloads by default and use bounded
 `--limit`/`--offset` pagination.
 
+Every command is documented in the terminal:
+
+```bash
+rhinoq help
+rhinoq help migrate
+rhinoq jobs --help
+```
+
+The main command groups are:
+
+| Command | What it is for | Writes |
+|---|---|:---:|
+| `init` | preview or create an environment template | optional file |
+| `migrate` | plan, review or explicitly apply schema versions | only `apply` |
+| `doctor` | validate config, PostgreSQL and migration state | No |
+| `jobs` | inspect bounded, payload-free job summaries | No |
+| `queue` | count, pause or resume one queue | pause/resume |
+| `attention` | show dead, blocked, uncertain or mismatched work | No |
+| `findings` | list or triage persistent business drift | transitions |
+| `rules` / `explain` | inspect, gate and schedule integrity Rules | explicit actions |
+| `workbench` | open the loopback-only developer interface | No |
+
 ```bash
 rhinoq doctor --ci
 rhinoq jobs list --queue generate-report --states pending,blocked,dead
@@ -343,6 +431,12 @@ rhinoq findings list --statuses open,regressed,acknowledged
 rhinoq rules list --limit 100
 rhinoq explain ready-report-has-output
 ```
+
+See the complete [CLI reference](./docs/cli.md) for every action, flag, state,
+exit code, JSON shape, write boundary and troubleshooting example. The current
+CLI intentionally has no generic `enqueue` or `work` command: enqueue belongs
+inside application transactions, Go handlers use the embedded API, and Node
+handlers run through `RhinoQWorker`.
 
 Needs Attention combines execution failures, uncertain effects, outcome
 mismatches, and live persistent Findings in one bounded inbox. Suppressed or
@@ -503,7 +597,8 @@ boundary.
 | Guide | Use it for |
 |---|---|
 | [Getting started](./docs/getting-started.md) | installation, migration, first durable worker |
-| [Node.js](./docs/nodejs.md) | producer-only SQL, Node worker, errors and tuning |
+| [CLI reference](./docs/cli.md) | every command, flag, exit code, write boundary and example |
+| [Node.js](./docs/nodejs.md) | source installation, producer/worker/client API, complete run flow and troubleshooting |
 | [Configuration](./docs/configuration.md) | environment and runtime tuning |
 | [PostgreSQL](./docs/postgres.md) | schema lifecycle, pools, query costs |
 | [Operations](./docs/operations.md) | queue controls, shutdown, rate limits |

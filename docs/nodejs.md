@@ -8,45 +8,129 @@ RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
 with two separate integration paths. Choose the smaller path that solves the
 actual problem.
 
-| Need | Use | Extra process |
-|---|---|---:|
-| Add a job from Node.js | `PostgresProducer` | No |
-| Commit a business row and job atomically | `PostgresProducer` with the current transaction client | No |
-| Run handlers in Node.js | `RhinoQWorker` through the HTTP Gateway | Yes |
-| Inspect or control work from Node.js | `RhinoQClient` | Yes |
+| Need | Use | What it does | Extra process |
+|---|---|---|---:|
+| Add a job from Node.js | `PostgresProducer` | calls `rhinoq.enqueue()` through the application's existing `pg` connection | No |
+| Commit a business row and job atomically | `PostgresProducer` with the current transaction client | puts both writes in the same PostgreSQL transaction | No |
+| Run handlers in Node.js | `RhinoQWorker` | claims, heartbeats and reports results through the HTTP Gateway | Yes |
+| Inspect or control work from Node.js | `RhinoQClient` | calls the typed Gateway operator API | Yes |
 
 The Gateway is deterministic Go infrastructure, not an AI agent. It does not
 run a model or require an LLM.
 
+## What you will run
+
+There are three different command surfaces. They are not interchangeable:
+
+| Surface | Example | Purpose |
+|---|---|---|
+| repository commands | `npm test`, `npm pack` | build and evaluate the unpublished SDK |
+| RhinoQ CLI | `rhinoq migrate apply`, `rhinoq doctor` | prepare and inspect PostgreSQL |
+| application process | `node worker.mjs` | run your producer or long-lived Node worker |
+
+The current CLI has no `rhinoq enqueue` or generic `rhinoq work` command.
+Enqueueing belongs to the application transaction. Node handlers run from the
+application's `RhinoQWorker` process, where real handler functions are
+available.
+
 ## Evaluate the package from this repository
 
-Until the first npm release, build and pack the preview locally:
+Until the first npm release, build and pack the preview locally. Start in the
+repository root:
 
 ```bash
-npm --prefix sdks/node ci
-npm --prefix sdks/node test
-npm --prefix sdks/node pack
+cd sdks/node
+npm ci
+npm run typecheck
+npm test
+npm run pack:check
+npm pack
 ```
 
-Install the generated tarball and the PostgreSQL driver in the Node
-application:
+Each command has a different purpose:
+
+| Command | What it does | Files produced |
+|---|---|---|
+| `npm ci` | installs the exact development dependencies from `package-lock.json`; use this in a clean checkout | `node_modules/` |
+| `npm run typecheck` | checks public TypeScript types without emitting JavaScript | none |
+| `npm test` | builds `src/` into `dist/`, then runs the Node test suite | `dist/` |
+| `npm run pack:check` | builds and shows which files would enter the package without creating an archive | `dist/` |
+| `npm pack` | creates the installable preview archive | `rhinoq-node-0.1.0-dev.tgz` |
+
+`npm pack` is intentionally run from `sdks/node`. The older command
+`npm --prefix sdks/node pack` does not reliably change the package directory
+for npm's built-in `pack` command.
+
+Install the generated tarball and the PostgreSQL driver in the target Node
+application. Replace the example path with the absolute path on your machine:
 
 ```bash
 npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-dev.tgz pg
 ```
 
+Windows PowerShell example:
+
+```powershell
+npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-dev.tgz pg
+```
+
+Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
+not own or configure the application's connection pool.
+
 This source-install path is for evaluation. A versioned npm package and
 prebuilt `rhinoq` CLI binaries remain release blockers.
+
+### Verify the installed package
+
+Run this from the target Node application:
+
+```bash
+node --input-type=module -e "import('@rhinoq/node').then(m => console.log(Boolean(m.PostgresProducer)))"
+```
+
+Expected output:
+
+```text
+true
+```
 
 ## Prepare PostgreSQL once
 
 The same checksum-tracked schema is used by Go and Node:
+
+### Bash, zsh or WSL
 
 ```bash
 export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app'
 rhinoq migrate plan
 rhinoq migrate apply
 rhinoq doctor --ci
+```
+
+### Windows PowerShell
+
+```powershell
+$env:RHINOQ_DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/app'
+rhinoq migrate plan
+rhinoq migrate apply
+rhinoq doctor --ci
+```
+
+What the commands mean:
+
+| Command | Why you run it | Writes data |
+|---|---|:---:|
+| `rhinoq migrate plan` | verifies migration history and shows pending versions | No |
+| `rhinoq migrate apply` | applies the reviewed schema under an advisory lock | Yes |
+| `rhinoq doctor --ci` | fails if configuration, connection or schema is unsafe | No |
+
+If the CLI is not installed, run the source equivalent from the repository
+root:
+
+```bash
+go run ./cmd/rhinoq migrate plan
+go run ./cmd/rhinoq migrate apply
+go run ./cmd/rhinoq doctor --ci
 ```
 
 Register every producer job name deliberately:
@@ -58,12 +142,51 @@ INSERT INTO rhinoq.job_allowlist (
   max_payload_bytes
 ) VALUES (
   'generate-report',
+  current_user,
+  262144
+);
+```
+
+For this local walkthrough, `current_user` authorizes the same PostgreSQL login
+that applied the row. In production, use the application's least-privileged
+login or a deliberately granted producer role. Do not give one shared login
+permission to every domain.
+
+When migrations are applied by a separate owner/DBA, grant only the function
+boundary to the producer role; do not grant queue-table access:
+
+```sql
+GRANT USAGE ON SCHEMA rhinoq TO app_report_producer;
+GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
+  text, jsonb, text, text, integer, text, interval, text
+) TO app_report_producer;
+
+INSERT INTO rhinoq.job_allowlist (
+  job_name,
+  producer_role,
+  max_payload_bytes
+) VALUES (
+  'generate-report',
   'app_report_producer',
   262144
 );
 ```
 
-Do not grant one shared producer role access to every domain.
+The application login must be `app_report_producer` or a deliberate member of
+that role. Migration 008 removes the default `PUBLIC` execute privilege.
+
+The allowlist row controls:
+
+| Column | Purpose |
+|---|---|
+| `job_name` | exact name the producer may enqueue |
+| `producer_role` | PostgreSQL login/role allowed to create that job; membership is checked against the invoking login; `NULL` allows any login that can execute the function |
+| `max_payload_bytes` | server-side payload ceiling |
+| `payload_schema` | optional application schema/version identity |
+| `default_class` | default resource class when the producer omits one |
+| `default_priority` | default priority when the producer omits one |
+
+The SQL function rejects an unregistered name before writing a job.
 
 ## Producer-only: the recommended Node starting point
 
@@ -125,6 +248,53 @@ try {
 
 The report and job now commit or roll back together.
 
+### `PostgresProducer` reference
+
+Constructor:
+
+```ts
+const producer = new PostgresProducer(executor, {
+  maxPayloadBytes: 1_048_576,
+});
+```
+
+| Argument | Meaning |
+|---|---|
+| `executor.query(text, values)` | minimal interface implemented by `pg.Pool` and `pg.PoolClient` |
+| `maxPayloadBytes` | optional local fail-fast limit; PostgreSQL still enforces the allowlist limit |
+
+`producer.enqueue(request)` accepts:
+
+| Field | Required | Meaning |
+|---|:---:|---|
+| `name` | Yes | registered job/handler name |
+| `payload` | Yes | JSON-serializable data; use references for large objects |
+| `idempotencyKey` | No | deduplicates within the current job name |
+| `correlationId` | No | connects the job to a business record or request |
+| `priority` | No | integer from `-100` to `100` |
+| `class` | No | `critical`, `interactive`, `standard`, `batch` or `maintenance` |
+| `runAfterMs` | No | non-negative delay before the job becomes eligible |
+| `payloadSchema` | No | application schema/version identity checked against the allowlist |
+
+The promise resolves to the durable RhinoQ job ID. The method does not wait for
+a worker or business outcome:
+
+```text
+enqueue resolved  = job intent committed
+worker completed  = execution completed
+outcome achieved  = declared business invariant passed
+```
+
+Common producer failures:
+
+| Error | Meaning | Action |
+|---|---|---|
+| `RHINOQ_JOB_NOT_ALLOWED` | job name is absent from the allowlist | register the exact producer contract |
+| `RHINOQ_JOB_FORBIDDEN` | current database role cannot produce the job | use the intended producer role |
+| `RHINOQ_PAYLOAD_TOO_LARGE` | encoded JSON exceeds the server limit | store the body elsewhere and enqueue a reference |
+| `RHINOQ_PAYLOAD_SCHEMA_MISMATCH` | caller and allowlist schema identities differ | deploy compatible producer/schema versions |
+| local `TypeError`/`RangeError` | request is not serializable or violates local bounds | fix the request before retrying |
+
 ## Run handlers in Node.js
 
 Start the optional Gateway after migrations:
@@ -134,6 +304,48 @@ export RHINOQ_DATABASE_URL='postgres://...'
 export RHINOQ_AGENT_TOKEN='replace-with-a-long-random-secret'
 go run ./cmd/rhinoq-agent
 ```
+
+PowerShell:
+
+```powershell
+$env:RHINOQ_DATABASE_URL = 'postgres://...'
+$env:RHINOQ_AGENT_TOKEN = 'replace-with-a-long-random-secret'
+go run ./cmd/rhinoq-agent
+```
+
+This process:
+
+- listens on `:8080` by default;
+- uses the built-in `pgx` driver;
+- refuses to start without authentication unless local development explicitly
+  sets `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true`;
+- exposes `/health/live`, `/health/ready` and `/metrics`;
+- contains no user handler code and does not run an LLM.
+
+Check it before starting a worker:
+
+```bash
+curl -H "Authorization: Bearer $RHINOQ_AGENT_TOKEN" \
+  http://127.0.0.1:8080/health/ready
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod `
+  -Headers @{ Authorization = "Bearer $env:RHINOQ_AGENT_TOKEN" } `
+  -Uri 'http://127.0.0.1:8080/health/ready'
+```
+
+In the Node application, map the server variables to client variables:
+
+```bash
+export RHINOQ_GATEWAY_URL='http://127.0.0.1:8080'
+export RHINOQ_GATEWAY_TOKEN="$RHINOQ_AGENT_TOKEN"
+```
+
+`RHINOQ_GATEWAY_URL` and `RHINOQ_GATEWAY_TOKEN` are names used by the example
+application. The Gateway process itself reads `RHINOQ_AGENT_*`.
 
 Then register handlers:
 
@@ -182,6 +394,44 @@ The worker:
 The Go engine still decides ordering, retry delay, terminal state and Effect
 Ledger transitions.
 
+### `RhinoQWorker` reference
+
+Constructor options:
+
+| Option | Default | Meaning |
+|---|---:|---|
+| `client` | required | connected `RhinoQClient` or compatible Gateway |
+| `name` | required | stable, unique process identity written into leases |
+| `concurrency` | `4` | maximum handlers running concurrently |
+| `maxClaimBatch` | `50` | hard cap for one claim; actual claim follows free slots |
+| `leaseForMs` | `60000` | lease duration requested from the Gateway |
+| `heartbeatIntervalMs` | negotiated | renewal interval; must be shorter than the lease |
+| `pollIntervalMs` | `100` | shortest idle wait |
+| `maxPollIntervalMs` | `2000` | maximum idle backoff |
+| `shutdownGraceMs` | `30000` | time for handlers to finish before cancellation |
+| `cancelGraceMs` | `10000` | time for handlers to react to cancellation |
+| `onError` | none | observer for non-fatal worker/runtime errors |
+
+Public worker methods:
+
+| Method | Purpose |
+|---|---|
+| `handle(name, handler)` | register one handler before `run()`; duplicates and more than 256 names are rejected |
+| `run({ signal })` | negotiate protocol and process jobs until aborted |
+| `stop()` | stop claiming and begin graceful shutdown |
+
+The handler receives `NodeJob<T>`:
+
+| Property/method | Meaning |
+|---|---|
+| `id`, `name`, `attempts`, `correlationId` | execution metadata |
+| `data` | lazily decoded JSON payload |
+| `rawPayload` | original UTF-8 bytes |
+| `signal` | cooperative cancellation signal; pass it to supported I/O calls |
+| `effect(request, run)` | execute one declared external effect through the ledger |
+
+Do not call `worker.run()` twice or register handlers after it starts.
+
 ## Classify failures explicitly
 
 ```ts
@@ -197,6 +447,15 @@ throw dependencyDown(error);
 throw rateLimited(error, retryAfterMs);
 throw permanent(error);
 ```
+
+| Helper | Meaning |
+|---|---|
+| `transient(error)` | temporary application/transport failure; normal retry policy may apply |
+| `dependencyDown(error)` | a required downstream dependency is unavailable |
+| `rateLimited(error, retryAfterMs)` | downstream rejected the rate; delay must be a positive number |
+| `permanent(error)` | retrying the same payload cannot succeed |
+| `cancelled(error)` | cooperative cancellation, not an application failure |
+| `classify(error, retryClass, retryAfterMs?)` | low-level form for adapters that already have a language-neutral class |
 
 An ordinary thrown error is `unknown`. RhinoQ retries it cautiously and then
 parks it instead of inferring semantics from a JavaScript stack trace.
@@ -234,6 +493,39 @@ Do not call `confirmEffect` merely because a request was accepted. The
 application owns provider authentication and decides what event constitutes
 proof.
 
+Confirmation policies:
+
+| Policy | When the ledger confirms | Use when |
+|---|---|---|
+| `on-return` | the callback returns successfully | the returned value itself proves completion |
+| `external-signal` | authenticated application/provider evidence calls `confirmEffect` | provider first returns an accepted/processing response |
+| `verify` | a verifier proves the effect later | completion must be read back from a source of truth |
+| `predicate` | the callback's returned `reference` exactly equals `completedStatus` | a synchronous provider exposes one stable completed status value |
+
+Effect request fields:
+
+| Field | Required | Meaning |
+|---|:---:|---|
+| `name` | Yes | stable effect name inside the job |
+| `key` | Yes | idempotency identity reused across attempts |
+| `irreversible` | No | marks this effect—not the whole job—as impossible to undo |
+| `confirm` | No | confirmation policy; defaults to `on-return` |
+| `completedStatus` | For `predicate` | exact value compared with the callback's returned `reference` |
+
+`irreversible` belongs to this individual effect. It is not inherited from a
+whole job profile.
+
+The callback must return:
+
+| Return field | Meaning |
+|---|---|
+| `reference` | stable provider/evidence reference; also the value tested by `predicate` |
+| `value` | application value returned from `job.effect()` to the handler |
+
+If the same effect is already confirmed, RhinoQ does not execute the callback
+again and `job.effect()` resolves to `undefined`. The handler must therefore
+not rely on the callback's return value as its only durable business state.
+
 ## Operate from Node.js
 
 ```ts
@@ -257,6 +549,169 @@ await client.replay(jobs[0].id, {
 
 Replay remains guarded by effect state and writes a hash-chained audit record.
 Payloads are intentionally absent from list/inbox responses.
+
+### `RhinoQClient` reference
+
+Create one client and reuse it:
+
+```ts
+const client = new RhinoQClient({
+  url: 'http://127.0.0.1:8080',
+  token: process.env.RHINOQ_GATEWAY_TOKEN,
+  timeoutMs: 10_000,
+});
+```
+
+| Option | Required | Meaning |
+|---|:---:|---|
+| `url` | Yes | Gateway base URL without an endpoint path |
+| `token` | In authenticated mode | value sent as `Authorization: Bearer ...` |
+| `timeoutMs` | No | per-request timeout, default `10000` |
+| `fetch` | No | custom Fetch implementation for tests/instrumentation |
+
+Producer and inspection methods:
+
+| Method | Purpose | Mutates |
+|---|---|:---:|
+| `connect()` | negotiate and cache protocol compatibility | No |
+| `handshake()` | force one handshake request | No |
+| `enqueue(request)` | enqueue through HTTP; prefer `PostgresProducer` when direct SQL is available | Yes |
+| `listJobs(query)` | list bounded payload-free job summaries | No |
+| `counts(queue)` | count jobs by state | No |
+| `attention(query)` | list Needs Attention items | No |
+| `attempts(jobId, offset, limit)` | read append-only attempt evidence | No |
+| `audit(jobId, offset, limit)` | read replay/operator audit entries | No |
+| `findings(query)` | list persistent business-integrity Findings | No |
+
+Operator methods:
+
+| Method | Purpose | Important behavior |
+|---|---|---|
+| `pause(queue)` | stop future claims | running handlers continue |
+| `resume(queue)` | allow claims again | does not force delayed jobs |
+| `cancel(jobId)` | cancel eligible work or request cancellation from a leased handler | handler must honor its signal |
+| `replay(jobId, { actor, reason })` | replay a guarded terminal job | refused while effects are unresolved/uncertain |
+| `transitionFinding(key, transition)` | record a Finding lifecycle decision | exact invariant version is required |
+| `confirmEffect(jobId, effect)` | record verified external completion evidence | never use for request acceptance alone |
+
+Common request shapes:
+
+| Method | Important fields |
+|---|---|
+| `enqueue(request)` | `name`, `payload`, optional `idempotencyKey`, `correlationId`, `priority`, `class`, `runAfterMs` |
+| `listJobs(query)` | optional `queue`, `states`, `offset`, `limit` |
+| `attention(query)` | optional `queue`, `offset`, `limit` |
+| `findings(query)` | optional `ruleId`, `subjectType`, `subjectId`, `statuses`, `includeSuppressed`, `offset`, `limit` |
+| `transitionFinding(key, transition)` | key: `ruleId`, `subjectType`, `subjectId`, `invariantVersion`; transition: `status`, `actor`, optional `reason`, `until` |
+| `confirmEffect(jobId, effect)` | effect: `name`, `key`, verified `reference` |
+
+Low-level runtime methods are public for SDK/runtime integration:
+
+| Method | Purpose |
+|---|---|
+| `claim(worker, limit, leaseForMs?, queues?)` | claim a bounded batch and receive fenced lease tokens |
+| `heartbeat(lease, extendMs?)` | renew ownership and observe cancellation |
+| `complete(lease)` | mark a successfully handled lease complete |
+| `release(lease)` | return unexecuted work without reporting handler success |
+| `fail(lease, queue, error, options?)` | submit a language-neutral failure class and optional retry hint |
+| `effect(lease, request, run)` | execute the Effect Ledger begin/run/resolve protocol |
+
+Application code should normally use `RhinoQWorker`, which keeps claim,
+heartbeat, fencing and shutdown semantics together.
+
+`RhinoQError` exposes:
+
+| Property | Meaning |
+|---|---|
+| `code` | stable RhinoQ error code |
+| `retryable` | whether transport/runtime retry is allowed |
+| `retryAfterMs` | optional server backoff |
+| `status` | HTTP status when a response was received |
+
+Do not retry every `RhinoQError`. In particular, lease loss and an uncertain
+effect require the worker/operator to stop and inspect evidence.
+
+## Run the complete Node flow
+
+Use separate terminals so each long-lived process remains visible.
+
+### Terminal 1 — prepare PostgreSQL
+
+```bash
+export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app'
+rhinoq migrate apply
+rhinoq doctor --ci
+```
+
+Register `generate-report` in `rhinoq.job_allowlist` through your migration,
+`psql` or database administration tool.
+
+### Terminal 2 — start the Gateway
+
+```bash
+export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app'
+export RHINOQ_AGENT_TOKEN='development-secret-change-me'
+go run ./cmd/rhinoq-agent
+```
+
+Keep this process running.
+
+### Terminal 3 — start the Node worker
+
+```bash
+export RHINOQ_GATEWAY_URL='http://127.0.0.1:8080'
+export RHINOQ_GATEWAY_TOKEN='development-secret-change-me'
+node worker.mjs
+```
+
+The worker is expected to stay running. Stop it with `Ctrl+C`; its abort signal
+starts graceful shutdown.
+
+### Terminal 4 — enqueue and inspect
+
+The direct producer needs the application's database URL:
+
+```bash
+export DATABASE_URL='postgres://postgres:postgres@localhost:5432/app'
+node producer.mjs
+rhinoq jobs list --queue generate-report
+rhinoq attention
+```
+
+The repository example generates a new report ID when no argument is supplied.
+Run `node producer.mjs report_01` twice to verify that the same idempotency key
+returns the original job ID instead of creating duplicate work.
+
+Expected lifecycle:
+
+```text
+producer prints "enqueued job_..."
+worker prints the report id
+jobs list eventually shows succeeded
+attention stays empty unless execution/evidence needs a decision
+```
+
+`DATABASE_URL` is read by the example producer. `RHINOQ_DATABASE_URL` is read
+by the Go CLI/Gateway. They may contain the same value, but keeping the names
+explicit prevents a library from silently taking ownership of application
+configuration.
+
+## Troubleshooting
+
+| Symptom | Meaning | Fix |
+|---|---|---|
+| `Cannot find package '@rhinoq/node'` | tarball is not installed in the target app | run `npm pack` in `sdks/node`, then install the absolute `.tgz` path |
+| `rhinoq.enqueue does not exist` | migrations are missing | run `rhinoq migrate plan/apply` against the same database |
+| `RHINOQ_JOB_NOT_ALLOWED` | job name is not registered | add an allowlist row using a reviewed migration |
+| `RHINOQ_JOB_FORBIDDEN` | database role does not match `producer_role` | use/grant the intended producer role |
+| `permission denied for schema rhinoq` | producer lacks the SQL function boundary grants | grant schema `USAGE` and function `EXECUTE`, never direct queue-table writes |
+| Gateway refuses to start | no authentication mode was selected | set `RHINOQ_AGENT_TOKEN`; unauthenticated mode is local-only |
+| `RHINOQ_GATEWAY_UNREACHABLE` | URL, port or process is wrong | check Gateway logs and `/health/ready` |
+| `RHINOQ_UNAUTHORIZED` | worker/client token differs from server token | map `RHINOQ_GATEWAY_TOKEN` to `RHINOQ_AGENT_TOKEN` |
+| worker runs but claims nothing | handler name, pause, delay or schema differs | inspect `jobs list`, queue state and exact `worker.handle()` name |
+| `RHINOQ_LEASE_LOST` | this execution no longer owns the job | stop effects and let the current owner/reaper decide |
+| effect remains pending | confirmation policy requires later evidence | authenticate the provider signal, then call `confirmEffect` |
+| process never exits | a handler ignored cancellation | pass `job.signal` into supported I/O and bound application cleanup |
 
 ## Performance guidance
 

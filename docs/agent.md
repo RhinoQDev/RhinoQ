@@ -50,10 +50,27 @@ INSERT INTO rhinoq.job_allowlist (
     max_payload_bytes
 ) VALUES (
     'generate-report',
-    'app_report_producer',
+    current_user,
     262144
 );
 ```
+
+`current_user` giúp ví dụ local cho phép đúng login vừa chạy migration. Ở
+production, thay nó bằng login service có quyền tối thiểu hoặc producer role
+được grant có chủ đích. Migration mới nhất kiểm danh tính login gọi hàm, không
+kiểm role của chủ sở hữu `SECURITY DEFINER`.
+
+Nếu migration do DBA/owner khác chạy, cấp đúng function boundary cho producer:
+
+```sql
+GRANT USAGE ON SCHEMA rhinoq TO app_report_producer;
+GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
+    text, jsonb, text, text, integer, text, interval, text
+) TO app_report_producer;
+```
+
+Không grant quyền ghi trực tiếp vào `rhinoq_jobs`. Migration 008 đã thu hồi
+quyền `EXECUTE` mặc định của `PUBLIC`.
 
 Sau đó application có thể ghi business record và job trong cùng transaction:
 
@@ -79,7 +96,8 @@ quyền enqueue mọi job name.
 
 ## Khởi động Gateway
 
-Chuẩn bị schema bằng CLI trước, rồi đặt token:
+Binary chính thức đã đăng ký sẵn driver `pgx`. Chuẩn bị schema bằng CLI trước,
+rồi đặt token:
 
 ```bash
 export RHINOQ_DATABASE_URL='postgres://...'
@@ -90,9 +108,49 @@ rhinoq migrate apply
 go run ./cmd/rhinoq-agent
 ```
 
+PowerShell:
+
+```powershell
+$env:RHINOQ_DATABASE_URL = 'postgres://...'
+$env:RHINOQ_AGENT_TOKEN = 'a-long-random-secret'
+
+go run ./cmd/rhinoq migrate plan
+go run ./cmd/rhinoq migrate apply
+go run ./cmd/rhinoq-agent
+```
+
+Ý nghĩa từng process:
+
+| Command | Chức năng | Có chạy lâu dài |
+|---|---|:---:|
+| `rhinoq migrate plan` | kiểm migration/checksum, không ghi database | Không |
+| `rhinoq migrate apply` | apply schema đã review | Không |
+| `go run ./cmd/rhinoq-agent` | chạy HTTP Gateway tại `:8080` mặc định | Có |
+| `node worker.mjs` | chạy handler của ứng dụng Node | Có |
+
 Gateway từ chối khởi động nếu không có token, trừ khi operator chủ động đặt
 `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true`. Không dùng tùy chọn đó ngoài local
 development.
+
+Các biến cấu hình Gateway:
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---:|---|
+| `RHINOQ_DATABASE_URL` | memory store | PostgreSQL durable store; để trống chỉ dành cho demo |
+| `RHINOQ_DATABASE_DRIVER` | `pgx` | tên driver `database/sql`; custom driver cần custom build |
+| `RHINOQ_AGENT_ADDRESS` | `:8080` | địa chỉ HTTP lắng nghe |
+| `RHINOQ_AGENT_TOKEN` | empty | bearer token cho mọi endpoint được bảo vệ |
+| `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED` | false | cho phép không token, chỉ dành cho local development |
+| `RHINOQ_AGENT_HEARTBEAT` | `10s` | heartbeat interval trả cho SDK khi handshake |
+| `RHINOQ_AGENT_SHUTDOWN_GRACE` | `20s` | thời gian drain HTTP khi dừng |
+| `RHINOQ_MAX_PAYLOAD_BYTES` | `1048576` | hard limit request body/payload |
+
+Kiểm tra readiness:
+
+```bash
+curl -H "Authorization: Bearer $RHINOQ_AGENT_TOKEN" \
+  http://127.0.0.1:8080/health/ready
+```
 
 ## Handshake bắt buộc
 

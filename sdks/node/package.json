@@ -25,7 +25,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
-    "pack:check": "npm run build && npm pack --dry-run"
+    "prepack": "npm run build",
+    "pack:check": "npm pack --dry-run"
   },
   "devDependencies": {
     "pg": "^8.22.0",

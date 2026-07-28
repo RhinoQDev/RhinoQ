@@ -1055,9 +1055,10 @@ Dry-run mặc định · expected change · affected business objects · effect 
 ### Bước 1 — Cài
 
 ```bash
-go get github.com/rhinoq/rhinoq
+go mod edit -replace=github.com/rhinoq/rhinoq=/absolute/path/to/rhinoq
+go get github.com/rhinoq/rhinoq/pkg/rhinoq
 go get github.com/jackc/pgx/v5
-go install github.com/rhinoq/rhinoq/cmd/rhinoq@latest
+go -C /absolute/path/to/rhinoq install ./cmd/rhinoq
 rhinoq init
 ```
 

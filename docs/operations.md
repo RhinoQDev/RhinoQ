@@ -94,6 +94,9 @@ rhinoq attention
 rhinoq findings list
 ```
 
+Xem [CLI command reference](./cli.md) để biết đầy đủ flags, trạng thái hợp lệ,
+write boundary, JSON output, pagination và ý nghĩa của từng transition.
+
 List output không chứa payload; thêm `--json` khi cần machine-readable output.
 Các lệnh danh sách và inbox hỗ trợ `--limit` cùng `--offset` để phân trang có
 giới hạn.

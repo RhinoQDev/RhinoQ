@@ -20,9 +20,18 @@ func main() {
 	if len(os.Args) > 1 {
 		command = os.Args[1]
 	}
+	if command != "help" && len(os.Args) > 2 &&
+		(os.Args[2] == "-h" || os.Args[2] == "--help") {
+		if runHelp([]string{command}, os.Stdout) != 0 {
+			os.Exit(2)
+		}
+		return
+	}
 	switch command {
 	case "help", "-h", "--help":
-		printHelp()
+		if runHelp(os.Args[2:], os.Stdout) != 0 {
+			os.Exit(2)
+		}
 	case "doctor":
 		os.Exit(runDoctor(ciMode()))
 	case "init":
@@ -47,7 +56,7 @@ func main() {
 		fmt.Println("rhinoq 0.1.0-dev")
 	default:
 		fmt.Fprintf(os.Stderr, "FAIL unknown command %q\n\n", command)
-		printHelp()
+		_ = runHelp(nil, os.Stderr)
 		os.Exit(2)
 	}
 }
@@ -250,18 +259,294 @@ func runInit() {
 	fmt.Println("Created rhinoq.config.env.example")
 }
 
-func printHelp() {
-	fmt.Println("RhinoQ CLI")
-	fmt.Println("  rhinoq init                         show initialization plan")
-	fmt.Println("  rhinoq init --apply                 write the environment template")
-	fmt.Println("  rhinoq migrate [plan|status|sql|apply]  manage PostgreSQL schema safely")
-	fmt.Println("  rhinoq doctor [--ci]                check config, database and schema")
-	fmt.Println("  rhinoq jobs list                    inspect jobs without payload export")
-	fmt.Println("  rhinoq queue <counts|pause|resume>  control one queue")
-	fmt.Println("  rhinoq attention                    show the operator inbox")
-	fmt.Println("  rhinoq findings [action]            list or triage business drift")
-	fmt.Println("  rhinoq rules <list|enable|disable|run>  manage integrity Rules")
-	fmt.Println("  rhinoq workbench [--demo]          open the local developer interface")
-	fmt.Println("  rhinoq explain <id>                 Explain a Rule using PostgreSQL")
-	fmt.Println("  rhinoq version                      print version")
+func runHelp(args []string, output io.Writer) int {
+	if len(args) == 0 {
+		printRootHelp(output)
+		return 0
+	}
+	if len(args) != 1 {
+		fmt.Fprintln(output, "Usage: rhinoq help [command]")
+		return 2
+	}
+	topic := strings.ToLower(strings.TrimSpace(args[0]))
+	if topic == "ui" {
+		topic = "workbench"
+	}
+	if !printCommandHelp(output, topic) {
+		fmt.Fprintf(output, "FAIL unknown help topic %q\n\n", args[0])
+		printRootHelp(output)
+		return 2
+	}
+	return 0
+}
+
+func printRootHelp(output io.Writer) {
+	fmt.Fprintln(output, "RhinoQ CLI")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Usage:")
+	fmt.Fprintln(output, "  rhinoq <command> [options]")
+	fmt.Fprintln(output, "  rhinoq help <command>")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Setup and safety")
+	fmt.Fprintln(output, "  init        preview or write a local environment template")
+	fmt.Fprintln(output, "  migrate     inspect or apply checksum-tracked PostgreSQL migrations")
+	fmt.Fprintln(output, "  doctor      validate config, database connectivity and migration state")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Inspect and operate")
+	fmt.Fprintln(output, "  jobs        list bounded, payload-free job summaries")
+	fmt.Fprintln(output, "  queue       count, pause or resume one queue")
+	fmt.Fprintln(output, "  attention   list work that needs a developer decision")
+	fmt.Fprintln(output, "  findings    list and triage persistent business-integrity drift")
+	fmt.Fprintln(output, "  rules       list, enable, disable or schedule integrity Rules")
+	fmt.Fprintln(output, "  explain     inspect the PostgreSQL safety plan for one Rule")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Developer interface")
+	fmt.Fprintln(output, "  workbench   open the loopback-only, read-only developer Workbench")
+	fmt.Fprintln(output, "  ui          alias for workbench")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Other")
+	fmt.Fprintln(output, "  version     print the CLI development version")
+	fmt.Fprintln(output, "  help        show this page or detailed help for one command")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Most commands require RHINOQ_DATABASE_URL. Run `rhinoq help <command>`")
+	fmt.Fprintln(output, "for flags, write behavior and examples.")
+	fmt.Fprintln(output, "Docs: https://github.com/madebyduy/RhinoQ/blob/main/docs/cli.md")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Exit codes: 0 success, 1 runtime/configuration failure, 2 invalid usage.")
+}
+
+func printCommandHelp(output io.Writer, topic string) bool {
+	switch topic {
+	case "help":
+		fmt.Fprintln(output, `rhinoq help — terminal command reference
+
+Usage:
+  rhinoq help
+  rhinoq help <command>
+  rhinoq <command> --help
+
+The first form lists commands. The second and third forms explain one command.
+Help never connects to PostgreSQL and never changes files or data.`)
+	case "init":
+		fmt.Fprintln(output, `rhinoq init — prepare an environment template
+
+Usage:
+  rhinoq init
+  rhinoq init --apply
+
+Without --apply, prints the files and next steps it would use. With --apply,
+creates rhinoq.config.env.example in the current directory using safe defaults.
+It never overwrites an existing file and does not create a database or apply
+migrations.
+
+Next:
+  copy the values into your environment
+  rhinoq migrate plan
+  rhinoq migrate apply
+  rhinoq doctor --ci`)
+	case "migrate":
+		fmt.Fprintln(output, `rhinoq migrate — manage the RhinoQ PostgreSQL schema
+
+Usage:
+  rhinoq migrate plan
+  rhinoq migrate status
+  rhinoq migrate sql
+  rhinoq migrate apply
+
+Actions:
+  plan    show applied and pending migrations; read-only
+  status  show the same authoritative schema state; read-only
+  sql     print pending SQL for DBA review; read-only
+  apply   verify checksums, take an advisory lock and apply pending versions
+
+Required:
+  RHINOQ_DATABASE_URL
+
+Production flow:
+  rhinoq migrate plan
+  rhinoq migrate sql > rhinoq-pending.sql
+  rhinoq migrate apply
+  rhinoq doctor --ci
+
+Apply refuses checksum drift, version gaps, a newer schema and untracked RhinoQ
+objects. It does not guess or automatically repair a migration baseline.`)
+	case "doctor":
+		fmt.Fprintln(output, `rhinoq doctor — validate a deployment before it handles work
+
+Usage:
+  rhinoq doctor
+  rhinoq doctor --ci
+
+Checks typed runtime configuration, worker identity, lease/heartbeat/reaper
+timing, PostgreSQL connectivity and migration state. It never applies a
+migration.
+
+Without --ci, the command prints a diagnostic report. With --ci, any FAIL
+returns exit code 1 so a deployment pipeline can stop safely.
+
+Required for database checks:
+  RHINOQ_DATABASE_URL
+
+Example:
+  rhinoq doctor --ci`)
+	case "jobs":
+		fmt.Fprintln(output, `rhinoq jobs — inspect jobs without exporting payloads
+
+Usage:
+  rhinoq jobs list [flags]
+
+Flags:
+  --queue <name>           filter by queue/job name
+  --states <csv>           pending,leased,retry_wait,blocked,dead,succeeded,cancelled
+  --limit <n>              maximum rows, default 50, maximum 1000
+  --offset <n>             pagination offset, default 0
+  --json                   emit machine-readable JSON
+
+Examples:
+  rhinoq jobs list --queue generate-report --states pending,blocked,dead
+  rhinoq jobs list --states dead --limit 100 --json
+
+This command is read-only. Job payloads are deliberately absent from list
+results.`)
+	case "queue":
+		fmt.Fprintln(output, `rhinoq queue — inspect or control one queue
+
+Usage:
+  rhinoq queue counts <name>
+  rhinoq queue pause <name>
+  rhinoq queue resume <name>
+
+Actions:
+  counts  show counts for every job state; read-only
+  pause   stop future claims; already-running handlers continue
+  resume  allow workers to claim the queue again
+
+Examples:
+  rhinoq queue counts generate-report
+  rhinoq queue pause generate-report
+  rhinoq queue resume generate-report
+
+Pause and resume write queue-control state in PostgreSQL. They do not cancel or
+terminate work that already owns a lease.`)
+	case "attention":
+		fmt.Fprintln(output, `rhinoq attention — show the developer decision inbox
+
+Usage:
+  rhinoq attention [flags]
+
+Flags:
+  --queue <name>  optional queue filter
+  --limit <n>     maximum rows, default 50
+  --offset <n>    pagination offset, default 0
+  --json          emit machine-readable JSON
+
+The inbox combines dead jobs, blocked executions, uncertain effects, outcome
+mismatches and live persistent Findings. It is read-only and omits payloads.
+
+Examples:
+  rhinoq attention
+  rhinoq attention --queue generate-report --limit 100 --json`)
+	case "findings":
+		fmt.Fprintln(output, `rhinoq findings — inspect and triage business-integrity drift
+
+Usage:
+  rhinoq findings list [flags]
+  rhinoq findings acknowledge <identity flags>
+  rhinoq findings resolve <identity flags> --reason <text>
+  rhinoq findings ignore <identity flags> --until <duration> --reason <text>
+  rhinoq findings false-positive <identity flags> --until <duration> --reason <text>
+
+List flags:
+  --rule <id>                 filter by Rule
+  --subject-type <type>       filter by business subject type
+  --subject <id>              filter by business subject id
+  --statuses <csv>            default open,regressed,acknowledged
+  --include-suppressed        include active suppressions
+  --limit <n> --offset <n>    bounded pagination
+  --json                      machine-readable output
+
+Identity flags required by every transition:
+  --rule --subject-type --subject --version --actor
+
+Semantics:
+  acknowledge     record ownership/awareness; future violations remain visible
+  resolve         record that the underlying business state was repaired
+  ignore          suppress the exact Finding until the requested duration
+  false-positive  suppress it as an invalid invariant result for a duration
+
+Every transition is persisted. Resolve, ignore and false-positive require a
+reason; suppressions also require a positive duration such as 24h.`)
+	case "rules":
+		fmt.Fprintln(output, `rhinoq rules — operate deterministic integrity Rules
+
+Usage:
+  rhinoq rules list [flags]
+  rhinoq rules enable <rule-id>
+  rhinoq rules disable <rule-id>
+  rhinoq rules run [flags]
+
+List flags:
+  --scope <job|table>  filter by scope
+  --statuses <csv>     filter by draft,enabled,disabled status
+  --limit <n>          default 100
+  --offset <n>         default 0
+  --json               machine-readable output
+
+Scheduler flags:
+  --owner <name>          unique scheduler identity; defaults to hostname/pid
+  --poll <duration>       idle poll interval; default 1s
+  --lease <duration>      page lease; default 1m
+  --error-backoff <dur>   retry delay after evaluation error; default 30s
+  --batch <n>             maximum Rules claimed per cycle; default 4
+
+Enable first runs the PostgreSQL Explain safety gate. Disable prevents future
+claims but does not corrupt a page already leased. "rules run" is long-lived;
+stop it with Ctrl+C/SIGTERM for graceful shutdown.`)
+	case "explain":
+		fmt.Fprintln(output, `rhinoq explain — inspect one Rule before enabling it
+
+Usage:
+  rhinoq explain <rule-id>
+
+By default this command connects directly through RHINOQ_DATABASE_URL. If
+RHINOQ_AGENT_URL is set, it calls the optional authenticated HTTP Gateway and
+uses RHINOQ_AGENT_TOKEN.
+
+The result includes query shape, row/plan budgets and rejection reasons. Explain
+is diagnostic; it does not enable or execute the Rule.
+
+Example:
+  rhinoq explain ready-report-has-output`)
+	case "workbench":
+		fmt.Fprintln(output, `rhinoq workbench — open the local developer interface
+
+Usage:
+  rhinoq workbench [flags]
+  rhinoq ui [flags]
+
+Flags:
+  --demo           use built-in sample data; PostgreSQL is not required
+  --port <n>       loopback port, default 8787; 0 selects an available port
+  --queue <name>   open with an initial queue filter
+  --no-open        print the URL without launching the system browser
+
+Live mode requires RHINOQ_DATABASE_URL and applied migrations. The server binds
+only to 127.0.0.1. Workbench v0 is read-only and never exposes job payloads.
+
+Examples:
+  rhinoq workbench --demo
+  rhinoq workbench --queue generate-report
+  rhinoq workbench --no-open --port 0`)
+	case "version":
+		fmt.Fprintln(output, `rhinoq version — print the CLI version
+
+Usage:
+  rhinoq version
+
+The current source build reports a development version. A tagged release and
+prebuilt CLI distribution do not exist yet.`)
+	default:
+		return false
+	}
+	return true
 }

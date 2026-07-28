@@ -3,6 +3,7 @@
 ## Bắt đầu
 
 - [Getting started](./getting-started.md)
+- [CLI command reference](./cli.md)
 - [Node.js integration](./nodejs.md)
 - [Configuration](./configuration.md)
 - [PostgreSQL production client](./postgres.md)

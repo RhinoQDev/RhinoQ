@@ -39,6 +39,9 @@ Prebuilt CLI binaries have not been released yet. Node.js users will use the
 same Go CLI binary once distribution is available; the Workbench does not
 require a Node.js frontend server.
 
+See [cli.md](./cli.md) for every Workbench flag, source-install command, exit
+code and the boundary between browser reads and explicit CLI writes.
+
 ## What developers see
 
 - **Execution worktable:** a dense, sticky-header table for job state, queue,

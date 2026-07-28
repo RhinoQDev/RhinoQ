@@ -232,6 +232,96 @@ func TestSQLEnqueueValidatesItsCaller(t *testing.T) {
 	}
 }
 
+func TestSQLEnqueueAuthorizesTheInvokingLogin(t *testing.T) {
+	_ = newClient(t)
+	ctx := context.Background()
+
+	const allowedRole = "rhinoq_test_producer_allowed"
+	const deniedRole = "rhinoq_test_producer_denied"
+	t.Cleanup(func() {
+		_, _ = testDB.Exec(`
+			REVOKE ALL ON FUNCTION rhinoq.enqueue(
+				text, jsonb, text, text, integer, text, interval, text
+			) FROM ` + deniedRole)
+		_, _ = testDB.Exec(`REVOKE USAGE ON SCHEMA rhinoq FROM ` + deniedRole)
+		_, _ = testDB.Exec(`
+			REVOKE ALL ON FUNCTION rhinoq.enqueue(
+				text, jsonb, text, text, integer, text, interval, text
+			) FROM ` + allowedRole)
+		_, _ = testDB.Exec(`REVOKE USAGE ON SCHEMA rhinoq FROM ` + allowedRole)
+		_, _ = testDB.Exec(`DROP ROLE IF EXISTS ` + deniedRole)
+		_, _ = testDB.Exec(`DROP ROLE IF EXISTS ` + allowedRole)
+	})
+	for _, role := range []string{allowedRole, deniedRole} {
+		if _, err := testDB.Exec(`DROP ROLE IF EXISTS ` + role); err != nil {
+			t.Skipf("producer-role contract requires a disposable database role with CREATEROLE: %v", err)
+		}
+		if _, err := testDB.Exec(`CREATE ROLE ` + role + ` NOLOGIN`); err != nil {
+			t.Skipf("producer-role contract requires a disposable database role with CREATEROLE: %v", err)
+		}
+	}
+	if _, err := testDB.Exec(`
+		GRANT USAGE ON SCHEMA rhinoq
+		TO ` + allowedRole + `, ` + deniedRole); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testDB.Exec(`
+		GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
+			text, jsonb, text, text, integer, text, interval, text
+		) TO ` + allowedRole + `, ` + deniedRole); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := testDB.Exec(`
+		INSERT INTO rhinoq.job_allowlist (
+			job_name, producer_role, max_payload_bytes
+		) VALUES ('restricted-report', $1, 1024)`, allowedRole); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := testDB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), `RESET SESSION AUTHORIZATION`)
+	}()
+
+	if _, err := conn.ExecContext(ctx, `SET SESSION AUTHORIZATION `+deniedRole); err != nil {
+		t.Skipf("test connection cannot change session authorization: %v", err)
+	}
+	var id string
+	err = conn.QueryRowContext(ctx, `
+		SELECT rhinoq.enqueue(
+			'restricted-report',
+			'{"reportId":"report_denied"}'::jsonb
+		)`).Scan(&id)
+	if err == nil || !strings.Contains(err.Error(), "RHINOQ_JOB_FORBIDDEN") {
+		t.Fatalf("a login outside producer_role must be refused, got id=%q err=%v", id, err)
+	}
+
+	if _, err := conn.ExecContext(ctx, `RESET SESSION AUTHORIZATION`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `SET SESSION AUTHORIZATION `+allowedRole); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRowContext(ctx, `
+		SELECT rhinoq.enqueue(
+			'restricted-report',
+			'{"reportId":"report_allowed"}'::jsonb
+		)`).Scan(&id); err != nil {
+		t.Fatalf("the authorized login must be able to enqueue: %v", err)
+	}
+	if !strings.HasPrefix(id, "job_") {
+		t.Fatalf("expected a durable job id, got %q", id)
+	}
+	if _, err := conn.ExecContext(ctx, `RESET SESSION AUTHORIZATION`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func sweep(t *testing.T, _ *rhinoq.Client) {
 	t.Helper()
 	reaper, err := lease.NewReaper(lease.Config{

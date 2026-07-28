@@ -4,6 +4,7 @@ dist/
 bin/
 coverage/
 .gocache/
+*.tgz
 
 # Local configuration and secrets
 .env
@@ -26,4 +27,3 @@ Thumbs.db
 *.sqlite3
 tmp/
 storage/
-

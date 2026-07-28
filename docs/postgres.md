@@ -39,6 +39,38 @@ Trước khi chạy production:
 
 `NewInMemory()` chỉ dành cho local/demo/test; nó mất state khi process restart.
 
+## Quyền tối thiểu cho SQL/Node producer
+
+`rhinoq.enqueue()` là `SECURITY DEFINER`: producer được tạo job qua một
+function đã validate mà không có quyền ghi trực tiếp vào bảng queue. Migration
+008 thu hồi `EXECUTE` của `PUBLIC`; DBA cấp đúng hai quyền cho producer role:
+
+```sql
+GRANT USAGE ON SCHEMA rhinoq TO app_report_producer;
+GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
+    text, jsonb, text, text, integer, text, interval, text
+) TO app_report_producer;
+```
+
+Sau đó đăng ký từng job name:
+
+```sql
+INSERT INTO rhinoq.job_allowlist (
+    job_name,
+    producer_role,
+    max_payload_bytes
+) VALUES (
+    'generate-report',
+    'app_report_producer',
+    262144
+);
+```
+
+Application login phải là role đó hoặc được grant membership có chủ đích.
+Function kiểm `session_user`—login gọi hàm—thay vì `current_user`, vì bên trong
+`SECURITY DEFINER`, `current_user` là owner của function. Không grant
+`INSERT`/`UPDATE` trực tiếp trên `rhinoq_jobs` cho producer.
+
 ## Chi phí truy vấn cần biết
 
 | Đường đi | Chi phí |

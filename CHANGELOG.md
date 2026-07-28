@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Added a complete CLI reference covering every implemented command, action,
+  flag, exit code, read/write boundary, JSON/pagination behavior and common
+  failure, plus topic-aware `rhinoq help <command>` output with regression
+  tests.
+- Replaced non-runnable preview installation claims with tested source-checkout
+  and local-module instructions while documenting tagged Go/npm and prebuilt
+  CLI distribution as release blockers.
+- Expanded the Node.js guide with an explained build/pack/install flow,
+  PowerShell and Unix setup, complete `PostgresProducer`, `RhinoQWorker`,
+  `NodeJob` and `RhinoQClient` references, a four-terminal runnable walkthrough
+  and troubleshooting; the producer example is now repeatable and can
+  demonstrate idempotent enqueue with an explicit business ID.
+- Fixed the documented Node preview packaging command and made the official
+  HTTP Gateway register `pgx`, so `go run ./cmd/rhinoq-agent` can connect to the
+  configured PostgreSQL database without a custom bootstrap.
+- Fixed `rhinoq.enqueue()` producer authorization to check the invoking
+  PostgreSQL login rather than the owner of its `SECURITY DEFINER` function,
+  with a real-database regression contract.
 - Added RhinoQ Workbench, an embedded loopback-only developer interface with
   demo/live PostgreSQL modes, a dense execution table, Needs Attention,
   Findings, Rules, command navigation and a per-job Evidence Rail.

@@ -12,7 +12,7 @@ func TestMigrationCatalogIsContiguousAndChecksummed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog) < 7 {
+	if len(catalog) < 8 {
 		t.Fatalf("expected the current migration catalog, got %d entries", len(catalog))
 	}
 	for index, definition := range catalog {

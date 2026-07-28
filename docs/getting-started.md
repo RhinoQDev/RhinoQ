@@ -20,17 +20,44 @@ Gateway; chỉ Node worker mới cần Gateway.
 
 ## 1. Cài library và CLI
 
+Từ checkout của repository RhinoQ:
+
 ```bash
-go get github.com/rhinoq/rhinoq
-go get github.com/jackc/pgx/v5
-go install github.com/rhinoq/rhinoq/cmd/rhinoq@latest
+go install ./cmd/rhinoq
+rhinoq version
 ```
 
-Nếu đang phát triển ngay trong repository:
+Canonical Go module chưa được publish từ repository path cuối cùng. Để thử
+library từ checkout hiện tại trong application khác, dùng local replacement
+explicit:
+
+```bash
+go mod edit -replace=github.com/rhinoq/rhinoq=/absolute/path/to/rhinoq
+go get github.com/rhinoq/rhinoq/pkg/rhinoq
+go get github.com/jackc/pgx/v5
+```
+
+PowerShell:
+
+```powershell
+go mod edit "-replace=github.com/rhinoq/rhinoq=C:\src\RhinoQ"
+go get github.com/rhinoq/rhinoq/pkg/rhinoq
+go get github.com/jackc/pgx/v5
+```
+
+Không commit local path này vào application dùng chung. Remote versioned
+install vẫn là release blocker.
+
+Nếu chưa cài CLI, có thể chạy trực tiếp ngay trong repository:
 
 ```bash
 go run ./cmd/rhinoq version
+go run ./cmd/rhinoq help
 ```
+
+CLI tự mô tả từng command bằng `rhinoq help <command>`. Bảng đầy đủ về mục
+đích, flags, write boundary, exit code và ví dụ nằm tại
+[CLI command reference](./cli.md).
 
 ## 2. Chuẩn bị database
 
@@ -108,6 +135,10 @@ if err != nil {
     return err
 }
 ```
+
+`reports.Generate` ở đây là hàm business của application, không phải API của
+RhinoQ. Thay nó bằng use case/service hiện có và truyền `ctx` xuống I/O để
+cancellation hoạt động.
 
 `IdempotencyKey` được scope theo job name. `CorrelationID` liên kết execution
 với business subject và nên được đặt ngay từ đầu.
@@ -200,6 +231,12 @@ rhinoq explain ready-report-has-output
 
 Các list command không trả payload mặc định. `attention` gộp lỗi execution,
 effect uncertain, outcome mismatch và Finding đang sống.
+
+Không có lệnh `rhinoq enqueue` hoặc `rhinoq work` ở preview hiện tại.
+Application enqueue trong transaction qua Go API, Node `PostgresProducer` hoặc
+`rhinoq.enqueue()`; handler Go chạy embedded, handler Node chạy bằng
+`RhinoQWorker`. Điều này giúp người dùng không nhầm CLI vận hành với runtime
+chứa business code.
 
 Mở Workbench local để xem cùng dữ liệu theo bảng dành cho developer:
 

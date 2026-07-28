@@ -11,6 +11,37 @@ Node.js support has two deliberately separate paths:
 This package is a development preview and is not published to npm yet.
 The preview targets ESM on Node.js 22+.
 
+## Build and install the preview
+
+From the repository:
+
+```bash
+cd sdks/node
+npm ci                 # install exactly what package-lock.json records
+npm run typecheck      # check TypeScript without producing dist/
+npm test               # build dist/ and run the SDK tests
+npm run pack:check     # show the files that would enter the package
+npm pack               # create rhinoq-node-0.1.0-dev.tgz
+```
+
+Install the resulting archive and your PostgreSQL driver in the target
+application:
+
+```bash
+npm install /absolute/path/to/rhinoq-node-0.1.0-dev.tgz pg
+```
+
+Do not use `npm install @rhinoq/node` until a tagged npm release exists.
+
+## Choose one integration path
+
+| Need | API | Gateway required |
+|---|---|:---:|
+| enqueue through the application's PostgreSQL pool | `PostgresProducer` | No |
+| enqueue in the current business transaction | `PostgresProducer` with `PoolClient` | No |
+| run JavaScript/TypeScript handlers | `RhinoQWorker` | Yes |
+| inspect, pause, cancel, replay or triage | `RhinoQClient` | Yes |
+
 ## Producer-only
 
 ```ts
@@ -34,6 +65,9 @@ const jobId = await producer.enqueue({
 
 Pass a checked-out `PoolClient` instead of the pool when the business write and
 job must commit atomically.
+
+`enqueue()` resolves when the job intent commits. It does not mean the handler
+ran or that the business outcome was achieved.
 
 ## Node worker
 
@@ -74,5 +108,14 @@ The worker sends its registered job names with every claim. It cannot take work
 for a handler it does not own. On shutdown it stops claiming, keeps heartbeats
 alive during the grace period, then cooperatively aborts handlers that overrun.
 
-See [`docs/nodejs.md`](../../docs/nodejs.md) for setup, transactions, error
-classification, effects and operational commands.
+## Where to find each answer
+
+- [`docs/nodejs.md`](../../docs/nodejs.md): end-to-end installation, every
+  repository command, producer/worker/client API reference, environment
+  variables, effects and troubleshooting.
+- [`docs/cli.md`](../../docs/cli.md): every `rhinoq` command, flag, write
+  behavior and example.
+- [`docs/agent.md`](../../docs/agent.md): optional Gateway deployment and HTTP
+  protocol boundary.
+- [`examples/nodejs`](../../examples/nodejs): minimal producer and worker
+  processes.

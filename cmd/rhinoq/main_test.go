@@ -64,3 +64,31 @@ func TestDatabaseSourceLabelNeverIncludesCredentials(t *testing.T) {
 		t.Fatalf("unexpected safe source label %q", label)
 	}
 }
+
+func TestHelpDocumentsEveryPublicCommand(t *testing.T) {
+	for _, topic := range []string{
+		"help", "init", "migrate", "doctor", "jobs", "queue",
+		"attention", "findings", "rules", "explain", "workbench",
+		"ui", "version",
+	} {
+		t.Run(topic, func(t *testing.T) {
+			var output bytes.Buffer
+			if code := runHelp([]string{topic}, &output); code != 0 {
+				t.Fatalf("help %s returned %d: %s", topic, code, output.String())
+			}
+			if !strings.Contains(output.String(), "Usage:") {
+				t.Fatalf("help %s has no usage section: %s", topic, output.String())
+			}
+		})
+	}
+}
+
+func TestHelpRejectsUnknownTopic(t *testing.T) {
+	var output bytes.Buffer
+	if code := runHelp([]string{"missing"}, &output); code != 2 {
+		t.Fatalf("expected usage error, got %d: %s", code, output.String())
+	}
+	if !strings.Contains(output.String(), "unknown help topic") {
+		t.Fatalf("help should explain the failure: %s", output.String())
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/rhinoq/rhinoq/internal/interfaces/agent"
 	"github.com/rhinoq/rhinoq/internal/runtime/shutdown"
 	"github.com/rhinoq/rhinoq/pkg/rhinoq"
@@ -44,9 +45,15 @@ What RhinoQ did
   The process did not start. Nothing is listening.
 
 How to fix
+  Bash/zsh:
   export RHINOQ_AGENT_TOKEN=$(openssl rand -hex 32)
   or, for local development only:
   export RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true
+
+  PowerShell:
+  $env:RHINOQ_AGENT_TOKEN = '<long-random-secret>'
+  or, for local development only:
+  $env:RHINOQ_AGENT_ALLOW_UNAUTHENTICATED = 'true'
 
 Verify
   curl -H "Authorization: Bearer $RHINOQ_AGENT_TOKEN" localhost:8080/health/ready`)
@@ -98,9 +105,10 @@ Verify
 	return httpServer.Shutdown(graceCtx)
 }
 
-// openClient builds the queue client. The PostgreSQL driver is the
-// application's choice, so the Agent asks for a driver name instead of linking
-// one in and locking every deployment to it.
+// openClient builds the queue client. The official Gateway binary registers
+// pgx so the documented command works without a custom bootstrap. A custom
+// build may register another database/sql driver and select it through
+// RHINOQ_DATABASE_DRIVER.
 func openClient() (*rhinoq.Client, func(), error) {
 	url := os.Getenv("RHINOQ_DATABASE_URL")
 	if url == "" {
@@ -122,9 +130,10 @@ What RhinoQ did
   The process did not start. Nothing was written.
 
 How to fix
-  RhinoQ does not link a PostgreSQL driver, so your build has to register one:
-    import _ "github.com/jackc/pgx/v5/stdlib"
-  Then set RHINOQ_DATABASE_DRIVER to its registered name (default "pgx").
+  The official Gateway includes pgx. If RHINOQ_DATABASE_DRIVER names another
+  driver, your custom build must register it:
+    import _ "<database/sql driver package>"
+  Otherwise remove the override and use the default "pgx".
 
 Verify
   rhinoq doctor`, driver, err)
