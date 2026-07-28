@@ -243,6 +243,7 @@ type Client struct {
 	store    ports.JobStore
 	effects  ports.EffectStore
 	recovery ports.RecoveryStore
+	findings ports.FindingStore
 	handlers *worker.HandlerRegistry
 	// retry is the policy applied to failures reported through the remote
 	// worker API, where no in-process worker owns a policy.
@@ -269,11 +270,15 @@ func NewInMemory() *Client {
 		panic(err)
 	}
 	outcomes := memory.NewOutcomeStore()
+	findingStore := memory.NewFindingStore()
 	recoveryStore, err := memory.NewRecoveryStore(jobs, effects, outcomes)
 	if err != nil {
 		panic(err)
 	}
-	return &Client{store: jobs, effects: effects, recovery: recoveryStore, handlers: worker.NewHandlerRegistry()}
+	return &Client{
+		store: jobs, effects: effects, recovery: recoveryStore,
+		findings: findingStore, handlers: worker.NewHandlerRegistry(),
+	}
 }
 
 func NewPostgres(db *sql.DB) (*Client, error) {
@@ -289,9 +294,13 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	findingStore, err := postgres.NewFindingStore(db)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		store: store, effects: effects, recovery: recoveryStore,
-		handlers: worker.NewHandlerRegistry(),
+		findings: findingStore, handlers: worker.NewHandlerRegistry(),
 	}, nil
 }
 
@@ -299,6 +308,9 @@ func NewWithStore(store ports.JobStore) *Client {
 	client := &Client{store: store, handlers: worker.NewHandlerRegistry()}
 	if recoveryStore, ok := store.(ports.RecoveryStore); ok {
 		client.recovery = recoveryStore
+	}
+	if findingStore, ok := store.(ports.FindingStore); ok {
+		client.findings = findingStore
 	}
 	return client
 }

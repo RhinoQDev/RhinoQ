@@ -1,7 +1,7 @@
 # RhinoQ
 
 <p align="center">
-  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — business integrity for background execution" width="100%" />
+  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — a PostgreSQL job queue with business integrity" width="100%" />
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  PostgreSQL-backed integrity layer · Go runtime · reference queue included
+  PostgreSQL job queue · Go runtime · business rules and findings in progress
 </p>
 
 <p align="center">
@@ -62,9 +62,9 @@ such as:
 - a synchronization job completed, but source and destination disagree;
 - an account workflow ran, but provisioning never reached the required state.
 
-RhinoQ's intended adoption path is observe-only first. A team should be able to
-correlate BullMQ, pg-boss, DBOS, or a custom worker and see a useful finding
-before considering any queue migration.
+RhinoQ remains a PostgreSQL job queue. Its `scan`/observe-only adoption path is
+planned so a team can evaluate outside-in rules against an existing BullMQ,
+pg-boss, DBOS, or custom worker before deciding whether to adopt the queue.
 
 If the requirement is only a mature Redis queue, a simple Node/PostgreSQL
 queue, or a durable DAG/workflow runtime, evaluate BullMQ, pg-boss, Graphile
@@ -79,11 +79,12 @@ RhinoQ organizes work into four explicit stages:
 | **COMMIT** | Was the work recorded durably? | idempotency, correlation, payload validation, outbox foundation | Foundation implemented |
 | **RUN** | Can the work execute and recover safely? | claims, leases, heartbeat, retries, cancellation, rate limits | Core implemented |
 | **VERIFY** | Did declared effects and outcomes really happen? | Effect Ledger, confirmation policy, Outcome contracts | Domain foundation; usable indexed verifier pending |
-| **RECOVER** | Can an operator investigate and repair safely? | persistent findings, reverse reconciliation, replay policy, audit | Domain foundation; persistence and reconciliation pending |
+| **RECOVER** | Can an operator investigate and repair safely? | persistent findings, reverse reconciliation, replay policy, audit | Persistent finding lifecycle implemented; Rule runner pending |
 
-RhinoQ includes a PostgreSQL-backed queue as a reference execution adapter. It
-is not a message broker or a general-purpose workflow engine. Topic routing,
-fan-out, and DAG orchestration are intentionally outside the core product.
+RhinoQ's PostgreSQL-backed queue is part of the core product, but queue parity
+is not its differentiator. It is not a message broker or a general-purpose
+workflow engine. Topic routing, fan-out, and DAG orchestration are intentionally
+outside the core product.
 
 ## Quickstart
 
@@ -214,12 +215,14 @@ List responses intentionally exclude payloads so an operational queue view does 
 - Explicit effect states including uncertain and confirmed
 - Outcome records separated from execution completion
 - Finding lifecycle domain rules for deduplication, acknowledgement, suppression, resolution and regression
+- Persistent memory/PostgreSQL finding stores with append-only lifecycle events
+- Public Go and Agent HTTP APIs for finding observation, filtering, transition and history
 - Outbox storage and publisher runtime
 - Fail-closed handling for unknown error classes
 
-The persistent finding store, reverse reconciler, observe-only adapter, and
-ORM-aware verifier API are not complete yet. The current code should not be
-presented as a finished integrity product.
+The reverse reconciler, Rule runner, scan workflow, and query-cost gate are not
+complete yet. The current code should not be presented as a finished integrity
+product.
 
 Using RhinoQ from another language needs one thin file, not a reimplementation. See the [Agent guide](./docs/agent.md).
 
@@ -284,17 +287,17 @@ docs/                             user and operator documentation
 RhinoQ has a runnable Go core, memory adapter, PostgreSQL adapters, migrations,
 and a real-database contract suite. The RUN foundation is ahead of the product
 differentiator: production readiness still requires fault evidence, while the
-v0.1 Integrity Slice still needs persistent findings, reverse reconciliation,
-external execution correlation, and an indexed verifier API.
+v0.1 Integrity Slice now has persistent findings, but still needs the Rule
+runner, reverse reconciliation, scan/baseline workflow, and correlation
+timeline.
 
 The next engineering priorities are:
 
-1. Persistent finding store and public lifecycle API
-2. Incremental reverse reconciliation for one non-financial business subject
-3. External queue/job correlation and observe-only ingestion
-4. ORM-aware Outcome Level 1 verifier with a query-cost gate
-5. A no-cutover integration recipe for BullMQ or pg-boss
-6. Fault-injection, retention, security, and reproducible benchmark gates
+1. Canonical Rule model for job-scoped and table-scoped checks
+2. Incremental runner with mandatory baseline and query-cost gate
+3. Correlation timeline across job, attempt, effect, finding and business state
+4. A bounded `rhinoq scan` workflow and `init --from-scan` plan
+5. Fault-injection, retention, security, and reproducible benchmark gates
 
 RhinoQ does not publish throughput or latency claims without a repeatable benchmark that records hardware, payload, durability, worker count, and workload.
 

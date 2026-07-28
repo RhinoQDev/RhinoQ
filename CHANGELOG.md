@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added persistent memory and PostgreSQL finding stores, atomic observation
+  deduplication, lifecycle transitions, append-only finding events, business
+  subject filtering, public Go APIs and Agent HTTP endpoints.
+- Added migration `005_findings.sql` with inbox and subject timeline indexes,
+  plus transaction-scoped advisory locking so concurrent first observations
+  fold into one finding instead of racing on the primary key.
+- Reviewed the v2 strategy against current official competitor capabilities;
+  kept RhinoQ as a PostgreSQL job queue while removing outdated claims that
+  pg-boss lacks dashboards, workflows, priorities or rate limiting.
 - Reframed v0.1 as an Integrity Slice: observe an existing execution system,
   verify one indexed business invariant, persist a finding, and support an
   audited operator lifecycle without requiring a queue cutover.

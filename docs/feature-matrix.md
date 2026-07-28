@@ -22,7 +22,7 @@ execution platforms.
 | Stalled/poison protection | `maxStalledCount` | crash budget per job implemented; distinct-worker tracking pending |
 | Producer backpressure | not native | admission control with reserved critical budget implemented; `route` and `sample` overflow modes pending |
 | Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
-| DLQ / Needs Attention | failed-job and operational views | dead/blocked/effect/outcome derived attention view and finding domain lifecycle implemented; persistent finding store/API pending |
+| DLQ / Needs Attention | failed-job and operational views | persistent finding lifecycle/store/API and append-only events implemented; derived attention view is not yet backed by the finding inbox |
 | Reverse reconciliation | application-specific | planned for one v0.1 business subject; not implemented |
 | Observe-only correlation | application-specific | external source/job/business-key contract pending |
 | Manual replay | retry failed work | guarded dead/blocked replay with effect safety checks and transactional audit |

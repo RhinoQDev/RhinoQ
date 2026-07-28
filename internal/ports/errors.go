@@ -11,8 +11,9 @@ var (
 	// ErrLeaseLost matches every fencing rejection through errors.Is. A store
 	// returns it when the presented owner and epoch are no longer the ones the
 	// database recognises, which means another execution owns the job now.
-	ErrLeaseLost   = errors.New("RHINOQ_LEASE_LOST")
-	ErrJobNotFound = errors.New("RHINOQ_JOB_NOT_FOUND")
+	ErrLeaseLost       = errors.New("RHINOQ_LEASE_LOST")
+	ErrJobNotFound     = errors.New("RHINOQ_JOB_NOT_FOUND")
+	ErrFindingNotFound = errors.New("RHINOQ_FINDING_NOT_FOUND")
 )
 
 // LeaseLostError explains a fencing rejection to the operator reading the log.

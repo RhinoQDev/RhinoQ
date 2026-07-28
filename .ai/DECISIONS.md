@@ -47,13 +47,13 @@
 - **Rollback:** không cần; đây là ràng buộc chặt hơn ràng buộc cũ.
 - **Owner:** engine
 
-## ADR-0007 — v0.1 là Integrity Slice, native queue là reference adapter
+## ADR-0007 — v0.1 là Integrity Slice trong một PostgreSQL job queue
 
 - **Status:** accepted
 - **Context:** PostgreSQL queue parity có switching cost cao và không tạo khác biệt đủ mạnh so với BullMQ, pg-boss, Graphile Worker, PGMQ hoặc các durable execution platform. Hoãn VERIFY/RECOVER tới sau khi có user tạo vòng lặp không thể đạt: sản phẩm cần differentiator để có design partner.
-- **Decision:** v0.1 phải kiểm chứng một business invariant từ record ngược về execution/effect, lưu finding bền vững và hỗ trợ operator lifecycle có audit. Ứng dụng được thử ở observe-only mode trên execution system hiện hữu; native RhinoQ queue là reference adapter, không phải điều kiện bắt buộc.
+- **Decision:** RhinoQ vẫn là PostgreSQL job queue. v0.1 phải kiểm chứng một business invariant từ record ngược về execution/effect, lưu finding bền vững và hỗ trợ operator lifecycle có audit. `scan`/observe-only cho phép đánh giá trên execution system hiện hữu trước khi người dùng quyết định adopt queue.
 - **Alternatives:** release queue foundation trước; yêu cầu migrate queue; chỉ trả `needs_decision` mà không có verifier/reconciliation.
-- **Consequences:** persistent finding, external correlation và reconciliation được ưu tiên trước DAG, adapter thứ hai và queue parity mở rộng. README phải nói rõ khi nào nên dùng sản phẩm khác.
+- **Consequences:** queue foundation được giữ ổn định; persistent finding, Rule, correlation timeline và scan được ưu tiên trước DAG, adapter thứ hai và queue parity mở rộng. README phải nói rõ khi nào nên dùng sản phẩm khác.
 - **Rollback:** nếu ba design partner không coi invariant/finding là reusable product capability, dừng mở rộng product layer và giữ queue/runtime như research foundation.
 - **Owner:** product + engine
 

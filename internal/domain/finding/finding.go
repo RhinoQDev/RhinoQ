@@ -32,6 +32,13 @@ const (
 	// Regressed is the most important signal in the whole lifecycle: something
 	// that was repaired came back, which means the repair did not fix the cause.
 	Regressed Status = "regressed"
+
+	MaxRuleIDBytes      = 128
+	MaxSubjectTypeBytes = 64
+	MaxSubjectIDBytes   = 256
+	MaxEvidenceBytes    = 64 << 10
+	MaxActorBytes       = 256
+	MaxReasonBytes      = 4 << 10
 )
 
 func (s Status) Valid() bool {
@@ -61,6 +68,9 @@ var (
 	ErrActorRequired     = errors.New("a lifecycle change requires an actor")
 	ErrInvalidTransition = errors.New("invalid finding transition")
 	ErrObservationTime   = errors.New("an observation needs a time")
+	ErrEvidenceTooLarge  = errors.New("finding evidence exceeds 64 KiB")
+	ErrActorTooLarge     = errors.New("finding actor exceeds 256 bytes")
+	ErrReasonTooLarge    = errors.New("finding reason exceeds 4 KiB")
 )
 
 // Key identifies a finding. The invariant version is part of the key so that a
@@ -75,7 +85,9 @@ type Key struct {
 
 func (k Key) Validate() error {
 	if strings.TrimSpace(k.RuleID) == "" || strings.TrimSpace(k.SubjectType) == "" ||
-		strings.TrimSpace(k.SubjectID) == "" || k.ObservedInvariantVersion < 0 {
+		strings.TrimSpace(k.SubjectID) == "" || k.ObservedInvariantVersion < 0 ||
+		len(k.RuleID) > MaxRuleIDBytes || len(k.SubjectType) > MaxSubjectTypeBytes ||
+		len(k.SubjectID) > MaxSubjectIDBytes {
 		return ErrInvalidKey
 	}
 	return nil
@@ -105,6 +117,26 @@ type Record struct {
 	UpdatedAt       time.Time
 }
 
+// Event is one immutable fact in a finding's lifecycle. The current record is
+// optimized for the operator inbox; events preserve how it got there.
+type Event struct {
+	Sequence int64
+	Key
+	Kind       string
+	FromStatus Status
+	ToStatus   Status
+	Actor      string
+	Reason     string
+	Evidence   string
+	Until      time.Time
+	OccurredAt time.Time
+}
+
+const (
+	EventObserved   = "observed"
+	EventTransition = "transitioned"
+)
+
 // Suppressed reports whether the finding is currently hidden.
 func (r Record) Suppressed(now time.Time) bool {
 	return r.Status.Suppressed() && r.SuppressedUntil.After(now)
@@ -123,6 +155,9 @@ func (o Observation) Validate() error {
 	}
 	if o.ObservedAt.IsZero() {
 		return ErrObservationTime
+	}
+	if len(o.Evidence) > MaxEvidenceBytes {
+		return ErrEvidenceTooLarge
 	}
 	return nil
 }
@@ -214,6 +249,12 @@ func ApplyTransition(existing Record, transition Transition) (Record, error) {
 	if strings.TrimSpace(transition.Actor) == "" {
 		return existing, ErrActorRequired
 	}
+	if len(transition.Actor) > MaxActorBytes {
+		return existing, ErrActorTooLarge
+	}
+	if len(transition.Reason) > MaxReasonBytes {
+		return existing, ErrReasonTooLarge
+	}
 	if transition.At.IsZero() {
 		return existing, ErrObservationTime
 	}
@@ -266,6 +307,10 @@ type Query struct {
 func (q Query) Validate() error {
 	if q.Offset < 0 || q.Limit <= 0 || q.Limit > 1000 {
 		return errors.New("finding offset must be non-negative and limit must be between 1 and 1000")
+	}
+	if len(q.RuleID) > MaxRuleIDBytes || len(q.SubjectType) > MaxSubjectTypeBytes ||
+		len(q.SubjectID) > MaxSubjectIDBytes {
+		return ErrInvalidKey
 	}
 	for _, status := range q.Statuses {
 		if !status.Valid() {

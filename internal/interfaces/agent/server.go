@@ -121,6 +121,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /v1/queues/{name}/pause", s.guard(s.handlePause))
 	mux.HandleFunc("POST /v1/queues/{name}/resume", s.guard(s.handleResume))
 	mux.HandleFunc("GET /v1/attention", s.guard(s.handleAttention))
+	mux.HandleFunc("POST /v1/findings/observe", s.guard(s.handleObserveFinding))
+	mux.HandleFunc("GET /v1/findings", s.guard(s.handleListFindings))
+	mux.HandleFunc("POST /v1/findings/transition", s.guard(s.handleTransitionFinding))
+	mux.HandleFunc("GET /v1/findings/history", s.guard(s.handleFindingHistory))
 
 	s.mux = mux
 }
@@ -269,6 +273,66 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleObserveFinding(w http.ResponseWriter, r *http.Request) {
+	var observation rhinoq.FindingObservation
+	if !decode(w, r, &observation) {
+		return
+	}
+	record, err := s.client.ObserveFinding(r.Context(), observation)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"finding": record})
+}
+
+func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	records, err := s.client.ListFindings(r.Context(), rhinoq.FindingQuery{
+		RuleID: query.Get("ruleId"), SubjectType: query.Get("subjectType"),
+		SubjectID: query.Get("subjectId"), Statuses: splitStates(query.Get("statuses")),
+		IncludeSuppressed: boolParam(query.Get("includeSuppressed")),
+		Offset:            intParam(query.Get("offset"), 0), Limit: intParam(query.Get("limit"), 50),
+	})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"findings": records})
+}
+
+type transitionFindingRequest struct {
+	Key        rhinoq.FindingKey        `json:"key"`
+	Transition rhinoq.FindingTransition `json:"transition"`
+}
+
+func (s *Server) handleTransitionFinding(w http.ResponseWriter, r *http.Request) {
+	var request transitionFindingRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	record, err := s.client.TransitionFinding(r.Context(), request.Key, request.Transition)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"finding": record})
+}
+
+func (s *Server) handleFindingHistory(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	version := intParam(query.Get("invariantVersion"), -1)
+	events, err := s.client.FindingHistory(r.Context(), rhinoq.FindingKey{
+		RuleID: query.Get("ruleId"), SubjectType: query.Get("subjectType"),
+		SubjectID: query.Get("subjectId"), InvariantVersion: version,
+	}, intParam(query.Get("offset"), 0), intParam(query.Get("limit"), 50))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 type replayRequest struct {
@@ -485,4 +549,9 @@ func intParam(raw string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func boolParam(raw string) bool {
+	value, err := strconv.ParseBool(raw)
+	return err == nil && value
 }

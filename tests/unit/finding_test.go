@@ -2,6 +2,7 @@ package unit_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,25 @@ func TestFindingObservationDeduplicatesAndRegresses(t *testing.T) {
 	}
 	if record.Status != finding.Regressed || !record.ResolvedAt.IsZero() {
 		t.Fatalf("a resolved drift that returns must be marked regressed: %+v", record)
+	}
+}
+
+func TestFindingEvidenceAndIdentityAreBounded(t *testing.T) {
+	observation := finding.Observation{
+		Key: finding.Key{
+			RuleID: "rule", SubjectType: "report", SubjectID: "report-1",
+			ObservedInvariantVersion: 1,
+		},
+		Evidence:   strings.Repeat("x", finding.MaxEvidenceBytes+1),
+		ObservedAt: time.Now().UTC(),
+	}
+	if !errors.Is(observation.Validate(), finding.ErrEvidenceTooLarge) {
+		t.Fatal("oversized evidence must be rejected before it reaches storage")
+	}
+	observation.Evidence = ""
+	observation.SubjectID = strings.Repeat("x", finding.MaxSubjectIDBytes+1)
+	if !errors.Is(observation.Validate(), finding.ErrInvalidKey) {
+		t.Fatal("oversized business identity must be rejected")
 	}
 }
 

@@ -12,3 +12,6 @@
 10. `notBefore` mặc định là `0`; telemetry chỉ đưa ra đề xuất.
 11. Database migration dùng expand → migrate → contract.
 12. Không thêm công nghệ mới nếu chưa ghi rõ lý do, owner và cách rollback trong `DECISIONS.md`.
+13. Rule SQL chạy bằng read-only role, parameterized input, statement timeout và bounded result.
+14. Table-scope Rule mặc định baseline từ thời điểm enable; historical scan phải được yêu cầu rõ.
+15. Queue là core product; Rules/Findings/timeline là differentiator; `scan` là no-cutover evaluation path.

@@ -2,7 +2,7 @@
 
 ## Sản phẩm
 
-RhinoQ là business-integrity layer cho background execution: tương quan intent/job/effect, xác minh business outcome và phục hồi sai lệch. PostgreSQL queue tích hợp là reference execution adapter; VERIFY/RECOVER phải có đường observe-only cho execution system hiện hữu.
+RhinoQ là PostgreSQL job queue có business-integrity workflow: tương quan intent/job/effect, xác minh business outcome và phục hồi sai lệch. Queue là core product; `scan`/observe-only là đường đánh giá trên execution system hiện hữu.
 
 ## Mục tiêu hiện tại
 

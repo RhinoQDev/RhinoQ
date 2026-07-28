@@ -152,7 +152,8 @@ func newClient(t *testing.T) *rhinoq.Client {
 func truncate(t *testing.T) {
 	t.Helper()
 	_, err := testDB.Exec(`
-		TRUNCATE rhinoq_audit, rhinoq_attempt_events, rhinoq_effects, rhinoq_outcomes, rhinoq_outbox,
+		TRUNCATE rhinoq_finding_events, rhinoq_findings,
+		         rhinoq_audit, rhinoq_attempt_events, rhinoq_effects, rhinoq_outcomes, rhinoq_outbox,
 		         rhinoq_jobs, rhinoq_queue_controls RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset tables: %v", err)

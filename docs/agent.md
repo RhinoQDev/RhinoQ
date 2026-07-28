@@ -16,8 +16,8 @@ PostgreSQL
 
 Lý do không viết lại logic ở mỗi SDK: nếu SDK Node xử lý lease một kiểu, SDK Python một kiểu khác, thì correctness bị nhân theo số ngôn ngữ. Một bug lease sẽ tồn tại ở năm nơi và được sửa ở một nơi.
 
-**Agent giữ:** claim · ordering · lease · fencing · retry classification · rate limit · admission · effect ledger · recovery.
-**Client chỉ làm bốn việc:** enqueue · nhận job · báo kết quả · ghi effect.
+**Agent giữ:** claim · ordering · lease · fencing · retry classification · rate limit · admission · effect ledger · finding lifecycle · recovery.
+**Client chỉ gửi intent/observation/decision:** enqueue · nhận job · báo kết quả · ghi effect · ghi/triage finding.
 
 Client TypeScript tham chiếu nằm ở [`sdks/typescript/src/interfaces/sdk/agent-client.ts`](../sdks/typescript/src/interfaces/sdk/agent-client.ts) — khoảng 200 dòng, không dependency. Port sang ngôn ngữ khác là dịch lại 200 dòng đó, không phải viết lại một queue.
 
@@ -90,6 +90,7 @@ Ba kết quả, phân biệt rõ:
 | Producer | `POST /v1/jobs` · `GET /v1/jobs` · `POST /v1/jobs/{id}/cancel` |
 | Worker | `POST /v1/claim` · `POST /v1/leases/heartbeat` · `POST /v1/leases/complete` · `POST /v1/leases/fail` · `POST /v1/leases/release` |
 | Effect | `POST /v1/effects/begin` · `POST /v1/effects/resolve` |
+| Findings | `POST /v1/findings/observe` · `GET /v1/findings` · `POST /v1/findings/transition` · `GET /v1/findings/history` |
 | Operator | `GET /v1/queues/{name}/counts` · `POST /v1/queues/{name}/pause` · `POST /v1/queues/{name}/resume` · `GET /v1/attention` · `POST /v1/jobs/{id}/replay` · `GET /v1/jobs/{id}/audit` · `GET /v1/jobs/{id}/attempts` |
 | Vận hành | `GET /health/live` · `GET /health/ready` · `GET /metrics` |
 

@@ -8,9 +8,9 @@ RhinoQ does not enter an empty category. PostgreSQL queues, durable execution
 runtimes, and workflow platforms already solve large parts of reliable
 background execution. The product hypothesis is narrower:
 
-> Can a shared integrity layer make business-outcome verification and reverse
-> reconciliation easier to adopt, operate, and audit without first replacing
-> the application's current queue?
+> Can a PostgreSQL queue package business-outcome rules, findings and
+> correlation timelines better than queue dashboards or application cron jobs,
+> while offering a no-cutover scan as the first evaluation step?
 
 This is a hypothesis to validate, not a claim that no other system can express
 an invariant in application code.

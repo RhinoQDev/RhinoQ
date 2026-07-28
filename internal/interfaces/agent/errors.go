@@ -54,6 +54,9 @@ func describe(err error) (int, ErrorBody) {
 	if errors.Is(err, ports.ErrJobNotFound) {
 		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_JOB_NOT_FOUND", Message: err.Error()}
 	}
+	if errors.Is(err, ports.ErrFindingNotFound) {
+		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_FINDING_NOT_FOUND", Message: err.Error()}
+	}
 	switch {
 	case errors.Is(err, rhinoq.ErrEffectUncertain):
 		return http.StatusConflict, ErrorBody{Code: "RHINOQ_EFFECT_UNCERTAIN", Message: err.Error()}

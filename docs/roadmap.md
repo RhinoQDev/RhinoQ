@@ -1,8 +1,8 @@
 # Implementation roadmap
 
-The roadmap separates execution maturity from product differentiation. A
-native queue remains a reference execution adapter; v0.1 is not considered
-useful until VERIFY and RECOVER work on at least one real business subject.
+The roadmap separates execution maturity from product differentiation. The
+native PostgreSQL queue remains part of the core product; v0.1 is not considered
+useful until Rules and Findings work on at least one real business subject.
 
 ## Foundation — COMMIT and RUN
 
@@ -24,13 +24,15 @@ useful until VERIFY and RECOVER work on at least one real business subject.
 The release demonstration must detect one real business mismatch without
 requiring the application's current queue to be replaced.
 
-### VERIFY
+### Rules and effects
 
 - [x] explicit Effect Ledger states and fenced transitions
 - [x] explicit effect confirmation policy
-- [x] Outcome Level 1 domain foundation
-- [ ] ORM/metadata-aware indexed verifier API
-- [ ] explicit `notBefore`, deadline and finality behavior end to end
+- [x] legacy Outcome Level 1 domain foundation
+- [ ] one canonical Rule contract with `job` and `table` scopes
+- [ ] parameterized SQL executor with read-only role, statement timeout and
+  bounded results
+- [ ] baseline policy and incremental table cursor
 - [ ] query-cost and index gate
 - [ ] external execution correlation:
   `source_system`, `source_job_id`, `business_key`
@@ -38,26 +40,25 @@ requiring the application's current queue to be replaced.
 ### RECOVER
 
 - [x] finding domain lifecycle and deduplication rules
-- [ ] persistent finding store and public API
-- [ ] incremental reverse reconciliation for one business subject
+- [x] persistent memory/PostgreSQL finding store and public Go/Agent API
+- [ ] table-scoped Rule runner for one business subject
 - [ ] Needs Attention backed by persistent findings
-- [ ] acknowledge, suppress, resolve and regressed operations with audit
+- [x] acknowledge, suppress, resolve and regressed operations with append-only events
 - [x] guarded manual replay and transactional audit hash chain
-- [ ] business-key and external-job search
+- [ ] correlation timeline and business-key/external-job search
 
 ### Adoption
 
-- [ ] observe-only ingestion/API for an existing execution system
-- [ ] one production-quality BullMQ or pg-boss integration recipe
-- [ ] `rhinoq verify --business-key <id>`
+- [ ] bounded `rhinoq scan` over tables with job/correlation references
+- [ ] `rhinoq init --from-scan` plan with baseline by default
 - [ ] one non-financial reference workload, such as a completed report whose
   output object is missing
 - [ ] no-cutover quickstart that produces the first finding
 
 ## v0.2 — Integrity Hardening
 
-- [ ] invariant DSL and versioned contracts
-- [ ] signal-first and batched verification
+- [ ] versioned Rule contracts
+- [ ] signal-first and batched Rule evaluation
 - [ ] finding suppression, deduplication and regression hardening
 - [ ] reconciliation cursors, budgets and backpressure
 - [ ] handler and verifier version evidence
@@ -71,8 +72,7 @@ requiring the application's current queue to be replaced.
 
 ## Later, after design-partner evidence
 
-- [ ] second execution adapter
-- [ ] Console integrity workspace
+- [ ] Console Queues and Findings screens with correlation timeline
 - [ ] gRPC/Unix-socket Agent transport
 - [ ] NestJS integration
 - [ ] retention and partition sweeper

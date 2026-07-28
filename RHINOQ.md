@@ -2,7 +2,7 @@
 
 > **Run the job. Verify the result. Recover safely.**
 
-RhinoQ là business-integrity layer cho background work quan trọng, nơi _"worker chạy xong"_ chưa đủ và hệ thống cần biết trạng thái nghiệp vụ cuối cùng có thực sự chính xác hay không. Sản phẩm có native PostgreSQL queue làm reference execution adapter, nhưng VERIFY/RECOVER phải dùng được với queue hoặc durable runtime hiện hữu.
+RhinoQ là PostgreSQL job queue có business-integrity workflow cho background work quan trọng, nơi _"worker chạy xong"_ chưa đủ và hệ thống cần biết trạng thái nghiệp vụ cuối cùng có thực sự chính xác hay không. `scan`/observe-only là đường đánh giá trên execution system hiện hữu; native queue vẫn là core product.
 
 ---
 
@@ -65,7 +65,7 @@ Kiểm tra trước khi cam kết: `npm view rhinoq`, GitHub search, `rhinoq.dev
 
 ### Định vị chính
 
-> RhinoQ là **business-integrity layer cho background execution**: tương quan công việc, xác minh trạng thái nghiệp vụ quan trọng sau execution, và hỗ trợ phục hồi sai lệch có kiểm soát. Native queue là một execution adapter, không phải điều kiện để dùng VERIFY/RECOVER.
+> RhinoQ là **PostgreSQL job queue có business-integrity workflow**: tương quan công việc, xác minh trạng thái nghiệp vụ quan trọng sau execution, và hỗ trợ phục hồi sai lệch có kiểm soát. Queue tạo category và runtime; Rules, Findings và timeline tạo khác biệt.
 
 ### Câu cho người dùng BullMQ
 
@@ -2821,7 +2821,9 @@ business record
   → operator decision + audit
 ```
 
-Native RhinoQ queue là một execution adapter/reference implementation. Người dùng phải thử được VERIFY/RECOVER ở **observe-only mode trên queue hiện tại**, không cần migrate producer/worker trước.
+Native RhinoQ queue là core product. `rhinoq scan` phải cho người dùng thấy một
+outside-in finding ở **observe-only mode trên hệ thống hiện tại** trước khi họ
+quyết định adopt queue.
 
 ### COMMIT
 
@@ -2839,35 +2841,43 @@ Native RhinoQ queue là một execution adapter/reference implementation. Ngư�
 9. DLQ
 10. Crash recovery
 11. Basic delayed job
-    11b. **Parity tối thiểu với BullMQ (mục 9.1)** — graceful shutdown 6 bước · pause/resume queue · rate limiting per-queue · worker process riêng · metrics export · NestJS module
+    11b. **Production foundation theo pg-boss reference (mục 9.1)** — graceful shutdown 6 bước · pause/resume queue · rate limiting per-queue · worker process riêng · metrics export · NestJS module. Không yêu cầu feature parity toàn bộ.
     11c. **Retry classification (mục 9.2)** — 7 class, không retry mù mọi exception
     11d. **Cancellation cơ bản (mục 9.3)** — `abortSignal` cooperative + `cancel_requested`
     11e. **Poison-job protection (mục 9.4)** — `maxWorkerCrashesPerJob`
     11f. **`lease_epoch` fencing (mục 41.3)** — kiểm ở cả 7 thao tác
     11g. **Admission control (mục 28.2)** — `maxPendingJobs` + `criticalReservedSlots`
 
-### VERIFY
+### RULES
 
-12. **Effect tối giản** — `pending` · `confirmed` · `uncertain` · effect irreversible **không auto-retry** · `UNIQUE (job_id, effect_name, effect_key)` (mục 10.3c). Đây là primitive hỗ trợ, không còn là differentiator duy nhất.
-13. **Outcome Level 1 dùng được thật** — một entity/ORM-aware indexed verifier · `deadline` · explicit `notBefore` · `finality: 'once'` · 5 trạng thái (mục 11.5). Không dùng stringly-typed table/field làm canonical API.
-14. **Query-cost gate** — `outcome:explain` chặn contract thiếu index ở CI.
-15. **External execution correlation** — lưu `source_system`, `source_job_id`, `business_key`; một finding phải nối được tới BullMQ/pg-boss/DBOS/worker riêng mà không cần RhinoQ sở hữu RUN.
+12. **Một canonical Rule model** thay cho hai subsystem Outcome/Reconciliation:
+    - `scope: job` kiểm hậu điều kiện của một execution;
+    - `scope: table` quét business record đáng lẽ phải có job/outcome.
+13. Rule dùng SQL parameterized có budget, statement timeout, read-only role và
+    baseline mặc định. Không phát minh invariant DSL ở v0.1.
+14. **`rhinoq explain`** chặn rule thiếu index hoặc vượt query budget ở CI.
+15. **External correlation** — `source_system`, `source_job_id`,
+    `business_key`; timeline nối được execution ngoài RhinoQ.
+16. **Effect tối giản** — `pending` · `confirmed` · `uncertain`; unknown effect
+    không auto-retry và tạo finding. Provider adapter hoãn tới khi có nhu cầu.
 
 ### RECOVER
 
-16. **Incremental reverse reconciliation tối thiểu** — đi từ một loại business record ngược về intent/execution; cursor an toàn; không full scan.
-17. **Persistent finding lifecycle** — `open → acknowledged → resolved`; suppression có expiry; resolved quay lại thành `regressed`.
-18. Needs Attention đọc từ finding bền vững, không chỉ union query tạm thời.
-19. Manual decision / guarded replay; v0.1 không auto-repair.
-20. Audit cho acknowledge, suppress, replay và resolve.
-21. Business search theo correlation và external job id.
+17. **Persistent finding lifecycle** — dedup bằng rule/subject/version;
+    `open → acknowledged → resolved`; suppression có expiry; resolved quay lại
+    thành `regressed`; append-only event history.
+18. **Incremental table rule runner** — cursor an toàn, bounded batch, baseline
+    mặc định, không full scan ngầm.
+19. Needs Attention đọc từ finding bền vững, không chỉ union query tạm thời.
+20. `rhinoq fix` dry-run mặc định, `--limit` và audit; v0.1 không auto-repair.
+21. Business timeline/search theo correlation và external job id.
 
 ### ADOPTION PATH BẮT BUỘC
 
-22. Observe-only ingestion/API cho ứng dụng đang dùng queue khác.
-23. Một adapter/reference recipe cho BullMQ **hoặc** pg-boss; không viết hai adapter nửa vời.
-24. `rhinoq verify --business-key <id>` chạy được mà không khởi động RhinoQ worker.
-25. Không yêu cầu cutover queue để thấy finding đầu tiên.
+22. `rhinoq scan` chỉ quét bảng có correlation/job reference, dùng read-only
+    role, bounded sample và gọi kết quả là anomaly—không tự tuyên bố lỗi.
+23. `rhinoq init --from-scan` sinh plan; baseline là mặc định.
+24. Không yêu cầu cutover queue để thấy finding đầu tiên.
 
 ### DEVELOPER EXPERIENCE (không phải "làm sau")
 
