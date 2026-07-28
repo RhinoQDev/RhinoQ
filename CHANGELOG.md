@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a business-subject investigation view to the Workbench:
+  `/api/v1/subjects/{type}/{id}` and a rail that merges findings, operator
+  decisions and Effect Ledger entries into one time-ordered narrative, with the
+  executions that touched the subject listed whether or not RhinoQ ran them.
+  Clicking a Finding now opens it instead of showing a "timeline is planned"
+  toast.
+
 - Effects no longer require a RhinoQ job. A new correlation model gives every
   entry a `SubjectRef` and an `ExecutionRef`, and a RhinoQ job id becomes one
   kind of execution reference rather than a precondition, so a team running

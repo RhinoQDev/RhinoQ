@@ -24,6 +24,91 @@ type Query struct {
 type Reader interface {
 	Snapshot(context.Context, Query) (Snapshot, error)
 	JobDetail(context.Context, string) (JobDetail, error)
+	SubjectDetail(context.Context, SubjectRef) (SubjectDetail, error)
+}
+
+// SubjectRef names the business thing an investigation is about.
+type SubjectRef struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+// ExecutionRef names a run that touched a subject, in whatever system performed
+// it. A RhinoQ job appears here as source system "rhinoq".
+type ExecutionRef struct {
+	SourceSystem string    `json:"sourceSystem"`
+	SourceID     string    `json:"sourceId"`
+	JobID        string    `json:"jobId,omitempty"`
+	FirstSeen    time.Time `json:"firstSeen"`
+	LastSeen     time.Time `json:"lastSeen"`
+	Effects      int       `json:"effects"`
+}
+
+// SubjectSummary is the answer an investigator wants before reading anything
+// else: is this subject in drift right now, and since when.
+type SubjectSummary struct {
+	// State is "clean", "drift" or "unknown". Unknown is its own state because
+	// folding it into clean is how an unreachable provider hides real drift.
+	State string `json:"state"`
+	// Headline says the same thing in one sentence.
+	Headline       string `json:"headline"`
+	OpenFindings   int    `json:"openFindings"`
+	Findings       int    `json:"findings"`
+	PendingEffects int    `json:"pendingEffects"`
+	// UncertainEffects are effects whose execution died before confirming.
+	UncertainEffects int       `json:"uncertainEffects"`
+	FirstSeen        time.Time `json:"firstSeen,omitempty"`
+	LastSeen         time.Time `json:"lastSeen,omitempty"`
+}
+
+// SubjectEventKind separates what RhinoQ observed from what a person decided,
+// because an investigator reading a timeline needs to tell them apart.
+const (
+	SubjectEventObservation = "observation"
+	SubjectEventDecision    = "decision"
+	SubjectEventEffect      = "effect"
+)
+
+// SubjectEvent is one entry in the subject timeline. Observations, operator
+// decisions and effects are merged into one ordered list, because that is the
+// order the investigator lived through.
+type SubjectEvent struct {
+	Kind       string    `json:"kind"`
+	OccurredAt time.Time `json:"occurredAt"`
+	// Label is the short human phrase: "violation observed", "acknowledged",
+	// "upload-report confirmed".
+	Label string `json:"label"`
+	// RuleID and InvariantVersion are set for observations and decisions, so a
+	// reader can tell which version of the invariant produced them.
+	RuleID           string `json:"ruleId,omitempty"`
+	InvariantVersion int    `json:"invariantVersion,omitempty"`
+	FromStatus       string `json:"fromStatus,omitempty"`
+	ToStatus         string `json:"toStatus,omitempty"`
+	Actor            string `json:"actor,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	Evidence         string `json:"evidence,omitempty"`
+	// Execution is set for effects, naming who performed the run.
+	Execution string `json:"execution,omitempty"`
+}
+
+// SubjectDetail is the investigation view for one business subject.
+//
+// It exists because the Workbench had the right tables and no way to connect
+// them: jobs, findings, rules and evidence sat next to each other, and an
+// operator asking "what happened to report_3912" had to join them by eye. This
+// is the page where the layers meet from the user's side rather than the
+// engine's.
+type SubjectDetail struct {
+	Subject SubjectRef     `json:"subject"`
+	Summary SubjectSummary `json:"summary"`
+	// Findings are the persistent drift records for this subject, newest first.
+	Findings []Finding `json:"findings"`
+	// History merges observations, operator decisions and effects in time order.
+	History []SubjectEvent `json:"history"`
+	Effects []Effect       `json:"effects"`
+	// Executions lists every run that touched this subject, RhinoQ or not.
+	Executions []ExecutionRef `json:"executions"`
+	Notices    []string       `json:"notices,omitempty"`
 }
 
 type Source struct {
@@ -121,8 +206,14 @@ type Attempt struct {
 }
 
 type Effect struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// SourceSystem and SourceID name the execution that opened this effect.
+	// JobID is set only when RhinoQ ran it, which is also the only case where
+	// LeaseEpoch means anything.
+	SourceSystem   string    `json:"sourceSystem,omitempty"`
+	SourceID       string    `json:"sourceId,omitempty"`
+	JobID          string    `json:"jobId,omitempty"`
 	IdempotencyKey string    `json:"idempotencyKey"`
 	State          string    `json:"state"`
 	Irreversible   bool      `json:"irreversible"`

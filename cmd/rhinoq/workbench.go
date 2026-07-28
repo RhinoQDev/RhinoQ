@@ -411,3 +411,118 @@ func truthy(value string) bool {
 		return false
 	}
 }
+
+// SubjectDetail assembles the investigation view for one business subject.
+//
+// It reads from the integrity plane rather than from jobs, because the subject
+// may never have had a RhinoQ job: the whole point is to answer "what happened
+// to report_3912" for a team whose worker RhinoQ never ran.
+func (r *liveWorkbenchReader) SubjectDetail(
+	ctx context.Context,
+	subject workbench.SubjectRef,
+) (workbench.SubjectDetail, error) {
+	findings, err := r.client.ListFindings(ctx, rhinoq.FindingQuery{
+		SubjectType: subject.Type, SubjectID: subject.ID,
+		IncludeSuppressed: true, Limit: 100,
+	})
+	if err != nil {
+		return workbench.SubjectDetail{}, err
+	}
+	effects, err := r.client.SubjectEffects(ctx, rhinoq.SubjectRef{
+		Type: subject.Type, ID: subject.ID,
+	}, 0, 200)
+	if err != nil {
+		return workbench.SubjectDetail{}, err
+	}
+	if len(findings) == 0 && len(effects) == 0 {
+		return workbench.SubjectDetail{}, workbench.ErrNotFound
+	}
+
+	detail := workbench.SubjectDetail{Subject: subject}
+	for _, item := range findings {
+		detail.Findings = append(detail.Findings, workbench.Finding{
+			RuleID: item.RuleID, SubjectType: item.SubjectType,
+			SubjectID: item.SubjectID, InvariantVersion: item.InvariantVersion,
+			Status: item.Status, FirstSeen: item.FirstSeen, LastSeen: item.LastSeen,
+			OccurrenceCount: item.OccurrenceCount, LatestEvidence: item.LatestEvidence,
+		})
+		history, err := r.client.FindingHistory(ctx, item.FindingKey, 0, 200)
+		if err != nil {
+			return workbench.SubjectDetail{}, err
+		}
+		for _, event := range history {
+			detail.History = append(detail.History, subjectEventFromFinding(event))
+		}
+	}
+	for _, item := range effects {
+		detail.Effects = append(detail.Effects, workbench.Effect{
+			ID: item.ID, Name: item.Name,
+			SourceSystem: item.SourceSystem, SourceID: item.SourceID,
+			JobID: item.JobID, IdempotencyKey: item.IdempotencyKey,
+			State: item.State, Irreversible: item.Irreversible,
+			ExternalRef: item.ExternalRef, CreatedAt: item.CreatedAt,
+			LeaseEpoch: item.LeaseEpoch,
+		})
+		detail.History = append(detail.History, workbench.SubjectEvent{
+			Kind: workbench.SubjectEventEffect, OccurredAt: item.CreatedAt,
+			Label:     item.Name + " " + item.State,
+			Execution: item.SourceSystem + ":" + item.SourceID,
+		})
+	}
+	detail.Executions = executionsFromWorkbenchEffects(detail.Effects)
+	detail.Notices = []string{
+		"Payloads are excluded from every Workbench response by design.",
+		"Business repair is not implemented: this page reports what happened, it cannot fix it.",
+	}
+	return detail, nil
+}
+
+// subjectEventFromFinding classifies one finding event as something RhinoQ
+// observed or something a person decided. An investigator needs that
+// distinction more than any other on this page.
+func subjectEventFromFinding(event rhinoq.FindingEvent) workbench.SubjectEvent {
+	kind := workbench.SubjectEventDecision
+	if event.Actor == "" {
+		kind = workbench.SubjectEventObservation
+	}
+	label := event.Kind
+	if label == "" {
+		label = event.ToStatus
+	}
+	return workbench.SubjectEvent{
+		Kind: kind, OccurredAt: event.OccurredAt, Label: label,
+		RuleID: event.RuleID, InvariantVersion: event.InvariantVersion,
+		FromStatus: event.FromStatus, ToStatus: event.ToStatus,
+		Actor: event.Actor, Reason: event.Reason, Evidence: event.Evidence,
+	}
+}
+
+func executionsFromWorkbenchEffects(effects []workbench.Effect) []workbench.ExecutionRef {
+	order := make([]string, 0, len(effects))
+	byKey := make(map[string]*workbench.ExecutionRef, len(effects))
+	for _, item := range effects {
+		key := item.SourceSystem + "\x00" + item.SourceID
+		existing, found := byKey[key]
+		if !found {
+			byKey[key] = &workbench.ExecutionRef{
+				SourceSystem: item.SourceSystem, SourceID: item.SourceID,
+				JobID:     item.JobID,
+				FirstSeen: item.CreatedAt, LastSeen: item.CreatedAt, Effects: 1,
+			}
+			order = append(order, key)
+			continue
+		}
+		existing.Effects++
+		if item.CreatedAt.Before(existing.FirstSeen) {
+			existing.FirstSeen = item.CreatedAt
+		}
+		if item.CreatedAt.After(existing.LastSeen) {
+			existing.LastSeen = item.CreatedAt
+		}
+	}
+	result := make([]workbench.ExecutionRef, 0, len(order))
+	for _, key := range order {
+		result = append(result, *byKey[key])
+	}
+	return result
+}

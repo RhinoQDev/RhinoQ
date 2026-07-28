@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,6 +59,8 @@ func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case r.URL.Path == "/api/v1/snapshot":
 		s.snapshot(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/subjects/"):
+		s.subjectDetail(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/jobs/"):
 		s.jobDetail(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/"):
@@ -241,4 +244,105 @@ func normalizeDetail(detail *JobDetail) {
 	if detail.Audit == nil {
 		detail.Audit = []Audit{}
 	}
+}
+
+// subjectDetail serves the investigation view for one business subject.
+//
+// The path carries type and id separately because a subject id may contain
+// almost anything an application uses as a primary key, and packing both into
+// one segment would make "report/3912" ambiguous with a type called "report"
+// and an id "3912".
+func (s *server) subjectDetail(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/subjects/")
+	subjectType, rawID, found := strings.Cut(rest, "/")
+	if !found {
+		writeError(w, http.StatusBadRequest, "invalid_subject",
+			"A subject type and id are required: /api/v1/subjects/{type}/{id}")
+		return
+	}
+	subjectType, typeErr := url.PathUnescape(subjectType)
+	id, idErr := url.PathUnescape(rawID)
+	if typeErr != nil || idErr != nil ||
+		strings.TrimSpace(subjectType) == "" || strings.TrimSpace(id) == "" ||
+		strings.Contains(id, "/") {
+		writeError(w, http.StatusBadRequest, "invalid_subject",
+			"A subject type and id are required: /api/v1/subjects/{type}/{id}")
+		return
+	}
+	detail, err := s.reader.SubjectDetail(r.Context(), SubjectRef{
+		Type: strings.TrimSpace(subjectType), ID: strings.TrimSpace(id),
+	})
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeError(w, http.StatusNotFound, "subject_not_found",
+				"RhinoQ has no findings or effects recorded for this subject")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "subject_detail_failed", err.Error())
+		return
+	}
+	normalizeSubject(&detail)
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, detail)
+}
+
+// normalizeSubject fills the derived parts of the view so every Reader does not
+// have to, and so the summary cannot disagree with the lists it summarises.
+func normalizeSubject(detail *SubjectDetail) {
+	if detail.Findings == nil {
+		detail.Findings = []Finding{}
+	}
+	if detail.History == nil {
+		detail.History = []SubjectEvent{}
+	}
+	if detail.Effects == nil {
+		detail.Effects = []Effect{}
+	}
+	if detail.Executions == nil {
+		detail.Executions = []ExecutionRef{}
+	}
+	sort.SliceStable(detail.History, func(i, j int) bool {
+		return detail.History[i].OccurredAt.Before(detail.History[j].OccurredAt)
+	})
+
+	summary := SubjectSummary{Findings: len(detail.Findings)}
+	for _, item := range detail.Findings {
+		switch item.Status {
+		case "open", "acknowledged", "repair_proposed", "repairing", "regressed":
+			summary.OpenFindings++
+		}
+		if summary.FirstSeen.IsZero() || item.FirstSeen.Before(summary.FirstSeen) {
+			summary.FirstSeen = item.FirstSeen
+		}
+		if item.LastSeen.After(summary.LastSeen) {
+			summary.LastSeen = item.LastSeen
+		}
+	}
+	for _, item := range detail.Effects {
+		switch item.State {
+		case "pending":
+			summary.PendingEffects++
+		case "uncertain":
+			summary.UncertainEffects++
+		}
+	}
+
+	// Uncertain outranks drift: an effect whose execution died has an unknown
+	// result, and reporting that as clean or as plain drift would both be
+	// claiming to know more than RhinoQ does.
+	switch {
+	case summary.UncertainEffects > 0:
+		summary.State = "unknown"
+		summary.Headline = "An effect was left in an unknown state by an execution that died."
+	case summary.OpenFindings > 0:
+		summary.State = "drift"
+		summary.Headline = "This subject has drift nobody has resolved yet."
+	case summary.Findings > 0:
+		summary.State = "clean"
+		summary.Headline = "Drift was recorded here before and is resolved now."
+	default:
+		summary.State = "clean"
+		summary.Headline = "RhinoQ has recorded no drift for this subject."
+	}
+	detail.Summary = summary
 }

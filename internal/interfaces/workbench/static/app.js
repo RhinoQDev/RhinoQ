@@ -8,6 +8,7 @@ const app = {
   stateFilter: "",
   stageFilter: "",
   selectedJobId: "",
+  selectedSubject: null,
   selectedIndex: -1,
   visibleRows: [],
   columns: {
@@ -75,7 +76,8 @@ function cacheElements() {
     "truth-request-copy", "truth-effect", "truth-effect-copy", "truth-outcome",
     "truth-outcome-copy", "rail-state", "job-context", "attempt-total",
     "attempt-timeline", "effect-total", "effect-list", "outcome-total", "outcome-list",
-    "audit-section", "audit-total", "audit-list", "rail-notice", "command-trigger",
+    "audit-section", "audit-total", "audit-list", "rail-subject", "rail-notice",
+    "command-trigger",
     "command-palette", "palette-input", "palette-results", "theme-toggle", "theme-icon",
     "mobile-nav-button", "sidebar", "mobile-scrim", "toast",
   ].forEach((id) => {
@@ -438,7 +440,7 @@ function tableRowForView(view, row, index) {
     </tr>`;
   }
   if (view === "findings") {
-    return `<tr data-row-index="${index}">
+    return `<tr data-row-index="${index}" data-subject-type="${escapeAttribute(row.subjectType)}" data-subject-id="${escapeAttribute(row.subjectId)}" class="${isSelectedSubject(row) ? "is-selected" : ""}">
       <td><span class="cell-primary"><span class="state-mark" data-state="${escapeAttribute(row.status)}"></span>${stateBadge(row.status)}</span></td>
       <td><div class="cell-stack"><strong>${escapeHTML(row.ruleId)}</strong><small>contract v${row.invariantVersion}</small></div></td>
       <td><div class="cell-stack"><strong>${escapeHTML(row.subjectId)}</strong><small>${escapeHTML(row.subjectType)}</small></div></td>
@@ -537,8 +539,8 @@ function onTableClick(event) {
   const jobID = app.view === "jobs" ? row?.id : app.view === "attention" ? row?.jobId : "";
   if (jobID) {
     selectJob(jobID);
-  } else if (app.view === "findings") {
-    showToast("Finding selected. A subject timeline is planned; no write action is hidden here.");
+  } else if (app.view === "findings" && row?.subjectType && row?.subjectId) {
+    selectSubject({ type: row.subjectType, id: row.subjectId });
   } else if (app.view === "rules") {
     showToast("Rule details remain read-only in Workbench v0.");
   }
@@ -547,6 +549,8 @@ function onTableClick(event) {
 async function selectJob(id, options = {}) {
   if (!id) return;
   app.selectedJobId = id;
+  app.selectedSubject = null;
+  setRailMode("job");
   elements["rail-empty"].hidden = true;
   elements["rail-content"].hidden = false;
   elements["evidence-rail"].classList.add("is-open");
@@ -999,4 +1003,133 @@ function escapeHTML(value) {
 
 function escapeAttribute(value) {
   return escapeHTML(value).replaceAll("`", "&#096;");
+}
+
+/*
+ * Subject investigation.
+ *
+ * The Workbench had every table it needed and no way to connect them: an
+ * operator asking "what happened to report_3912" had to join findings, effects
+ * and executions by eye. This view is where the layers meet from the user's
+ * side rather than the engine's, so it is deliberately one narrative in time
+ * order rather than another set of panels.
+ */
+
+function isSelectedSubject(row) {
+  return (
+    app.selectedSubject &&
+    app.selectedSubject.type === row.subjectType &&
+    app.selectedSubject.id === row.subjectId
+  );
+}
+
+async function selectSubject(subject) {
+  if (!subject?.type || !subject?.id) return;
+  app.selectedSubject = subject;
+  app.selectedJobId = null;
+  elements["rail-empty"].hidden = true;
+  elements["rail-content"].hidden = false;
+  elements["evidence-rail"].classList.add("is-open");
+  if (window.innerWidth <= 1120) {
+    elements["mobile-scrim"].hidden = false;
+  }
+  setRailMode("subject");
+  elements["rail-queue"].textContent = subject.type.toLocaleUpperCase();
+  elements["rail-title"].textContent = "Loading subject…";
+  elements["rail-id"].textContent = subject.id;
+  renderCurrentView();
+
+  try {
+    const detail = await fetchJSON(
+      `/api/v1/subjects/${encodeURIComponent(subject.type)}/${encodeURIComponent(subject.id)}`,
+    );
+    renderSubjectDetail(detail);
+  } catch (error) {
+    elements["rail-title"].textContent = "Could not read this subject";
+    elements["rail-notice"].textContent = error.message;
+  }
+}
+
+function renderSubjectDetail(detail) {
+  const summary = detail.summary || {};
+  elements["rail-queue"].textContent = detail.subject.type.toLocaleUpperCase();
+  elements["rail-title"].textContent = detail.subject.id;
+  elements["rail-id"].textContent = `${detail.subject.type}/${detail.subject.id}`;
+  elements["rail-state"].className = "state-badge";
+  elements["rail-state"].dataset.state = summary.state === "drift" ? "open" : summary.state;
+  elements["rail-state"].textContent = humanize(summary.state || "clean");
+
+  elements["job-context"].innerHTML = [
+    ["Verdict", summary.headline || "—"],
+    ["Open findings", String(summary.openFindings ?? 0)],
+    ["Findings recorded", String(summary.findings ?? 0)],
+    ["Effects pending", String(summary.pendingEffects ?? 0)],
+    ["Effects uncertain", String(summary.uncertainEffects ?? 0)],
+    ["First seen", summary.firstSeen ? formatDate(summary.firstSeen) : "—"],
+    ["Last seen", summary.lastSeen ? formatDate(summary.lastSeen) : "—"],
+  ]
+    .map(
+      ([term, value]) =>
+        `<div><dt>${escapeHTML(term)}</dt><dd>${escapeHTML(value)}</dd></div>`,
+    )
+    .join("");
+
+  const executions = (detail.executions || [])
+    .map(
+      (item) => `<article class="evidence-card">
+        <div class="evidence-card-head">
+          <strong>${escapeHTML(item.sourceSystem)}</strong>
+          ${stateBadge(item.sourceSystem === "rhinoq" ? "leased" : "external")}
+        </div>
+        <dl>
+          <div><dt>Run</dt><dd class="mono">${escapeHTML(item.sourceId)}</dd></div>
+          <div><dt>Effects</dt><dd>${item.effects}</dd></div>
+          <div><dt>Last touched</dt><dd>${escapeHTML(formatDate(item.lastSeen))}</dd></div>
+        </dl>
+      </article>`,
+    )
+    .join("");
+
+  const history = (detail.history || [])
+    .map((event) => {
+      const detailLine =
+        event.kind === "effect"
+          ? `<small class="mono">${escapeHTML(event.execution || "")}</small>`
+          : `<small>${escapeHTML(
+              [event.ruleId, event.actor, event.reason].filter(Boolean).join(" · ") ||
+                event.toStatus ||
+                "",
+            )}</small>`;
+      return `<li class="timeline-entry" data-kind="${escapeAttribute(event.kind)}">
+        <span class="timeline-time" title="${escapeAttribute(formatDate(event.occurredAt))}">${relativeTime(event.occurredAt)}</span>
+        <div class="cell-stack">
+          <strong>${escapeHTML(humanize(event.label || event.kind))}</strong>
+          ${detailLine}
+        </div>
+      </li>`;
+    })
+    .join("");
+
+  elements["rail-subject"].innerHTML = `
+    <section class="rail-section">
+      <h3>What ran</h3>
+      ${executions || `<p class="muted">No execution has recorded an effect for this subject.</p>`}
+    </section>
+    <section class="rail-section">
+      <h3>What happened, in order</h3>
+      ${history ? `<ol class="timeline">${history}</ol>` : `<p class="muted">No observations or decisions recorded.</p>`}
+    </section>`;
+
+  elements["rail-notice"].textContent = (detail.notices || []).join(" ");
+}
+
+/*
+ * The rail answers one question at a time. A job view and a subject view show
+ * different evidence, and leaving the other one's panels on screen would invite
+ * an operator to read a job's outcome as if it belonged to the subject.
+ */
+function setRailMode(mode) {
+  document.querySelectorAll("[data-rail-mode]").forEach((node) => {
+    node.hidden = node.dataset.railMode !== mode;
+  });
 }

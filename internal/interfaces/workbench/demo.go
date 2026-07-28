@@ -285,3 +285,115 @@ func attemptKind(state string) string {
 		return "claimed"
 	}
 }
+
+// SubjectDetail shows the investigation view the demo dataset can support. It
+// deliberately includes an execution RhinoQ did not run, because that is the
+// case the page exists to make legible.
+func (d *demoReader) SubjectDetail(_ context.Context, subject SubjectRef) (SubjectDetail, error) {
+	now := d.now()
+	findings := make([]Finding, 0, 2)
+	for _, item := range demoFindings(now) {
+		if item.SubjectType == subject.Type && item.SubjectID == subject.ID {
+			findings = append(findings, item)
+		}
+	}
+	effects := demoSubjectEffects(now, subject)
+	if len(findings) == 0 && len(effects) == 0 {
+		return SubjectDetail{}, ErrNotFound
+	}
+
+	detail := SubjectDetail{
+		Subject: subject, Findings: findings, Effects: effects,
+		Executions: executionsFromEffects(effects),
+		Notices: []string{
+			"Demo mode uses local sample data and never connects to PostgreSQL.",
+			"Payloads are excluded from every Workbench response by design.",
+		},
+	}
+	for _, item := range findings {
+		detail.History = append(detail.History, SubjectEvent{
+			Kind: SubjectEventObservation, OccurredAt: item.FirstSeen,
+			Label: "violation observed", RuleID: item.RuleID,
+			InvariantVersion: item.InvariantVersion, ToStatus: "open",
+			Evidence: item.LatestEvidence,
+		})
+		if item.Status == "regressed" {
+			detail.History = append(detail.History, SubjectEvent{
+				Kind: SubjectEventDecision, OccurredAt: item.FirstSeen.Add(time.Hour),
+				Label: "resolved by operator", RuleID: item.RuleID,
+				InvariantVersion: item.InvariantVersion,
+				FromStatus:       "open", ToStatus: "resolved",
+				Actor: "ops@example.com", Reason: "re-ran the export",
+			})
+			detail.History = append(detail.History, SubjectEvent{
+				Kind: SubjectEventObservation, OccurredAt: item.LastSeen,
+				Label: "regressed", RuleID: item.RuleID,
+				InvariantVersion: item.InvariantVersion,
+				FromStatus:       "resolved", ToStatus: "regressed",
+				Evidence: item.LatestEvidence,
+			})
+		}
+	}
+	for _, item := range effects {
+		detail.History = append(detail.History, SubjectEvent{
+			Kind: SubjectEventEffect, OccurredAt: item.CreatedAt,
+			Label:     item.Name + " " + item.State,
+			Execution: item.SourceSystem + ":" + item.SourceID,
+		})
+	}
+	return detail, nil
+}
+
+func demoSubjectEffects(now time.Time, subject SubjectRef) []Effect {
+	if subject.Type != "report" || subject.ID != "report_3Q1N" {
+		return nil
+	}
+	return []Effect{
+		{
+			ID: "eff_01J0DEMOEXPORT", Name: "export-report",
+			SourceSystem: "bullmq", SourceID: "bull_8291",
+			IdempotencyKey: "report_3Q1N:export", State: "confirmed",
+			ExternalRef: "exports/report_3Q1N.csv", CreatedAt: now.Add(-3 * time.Hour),
+		},
+		{
+			ID: "eff_01J0DEMOUPLOAD", Name: "upload-report",
+			SourceSystem: "rhinoq", SourceID: "job_01J0REPORT7D9A",
+			JobID:          "job_01J0REPORT7D9A",
+			IdempotencyKey: "report_3Q1N:pdf", State: "pending",
+			CreatedAt: now.Add(-19 * time.Minute), LeaseEpoch: 2,
+		},
+	}
+}
+
+// executionsFromEffects folds the ledger into the distinct runs that touched a
+// subject, which is what an investigator actually asks for: not "which effects
+// exist" but "who did something to this".
+func executionsFromEffects(effects []Effect) []ExecutionRef {
+	order := make([]string, 0, len(effects))
+	byKey := make(map[string]*ExecutionRef, len(effects))
+	for _, item := range effects {
+		key := item.SourceSystem + "\x00" + item.SourceID
+		existing, found := byKey[key]
+		if !found {
+			byKey[key] = &ExecutionRef{
+				SourceSystem: item.SourceSystem, SourceID: item.SourceID,
+				JobID:     item.JobID,
+				FirstSeen: item.CreatedAt, LastSeen: item.CreatedAt, Effects: 1,
+			}
+			order = append(order, key)
+			continue
+		}
+		existing.Effects++
+		if item.CreatedAt.Before(existing.FirstSeen) {
+			existing.FirstSeen = item.CreatedAt
+		}
+		if item.CreatedAt.After(existing.LastSeen) {
+			existing.LastSeen = item.CreatedAt
+		}
+	}
+	result := make([]ExecutionRef, 0, len(order))
+	for _, key := range order {
+		result = append(result, *byKey[key])
+	}
+	return result
+}

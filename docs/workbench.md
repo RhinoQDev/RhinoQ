@@ -151,12 +151,33 @@ Implemented now:
 - per-job attempts, effects, outcomes and replay audit;
 - responsive table and Evidence Rail;
 - keyboard, theme, density and column preferences;
-- security headers and payload-free read models.
+- security headers and payload-free read models;
+- a business-subject investigation view.
+
+## Subject investigation
+
+Selecting a Finding opens the subject it is about, not the job that produced it.
+The view answers one question — *what happened to `report_3912`* — by merging
+into a single time-ordered narrative:
+
+- a verdict: clean, drift, or unknown;
+- every execution that touched the subject, whether RhinoQ ran it or BullMQ,
+  Temporal, cron or an application did;
+- Effect Ledger entries with their confirmation state;
+- observations RhinoQ made and decisions people took, told apart by whether an
+  actor is recorded.
+
+`GET /api/v1/subjects/{type}/{id}` serves it. Type and id are separate path
+segments because a subject id may itself contain a slash.
+
+Unknown is its own verdict rather than a shade of clean: an effect whose
+execution died has an unknown result, and reporting that as clean would claim
+more than RhinoQ knows.
 
 Not implemented:
 
-- business-key timeline across multiple jobs and external execution systems;
 - write actions in the browser;
+- business repair — the page reports what happened; it cannot fix it;
 - tenant-aware remote hosting or authentication;
 - streaming updates and large-history virtualization;
 - packaged CLI distribution.

@@ -149,3 +149,125 @@ func localRequest(method, target string) *http.Request {
 	request.Host = "127.0.0.1:8787"
 	return request
 }
+
+func TestSubjectDetailServesTheInvestigationView(t *testing.T) {
+	handler, err := NewHandler(NewDemoReader(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/subjects/report/report_3Q1N", nil)
+	request.Host = "127.0.0.1:7070"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var detail SubjectDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Subject.Type != "report" || detail.Subject.ID != "report_3Q1N" {
+		t.Fatalf("the response must describe the requested subject: %+v", detail.Subject)
+	}
+	if len(detail.Findings) == 0 {
+		t.Fatal("the demo subject has drift recorded against it")
+	}
+
+	// The point of the page: an execution RhinoQ never ran appears next to one
+	// it did, on the same subject.
+	var external, internal bool
+	for _, item := range detail.Executions {
+		if item.SourceSystem == "rhinoq" {
+			internal = true
+		} else {
+			external = true
+		}
+	}
+	if !external || !internal {
+		t.Fatalf("both a RhinoQ and a non-RhinoQ execution must be visible: %+v", detail.Executions)
+	}
+
+	// History must be one ordered narrative, not several lists side by side.
+	for index := 1; index < len(detail.History); index++ {
+		if detail.History[index].OccurredAt.Before(detail.History[index-1].OccurredAt) {
+			t.Fatalf("subject history must be in time order, entry %d goes backwards", index)
+		}
+	}
+	var sawObservation, sawEffect bool
+	for _, event := range detail.History {
+		switch event.Kind {
+		case SubjectEventObservation:
+			sawObservation = true
+		case SubjectEventEffect:
+			sawEffect = true
+		}
+	}
+	if !sawObservation || !sawEffect {
+		t.Fatal("the timeline must merge what RhinoQ observed with what executions did")
+	}
+}
+
+// The summary must never disagree with the lists it summarises, because an
+// operator reads the headline and acts on it.
+func TestSubjectSummaryReportsUncertainAheadOfDrift(t *testing.T) {
+	handler, err := NewHandler(NewDemoReader(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/subjects/report/report_3Q1N", nil)
+	request.Host = "127.0.0.1:7070"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	var detail SubjectDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	open := 0
+	for _, item := range detail.Findings {
+		switch item.Status {
+		case "open", "acknowledged", "repair_proposed", "repairing", "regressed":
+			open++
+		}
+	}
+	if detail.Summary.OpenFindings != open {
+		t.Fatalf("summary claims %d open findings, list has %d",
+			detail.Summary.OpenFindings, open)
+	}
+	if detail.Summary.State == "" || detail.Summary.Headline == "" {
+		t.Fatalf("the summary must state a verdict: %+v", detail.Summary)
+	}
+}
+
+func TestSubjectDetailRejectsAnIncompleteReference(t *testing.T) {
+	handler, err := NewHandler(NewDemoReader(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"/api/v1/subjects/report",
+		"/api/v1/subjects/report/",
+		"/api/v1/subjects//report_3Q1N",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Host = "127.0.0.1:7070"
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("%s must be refused, got %d", path, recorder.Code)
+		}
+	}
+}
+
+func TestUnknownSubjectIsNotFound(t *testing.T) {
+	handler, err := NewHandler(NewDemoReader(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/subjects/report/nothing_here", nil)
+	request.Host = "127.0.0.1:7070"
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", recorder.Code)
+	}
+}
