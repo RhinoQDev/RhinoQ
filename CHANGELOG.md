@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Made the Node SDK release path publish-ready without publishing a package.
+  The first intended evaluation version is `@rhinoq/node@0.1.0-beta.1` under
+  npm's `next` tag. Tag releases now test, pack, verify tag/package version and
+  publish with npm provenance through GitHub OIDC after the owner configures
+  trusted publishing. `docs/releasing.md` records the account actions that
+  cannot safely be automated from this repository.
+
 - Refined the embedded, read-only Workbench into the **Obsidian Ledger** visual
   system: a calmer dark operational surface with a mineral palette, evidence
   path motif and clearer type hierarchy. This is a presentation-only change;

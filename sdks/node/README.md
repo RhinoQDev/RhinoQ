@@ -8,8 +8,9 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview and is not published to npm yet.
-The preview targets ESM on Node.js 22+.
+This package is a development preview. The first public npm release is planned
+as `@rhinoq/node@0.1.0-beta.1` on the `next` dist-tag; do not use it as a
+production stability promise. The preview targets ESM on Node.js 22+.
 
 ## Build and install the preview
 
@@ -31,7 +32,15 @@ application:
 npm install /absolute/path/to/rhinoq-node-0.1.0-dev.tgz pg
 ```
 
-Do not use `npm install @rhinoq/node` until a tagged npm release exists.
+Until the first npm release exists, install the generated archive. Once it is
+published, pin the explicit prerelease rather than using `latest`:
+
+```bash
+npm install @rhinoq/node@0.1.0-beta.1 pg
+```
+
+Check the [release guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/releasing.md)
+for the authoritative publication state and the trusted-publishing setup.
 
 ## Choose one integration path
 

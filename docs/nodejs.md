@@ -2,7 +2,8 @@
 
 > Status: development preview. The SDK is tested in this repository but is not
 > published to npm yet. Do not put `npm install @rhinoq/node` in production
-> automation until a tagged package release exists.
+> automation until a tagged package release exists. The first intended package
+> is `0.1.0-beta.1` on npm's `next` tag; see [releasing.md](./releasing.md).
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
 with two separate integration paths. Choose the smaller path that solves the

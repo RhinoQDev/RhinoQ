@@ -67,6 +67,25 @@ Verified Tasks (optional): Effect Ledger, outcome observation, Rules, Findings
 state are deliberately separate. A worker returning successfully is not proof
 that an external provider completed work or that a business invariant holds.
 
+## Why inspect RhinoQ instead of another dashboard
+
+- **A browser-safe Task revision:** every Task and child Execution mutation
+  advances one aggregate version, so a stale browser/worker update fails closed
+  rather than silently replacing newer state.
+- **Three explicit truths:** request acceptance, external-effect confirmation
+  and business outcome are separate states. The Evidence Rail makes that
+  distinction inspectable instead of showing one misleading green “done”.
+- **Existing BullMQ stays owned by the application:** the narrow bridge observes
+  explicitly tracked jobs without importing BullMQ into RhinoQ, taking over
+  Redis, or copying worker correctness into the SDK.
+- **Verification is optional:** ordinary Task progress does not require Rules;
+  high-risk work can add independent evidence and Findings when technical
+  completion is insufficient.
+
+These are implementation facts, not throughput, code-reduction or production
+claims. Their current limits are documented below and in
+[Product strengths](./docs/product-strengths.md).
+
 ## What exists today
 
 | Capability | Status |
@@ -187,6 +206,7 @@ and browser/reconnect tests before realtime transport is added.
 | [Native runtime](./docs/getting-started.md#native-runtime-is-a-separate-optional-path) | PostgreSQL queue/worker path |
 | [Workbench](./docs/workbench.md) | local, read-only Evidence Ledger for operational investigation |
 | [Node.js integration](./docs/nodejs.md) | source-only Node preview |
+| [Releasing](./docs/releasing.md) | npm trusted publishing and first prerelease checklist |
 | [Architecture](./ARCHITECTURE.md) | module, dependency and runtime boundaries |
 | [Roadmap](./docs/roadmap.md) | next implementation and release gates |
 

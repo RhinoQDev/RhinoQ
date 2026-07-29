@@ -1,7 +1,7 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-dev",
-  "description": "Node.js producer, worker and operator client for RhinoQ",
+  "version": "0.1.0-beta.1",
+  "description": "Typed Node.js Task, BullMQ lifecycle and worker client for RhinoQ",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -27,6 +27,10 @@
     "LICENSE"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -35,7 +39,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm run build",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "release:check": "node scripts/verify-release.mjs"
   },
   "devDependencies": {
     "pg": "^8.22.0",
