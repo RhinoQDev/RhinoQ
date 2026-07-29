@@ -97,7 +97,7 @@ claims. Their current limits are documented below and in
 | Result-reference read/write API | implemented; payload proxy/download is not |
 | Native Go/PostgreSQL job runtime | implemented and tested |
 | Effect Ledger, Rules, Findings and read-only investigation | implemented as optional Verified Tasks foundation |
-| BullMQ lifecycle bridge V1 | implemented and Node SDK-tested; observes tracked existing jobs only |
+| BullMQ lifecycle bridge V1 | implemented and Node SDK-tested; observes/reconciles tracked known jobs only |
 | pg-boss/custom runtime adapter | **not implemented** |
 | React hook, Task Center, SSE/WebSocket/streams | **not implemented** |
 | Tenant-scoped user authorization | **not implemented** |
@@ -110,7 +110,9 @@ does **not** enqueue jobs, own Redis connections, change a worker handler,
 cancel a job, create a new Execution for a BullMQ retry, or discover every job
 after an outage. The application calls `track()` when it adds the job; the
 durable runtime/external-ID lookup makes repeating that call safe after a
-bridge restart. This is a narrow lifecycle bridge, not drop-in BullMQ support.
+bridge restart. It can also reconcile one already-known Job state read by the
+application after an offline gap. This is a narrow lifecycle bridge, not
+drop-in BullMQ support.
 
 ## First Task contract
 

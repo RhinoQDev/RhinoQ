@@ -117,6 +117,44 @@ test('BullMQ Task bridge projects an existing job without owning the queue', asy
   assert.equal(events.listeners.size, 0);
 });
 
+test('BullMQ Task bridge reconciles one known completed job after an offline gap', async () => {
+  const events = new FakeQueueEvents();
+  const client = new FakeTaskClient();
+  const bridge = new BullMQTaskBridge({ client, events });
+
+  await bridge.track({
+    task: { id: 'task_bull_reconcile', type: 'report.export', definitionVersion: 1 },
+    executionId: 'exec_bull_reconcile',
+    jobId: 'bull_job_reconcile',
+  });
+  await bridge.reconcile({
+    jobId: 'bull_job_reconcile',
+    state: 'completed',
+  });
+
+  assert.equal((await client.getTask('task_bull_reconcile')).state, 'succeeded');
+  assert.equal(client.executions.get('exec_bull_reconcile').state, 'succeeded');
+  bridge.close();
+});
+
+test('BullMQ Task bridge leaves an observed failed job running without terminal proof', async () => {
+  const events = new FakeQueueEvents();
+  const client = new FakeTaskClient();
+  const bridge = new BullMQTaskBridge({ client, events });
+
+  await bridge.track({
+    task: { id: 'task_bull_retry', type: 'report.export', definitionVersion: 1 },
+    executionId: 'exec_bull_retry',
+    jobId: 'bull_job_retry',
+  });
+  await bridge.reconcile({ jobId: 'bull_job_retry', state: 'active' });
+  await bridge.reconcile({ jobId: 'bull_job_retry', state: 'failed' });
+
+  assert.equal((await client.getTask('task_bull_retry')).state, 'running');
+  assert.equal(client.executions.get('exec_bull_retry').state, 'running');
+  bridge.close();
+});
+
 test('Gateway client sends UTF-8 JSON safely without argument spreading limits', async () => {
   let request;
   const client = new RhinoQClient({

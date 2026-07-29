@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a fail-closed per-job BullMQ reconciliation path. After a bridge
+  restart, an application can read a **known** BullMQ Job and pass its current
+  state to `BullMQTaskBridge.reconcile()`, which brings the durable Task and
+  Execution forward through the normal version-fenced API. Failed observations
+  require explicit `terminal: true`; the bridge does not scan Redis, discover
+  jobs, dispatch, cancel or invent retry attempts.
+
 - Made the Node SDK release path publish-ready without publishing a package.
   The first intended evaluation version is `@rhinoq/node@0.1.0-beta.1` under
   npm's `next` tag. Tag releases now test, pack, verify tag/package version and

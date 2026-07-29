@@ -285,7 +285,8 @@
   Execution binding only (rejected: does not test event projection).
 - **Consequences:** V1 has no auto-dispatch, cancellation, retry-to-new-
   Execution orchestration or outage-wide reconciliation. Repeating `track()`
-  after a bridge restart is safe through `(runtime, external_id)` lookup.
+  after a bridge restart is safe through `(runtime, external_id)` lookup; the
+  application may also reconcile one known Job state it reads from BullMQ.
   Redis may later be an optional delivery invalidation capability, never the
   correctness source for a Task snapshot.
 - **Rollback:** stop instantiating the bridge. Existing Task/Execution records

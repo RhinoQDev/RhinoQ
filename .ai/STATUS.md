@@ -51,9 +51,10 @@ its code, tests, documentation and evidence agree.
   source-system/job/queue correlation and therefore cannot be safely included
   in a queue-filtered view.
 - The BullMQ lifecycle bridge correlates explicitly tracked BullMQ jobs through
-  a durable runtime/external-ID lookup. It does not dispatch, cancel, model a
-  retry as a new Execution, or discover queue work after an outage; pg-boss,
-  DBOS and custom runtime adapters do not exist.
+  a durable runtime/external-ID lookup and can reconcile a state the application
+  reads for one known job after an offline gap. It does not dispatch, cancel,
+  model a retry as a new Execution, or discover queue work after an outage;
+  pg-boss, DBOS and custom runtime adapters do not exist.
 - Public Execution create/bind exists, but composed retry with command identity
   and crash recovery across “new Execution → queued Task” is not implemented;
   `QueueTask` is only a lifecycle primitive.

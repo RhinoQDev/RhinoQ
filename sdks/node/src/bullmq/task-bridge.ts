@@ -32,6 +32,19 @@ export interface BullMQTaskBinding {
   jobId: string;
 }
 
+export type BullMQObservedState = 'waiting' | 'active' | 'completed' | 'failed';
+
+/**
+ * A point-in-time observation read by the application from its BullMQ Job.
+ * It is intentionally not a Queue scan contract: the application decides
+ * which already-known jobs are worth reconciling after its bridge restarts.
+ */
+export interface BullMQTaskObservation extends BullMQEvent {
+  state: BullMQObservedState;
+  /** Required to make an observed failed job terminal in RhinoQ. */
+  terminal?: boolean;
+}
+
 export interface BullMQTaskBridgeOptions {
   client: RhinoQClient;
   events: BullMQQueueEvents;
@@ -126,6 +139,33 @@ export class BullMQTaskBridge {
     return this.ensureTask(snapshot.id, 'queued');
   }
 
+  /**
+   * Projects one job state that the application has just read from BullMQ. Use
+   * this after `track()` on bridge startup to cover a lifecycle event missed
+   * while this process was offline. It neither discovers jobs nor scans Redis.
+   *
+   * A failed observation is fail-closed: it becomes a failed Task only when
+   * `terminal: true` is supplied. BullMQ retries can otherwise make a transient
+   * failed event look terminal when it is not.
+   */
+  async reconcile(observation: BullMQTaskObservation): Promise<void> {
+    switch (observation.state) {
+      case 'waiting':
+        await this.queue(observation.jobId);
+        return;
+      case 'active':
+        await this.start(observation.jobId);
+        return;
+      case 'completed':
+        await this.complete(observation);
+        return;
+      case 'failed':
+        if (observation.terminal) {
+          await this.fail(observation);
+        }
+    }
+  }
+
   close(): void {
     for (const [name, listener] of this.listeners) {
       this.events.off?.(name, listener);
@@ -184,6 +224,10 @@ export class BullMQTaskBridge {
     if (!this.isTerminalFailure || !(await this.isTerminalFailure(event))) {
       return;
     }
+    await this.fail(event);
+  }
+
+  private async fail(event: BullMQEvent): Promise<void> {
     const execution = await this.find(event.jobId);
     if (!execution) {
       return;

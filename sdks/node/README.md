@@ -114,8 +114,20 @@ await bridge.track({
 The bridge projects `waiting`, `active`, `progress`, `completed` and a failure
 that the application explicitly classifies as terminal. It is restart-safe for
 a repeated `track()` call because it looks up the durable runtime/external-ID
-binding. It does not yet auto-dispatch, cancel a BullMQ job, create a RhinoQ
-Execution for a BullMQ retry, or scan/reconcile a whole queue after downtime.
+binding. After an offline gap, read a known job from the application's BullMQ
+Queue and reconcile that one observation:
+
+```ts
+const state = await job.getState();
+if (state === 'waiting' || state === 'active' || state === 'completed') {
+  await bridge.reconcile({ jobId: job.id!, state });
+}
+```
+
+For a terminal failure, pass `terminal: true` only after the application has
+checked BullMQ's retry policy/attempts. The bridge does not auto-dispatch,
+cancel a BullMQ job, create a RhinoQ Execution for a BullMQ retry, or
+discover/scan a whole queue after downtime.
 
 ## Producer-only
 
