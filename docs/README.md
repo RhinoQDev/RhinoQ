@@ -30,6 +30,8 @@
 - [Integrity Rules](./rules.md)
 - [Competitive landscape](./competitive-landscape.md)
 - [Adoption and usability review](./adoption-review.md)
+- [The adoption gap](./adoption-gap.md) — what limits adoption now that the
+  contract no longer does
 - [Roadmap](./roadmap.md)
 - [Architecture decision records](../.ai/DECISIONS.md)
 
