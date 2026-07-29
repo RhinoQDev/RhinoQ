@@ -21,9 +21,10 @@ import {
   type LeaseToken,
   type LeasedJob,
   type TaskCreateRequest,
+  type TaskCancellationStatus,
   type TaskExecutionBinding,
   type TaskExecutionCreateRequest,
-	  type TaskExecution,
+  type TaskExecution,
   type TaskProgress,
   type TaskResult,
   type TaskSnapshot,
@@ -223,6 +224,33 @@ export class RhinoQClient {
       'POST',
       `/v1/tasks/${requiredPath(taskId, 'task id')}/state`,
       { expectedVersion, state },
+    );
+  }
+
+  /** Owner-safe cancellation command; unlike transitionTask it cannot set an arbitrary state. */
+  async requestTaskCancellation(
+    taskId: string,
+    expectedVersion: number,
+  ): Promise<TaskSnapshot> {
+    validateEntityVersion(expectedVersion);
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/cancel`,
+      { expectedVersion },
+    );
+  }
+
+  async resolveTaskCancellation(
+    taskId: string,
+    expectedVersion: number,
+    status: Extract<TaskCancellationStatus, 'acknowledged' | 'cannot_cancel_safely' | 'failed'>,
+    reason?: string,
+  ): Promise<TaskSnapshot> {
+    validateEntityVersion(expectedVersion);
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/cancellation`,
+      { expectedVersion, status, ...(reason ? { reason } : {}) },
     );
   }
 

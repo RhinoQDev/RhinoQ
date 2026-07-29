@@ -5,7 +5,7 @@ existing runtime/Verified Tasks foundation from the incremental Task facade.
 
 | Area | Status | Evidence and remaining work |
 |---|---:|---|
-| TASK | 5/6 | Domains, PostgreSQL contract, public Go facade, aggregate-versioned HTTP polling, a version-safe Node polling watcher, public Execution binding, result-reference API, typed Node client and a narrow BullMQ lifecycle bridge are tested; runtime dispatch, retry/cancel/full reconciliation, result payload/realtime delivery and ProviderOperation remain |
+| TASK | 5/6 | Domains, PostgreSQL contract, owner-visible aggregate-versioned HTTP polling, owner-scoped read/cancel credentials, monotonic progress, cancellation outcome, a version-safe Node polling watcher, public Execution binding, result-reference API, typed Node client and single/fan-out-safe BullMQ lifecycle projection are tested; organization/RBAC authorization, runtime dispatch, composed retry, result payload/realtime delivery and ProviderOperation remain |
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
 | RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
 | VERIFY | 4/5 | fenced Effect Ledger, versioned Rules, Explain gate, bounded evaluation and crash-safe periodic scheduling exist; external execution correlation and signal-first verification remain |

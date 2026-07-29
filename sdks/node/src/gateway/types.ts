@@ -71,6 +71,20 @@ export interface TaskExecutionCreateRequest {
   runtime: string;
 }
 
+export type TaskCancellationStatus =
+  | 'none'
+  | 'requested'
+  | 'acknowledged'
+  | 'cancelled'
+  | 'too_late'
+  | 'cannot_cancel_safely'
+  | 'failed';
+
+export interface TaskCancellation {
+  status: TaskCancellationStatus;
+  reason?: string;
+}
+
 export interface TaskExecutionBinding {
   runtime: string;
   jobId?: string;
@@ -92,7 +106,10 @@ export interface TaskSnapshot {
   entityVersion: number;
   id: string;
   type: string;
+  ownerId?: string;
   state: TaskState;
+  /** Absent only when reading from a pre-beta.2 Gateway. */
+  cancellation?: TaskCancellation;
   progress: TaskProgress;
   hasResult: boolean;
   executions: TaskExecutionSummary[];

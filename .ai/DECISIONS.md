@@ -294,6 +294,32 @@
   removed.
 - **Owner:** engine + Node SDK
 
+## ADR-0019 — Runtime adapters must declare Task terminal projection
+
+- **Status:** accepted
+- **Context:** a real adopter maps one user-facing bulk download Task to N
+  BullMQ jobs. Letting each observed job complete/fail the parent Task makes the
+  first item terminalize the whole batch. Inferring a generic aggregation rule
+  in the Node SDK would move Task correctness out of the Go/application
+  boundary and turn a lifecycle adapter into a workflow engine.
+- **Decision:** lifecycle bridges declare terminal projection explicitly.
+  `single-execution` may project one terminal Execution onto its Task.
+  `execution-only` records each terminal Execution but leaves aggregate Task
+  completion/failure to the application, which owns the business completion
+  condition. Progress monotonicity and cancellation outcomes remain Go domain
+  invariants, independent of runtime.
+- **Alternatives:** one Task per fan-out item (rejected because it pushes
+  aggregation back to every frontend); auto-complete after all currently known
+  Executions (rejected because an early item can finish before all N items are
+  registered); generic workflow policies in V1 (deferred until adopter evidence
+  proves reusable semantics).
+- **Consequences:** fan-out adopters must configure `execution-only` and issue
+  the final Task command when the aggregate deliverable is known. This is
+  explicit additional work, but it cannot report false success.
+- **Rollback:** remove the option and stop using the bridge for fan-out; durable
+  Execution records remain valid.
+- **Owner:** engine + Node SDK
+
 ## Template cho ADR mới
 
 ```text

@@ -54,6 +54,11 @@ type TaskExecutionSummary struct {
 	Version int64  `json:"version"`
 }
 
+type TaskCancellation struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // TaskExecution is the adapter-facing view of one attempt. It intentionally
 // exposes no owner or runtime reference: an adapter already holds the external
 // ID it used for the lookup and only needs the Task relationship plus a version
@@ -94,7 +99,9 @@ type TaskSnapshot struct {
 	EntityVersion int64                  `json:"entityVersion"`
 	ID            string                 `json:"id"`
 	Type          string                 `json:"type"`
+	OwnerID       string                 `json:"ownerId,omitempty"`
 	State         TaskState              `json:"state"`
+	Cancellation  TaskCancellation       `json:"cancellation"`
 	Progress      TaskProgress           `json:"progress"`
 	HasResult     bool                   `json:"hasResult"`
 	Executions    []TaskExecutionSummary `json:"executions"`
@@ -283,6 +290,27 @@ func (c *Client) CancelTask(ctx context.Context, id string, expectedVersion int6
 	return c.transitionTask(ctx, id, expectedVersion, domaintask.Cancelled)
 }
 
+func (c *Client) ResolveTaskCancellation(
+	ctx context.Context,
+	id string,
+	expectedVersion int64,
+	status string,
+	reason string,
+) (TaskSnapshot, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	snapshot, err := service.ResolveCancellation(
+		ctx,
+		domaintask.ID(id),
+		expectedVersion,
+		domaintask.CancellationStatus(status),
+		reason,
+	)
+	return publicTaskSnapshot(snapshot), err
+}
+
 func (c *Client) transitionTask(
 	ctx context.Context,
 	id string,
@@ -320,7 +348,12 @@ func publicTaskSnapshot(snapshot taskcontract.Snapshot) TaskSnapshot {
 		EntityVersion: snapshot.EntityVersion,
 		ID:            snapshot.ID,
 		Type:          snapshot.Type,
+		OwnerID:       snapshot.OwnerID,
 		State:         TaskState(snapshot.State),
+		Cancellation: TaskCancellation{
+			Status: snapshot.Cancellation.Status,
+			Reason: snapshot.Cancellation.Reason,
+		},
 		Progress: TaskProgress{
 			Completed: snapshot.Progress.Completed,
 			Total:     snapshot.Progress.Total,

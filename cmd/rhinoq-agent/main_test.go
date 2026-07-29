@@ -26,3 +26,21 @@ func TestUnauthenticatedAgentMustStayOnLoopback(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskCredentialsParseFromJSONWithoutLoggingSecrets(t *testing.T) {
+	t.Setenv("RHINOQ_TASK_CREDENTIALS_JSON", `[
+		{"ownerId":"tenant-a","token":"owner-a-token-at-least-thirty-two-bytes"}
+	]`)
+	credentials, err := taskCredentialsFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(credentials) != 1 || credentials[0].OwnerID != "tenant-a" ||
+		credentials[0].Token == "" {
+		t.Fatalf("unexpected task credentials: count=%d owner=%q", len(credentials), credentials[0].OwnerID)
+	}
+	t.Setenv("RHINOQ_TASK_CREDENTIALS_JSON", `not-json`)
+	if _, err := taskCredentialsFromEnv(); err == nil {
+		t.Fatal("invalid credential JSON must fail startup")
+	}
+}

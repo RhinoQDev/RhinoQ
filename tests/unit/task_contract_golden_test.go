@@ -26,7 +26,11 @@ func TestPublicTaskContractMatchesGoldenV1(t *testing.T) {
 			EntityVersion: 7,
 			ID:            "task-contract-01",
 			Type:          "report.export",
+			OwnerID:       "tenant-acme",
 			State:         rhinoq.TaskRunning,
+			Cancellation: rhinoq.TaskCancellation{
+				Status: "none",
+			},
 			Progress: rhinoq.TaskProgress{
 				Completed: 4,
 				Total:     &total,

@@ -46,12 +46,17 @@ func newSnapshot(record task.Record, attempts []execution.Record) (taskcontract.
 		EntityVersion: record.Version,
 		ID:            record.ID.String(),
 		Type:          record.Type,
+		OwnerID:       record.OwnerID,
 		State:         record.State.String(),
-		Progress:      progress,
-		HasResult:     record.ResultRef != "",
-		Executions:    executions,
-		CreatedAt:     record.CreatedAt,
-		UpdatedAt:     record.UpdatedAt,
+		Cancellation: taskcontract.Cancellation{
+			Status: string(record.CancellationStatus),
+			Reason: record.CancellationReason,
+		},
+		Progress:   progress,
+		HasResult:  record.ResultRef != "",
+		Executions: executions,
+		CreatedAt:  record.CreatedAt,
+		UpdatedAt:  record.UpdatedAt,
 	}
 	if err := snapshot.Validate(); err != nil {
 		return taskcontract.Snapshot{}, err

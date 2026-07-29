@@ -53,6 +53,15 @@ export interface BullMQTaskObservation extends BullMQEvent {
 export interface BullMQTaskBridgeOptions {
   client: RhinoQClient;
   events: BullMQQueueEvents;
+  /**
+   * Controls whether one BullMQ job may terminate its parent Task.
+   *
+   * Use `single-execution` only when one job represents the whole user-facing
+   * Task. Use `execution-only` for fan-out: the bridge records each Execution,
+   * while the application completes/fails the Task after its aggregate
+   * outcome is known.
+   */
+  terminalProjection?: 'single-execution' | 'execution-only';
   /** Maps BullMQ progress into the portable Task progress contract. */
   progress?: (event: BullMQEvent) => TaskProgress | undefined;
   /**
@@ -75,6 +84,7 @@ export interface BullMQTaskBridgeOptions {
 export class BullMQTaskBridge {
   private readonly client: RhinoQClient;
   private readonly events: BullMQQueueEvents;
+  private readonly terminalProjection: 'single-execution' | 'execution-only';
   private readonly progress: (event: BullMQEvent) => TaskProgress | undefined;
   private readonly isTerminalFailure?: (event: BullMQEvent) => Promise<boolean>;
   private readonly resultReference?: (event: BullMQEvent) => Promise<string | undefined>;
@@ -84,6 +94,7 @@ export class BullMQTaskBridge {
   constructor(options: BullMQTaskBridgeOptions) {
     this.client = options.client;
     this.events = options.events;
+    this.terminalProjection = options.terminalProjection ?? 'single-execution';
     this.progress = options.progress ?? defaultProgress;
     this.isTerminalFailure = options.isTerminalFailure;
     this.resultReference = options.resultReference;
@@ -218,6 +229,9 @@ export class BullMQTaskBridge {
     }
     await this.start(event.jobId);
     await this.ensureExecution(execution.id, 'succeeded');
+    if (this.terminalProjection === 'execution-only') {
+      return;
+    }
     let task = await this.ensureTask(execution.taskId, 'succeeded');
     if (this.resultReference) {
       const reference = await this.resultReference(event);
@@ -246,7 +260,9 @@ export class BullMQTaskBridge {
     }
     await this.start(event.jobId);
     await this.ensureExecution(execution.id, 'failed');
-    await this.ensureTask(execution.taskId, 'failed');
+    if (this.terminalProjection === 'single-execution') {
+      await this.ensureTask(execution.taskId, 'failed');
+    }
   }
 
   private async find(jobId: string) {

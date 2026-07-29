@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -25,6 +26,10 @@ type Config struct {
 	// unless AllowUnauthenticated is set, because an Agent without one lets
 	// anybody enqueue, cancel and replay work.
 	Token string
+	// TaskCredentials are optional end-user polling/cancel credentials. They
+	// cannot access worker/operator routes and are scoped to one Task owner.
+	// The main Token remains an operator/runtime credential.
+	TaskCredentials []TaskCredential
 	// AllowUnauthenticated is an explicit opt-in for local development.
 	AllowUnauthenticated bool
 	// HeartbeatInterval is what the Agent tells SDKs to use for lease renewal.
@@ -37,10 +42,28 @@ type Config struct {
 	Version string
 }
 
+type TaskCredential struct {
+	OwnerID string `json:"ownerId"`
+	Token   string `json:"token"`
+}
+
+type taskCredential struct {
+	ownerID   string
+	tokenHash [sha256.Size]byte
+}
+
+type taskPrincipal struct {
+	ownerID  string
+	operator bool
+}
+
+type taskPrincipalContextKey struct{}
+
 // Server is the HTTP surface of a RhinoQ Agent.
 type Server struct {
 	client            *rhinoq.Client
 	tokenHash         [sha256.Size]byte
+	taskCredentials   []taskCredential
 	open              bool
 	heartbeatInterval time.Duration
 	maxPayloadBytes   int
@@ -65,6 +88,28 @@ func New(config Config) (*Server, error) {
 	if config.Token != "" && len(config.Token) < minTokenBytes {
 		return nil, fmt.Errorf("agent token must be at least %d bytes", minTokenBytes)
 	}
+	operatorHash := sha256.Sum256([]byte(config.Token))
+	credentials := make([]taskCredential, 0, len(config.TaskCredentials))
+	for _, credential := range config.TaskCredentials {
+		ownerID := strings.TrimSpace(credential.OwnerID)
+		if ownerID == "" || len(credential.Token) < minTokenBytes {
+			return nil, fmt.Errorf(
+				"task credential requires a non-empty owner and token of at least %d bytes",
+				minTokenBytes,
+			)
+		}
+		tokenHash := sha256.Sum256([]byte(credential.Token))
+		if config.Token != "" &&
+			subtle.ConstantTimeCompare(tokenHash[:], operatorHash[:]) == 1 {
+			return nil, errors.New("task credential must differ from the operator token")
+		}
+		for _, existing := range credentials {
+			if subtle.ConstantTimeCompare(tokenHash[:], existing.tokenHash[:]) == 1 {
+				return nil, errors.New("one task credential token cannot belong to multiple owners")
+			}
+		}
+		credentials = append(credentials, taskCredential{ownerID: ownerID, tokenHash: tokenHash})
+	}
 	if config.HeartbeatInterval <= 0 {
 		config.HeartbeatInterval = 10 * time.Second
 	}
@@ -78,7 +123,8 @@ func New(config Config) (*Server, error) {
 		config.Version = "0.1.0-dev"
 	}
 	server := &Server{
-		client: config.Client, tokenHash: sha256.Sum256([]byte(config.Token)),
+		client: config.Client, tokenHash: operatorHash,
+		taskCredentials:   credentials,
 		open:              config.AllowUnauthenticated,
 		heartbeatInterval: config.HeartbeatInterval, maxPayloadBytes: config.MaxPayloadBytes,
 		maxRequestBytes: config.MaxRequestBytes, version: config.Version,
@@ -118,10 +164,12 @@ func (s *Server) routes() {
 	// User-facing Task surface. GET is deliberately polling-first; realtime
 	// delivery can be added later without changing the versioned snapshot.
 	mux.HandleFunc("POST /v1/tasks", s.guard(s.handleCreateTask))
-	mux.HandleFunc("GET /v1/tasks/{id}", s.guard(s.handleGetTask))
+	mux.HandleFunc("GET /v1/tasks/{id}", s.taskGuard(s.handleGetTask))
+	mux.HandleFunc("POST /v1/tasks/{id}/cancel", s.taskGuard(s.handleRequestTaskCancellation))
 	mux.HandleFunc("POST /v1/tasks/{id}/state", s.guard(s.handleTransitionTask))
+	mux.HandleFunc("POST /v1/tasks/{id}/cancellation", s.guard(s.handleResolveTaskCancellation))
 	mux.HandleFunc("POST /v1/tasks/{id}/progress", s.guard(s.handleTaskProgress))
-	mux.HandleFunc("GET /v1/tasks/{id}/result", s.guard(s.handleGetTaskResult))
+	mux.HandleFunc("GET /v1/tasks/{id}/result", s.taskGuard(s.handleGetTaskResult))
 	mux.HandleFunc("POST /v1/tasks/{id}/result", s.guard(s.handleAttachTaskResult))
 	mux.HandleFunc("POST /v1/tasks/{id}/executions", s.guard(s.handleCreateTaskExecution))
 	mux.HandleFunc("GET /v1/task-executions/lookup", s.guard(s.handleLookupTaskExecution))
@@ -170,6 +218,20 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func (s *Server) taskGuard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := s.taskPrincipal(r)
+		if !ok {
+			status, body := unauthorized()
+			writeJSON(w, status, errorResponse{Error: body})
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
+		ctx := context.WithValue(r.Context(), taskPrincipalContextKey{}, principal)
+		next(w, r.WithContext(ctx))
+	}
+}
+
 func (s *Server) authorized(r *http.Request) bool {
 	if s.open {
 		return true
@@ -181,6 +243,41 @@ func (s *Server) authorized(r *http.Request) bool {
 	}
 	presentedHash := sha256.Sum256([]byte(presented))
 	return subtle.ConstantTimeCompare(presentedHash[:], s.tokenHash[:]) == 1
+}
+
+func (s *Server) taskPrincipal(r *http.Request) (taskPrincipal, bool) {
+	if s.open {
+		return taskPrincipal{operator: true}, true
+	}
+	presented := bearerToken(r)
+	presentedHash := sha256.Sum256([]byte(presented))
+	if subtle.ConstantTimeCompare(presentedHash[:], s.tokenHash[:]) == 1 {
+		return taskPrincipal{operator: true}, true
+	}
+	for _, credential := range s.taskCredentials {
+		if subtle.ConstantTimeCompare(presentedHash[:], credential.tokenHash[:]) == 1 {
+			return taskPrincipal{ownerID: credential.ownerID}, true
+		}
+	}
+	return taskPrincipal{}, false
+}
+
+func bearerToken(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	presented := strings.TrimPrefix(header, "Bearer ")
+	if presented == header {
+		return ""
+	}
+	return presented
+}
+
+func taskPrincipalFrom(ctx context.Context) taskPrincipal {
+	principal, _ := ctx.Value(taskPrincipalContextKey{}).(taskPrincipal)
+	return principal
+}
+
+func taskVisibleTo(principal taskPrincipal, ownerID string) bool {
+	return principal.operator || (principal.ownerID != "" && principal.ownerID == ownerID)
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
@@ -248,16 +345,63 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
+		s.fail(w, rhinoq.ErrTaskNotFound)
+		return
+	}
 	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) handleGetTaskResult(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := s.client.GetTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
+		s.fail(w, rhinoq.ErrTaskNotFound)
+		return
+	}
 	result, err := s.client.GetTaskResult(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+type requestTaskCancellationRequest struct {
+	ExpectedVersion int64 `json:"expectedVersion"`
+}
+
+func (s *Server) handleRequestTaskCancellation(w http.ResponseWriter, r *http.Request) {
+	var request requestTaskCancellationRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.GetTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
+		s.fail(w, rhinoq.ErrTaskNotFound)
+		return
+	}
+	if snapshot.State == rhinoq.TaskCancelRequested {
+		writeJSON(w, http.StatusOK, snapshot)
+		return
+	}
+	snapshot, err = s.client.RequestTaskCancellation(
+		r.Context(),
+		snapshot.ID,
+		request.ExpectedVersion,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 type attachTaskResultRequest struct {
@@ -398,6 +542,31 @@ func (s *Server) handleTransitionTask(w http.ResponseWriter, r *http.Request) {
 type taskProgressRequest struct {
 	ExpectedVersion int64               `json:"expectedVersion"`
 	Progress        rhinoq.TaskProgress `json:"progress"`
+}
+
+type resolveTaskCancellationRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Status          string `json:"status"`
+	Reason          string `json:"reason,omitempty"`
+}
+
+func (s *Server) handleResolveTaskCancellation(w http.ResponseWriter, r *http.Request) {
+	var request resolveTaskCancellationRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.ResolveTaskCancellation(
+		r.Context(),
+		r.PathValue("id"),
+		request.ExpectedVersion,
+		request.Status,
+		request.Reason,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) handleTaskProgress(w http.ResponseWriter, r *http.Request) {

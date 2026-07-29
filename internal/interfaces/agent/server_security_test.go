@@ -19,6 +19,31 @@ func TestNewRejectsShortAgentToken(t *testing.T) {
 	}
 }
 
+func TestNewRejectsTaskCredentialPrivilegeCollisions(t *testing.T) {
+	_, err := New(Config{
+		Client: rhinoq.NewInMemory(),
+		Token:  securityTestToken,
+		TaskCredentials: []TaskCredential{{
+			OwnerID: "tenant-a", Token: securityTestToken,
+		}},
+	})
+	if err == nil {
+		t.Fatal("owner credential must not equal the operator token")
+	}
+	shared := "shared-owner-token-at-least-thirty-two-bytes"
+	_, err = New(Config{
+		Client: rhinoq.NewInMemory(),
+		Token:  securityTestToken,
+		TaskCredentials: []TaskCredential{
+			{OwnerID: "tenant-a", Token: shared},
+			{OwnerID: "tenant-b", Token: shared},
+		},
+	})
+	if err == nil {
+		t.Fatal("one owner token must not authorize multiple owners")
+	}
+}
+
 func TestDecodeRejectsTrailingJSON(t *testing.T) {
 	server, err := New(Config{
 		Client: rhinoq.NewInMemory(),

@@ -27,7 +27,8 @@ func TestPublicTaskFacadeUsesPostgres(t *testing.T) {
 	}
 	ctx := context.Background()
 	created, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{
-		ID: "task-public", Type: "report.export", DefinitionVersion: 1,
+		ID: "task-public", Type: "report.export", OwnerID: "tenant-acme",
+		DefinitionVersion: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +65,9 @@ func TestPublicTaskFacadeUsesPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	if polled.State != rhinoq.TaskQueued ||
-		polled.EntityVersion != queued.EntityVersion {
+		polled.EntityVersion != queued.EntityVersion ||
+		polled.OwnerID != "tenant-acme" ||
+		polled.Cancellation.Status != "none" {
 		t.Fatalf("public facade did not round-trip through PostgreSQL: %+v", polled)
 	}
 	result, err := client.AttachTaskResult(
@@ -83,6 +86,58 @@ func TestPublicTaskFacadeUsesPostgres(t *testing.T) {
 	if loadedResult.Reference != result.Reference ||
 		loadedResult.EntityVersion != result.EntityVersion {
 		t.Fatalf("result reference did not round-trip through PostgreSQL: %+v", loadedResult)
+	}
+}
+
+func TestPostgresPersistsCancellationOutcome(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	client, err := rhinoq.NewPostgres(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	snapshot, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{
+		ID: "task-cancel", Type: "export", DefinitionVersion: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = client.QueueTask(ctx, snapshot.ID, snapshot.EntityVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = client.StartTask(ctx, snapshot.ID, snapshot.EntityVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = client.RequestTaskCancellation(ctx, snapshot.ID, snapshot.EntityVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = client.ResolveTaskCancellation(
+		ctx,
+		snapshot.ID,
+		snapshot.EntityVersion,
+		"acknowledged",
+		"worker reached a checkpoint",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = client.CompleteTask(ctx, snapshot.ID, snapshot.EntityVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := client.GetTask(ctx, snapshot.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.State != rhinoq.TaskSucceeded ||
+		loaded.Cancellation.Status != "too_late" {
+		t.Fatalf("PostgreSQL lost the cancellation race outcome: %+v", loaded)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	domaintask "github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
@@ -76,6 +77,15 @@ func describe(err error) (int, ErrorBody) {
 	}
 	if errors.Is(err, execution.ErrInvalidReference) {
 		return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_EXECUTION_INVALID_REFERENCE", Message: err.Error()}
+	}
+	if errors.Is(err, domaintask.ErrProgressRegression) {
+		return http.StatusConflict, ErrorBody{Code: "RHINOQ_PROGRESS_REGRESSION", Message: err.Error()}
+	}
+	if errors.Is(err, domaintask.ErrProgressTotal) {
+		return http.StatusConflict, ErrorBody{Code: "RHINOQ_PROGRESS_TOTAL_CHANGED", Message: err.Error()}
+	}
+	if errors.Is(err, domaintask.ErrInvalidCancellation) {
+		return http.StatusUnprocessableEntity, ErrorBody{Code: "RHINOQ_CANCELLATION_REFUSED", Message: err.Error()}
 	}
 	if errors.Is(err, ports.ErrFindingNotFound) {
 		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_FINDING_NOT_FOUND", Message: err.Error()}

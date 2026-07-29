@@ -126,13 +126,21 @@ Node SDK npm audit:      0 total vulnerabilities.
    không phải authorization boundary. Không được đưa API Task hiện tại trực
    tiếp cho frontend/end user.
 
+> Post-audit remediation: Snapshot hiện trả `ownerId`, và Gateway có optional
+> owner-scoped credentials chỉ được đọc Task/result cùng owner và request
+> cancellation. Cross-owner access trả `404`; queue/operator API và arbitrary
+> Task transition vẫn yêu cầu operator token. Organization membership, RBAC,
+> rotation và browser-safe authentication vẫn là release blocker, nên kết luận
+> không expose Gateway trực tiếp ra frontend vẫn giữ nguyên.
+
 ## Coverage chưa có
 
 - Codex Security sealed report và coverage map;
 - local CodeQL run;
 - DAST/fuzz/pentest với deployment thật;
 - test TLS/reverse proxy và credential rotation;
-- test tenant/owner authorization vì model đó chưa được implement;
+- organization/RBAC authorization, credential rotation và deployment-level
+  tenant policy tests; owner-scoped Task isolation đã được bổ sung sau audit;
 - full PostgreSQL suite tại thời điểm audit; fixture suppression dùng thời gian
   cố định đã quá hạn. Fixture sau đó đã chuyển sang PostgreSQL clock, có
   regression coverage cho cả suppression đang hiệu lực và đã hết hạn, và CI

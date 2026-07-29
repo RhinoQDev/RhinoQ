@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Fixed four contracts exposed by the real BullMQ adopter probe. Task snapshots
+  now return `ownerId` so the application can authorize without a parallel
+  Task-owner table (the Agent bearer remains an operator credential, not
+  tenant auth). Core progress rejects completed-count regression and changes to
+  an already-known total. Cancellation has an orthogonal, persisted outcome, so
+  a Task that succeeds after a cancel request reports `too_late` instead of
+  looking like no cancellation happened. The BullMQ bridge adds explicit
+  `execution-only` terminal projection for fan-out workloads, preventing the
+  first completed item from completing the aggregate Task. The Gateway also
+  separates optional owner-scoped Task credentials from its privileged
+  operator/runtime token. Owner credentials can read matching Tasks/results
+  and request cancellation, receive non-enumerating `404` responses across
+  owners, and cannot call queue/operator APIs or arbitrary lifecycle
+  transitions. Organization membership and RBAC remain out of scope.
+
 - Added a shared Task wire-contract golden fixture consumed by both Go and
   Node tests. `TaskSnapshot` and `TaskResult` v1 field names, nesting,
   timestamps and execution summaries now fail CI when one language drifts

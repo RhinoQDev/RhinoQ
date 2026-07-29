@@ -155,6 +155,44 @@ checked BullMQ's retry policy/attempts. The bridge does not auto-dispatch,
 cancel a BullMQ job, create a RhinoQ Execution for a BullMQ retry, or
 discover/scan a whole queue after downtime.
 
+For a fan-out queue, do not let the first item terminate the batch Task:
+
+```ts
+const bridge = new BullMQTaskBridge({
+  client,
+  events,
+  terminalProjection: 'execution-only',
+});
+```
+
+In this mode each item still reaches a terminal Execution state. The
+application completes/fails the parent Task only when its aggregate business
+outcome is known. The default `single-execution` mode preserves the convenient
+one-job/one-Task behavior.
+
+## Owner-scoped Task client
+
+Keep the operator/runtime token in backend workers. A browser-facing backend
+may use a separately configured owner token for polling and cancellation:
+
+```ts
+const taskClient = new RhinoQClient({
+  url: 'http://127.0.0.1:8080',
+  token: process.env.RHINOQ_TASK_OWNER_TOKEN,
+});
+
+const task = await taskClient.getTask(taskId);
+await taskClient.requestTaskCancellation(task.id, task.entityVersion);
+```
+
+An owner token cannot read another owner's Task/result, call queue/operator
+APIs or use the generic state transition endpoint. RhinoQ does not yet model
+organizations, roles or membership; do not expose a Task Center directly
+without the application's own authentication and authorization.
+Configure the Gateway's `RHINOQ_TASK_CREDENTIALS_JSON` as an array of
+`{"ownerId":"...","token":"..."}` objects with random tokens of at least
+32 bytes; never bundle those tokens into browser JavaScript.
+
 ## Producer-only
 
 ```ts

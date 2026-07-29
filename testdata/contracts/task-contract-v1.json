@@ -4,7 +4,11 @@
     "entityVersion": 7,
     "id": "task-contract-01",
     "type": "report.export",
+    "ownerId": "tenant-acme",
     "state": "running",
+    "cancellation": {
+      "status": "none"
+    },
     "progress": {
       "completed": 4,
       "total": 10,

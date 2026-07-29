@@ -49,6 +49,13 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
   });
   const polled = await client.getTask('task_01');
   await client.transitionTask('task_01', polled.entityVersion, 'running');
+  await client.requestTaskCancellation('task_01', polled.entityVersion);
+  await client.resolveTaskCancellation(
+    'task_01',
+    polled.entityVersion,
+    'acknowledged',
+    'worker reached a checkpoint',
+  );
   await client.reportTaskProgress('task_01', polled.entityVersion, {
     completed: 1,
     total: 4,
@@ -66,6 +73,8 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
     ['POST', 'http://gateway.test/v1/task-executions/exec_01/bind'],
     ['GET', 'http://gateway.test/v1/tasks/task_01'],
     ['POST', 'http://gateway.test/v1/tasks/task_01/state'],
+    ['POST', 'http://gateway.test/v1/tasks/task_01/cancel'],
+    ['POST', 'http://gateway.test/v1/tasks/task_01/cancellation'],
     ['POST', 'http://gateway.test/v1/tasks/task_01/progress'],
     ['POST', 'http://gateway.test/v1/tasks/task_01/result'],
     ['GET', 'http://gateway.test/v1/tasks/task_01/result'],
@@ -76,9 +85,17 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
   });
   assert.deepEqual(requests[5].body, {
     expectedVersion: 2,
-    progress: { completed: 1, total: 4 },
   });
   assert.deepEqual(requests[6].body, {
+    expectedVersion: 2,
+    status: 'acknowledged',
+    reason: 'worker reached a checkpoint',
+  });
+  assert.deepEqual(requests[7].body, {
+    expectedVersion: 2,
+    progress: { completed: 1, total: 4 },
+  });
+  assert.deepEqual(requests[8].body, {
     expectedVersion: 2,
     reference: 's3://reports/task_01.pdf',
   });
@@ -134,6 +151,39 @@ test('BullMQ Task bridge reconciles one known completed job after an offline gap
 
   assert.equal((await client.getTask('task_bull_reconcile')).state, 'succeeded');
   assert.equal(client.executions.get('exec_bull_reconcile').state, 'succeeded');
+  bridge.close();
+});
+
+test('BullMQ Task bridge records fan-out executions without completing the aggregate Task', async () => {
+  const events = new FakeQueueEvents();
+  const client = new FakeTaskClient();
+  const bridge = new BullMQTaskBridge({
+    client,
+    events,
+    terminalProjection: 'execution-only',
+  });
+
+  await bridge.track({
+    task: { id: 'task_batch', type: 'bulk-download', definitionVersion: 1 },
+    executionId: 'exec_item_1',
+    jobId: 'bull_item_1',
+  });
+  await bridge.track({
+    task: { id: 'task_batch', type: 'bulk-download', definitionVersion: 1 },
+    executionId: 'exec_item_2',
+    jobId: 'bull_item_2',
+  });
+
+  await bridge.reconcile({ jobId: 'bull_item_1', state: 'completed' });
+
+  assert.equal((await client.getTask('task_batch')).state, 'running');
+  assert.equal(client.executions.get('exec_item_1').state, 'succeeded');
+  assert.equal(client.executions.get('exec_item_2').state, 'dispatched');
+
+  await bridge.reconcile({ jobId: 'bull_item_2', state: 'completed' });
+
+  assert.equal((await client.getTask('task_batch')).state, 'running');
+  assert.equal(client.executions.get('exec_item_2').state, 'succeeded');
   bridge.close();
 });
 

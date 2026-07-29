@@ -35,14 +35,14 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | Task/Execution store ports | implemented, unit-tested | optimistic version checks và atomic attempt allocation |
 | Memory adapter | implemented, unit-tested | create/update/read Task và Execution |
 | Application Task service | implemented, unit-tested | create Task, public create/bind Execution, read Snapshot |
-| Versioned Snapshot DTO | implemented, contract-tested | không lộ owner hoặc runtime reference; shared Go/Node golden fixture locks Snapshot/Result v1 |
-| Lifecycle/progress commands | implemented, unit-tested | expected-version fencing; progress chỉ khi running/cancel requested |
-| PostgreSQL store và migration 015 | implemented, real-DB contract passed | optimistic updates; concurrent per-Task attempt allocation has no gaps/duplicates |
+| Versioned Snapshot DTO | implemented, contract-tested | trả `ownerId` để application authorize; không lộ runtime reference; shared Go/Node golden fixture locks Snapshot/Result v1 |
+| Lifecycle/progress commands | implemented, unit-tested | expected-version fencing; completed không giảm và known total không đổi |
+| PostgreSQL store và migrations 015–016 | implemented, real-DB contract passed | optimistic updates; cancellation outcome; concurrent per-Task attempt allocation has no gaps/duplicates |
 | Public Task facade | implemented, unit-tested | create/read/progress/result, create/bind Execution và explicit lifecycle commands |
 | Polling delivery | implemented, integration-tested | HTTP `POST/GET /v1/tasks`; typed Node client; stale write trả typed `409` |
 | Framework-neutral Node Task watcher | implemented, SDK-tested | non-overlapping polling; only newer aggregate versions are yielded; terminal/abort stop |
 | Result-reference delivery | implemented, integration-tested | separate Go/HTTP/Node read-write API; Snapshot chỉ trả `hasResult` |
-| BullMQ lifecycle bridge V1 | implemented, Node SDK-tested | tracked existing job events/known-job reconciliation → Task/Execution; no dispatch, retry, cancel or outage-wide reconciliation |
+| BullMQ lifecycle bridge V1 | implemented, Node SDK-tested | single-execution hoặc fan-out `execution-only`; no dispatch, retry, cancel or outage-wide reconciliation |
 | ProviderOperation | planned | boundary đã chốt, model chưa có |
 | Verified Task composition | planned | primitives Effect/Outcome/Rule/Finding đã có |
 
@@ -56,6 +56,12 @@ pending → queued → running → succeeded
 queued/running → cancel_requested → cancelled
 cancelled → queued (explicit retry)
 ```
+
+Cancellation outcome là state trực giao trong Snapshot. Vì vậy
+`cancel_requested → succeeded` trả Task `succeeded` cùng
+`cancellation.status = too_late`, không còn giống Task chưa từng được yêu cầu
+hủy. Worker/application cũng có thể ghi `acknowledged`,
+`cannot_cancel_safely` hoặc `failed` qua command có version fence.
 
 `failed/cancelled → queued` hiện là lifecycle primitive. Public composed Retry
 command có command identity, tạo Execution mới và xử lý crash giữa hai write
@@ -73,6 +79,30 @@ sau reconnect/retry, thay vì tin thứ tự arrival của transport.
 Node `watchTask()` hiện thực hóa phần polling này mà không thêm framework hoặc
 transport mới. Nó không thay thế tenant authorization, React state management
 hay realtime reconnect protocol.
+
+Gateway có hai credential boundary:
+
+- `RHINOQ_AGENT_TOKEN`: operator/runtime, có quyền ghi lifecycle và dùng adapter;
+- credential trong `RHINOQ_TASK_CREDENTIALS_JSON`: chỉ đọc Task/result cùng
+  `ownerId` và gọi cancellation-request command an toàn.
+
+Owner token đọc/cancel Task khác owner trả `404` để không lộ sự tồn tại, không
+thể gọi queue/operator endpoint và không thể tự đặt `succeeded`. Đây là owner
+isolation đã test, chưa phải organization membership/RBAC hay chính sách tenant
+hoàn chỉnh.
+
+Ví dụ cấu hình evaluation (mỗi token tối thiểu 32 byte):
+
+```json
+[
+  {
+    "ownerId": "tenant-acme",
+    "token": "replace-with-a-random-owner-token-at-least-32-bytes"
+  }
+]
+```
+
+Gán JSON trên vào `RHINOQ_TASK_CREDENTIALS_JSON`; không commit token vào source.
 
 Progress hỗ trợ hai dạng:
 
@@ -105,6 +135,11 @@ việc đó rồi báo reference về Application.
 Dispatch lỗi trước khi bind giữ Execution ở `pending_dispatch` để reconciler
 tương lai xử lý. Một Execution terminal không được mở lại; retry phải tạo
 Execution mới với attempt tăng lên.
+
+Với fan-out, bridge dùng `terminalProjection: 'execution-only'`. Completion
+hoặc failure của item chỉ terminalize Execution tương ứng; application sở hữu
+điều kiện aggregate (ví dụ ZIP đã tồn tại) và gọi Task terminal command sau đó.
+Default `single-execution` chỉ đúng khi một job đại diện toàn bộ Task.
 
 ## Provider support
 

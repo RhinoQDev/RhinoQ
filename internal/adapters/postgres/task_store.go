@@ -30,11 +30,13 @@ func (s *TaskStore) CreateTask(ctx context.Context, record task.Record) (task.Re
 		INSERT INTO rhinoq_tasks (
 			id, type, owner_id, definition_version, state,
 			progress_completed, progress_total, progress_message, result_ref,
+			cancellation_status, cancellation_reason,
 			version, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		record.ID, record.Type, nullableString(record.OwnerID), record.DefinitionVersion,
 		record.State, record.Progress.Completed, nullableProgressTotal(record.Progress),
 		nullableString(record.Progress.Message), nullableString(record.ResultRef),
+		record.CancellationStatus, nullableString(record.CancellationReason),
 		record.Version, record.CreatedAt, record.UpdatedAt)
 	if err != nil {
 		return task.Record{}, mapAlreadyExists(err)
@@ -58,11 +60,13 @@ func (s *TaskStore) UpdateTask(ctx context.Context, record task.Record, expected
 		UPDATE rhinoq_tasks SET
 			type=$2, owner_id=$3, definition_version=$4, state=$5,
 			progress_completed=$6, progress_total=$7, progress_message=$8,
-			result_ref=$9, version=$10, updated_at=$11
-		WHERE id=$1 AND version=$12`,
+			result_ref=$9, cancellation_status=$10, cancellation_reason=$11,
+			version=$12, updated_at=$13
+		WHERE id=$1 AND version=$14`,
 		record.ID, record.Type, nullableString(record.OwnerID), record.DefinitionVersion,
 		record.State, record.Progress.Completed, nullableProgressTotal(record.Progress),
 		nullableString(record.Progress.Message), nullableString(record.ResultRef),
+		record.CancellationStatus, nullableString(record.CancellationReason),
 		record.Version, record.UpdatedAt, expectedVersion)
 	if err != nil {
 		return task.Record{}, err
@@ -223,7 +227,9 @@ func (s *TaskStore) ListTaskExecutions(ctx context.Context, taskID string) ([]ex
 
 const taskSelect = `SELECT id, type, COALESCE(owner_id,''), definition_version,
 	state, progress_completed, progress_total, COALESCE(progress_message,''),
-	COALESCE(result_ref,''), version, created_at, updated_at FROM rhinoq_tasks`
+	COALESCE(result_ref,''), cancellation_status,
+	COALESCE(cancellation_reason,''), version, created_at, updated_at
+	FROM rhinoq_tasks`
 
 type rowScanner interface{ Scan(...any) error }
 
@@ -232,7 +238,8 @@ func scanTask(row rowScanner) (task.Record, error) {
 	var total sql.NullInt64
 	err := row.Scan(&record.ID, &record.Type, &record.OwnerID, &record.DefinitionVersion,
 		&record.State, &record.Progress.Completed, &total, &record.Progress.Message,
-		&record.ResultRef, &record.Version, &record.CreatedAt, &record.UpdatedAt)
+		&record.ResultRef, &record.CancellationStatus, &record.CancellationReason,
+		&record.Version, &record.CreatedAt, &record.UpdatedAt)
 	if err != nil {
 		return task.Record{}, err
 	}

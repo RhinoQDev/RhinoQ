@@ -92,8 +92,8 @@ claims. Their current limits are documented below and in
 | Capability | Status |
 |---|---|
 | Go Task facade; Task and Execution domains | implemented and tested |
-| PostgreSQL Task store and migration 015 | implemented; real-PostgreSQL contract tested |
-| Versioned HTTP polling snapshots | implemented and integration tested |
+| PostgreSQL Task store and migrations 015–016 | implemented; real-PostgreSQL contract tested |
+| Versioned HTTP polling snapshots | implemented and integration tested; includes owner metadata and cancellation outcome |
 | Typed Node Task client | `beta.1` published on npm; `beta.2` source adds a version-safe framework-neutral Task watcher |
 | Result-reference read/write API | implemented; payload proxy/download is not |
 | Native Go/PostgreSQL job runtime | implemented and tested |
@@ -101,7 +101,8 @@ claims. Their current limits are documented below and in
 | BullMQ lifecycle bridge V1 | implemented and Node SDK-tested; observes/reconciles tracked known jobs only |
 | pg-boss/custom runtime adapter | **not implemented** |
 | React hook, Task Center, SSE/WebSocket/streams | **not implemented** |
-| Tenant-scoped user authorization | **not implemented** |
+| Owner-scoped Task polling/cancel credential | implemented and isolation-tested; operator/runtime token stays separate |
+| Tenant/role authorization model | **not implemented**; `ownerId` is not organization membership or RBAC |
 | Generic ProviderOperation | **not implemented** |
 
 The BullMQ bridge creates/binds a durable external Execution for an existing
@@ -114,6 +115,13 @@ durable runtime/external-ID lookup makes repeating that call safe after a
 bridge restart. It can also reconcile one already-known Job state read by the
 application after an offline gap. This is a narrow lifecycle bridge, not
 drop-in BullMQ support.
+
+One job may terminate its Task only in the default `single-execution` mode.
+Fan-out applications must select `terminalProjection: 'execution-only'`: every
+item still advances its Execution, while the application completes or fails the
+aggregate Task only after the batch outcome is known. This prevents the first
+completed item from falsely completing an N-item Task without turning RhinoQ
+into a workflow engine.
 
 The Node `watchTask()` async iterator provides non-overlapping polling, yields
 only strictly newer aggregate versions, stops on terminal state by default and
@@ -150,11 +158,17 @@ result, err := client.AttachTaskResult(ctx, task.ID, task.EntityVersion,
 _ = result
 ```
 
-`TaskSnapshot` contains lifecycle, progress, result availability and execution
-summaries. `GetTaskResult` reads the result reference separately, so normal
-polling does not expose or repeat a storage location. The Gateway exposes the
-same contract at `POST /v1/tasks` and `GET /v1/tasks/{id}`; stale writes return
-typed `409` conflicts.
+`TaskSnapshot` contains owner metadata, lifecycle, monotonic progress,
+cancellation outcome, result availability and execution summaries.
+`GetTaskResult` reads the result reference separately, so normal polling does
+not expose or repeat a storage location. A known progress total cannot change
+and completed work cannot move backwards. The Gateway exposes the same contract
+at `POST /v1/tasks` and `GET /v1/tasks/{id}`; stale or regressing writes return
+typed `409` conflicts. Exposing `ownerId` lets an application enforce its own
+authorization without a parallel Task-owner table. Optional owner-scoped Task
+credentials can read matching Tasks/results and request cancellation, but
+cannot reach queue/operator APIs or set arbitrary lifecycle states. The
+deployment bearer remains the privileged operator/runtime credential.
 
 For a complete, accurate setup and the current external-runtime boundary, see
 [Getting started](./docs/getting-started.md) and the [Task Platform contract](./docs/task-platform.md).
@@ -191,9 +205,12 @@ execution history and verification evidence. Redis is not required by the
 current Task slice.
 
 The optional HTTP Gateway binds to loopback by default and requires a bearer
-token of at least 32 bytes. It is not a multi-tenant product API: remote TLS,
-credential rotation, rate limits, tenant isolation and role-based
-authorization remain release blockers.
+token of at least 32 bytes. Optional owner credentials are configured through
+`RHINOQ_TASK_CREDENTIALS_JSON`; each is restricted to matching Task reads,
+result reads and the safe cancellation-request command. This is an isolation
+primitive, not a complete multi-tenant product API: remote TLS, credential
+rotation, rate limits, organization membership and role-based authorization
+remain release blockers.
 
 ## Evidence, not marketing
 

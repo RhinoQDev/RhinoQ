@@ -136,3 +136,30 @@ func (s *Service) UpdateProgress(ctx context.Context, id task.ID, expectedVersio
 	}
 	return s.Get(ctx, id)
 }
+
+func (s *Service) ResolveCancellation(
+	ctx context.Context,
+	id task.ID,
+	expectedVersion int64,
+	status task.CancellationStatus,
+	reason string,
+) (taskcontract.Snapshot, error) {
+	record, found, err := s.tasks.GetTask(ctx, id)
+	if err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	if !found {
+		return taskcontract.Snapshot{}, ports.ErrTaskNotFound
+	}
+	if record.Version != expectedVersion {
+		return taskcontract.Snapshot{}, ports.ErrVersionConflict
+	}
+	record, err = record.ResolveCancellation(status, reason, s.now())
+	if err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	if _, err := s.tasks.UpdateTask(ctx, record, expectedVersion); err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	return s.Get(ctx, id)
+}

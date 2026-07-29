@@ -10,7 +10,7 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
 )
 
-func TestSnapshotIsVersionedAndDoesNotLeakOwnershipOrRuntimeReferences(t *testing.T) {
+func TestSnapshotIsVersionedAndExposesOwnershipWithoutRuntimeReferences(t *testing.T) {
 	now := time.Date(2026, 7, 29, 14, 0, 0, 0, time.UTC)
 	record, err := task.NewRecord(task.Spec{
 		ID: "task-1", Type: "report.export", OwnerID: "secret-owner",
@@ -44,7 +44,10 @@ func TestSnapshotIsVersionedAndDoesNotLeakOwnershipOrRuntimeReferences(t *testin
 	if snapshot.SchemaVersion != 1 || snapshot.EntityVersion != record.Version {
 		t.Fatalf("snapshot versions are missing: %+v", snapshot)
 	}
-	for _, secret := range []string{"secret-owner", "private-bull-job-id", "jobId", "externalId"} {
+	if snapshot.OwnerID != "secret-owner" || !strings.Contains(text, `"ownerId":"secret-owner"`) {
+		t.Fatalf("snapshot must expose ownership for application authorization: %s", text)
+	}
+	for _, secret := range []string{"private-bull-job-id", "jobId", "externalId"} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("snapshot leaked internal data %q: %s", secret, text)
 		}

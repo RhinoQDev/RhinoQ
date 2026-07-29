@@ -15,6 +15,8 @@ import (
 )
 
 const agentToken = "test-token-at-least-thirty-two-bytes"
+const ownerAToken = "owner-a-token-at-least-thirty-two-bytes"
+const ownerBToken = "owner-b-token-at-least-thirty-two-bytes"
 
 func TestAgentTaskPollingContractRejectsStaleWrites(t *testing.T) {
 	server := newAgentServer(t)
@@ -96,6 +98,137 @@ func TestAgentTaskPollingContractRejectsStaleWrites(t *testing.T) {
 	if loadedResult.Reference != result.Reference ||
 		loadedResult.EntityVersion != result.EntityVersion {
 		t.Fatalf("result reference did not round-trip: %+v", loadedResult)
+	}
+}
+
+func TestAgentOwnerCredentialsCannotCrossTaskOrOperatorBoundaries(t *testing.T) {
+	server, err := agent.New(agent.Config{
+		Client: rhinoq.NewInMemory(),
+		Token:  agentToken,
+		TaskCredentials: []agent.TaskCredential{
+			{OwnerID: "tenant-a", Token: ownerAToken},
+			{OwnerID: "tenant-b", Token: ownerBToken},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taskA rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-tenant-a", "type": "export", "ownerId": "tenant-a",
+		"definitionVersion": 1,
+	}, http.StatusCreated, &taskA)
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-tenant-b", "type": "export", "ownerId": "tenant-b",
+		"definitionVersion": 1,
+	}, http.StatusCreated, nil)
+	call(t, server, http.MethodPost, "/v1/tasks/task-tenant-a/state", map[string]any{
+		"expectedVersion": taskA.EntityVersion, "state": rhinoq.TaskQueued,
+	}, http.StatusOK, &taskA)
+
+	if status, body := rawCall(
+		t, server, http.MethodGet, "/v1/tasks/task-tenant-a", nil, ownerAToken,
+	); status != http.StatusOK || !strings.Contains(body, `"ownerId":"tenant-a"`) {
+		t.Fatalf("owner must read its Task: status=%d body=%s", status, body)
+	}
+	if status, body := rawCall(
+		t, server, http.MethodGet, "/v1/tasks/task-tenant-b", nil, ownerAToken,
+	); status != http.StatusNotFound || strings.Contains(body, "tenant-b") {
+		t.Fatalf("cross-owner read must be hidden: status=%d body=%s", status, body)
+	}
+	if status, _ := rawCall(
+		t, server, http.MethodGet, "/v1/jobs", nil, ownerAToken,
+	); status != http.StatusUnauthorized {
+		t.Fatalf("Task owner token reached operator API: status=%d", status)
+	}
+	if status, _ := rawCall(
+		t, server, http.MethodPost, "/v1/tasks/task-tenant-a/state",
+		map[string]any{
+			"expectedVersion": taskA.EntityVersion, "state": rhinoq.TaskSucceeded,
+		},
+		ownerAToken,
+	); status != http.StatusUnauthorized {
+		t.Fatalf("Task owner token set arbitrary terminal state: status=%d", status)
+	}
+	var cancelled rhinoq.TaskSnapshot
+	status, body := rawCall(
+		t, server, http.MethodPost, "/v1/tasks/task-tenant-a/cancel",
+		map[string]any{"expectedVersion": taskA.EntityVersion},
+		ownerAToken,
+	)
+	if status != http.StatusOK {
+		t.Fatalf("owner cancellation failed: status=%d body=%s", status, body)
+	}
+	if err := json.Unmarshal([]byte(body), &cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.State != rhinoq.TaskCancelRequested {
+		t.Fatalf("owner cancellation did not use safe command: %+v", cancelled)
+	}
+	if status, body := rawCall(
+		t, server, http.MethodPost, "/v1/tasks/task-tenant-b/cancel",
+		map[string]any{"expectedVersion": 1},
+		ownerAToken,
+	); status != http.StatusNotFound || strings.Contains(body, "tenant-b") {
+		t.Fatalf("cross-owner cancellation must be hidden: status=%d body=%s", status, body)
+	}
+}
+
+func TestAgentPreservesCancellationOutcomeWhenCompletionWins(t *testing.T) {
+	server := newAgentServer(t)
+	var snapshot rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-cancel-race", "type": "export", "ownerId": "tenant-a",
+		"definitionVersion": 1,
+	}, http.StatusCreated, &snapshot)
+	if snapshot.OwnerID != "tenant-a" || snapshot.Cancellation.Status != "none" {
+		t.Fatalf("creation snapshot lost ownership/cancellation fields: %+v", snapshot)
+	}
+	for _, state := range []rhinoq.TaskState{
+		rhinoq.TaskQueued, rhinoq.TaskRunning, rhinoq.TaskCancelRequested,
+	} {
+		call(t, server, http.MethodPost, "/v1/tasks/task-cancel-race/state", map[string]any{
+			"expectedVersion": snapshot.EntityVersion, "state": state,
+		}, http.StatusOK, &snapshot)
+	}
+	call(t, server, http.MethodPost, "/v1/tasks/task-cancel-race/cancellation", map[string]any{
+		"expectedVersion": snapshot.EntityVersion,
+		"status":          "acknowledged",
+		"reason":          "worker reached a cancellation checkpoint",
+	}, http.StatusOK, &snapshot)
+	call(t, server, http.MethodPost, "/v1/tasks/task-cancel-race/state", map[string]any{
+		"expectedVersion": snapshot.EntityVersion, "state": rhinoq.TaskSucceeded,
+	}, http.StatusOK, &snapshot)
+	if snapshot.State != rhinoq.TaskSucceeded ||
+		snapshot.Cancellation.Status != "too_late" {
+		t.Fatalf("cancel race must remain visible: %+v", snapshot)
+	}
+}
+
+func TestAgentRejectsProgressThatMovesBackwards(t *testing.T) {
+	server := newAgentServer(t)
+	var snapshot rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-progress", "type": "fanout", "definitionVersion": 1,
+	}, http.StatusCreated, &snapshot)
+	for _, state := range []rhinoq.TaskState{rhinoq.TaskQueued, rhinoq.TaskRunning} {
+		call(t, server, http.MethodPost, "/v1/tasks/task-progress/state", map[string]any{
+			"expectedVersion": snapshot.EntityVersion, "state": state,
+		}, http.StatusOK, &snapshot)
+	}
+	call(t, server, http.MethodPost, "/v1/tasks/task-progress/progress", map[string]any{
+		"expectedVersion": snapshot.EntityVersion,
+		"progress":        map[string]any{"completed": 5, "total": 10},
+	}, http.StatusOK, &snapshot)
+	var failure struct {
+		Error agent.ErrorBody `json:"error"`
+	}
+	call(t, server, http.MethodPost, "/v1/tasks/task-progress/progress", map[string]any{
+		"expectedVersion": snapshot.EntityVersion,
+		"progress":        map[string]any{"completed": 2, "total": 10},
+	}, http.StatusConflict, &failure)
+	if failure.Error.Code != "RHINOQ_PROGRESS_REGRESSION" {
+		t.Fatalf("progress regression needs a typed conflict: %+v", failure.Error)
 	}
 }
 

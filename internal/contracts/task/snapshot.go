@@ -32,17 +32,24 @@ type Execution struct {
 	Version int64  `json:"version"`
 }
 
+type Cancellation struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}
+
 type Snapshot struct {
-	SchemaVersion int         `json:"schemaVersion"`
-	EntityVersion int64       `json:"entityVersion"`
-	ID            string      `json:"id"`
-	Type          string      `json:"type"`
-	State         string      `json:"state"`
-	Progress      Progress    `json:"progress"`
-	HasResult     bool        `json:"hasResult"`
-	Executions    []Execution `json:"executions"`
-	CreatedAt     time.Time   `json:"createdAt"`
-	UpdatedAt     time.Time   `json:"updatedAt"`
+	SchemaVersion int          `json:"schemaVersion"`
+	EntityVersion int64        `json:"entityVersion"`
+	ID            string       `json:"id"`
+	Type          string       `json:"type"`
+	OwnerID       string       `json:"ownerId,omitempty"`
+	State         string       `json:"state"`
+	Cancellation  Cancellation `json:"cancellation"`
+	Progress      Progress     `json:"progress"`
+	HasResult     bool         `json:"hasResult"`
+	Executions    []Execution  `json:"executions"`
+	CreatedAt     time.Time    `json:"createdAt"`
+	UpdatedAt     time.Time    `json:"updatedAt"`
 }
 
 // Result is separate from Snapshot so state polling does not repeatedly send
@@ -66,6 +73,7 @@ func (r Result) Validate() error {
 func (s Snapshot) Validate() error {
 	if s.SchemaVersion != SnapshotSchemaVersion || s.EntityVersion <= 0 ||
 		s.ID == "" || s.Type == "" || s.State == "" ||
+		!validCancellationStatus(s.Cancellation.Status) ||
 		s.CreatedAt.IsZero() || s.UpdatedAt.IsZero() ||
 		s.Progress.Completed < 0 {
 		return ErrInvalidSnapshot
@@ -80,4 +88,14 @@ func (s Snapshot) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validCancellationStatus(status string) bool {
+	switch status {
+	case "none", "requested", "acknowledged", "cancelled", "too_late",
+		"cannot_cancel_safely", "failed":
+		return true
+	default:
+		return false
+	}
 }

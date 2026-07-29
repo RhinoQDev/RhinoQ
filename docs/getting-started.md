@@ -143,7 +143,9 @@ It does not yet prove the product's intended adoption promise:
 - no automatic Task-to-native-job dispatch exists;
 - no composed retry command creates a new Execution atomically;
 - no React hook, Task Center, SSE/WebSocket or stream transport exists;
-- `OwnerID` is not tenant/user authorization;
+- `OwnerID` is returned for application authorization and optional owner-scoped
+  polling/cancel credentials are available, but organization membership/RBAC
+  is not implemented;
 - result references are not proxied or downloaded by RhinoQ.
 
 Read [Task Platform](./task-platform.md) for the exact implementation status.

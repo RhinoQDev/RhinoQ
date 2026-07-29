@@ -18,6 +18,7 @@ without migrating their queue.
 - [x] polling delivery through a public application boundary
 - [x] PostgreSQL schema and store implementation after contract tests stabilized
 - [x] execute migration 015 and the Task store contract against real PostgreSQL
+- [x] persist cancellation outcome with migration 016 and real PostgreSQL coverage
 - [x] add the Task store contract to CI's PostgreSQL job
 - [x] public Go Task facade
 - [x] Node Task client

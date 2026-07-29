@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -71,9 +72,14 @@ Verify
 		return err
 	}
 	defer closeStore()
+	taskCredentials, err := taskCredentialsFromEnv()
+	if err != nil {
+		return err
+	}
 
 	server, err := agent.New(agent.Config{
 		Client: client, Token: token, AllowUnauthenticated: open,
+		TaskCredentials:   taskCredentials,
 		HeartbeatInterval: durationOr("RHINOQ_AGENT_HEARTBEAT", 10*time.Second),
 		MaxPayloadBytes:   intOr("RHINOQ_MAX_PAYLOAD_BYTES", 1<<20),
 	})
@@ -114,6 +120,18 @@ Verify
 	defer cancel()
 	log.Println("rhinoq-agent draining")
 	return httpServer.Shutdown(graceCtx)
+}
+
+func taskCredentialsFromEnv() ([]agent.TaskCredential, error) {
+	raw := strings.TrimSpace(os.Getenv("RHINOQ_TASK_CREDENTIALS_JSON"))
+	if raw == "" {
+		return nil, nil
+	}
+	var credentials []agent.TaskCredential
+	if err := json.Unmarshal([]byte(raw), &credentials); err != nil {
+		return nil, errors.New("RHINOQ_TASK_CREDENTIALS_JSON must be a JSON array of ownerId/token objects")
+	}
+	return credentials, nil
 }
 
 func validateAgentAddress(address string, allowUnauthenticated bool) error {
