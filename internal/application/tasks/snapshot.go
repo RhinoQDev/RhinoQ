@@ -31,11 +31,13 @@ func newSnapshot(record task.Record, attempts []execution.Record) (taskcontract.
 			return taskcontract.Snapshot{}, taskcontract.ErrInvalidSnapshot
 		}
 		executions = append(executions, taskcontract.Execution{
-			ID:      attempt.ID.String(),
-			Attempt: attempt.Attempt,
-			Runtime: attempt.Runtime,
-			State:   attempt.State.String(),
-			Version: attempt.Version,
+			ID:            attempt.ID.String(),
+			Attempt:       attempt.Attempt,
+			Runtime:       attempt.Runtime,
+			State:         attempt.State.String(),
+			Version:       attempt.Version,
+			HasResult:     attempt.ResultRef != "",
+			FailureReason: attempt.FailureReason,
 		})
 	}
 	sort.Slice(executions, func(i, j int) bool {

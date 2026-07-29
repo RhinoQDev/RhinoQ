@@ -104,7 +104,7 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
 test('BullMQ Task bridge projects an existing job without owning the queue', async () => {
   const events = new FakeQueueEvents();
   const client = new FakeTaskClient();
-  const bridge = new BullMQTaskBridge({ client, events });
+  const bridge = new BullMQTaskBridge({ client, events, terminalProjection: 'single-execution' });
 
   const queued = await bridge.track({
     task: { id: 'task_bull_01', type: 'report.export', definitionVersion: 1 },
@@ -137,7 +137,7 @@ test('BullMQ Task bridge projects an existing job without owning the queue', asy
 test('BullMQ Task bridge reconciles one known completed job after an offline gap', async () => {
   const events = new FakeQueueEvents();
   const client = new FakeTaskClient();
-  const bridge = new BullMQTaskBridge({ client, events });
+  const bridge = new BullMQTaskBridge({ client, events, terminalProjection: 'single-execution' });
 
   await bridge.track({
     task: { id: 'task_bull_reconcile', type: 'report.export', definitionVersion: 1 },
@@ -190,7 +190,7 @@ test('BullMQ Task bridge records fan-out executions without completing the aggre
 test('BullMQ Task bridge converges after a stale Task version conflict', async () => {
   const events = new FakeQueueEvents();
   const client = new FakeTaskClient();
-  const bridge = new BullMQTaskBridge({ client, events });
+  const bridge = new BullMQTaskBridge({ client, events, terminalProjection: 'single-execution' });
 
   await bridge.track({
     task: { id: 'task_bull_conflict', type: 'report.export', definitionVersion: 1 },
@@ -209,7 +209,7 @@ test('BullMQ Task bridge converges after a stale Task version conflict', async (
 test('BullMQ Task bridge leaves an observed failed job running without terminal proof', async () => {
   const events = new FakeQueueEvents();
   const client = new FakeTaskClient();
-  const bridge = new BullMQTaskBridge({ client, events });
+  const bridge = new BullMQTaskBridge({ client, events, terminalProjection: 'single-execution' });
 
   await bridge.track({
     task: { id: 'task_bull_retry', type: 'report.export', definitionVersion: 1 },

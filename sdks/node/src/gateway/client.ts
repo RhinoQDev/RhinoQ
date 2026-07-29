@@ -25,6 +25,7 @@ import {
   type TaskExecutionBinding,
   type TaskExecutionCreateRequest,
   type TaskExecution,
+  type TaskExecutionResults,
   type TaskProgress,
   type TaskResult,
   type TaskSnapshot,
@@ -179,6 +180,8 @@ export class RhinoQClient {
     executionId: string,
     expectedVersion: number,
     state: string,
+    /** Recorded for the failed state only: why this one item did not make it. */
+    reason?: string,
   ): Promise<TaskSnapshot> {
     validateEntityVersion(expectedVersion);
     if (!state?.trim()) {
@@ -187,7 +190,35 @@ export class RhinoQClient {
     return this.send<TaskSnapshot>(
       'POST',
       `/v1/task-executions/${requiredPath(executionId, 'execution id')}/state`,
-      { expectedVersion, state },
+      { expectedVersion, state, ...(reason ? { reason } : {}) },
+    );
+  }
+
+  /**
+   * Records where one attempt's own output landed. A fan-out needs this per
+   * item; `attachTaskResult` stays the aggregate answer for the whole Task.
+   */
+  async attachTaskExecutionResult(
+    executionId: string,
+    expectedVersion: number,
+    reference: string,
+  ): Promise<TaskSnapshot> {
+    validateEntityVersion(expectedVersion);
+    if (!reference?.trim()) {
+      throw new TypeError('execution result reference is required');
+    }
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/task-executions/${requiredPath(executionId, 'execution id')}/result`,
+      { expectedVersion, reference },
+    );
+  }
+
+  /** Answers "what happened to each item" in one owner-scoped read. */
+  async getTaskExecutionResults(taskId: string): Promise<TaskExecutionResults> {
+    return this.send<TaskExecutionResults>(
+      'GET',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/execution-results`,
     );
   }
 

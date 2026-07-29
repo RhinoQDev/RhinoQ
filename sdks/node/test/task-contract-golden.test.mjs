@@ -14,6 +14,9 @@ test('Node Task client consumes the shared Go wire contract v1', async () => {
   const client = new RhinoQClient({
     url: 'http://gateway.test',
     fetch: async (url) => {
+      if (url.endsWith('/execution-results')) {
+        return Response.json(golden.executionResults);
+      }
       if (url.endsWith('/result')) {
         return Response.json(golden.result);
       }
@@ -23,9 +26,11 @@ test('Node Task client consumes the shared Go wire contract v1', async () => {
 
   const snapshot = await client.getTask('task-contract-01');
   const result = await client.getTaskResult('task-contract-01');
+  const executionResults = await client.getTaskExecutionResults('task-contract-01');
 
   assert.deepEqual(snapshot, golden.snapshot);
   assert.deepEqual(result, golden.result);
+  assert.deepEqual(executionResults, golden.executionResults);
   assert.deepEqual(Object.keys(snapshot), [
     'schemaVersion',
     'entityVersion',
@@ -46,5 +51,23 @@ test('Node Task client consumes the shared Go wire contract v1', async () => {
     'runtime',
     'state',
     'version',
+    'hasResult',
   ]);
+  assert.deepEqual(Object.keys(snapshot.executions[2]), [
+    'id',
+    'attempt',
+    'runtime',
+    'state',
+    'version',
+    'hasResult',
+    'failureReason',
+  ]);
+
+  // Per-item storage references must reach the client only through the
+  // separate owner-scoped read, never through the polled snapshot.
+  assert.ok(!JSON.stringify(snapshot).includes('s3://'));
+  assert.equal(
+    executionResults.executions[1].reference,
+    's3://reports/task-contract-01/item-2.mp4',
+  );
 });

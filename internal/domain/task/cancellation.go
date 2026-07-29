@@ -35,6 +35,23 @@ func (s CancellationStatus) Valid() bool {
 	}
 }
 
+// RequestCancellation records the user's intent to stop the Task. Repeating it
+// on a Task that already carries the request is a no-op: the intent is stored
+// once, so a retried click must not consume an entity version.
+func (r Record) RequestCancellation(now time.Time) (Record, error) {
+	if err := r.valid(now); err != nil {
+		return r, err
+	}
+	if r.CancellationIsRequested() {
+		return r, nil
+	}
+	return r.Transition(CancelRequested, now)
+}
+
+// CancellationIsRequested reports whether RequestCancellation would leave this
+// record unchanged.
+func (r Record) CancellationIsRequested() bool { return r.State == CancelRequested }
+
 func (r Record) ResolveCancellation(
 	status CancellationStatus,
 	reason string,

@@ -24,12 +24,17 @@ type Progress struct {
 	Message   string `json:"message,omitempty"`
 }
 
+// Execution carries per-attempt outcome but never the storage reference
+// itself: polling must not repeatedly ship a location that may be sensitive.
+// Read the references through ExecutionResults instead.
 type Execution struct {
-	ID      string `json:"id"`
-	Attempt int    `json:"attempt"`
-	Runtime string `json:"runtime"`
-	State   string `json:"state"`
-	Version int64  `json:"version"`
+	ID            string `json:"id"`
+	Attempt       int    `json:"attempt"`
+	Runtime       string `json:"runtime"`
+	State         string `json:"state"`
+	Version       int64  `json:"version"`
+	HasResult     bool   `json:"hasResult"`
+	FailureReason string `json:"failureReason,omitempty"`
 }
 
 type Cancellation struct {
@@ -60,6 +65,41 @@ type Result struct {
 	TaskID        string    `json:"taskId"`
 	Reference     string    `json:"reference"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// ExecutionResult is one item's outcome in a fan-out: where its artifact
+// landed, or why it failed. Without this an application has to keep its own
+// per-item store, which is exactly the plumbing the Task layer exists to remove.
+type ExecutionResult struct {
+	ExecutionID   string    `json:"executionId"`
+	Attempt       int       `json:"attempt"`
+	State         string    `json:"state"`
+	Reference     string    `json:"reference,omitempty"`
+	FailureReason string    `json:"failureReason,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// ExecutionResults is read separately from the Snapshot and carries the Task
+// version it was read at, so a caller can tell whether it matches the snapshot
+// currently on screen.
+type ExecutionResults struct {
+	SchemaVersion int               `json:"schemaVersion"`
+	EntityVersion int64             `json:"entityVersion"`
+	TaskID        string            `json:"taskId"`
+	Executions    []ExecutionResult `json:"executions"`
+}
+
+func (r ExecutionResults) Validate() error {
+	if r.SchemaVersion != ResultSchemaVersion || r.EntityVersion <= 0 || r.TaskID == "" {
+		return ErrInvalidResult
+	}
+	for _, item := range r.Executions {
+		if item.ExecutionID == "" || item.Attempt <= 0 || item.State == "" ||
+			item.UpdatedAt.IsZero() {
+			return ErrInvalidResult
+		}
+	}
+	return nil
 }
 
 func (r Result) Validate() error {

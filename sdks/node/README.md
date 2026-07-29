@@ -11,7 +11,12 @@ Node.js support has two deliberately separate paths:
 This package is a development preview. `@rhinoq/node@0.1.0-beta.1` is publicly
 available as the first evaluation prerelease; pin that explicit version rather
 than depending on a floating dist-tag. It is not a production stability
-promise. The preview targets ESM on Node.js 22+.
+promise. The preview targets Node.js 22+.
+
+The package ships both an ESM and a CommonJS build, so a NestJS application —
+which still compiles to CommonJS by default — can `require('@rhinoq/node')` in
+a constructor instead of routing every touch point through `await import()`.
+Types are shared by both entry points.
 
 ## Build and install the preview
 
@@ -125,7 +130,12 @@ import { Queue, QueueEvents } from 'bullmq';
 
 const queue = new Queue('reports', { connection });
 const events = new QueueEvents('reports', { connection });
-const bridge = new BullMQTaskBridge({ client, events });
+const bridge = new BullMQTaskBridge({
+  client,
+  events,
+  // One job is the whole Task here. See the fan-out section below.
+  terminalProjection: 'single-execution',
+});
 
 const job = await queue.add('generate-report', { reportId: 'report_01' });
 await bridge.track({
@@ -155,7 +165,11 @@ checked BullMQ's retry policy/attempts. The bridge does not auto-dispatch,
 cancel a BullMQ job, create a RhinoQ Execution for a BullMQ retry, or
 discover/scan a whole queue after downtime.
 
-For a fan-out queue, do not let the first item terminate the batch Task:
+`terminalProjection` is required and has no default: only the application knows
+whether one BullMQ job is the whole user-facing Task. For a fan-out queue,
+`single-execution` would drive the batch to a terminal `succeeded` as soon as
+its first item finishes, and a terminal Task is never reopened. Pick
+`execution-only` there:
 
 ```ts
 const bridge = new BullMQTaskBridge({
@@ -167,8 +181,32 @@ const bridge = new BullMQTaskBridge({
 
 In this mode each item still reaches a terminal Execution state. The
 application completes/fails the parent Task only when its aggregate business
-outcome is known. The default `single-execution` mode preserves the convenient
-one-job/one-Task behavior.
+outcome is known — including after a crash between the last item and that call.
+The bridge refuses to guess: constructing it without `terminalProjection`
+throws.
+
+Each item also carries its own outcome, so a batch view does not need a
+parallel per-item store:
+
+```ts
+const bridge = new BullMQTaskBridge({
+  client,
+  events,
+  terminalProjection: 'execution-only',
+  // Recorded on the Execution that produced it.
+  resultReference: async (event) => event.returnvalue?.s3Key,
+  // Defaults to BullMQ's failedReason; return undefined to record none.
+  failureReason: (event) => event.failedReason,
+});
+
+// Storage references never travel in the polled snapshot. Read them once,
+// when the user opens the batch:
+const { executions } = await client.getTaskExecutionResults(taskId);
+```
+
+`TaskSnapshot` exposes `hasResult` and `failureReason` per execution so the
+list can render without a second call; only the references themselves require
+`getTaskExecutionResults`, which is owner-scoped like the Task result.
 
 ## Owner-scoped Task client
 

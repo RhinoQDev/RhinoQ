@@ -43,7 +43,7 @@ producer SQL, typed Gateway client và high-level worker với queue-filtered
 claim. Local read-only Workbench đã có jobs, evidence, Needs Attention,
 Findings, Rules và bounded scan. Task/Execution domain, store ports, memory
 adapter, application lifecycle/progress commands và versioned Snapshot DTO đã
-có test. Migrations 015–016 và PostgreSQL store đã pass contract trên PostgreSQL 16.
+có test. Migrations 015–017 và PostgreSQL store đã pass contract trên PostgreSQL 16.
 Public Go Task facade, HTTP polling, result-reference API và typed Node Task
 client đã có test. Runtime adapter, ProviderOperation, result payload/realtime
 delivery, production Console và protocol generation chưa hoàn thiện.

@@ -45,6 +45,16 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (task.Record, e
 	return s.tasks.CreateTask(ctx, record)
 }
 
+// CreateSnapshot answers the create command without re-reading: a Task that has
+// just been accepted by the store cannot have executions yet.
+func (s *Service) CreateSnapshot(ctx context.Context, input CreateInput) (taskcontract.Snapshot, error) {
+	record, err := s.Create(ctx, input)
+	if err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	return newSnapshot(record, nil)
+}
+
 type CreateExecutionInput struct {
 	ID      execution.ID
 	TaskID  task.ID
@@ -88,7 +98,15 @@ func (s *Service) Get(ctx context.Context, id task.ID) (taskcontract.Snapshot, e
 	if !found {
 		return taskcontract.Snapshot{}, ports.ErrTaskNotFound
 	}
-	executions, err := s.executions.ListTaskExecutions(ctx, id.String())
+	return s.snapshot(ctx, record)
+}
+
+// snapshot renders a record the caller already holds. Commands use it instead
+// of re-reading the Task: the store returns the row it just fenced, so another
+// read only costs a round trip and risks answering a command with a version
+// that some concurrent writer produced instead.
+func (s *Service) snapshot(ctx context.Context, record task.Record) (taskcontract.Snapshot, error) {
+	executions, err := s.executions.ListTaskExecutions(ctx, record.ID.String())
 	if err != nil {
 		return taskcontract.Snapshot{}, err
 	}
@@ -106,14 +124,48 @@ func (s *Service) Transition(ctx context.Context, id task.ID, expectedVersion in
 	if record.Version != expectedVersion {
 		return taskcontract.Snapshot{}, ports.ErrVersionConflict
 	}
-	record, err = record.Transition(to, s.now())
+	next, err := record.Transition(to, s.now())
 	if err != nil {
 		return taskcontract.Snapshot{}, err
 	}
-	if _, err := s.tasks.UpdateTask(ctx, record, expectedVersion); err != nil {
+	saved, err := s.tasks.UpdateTask(ctx, next, expectedVersion)
+	if err != nil {
 		return taskcontract.Snapshot{}, err
 	}
-	return s.Get(ctx, id)
+	return s.snapshot(ctx, saved)
+}
+
+// RequestCancellation is the end-user cancel command. Unlike the operator
+// lifecycle commands it tolerates a repeat: the second request cannot lose an
+// update, so it is answered from the stored record rather than fenced against a
+// version the caller may no longer hold.
+func (s *Service) RequestCancellation(
+	ctx context.Context,
+	id task.ID,
+	expectedVersion int64,
+) (taskcontract.Snapshot, error) {
+	record, found, err := s.tasks.GetTask(ctx, id)
+	if err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	if !found {
+		return taskcontract.Snapshot{}, ports.ErrTaskNotFound
+	}
+	if record.CancellationIsRequested() {
+		return s.snapshot(ctx, record)
+	}
+	if record.Version != expectedVersion {
+		return taskcontract.Snapshot{}, ports.ErrVersionConflict
+	}
+	next, err := record.RequestCancellation(s.now())
+	if err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	saved, err := s.tasks.UpdateTask(ctx, next, expectedVersion)
+	if err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	return s.snapshot(ctx, saved)
 }
 
 func (s *Service) UpdateProgress(ctx context.Context, id task.ID, expectedVersion int64, progress task.Progress) (taskcontract.Snapshot, error) {
@@ -124,17 +176,25 @@ func (s *Service) UpdateProgress(ctx context.Context, id task.ID, expectedVersio
 	if !found {
 		return taskcontract.Snapshot{}, ports.ErrTaskNotFound
 	}
+	// Fan-out runtimes re-deliver progress events, so an identical write is the
+	// normal case rather than an edge case. It stores nothing, so it consumes no
+	// version and needs no fence: failing it would turn a duplicate into a
+	// conflict for the writer that is genuinely up to date.
+	if record.ProgressIsCurrent(progress) {
+		return s.snapshot(ctx, record)
+	}
 	if record.Version != expectedVersion {
 		return taskcontract.Snapshot{}, ports.ErrVersionConflict
 	}
-	record, err = record.ApplyProgress(progress, s.now())
+	next, err := record.ApplyProgress(progress, s.now())
 	if err != nil {
 		return taskcontract.Snapshot{}, err
 	}
-	if _, err := s.tasks.UpdateTask(ctx, record, expectedVersion); err != nil {
+	saved, err := s.tasks.UpdateTask(ctx, next, expectedVersion)
+	if err != nil {
 		return taskcontract.Snapshot{}, err
 	}
-	return s.Get(ctx, id)
+	return s.snapshot(ctx, saved)
 }
 
 func (s *Service) ResolveCancellation(
@@ -154,12 +214,13 @@ func (s *Service) ResolveCancellation(
 	if record.Version != expectedVersion {
 		return taskcontract.Snapshot{}, ports.ErrVersionConflict
 	}
-	record, err = record.ResolveCancellation(status, reason, s.now())
+	next, err := record.ResolveCancellation(status, reason, s.now())
 	if err != nil {
 		return taskcontract.Snapshot{}, err
 	}
-	if _, err := s.tasks.UpdateTask(ctx, record, expectedVersion); err != nil {
+	saved, err := s.tasks.UpdateTask(ctx, next, expectedVersion)
+	if err != nil {
 		return taskcontract.Snapshot{}, err
 	}
-	return s.Get(ctx, id)
+	return s.snapshot(ctx, saved)
 }

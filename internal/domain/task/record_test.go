@@ -57,6 +57,80 @@ func TestRecordRejectsInvalidProgressAndResult(t *testing.T) {
 	}
 }
 
+// A queue that re-delivers events must not be able to inflate the version, and
+// a message-only change must still be delivered.
+func TestIdenticalProgressIsANoOpButAMessageChangeIsNot(t *testing.T) {
+	now := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
+	record := runningRecord(t, now)
+	progress := Progress{Completed: 6, Total: 10, HasTotal: true}
+	record, err := record.ApplyProgress(progress, now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := record.Version
+	updatedAt := record.UpdatedAt
+	for attempt := 0; attempt < 3; attempt++ {
+		if !record.ProgressIsCurrent(progress) {
+			t.Fatalf("identical progress must be recognised as current: %+v", record)
+		}
+		record, err = record.ApplyProgress(progress, now.Add(10*time.Second))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.Version != written || !record.UpdatedAt.Equal(updatedAt) {
+			t.Fatalf("re-delivery %d changed the record: %+v", attempt, record)
+		}
+	}
+	record, err = record.ApplyProgress(
+		Progress{Completed: 6, Total: 10, HasTotal: true, Message: "zipping"},
+		now.Add(11*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Version != written+1 || record.Progress.Message != "zipping" {
+		t.Fatalf("a new message is a real change: %+v", record)
+	}
+}
+
+func TestRepeatedCancellationRequestIsANoOp(t *testing.T) {
+	now := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
+	record := runningRecord(t, now)
+	requested, err := record.RequestCancellation(now.Add(3 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested.State != CancelRequested ||
+		requested.CancellationStatus != CancellationRequested ||
+		requested.Version != record.Version+1 {
+		t.Fatalf("first cancellation request must be recorded: %+v", requested)
+	}
+	repeated, err := requested.RequestCancellation(now.Add(4 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated != requested {
+		t.Fatalf("repeated cancellation request must change nothing: %+v", repeated)
+	}
+}
+
+func runningRecord(t *testing.T, now time.Time) Record {
+	t.Helper()
+	record, err := NewRecord(Spec{ID: "task-1", Type: "import", DefinitionVersion: 1, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = record.Transition(Queued, now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = record.Transition(Running, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return record
+}
+
 func TestRecordRejectsProgressRegressionAndKnownTotalChanges(t *testing.T) {
 	now := time.Date(2026, 7, 29, 10, 0, 0, 0, time.UTC)
 	record, err := NewRecord(Spec{ID: "task-1", Type: "import", DefinitionVersion: 1, Now: now})

@@ -168,10 +168,11 @@ func (s *TaskStore) UpdateExecution(ctx context.Context, record execution.Record
 	result, err := tx.ExecContext(ctx, `
 		UPDATE rhinoq_task_executions SET
 			runtime=$2, job_id=$3, external_id=$4, state=$5,
-			version=$6, updated_at=$7
-		WHERE id=$1 AND task_id=$8 AND attempt=$9 AND version=$10`,
+			result_ref=$6, failure_reason=$7, version=$8, updated_at=$9
+		WHERE id=$1 AND task_id=$10 AND attempt=$11 AND version=$12`,
 		record.ID, record.Runtime, nullableString(record.Reference.JobID),
 		nullableString(record.Reference.ExternalID), record.State,
+		nullableString(record.ResultRef), nullableString(record.FailureReason),
 		record.Version, record.UpdatedAt, record.TaskID, record.Attempt, expectedVersion)
 	if err != nil {
 		return execution.Record{}, 0, err
@@ -251,13 +252,15 @@ func scanTask(row rowScanner) (task.Record, error) {
 }
 
 const executionSelect = `SELECT id, task_id, attempt, runtime,
-	COALESCE(job_id,''), COALESCE(external_id,''), state, version,
+	COALESCE(job_id,''), COALESCE(external_id,''), state,
+	COALESCE(result_ref,''), COALESCE(failure_reason,''), version,
 	created_at, updated_at FROM rhinoq_task_executions`
 
 func scanExecution(row rowScanner) (execution.Record, error) {
 	var record execution.Record
 	err := row.Scan(&record.ID, &record.TaskID, &record.Attempt, &record.Runtime,
 		&record.Reference.JobID, &record.Reference.ExternalID, &record.State,
+		&record.ResultRef, &record.FailureReason,
 		&record.Version, &record.CreatedAt, &record.UpdatedAt)
 	if err != nil {
 		return execution.Record{}, err

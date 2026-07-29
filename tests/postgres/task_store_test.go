@@ -89,6 +89,188 @@ func TestPublicTaskFacadeUsesPostgres(t *testing.T) {
 	}
 }
 
+// The no-op path skips UpdateTask entirely, so the thing worth proving against
+// a real database is that nothing was written: the stored row, not just the
+// returned snapshot, must still carry the original version.
+func TestPostgresDoesNotWriteDuplicateProgressOrCancellation(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	client, err := rhinoq.NewPostgres(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	snapshot, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{
+		ID: "task-duplicate", Type: "bulk-download", DefinitionVersion: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err = client.QueueTask(ctx, snapshot.ID, snapshot.EntityVersion); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err = client.StartTask(ctx, snapshot.ID, snapshot.EntityVersion); err != nil {
+		t.Fatal(err)
+	}
+	total := int64(10)
+	progress := rhinoq.TaskProgress{Completed: 6, Total: &total}
+	snapshot, err = client.ReportTaskProgress(ctx, snapshot.ID, snapshot.EntityVersion, progress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := snapshot.EntityVersion
+	storedVersion, storedUpdatedAt := storedTaskRow(t, snapshot.ID)
+
+	for attempt := 0; attempt < 3; attempt++ {
+		repeated, err := client.ReportTaskProgress(ctx, snapshot.ID, written, progress)
+		if err != nil {
+			t.Fatalf("re-delivery %d was refused: %v", attempt, err)
+		}
+		if repeated.EntityVersion != written {
+			t.Fatalf("re-delivery %d advanced the version: %+v", attempt, repeated)
+		}
+	}
+	if version, updatedAt := storedTaskRow(t, snapshot.ID); version != storedVersion ||
+		!updatedAt.Equal(storedUpdatedAt) {
+		t.Fatalf(
+			"duplicates reached the row: version %d→%d, updatedAt %s→%s",
+			storedVersion, version, storedUpdatedAt, updatedAt,
+		)
+	}
+
+	cancelled, err := client.RequestTaskCancellation(ctx, snapshot.ID, written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.EntityVersion != written+1 ||
+		cancelled.Cancellation.Status != "requested" {
+		t.Fatalf("unexpected cancellation snapshot: %+v", cancelled)
+	}
+	repeated, err := client.RequestTaskCancellation(ctx, snapshot.ID, written)
+	if err != nil {
+		t.Fatalf("a repeated cancellation request was refused: %v", err)
+	}
+	if repeated.EntityVersion != cancelled.EntityVersion {
+		t.Fatalf("repeated cancellation advanced the version: %+v", repeated)
+	}
+	// A real change from the same stale version is still fenced.
+	if _, err := client.ReportTaskProgress(
+		ctx, snapshot.ID, written, rhinoq.TaskProgress{Completed: 7, Total: &total},
+	); !errors.Is(err, rhinoq.ErrTaskVersionConflict) {
+		t.Fatalf("a genuine stale write must still conflict, got %v", err)
+	}
+}
+
+// Per-item outcome is what lets a fan-out drop its parallel item store, so it
+// has to survive the round trip through real columns, not just memory.
+func TestPostgresPersistsPerExecutionOutcome(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	client, err := rhinoq.NewPostgres(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{
+		ID: "task-batch", Type: "bulk-download", OwnerID: "tenant-acme",
+		DefinitionVersion: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct{ execution, job string }{
+		{"exec-1", "bull-1"}, {"exec-2", "bull-2"},
+	} {
+		if _, err := client.CreateTaskExecution(ctx, "task-batch",
+			rhinoq.TaskExecutionCreateRequest{ID: item.execution, Runtime: "bullmq"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.BindTaskExecution(ctx, item.execution,
+			rhinoq.TaskExecutionBinding{Runtime: "bullmq", ExternalID: item.job}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	advance := func(id string, state string) rhinoq.TaskExecution {
+		t.Helper()
+		current, err := client.GetTaskExecution(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.TransitionTaskExecution(ctx, id, current.Version, state); err != nil {
+			t.Fatal(err)
+		}
+		current, err = client.GetTaskExecution(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return current
+	}
+
+	advance("exec-1", "running")
+	succeeded := advance("exec-1", "succeeded")
+	if _, err := client.AttachTaskExecutionResult(
+		ctx, "exec-1", succeeded.Version, "s3://videos/batch/item-1.mp4",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	advance("exec-2", "running")
+	running, err := client.GetTaskExecution(ctx, "exec-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := client.FailTaskExecution(
+		ctx, "exec-2", running.Version, "source mirror returned 404 after 3 attempts",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, attempt := range snapshot.Executions {
+		switch attempt.ID {
+		case "exec-1":
+			if !attempt.HasResult || attempt.FailureReason != "" {
+				t.Fatalf("succeeded attempt lost its outcome: %+v", attempt)
+			}
+		case "exec-2":
+			if attempt.HasResult ||
+				attempt.FailureReason != "source mirror returned 404 after 3 attempts" {
+				t.Fatalf("failed attempt lost its reason: %+v", attempt)
+			}
+		}
+	}
+
+	results, err := client.GetTaskExecutionResults(ctx, "task-batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results.EntityVersion != snapshot.EntityVersion || len(results.Executions) != 2 {
+		t.Fatalf("unexpected execution results: %+v", results)
+	}
+	if results.Executions[0].Reference != "s3://videos/batch/item-1.mp4" ||
+		results.Executions[1].Reference != "" ||
+		results.Executions[1].FailureReason != "source mirror returned 404 after 3 attempts" {
+		t.Fatalf("per-item outcome did not survive PostgreSQL: %+v", results.Executions)
+	}
+}
+
+func storedTaskRow(t *testing.T, id string) (int64, time.Time) {
+	t.Helper()
+	var version int64
+	var updatedAt time.Time
+	if err := testDB.QueryRowContext(
+		context.Background(),
+		`SELECT version, updated_at FROM rhinoq_tasks WHERE id=$1`,
+		id,
+	).Scan(&version, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	return version, updatedAt
+}
+
 func TestPostgresPersistsCancellationOutcome(t *testing.T) {
 	if testDB == nil {
 		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")

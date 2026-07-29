@@ -2,8 +2,10 @@ package tasks
 
 import (
 	"context"
+	"sort"
 
 	taskcontract "github.com/madebyduy/RhinoQ/internal/contracts/task"
+	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
@@ -47,6 +49,37 @@ func (s *Service) GetResult(ctx context.Context, id task.ID) (taskcontract.Resul
 		return taskcontract.Result{}, ports.ErrTaskResultNotFound
 	}
 	return newResult(record)
+}
+
+func newExecutionResults(
+	record task.Record,
+	attempts []execution.Record,
+) (taskcontract.ExecutionResults, error) {
+	items := make([]taskcontract.ExecutionResult, 0, len(attempts))
+	for _, attempt := range attempts {
+		if attempt.TaskID != record.ID.String() {
+			return taskcontract.ExecutionResults{}, taskcontract.ErrInvalidResult
+		}
+		items = append(items, taskcontract.ExecutionResult{
+			ExecutionID:   attempt.ID.String(),
+			Attempt:       attempt.Attempt,
+			State:         attempt.State.String(),
+			Reference:     attempt.ResultRef,
+			FailureReason: attempt.FailureReason,
+			UpdatedAt:     attempt.UpdatedAt,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Attempt < items[j].Attempt })
+	results := taskcontract.ExecutionResults{
+		SchemaVersion: taskcontract.ResultSchemaVersion,
+		EntityVersion: record.Version,
+		TaskID:        record.ID.String(),
+		Executions:    items,
+	}
+	if err := results.Validate(); err != nil {
+		return taskcontract.ExecutionResults{}, err
+	}
+	return results, nil
 }
 
 func newResult(record task.Record) (taskcontract.Result, error) {

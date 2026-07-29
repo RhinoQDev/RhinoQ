@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+- **Breaking (`@rhinoq/node`):** `BullMQTaskBridge` now requires
+  `terminalProjection`; there is no default. Only the application knows whether
+  one BullMQ job is the whole user-facing Task, and the previous
+  `single-execution` default drove a fan-out batch to a terminal `succeeded` on
+  its first finished item — silently, and irreversibly, because terminal Task
+  states are never reopened. Migration: pass `'single-execution'` to keep the
+  old behavior, or `'execution-only'` for fan-out. TypeScript callers get a
+  compile error; JavaScript callers get a `TypeError` at construction instead
+  of a wrong terminal state at the first completed job.
+
+- Added per-attempt outcome, requiring PostgreSQL schema **017** (additive).
+  A Task holds one aggregate result reference; a fan-out now records one per
+  item, so an application no longer has to keep a parallel per-item store to
+  answer "where did item 37 land" and "why did item 38 fail". `Execution` gains
+  `resultRef` (`POST /v1/task-executions/{id}/result`) and `failureReason`
+  (`POST /v1/task-executions/{id}/state` with
+  `{"state":"failed","reason":"..."}`), bounded and truncated on rune
+  boundaries because it travels with every poll. `TaskSnapshot` exposes only
+  `hasResult` and `failureReason` per execution — never the reference itself,
+  matching the existing rule that polling must not repeatedly ship a storage
+  location. Read references through the owner-scoped
+  `GET /v1/tasks/{id}/execution-results`. The BullMQ bridge maps
+  `resultReference` onto the Execution that produced it and adds a
+  `failureReason` hook defaulting to BullMQ's `failedReason`; previously
+  `resultReference` was ignored entirely in `execution-only` mode.
+
+- Fixed duplicate lifecycle commands consuming an entity version. A progress
+  write carrying the value already stored, and a cancellation request on a Task
+  already in `cancel_requested`, now return `200` with the current snapshot,
+  leave `entityVersion` unchanged and do not touch the store. Neither is fenced:
+  a write that changes nothing cannot lose an update, so a stale
+  `expectedVersion` is accepted for these two commands only. Queues re-deliver
+  events on reconnect, so version churn here pushed an identical snapshot to
+  every `watchTask()` client and turned duplicates into
+  `RHINOQ_VERSION_CONFLICT` for writers that were genuinely current. The rule
+  lives in the Task domain; the previous read-then-skip guard in the Gateway
+  cancel handler was removed because it raced concurrent writers.
+
+- Reduced round trips on the Task write path. Commands render their snapshot
+  from the row the store just fenced instead of re-reading the Task, which also
+  stops a command from being answered with a version some concurrent writer
+  produced. Task creation no longer re-reads at all. In the BullMQ bridge a
+  progress event costs 4 Gateway calls instead of 6, or 3 when the value is
+  unchanged; completed and failed events drop one lookup each.
+
+- `@rhinoq/node` now ships a CommonJS entry point alongside ESM, so a NestJS
+  application — still CommonJS by default — can `require('@rhinoq/node')` in a
+  constructor instead of routing every touch point through `await import()`.
+  Verified from a clean install of the packed tarball in both module systems.
+
+- The Gateway's Task surface no longer returns operator remediation to end-user
+  credentials. A `401` on an owner-scoped Task route keeps the
+  `RHINOQ_UNAUTHORIZED` code but drops the `RHINOQ_AGENT_TOKEN` environment
+  variable and the `curl` health check that the deployer-facing message carries.
+
 - Fixed four contracts exposed by the real BullMQ adopter probe. Task snapshots
   now return `ownerId` so the application can authorize without a parallel
   Task-owner table (the Agent bearer remains an operator credential, not

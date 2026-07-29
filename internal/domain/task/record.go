@@ -113,7 +113,7 @@ func (r Record) ApplyProgress(progress Progress, now time.Time) (Record, error) 
 	if !progress.Valid() {
 		return r, ErrInvalidProgress
 	}
-	if r.State != Running && r.State != CancelRequested {
+	if !r.acceptsProgress() {
 		return r, ErrProgressState
 	}
 	if progress.Completed < r.Progress.Completed {
@@ -124,10 +124,27 @@ func (r Record) ApplyProgress(progress Progress, now time.Time) (Record, error) 
 			return r, ErrProgressTotal
 		}
 	}
+	// A re-delivered event carrying the value already stored changes nothing.
+	// Advancing the version for it would push an identical snapshot to every
+	// watcher and fail concurrent writers that still hold the previous version.
+	if progress == r.Progress {
+		return r, nil
+	}
 	r.Progress = progress
 	r.Version++
 	r.UpdatedAt = now
 	return r, nil
+}
+
+// ProgressIsCurrent reports whether ApplyProgress would leave this record
+// unchanged. A write that cannot lose an update does not need a version fence,
+// so callers use this to answer a duplicate without touching the store.
+func (r Record) ProgressIsCurrent(progress Progress) bool {
+	return r.acceptsProgress() && progress.Valid() && progress == r.Progress
+}
+
+func (r Record) acceptsProgress() bool {
+	return r.State == Running || r.State == CancelRequested
 }
 
 func (r Record) AttachResult(resultRef string, now time.Time) (Record, error) {

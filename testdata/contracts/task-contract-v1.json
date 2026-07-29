@@ -21,7 +21,25 @@
         "attempt": 1,
         "runtime": "bullmq",
         "state": "running",
-        "version": 3
+        "version": 3,
+        "hasResult": false
+      },
+      {
+        "id": "execution-contract-02",
+        "attempt": 2,
+        "runtime": "bullmq",
+        "state": "succeeded",
+        "version": 4,
+        "hasResult": true
+      },
+      {
+        "id": "execution-contract-03",
+        "attempt": 3,
+        "runtime": "bullmq",
+        "state": "failed",
+        "version": 4,
+        "hasResult": false,
+        "failureReason": "source mirror returned 404 after 3 attempts"
       }
     ],
     "createdAt": "2026-07-29T14:00:00Z",
@@ -33,5 +51,32 @@
     "taskId": "task-contract-01",
     "reference": "s3://reports/task-contract-01.pdf",
     "updatedAt": "2026-07-29T14:02:00Z"
+  },
+  "executionResults": {
+    "schemaVersion": 1,
+    "entityVersion": 7,
+    "taskId": "task-contract-01",
+    "executions": [
+      {
+        "executionId": "execution-contract-01",
+        "attempt": 1,
+        "state": "running",
+        "updatedAt": "2026-07-29T14:02:00Z"
+      },
+      {
+        "executionId": "execution-contract-02",
+        "attempt": 2,
+        "state": "succeeded",
+        "reference": "s3://reports/task-contract-01/item-2.mp4",
+        "updatedAt": "2026-07-29T14:02:00Z"
+      },
+      {
+        "executionId": "execution-contract-03",
+        "attempt": 3,
+        "state": "failed",
+        "failureReason": "source mirror returned 404 after 3 attempts",
+        "updatedAt": "2026-07-29T14:02:00Z"
+      }
+    ]
   }
 }

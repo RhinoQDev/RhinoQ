@@ -122,6 +122,23 @@ func describe(err error) (int, ErrorBody) {
 	}
 }
 
+// unauthorizedTask answers the end-user Task surface. It carries the same code
+// as the operator refusal but none of its deployment guidance: the caller here
+// holds a per-owner credential and can act on neither the Agent's environment
+// nor its health endpoint.
+func unauthorizedTask() (int, ErrorBody) {
+	message := diagnostic.Message{
+		Code:         "RHINOQ_UNAUTHORIZED",
+		WhatHappened: "The request did not carry a credential that may act on this Task.",
+		WhyItMatters: "A Task credential is scoped to one owner. Reading or cancelling\n" +
+			"someone else's work would cross that boundary.",
+		WhatRhinoQDid: "The request was refused. Nothing was read and nothing was written.",
+		HowToFix: "Send the Task credential issued to this owner:\n" +
+			"  Authorization: Bearer <task token>",
+	}
+	return http.StatusUnauthorized, ErrorBody{Code: message.Code, Message: message.Error()}
+}
+
 func unauthorized() (int, ErrorBody) {
 	message := diagnostic.Message{
 		Code:          "RHINOQ_UNAUTHORIZED",

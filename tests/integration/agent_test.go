@@ -232,6 +232,60 @@ func TestAgentRejectsProgressThatMovesBackwards(t *testing.T) {
 	}
 }
 
+// BullMQ re-delivers progress on a QueueEvents reconnect, so an identical write
+// is the normal case in a fan-out. It must leave entityVersion alone: watchers
+// only yield newer versions, so churn here becomes a spurious render for every
+// client and a conflict for every writer that is genuinely current.
+func TestAgentKeepsIdenticalProgressAndRepeatedCancellationIdempotent(t *testing.T) {
+	server := newAgentServer(t)
+	var snapshot rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-duplicate", "type": "bulk-download", "definitionVersion": 1,
+	}, http.StatusCreated, &snapshot)
+	for _, state := range []rhinoq.TaskState{rhinoq.TaskQueued, rhinoq.TaskRunning} {
+		call(t, server, http.MethodPost, "/v1/tasks/task-duplicate/state", map[string]any{
+			"expectedVersion": snapshot.EntityVersion, "state": state,
+		}, http.StatusOK, &snapshot)
+	}
+	progress := map[string]any{"completed": 6, "total": 10}
+	call(t, server, http.MethodPost, "/v1/tasks/task-duplicate/progress", map[string]any{
+		"expectedVersion": snapshot.EntityVersion, "progress": progress,
+	}, http.StatusOK, &snapshot)
+
+	written := snapshot.EntityVersion
+	for attempt := 0; attempt < 3; attempt++ {
+		var repeated rhinoq.TaskSnapshot
+		call(t, server, http.MethodPost, "/v1/tasks/task-duplicate/progress", map[string]any{
+			"expectedVersion": written, "progress": progress,
+		}, http.StatusOK, &repeated)
+		if repeated.EntityVersion != written || repeated.Progress.Completed != 6 {
+			t.Fatalf("re-delivery %d moved the snapshot: %+v", attempt, repeated)
+		}
+	}
+	var polled rhinoq.TaskSnapshot
+	call(t, server, http.MethodGet, "/v1/tasks/task-duplicate", nil, http.StatusOK, &polled)
+	if polled.EntityVersion != written {
+		t.Fatalf("duplicates leaked into the stored version: %+v", polled)
+	}
+
+	var cancelled rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks/task-duplicate/cancel", map[string]any{
+		"expectedVersion": written,
+	}, http.StatusOK, &cancelled)
+	if cancelled.State != rhinoq.TaskCancelRequested ||
+		cancelled.EntityVersion != written+1 {
+		t.Fatalf("unexpected cancellation snapshot: %+v", cancelled)
+	}
+	var repeatedCancel rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks/task-duplicate/cancel", map[string]any{
+		"expectedVersion": written,
+	}, http.StatusOK, &repeatedCancel)
+	if repeatedCancel.EntityVersion != cancelled.EntityVersion ||
+		repeatedCancel.Cancellation.Status != cancelled.Cancellation.Status {
+		t.Fatalf("repeated cancellation must be a no-op: %+v", repeatedCancel)
+	}
+}
+
 func TestAgentLetsRuntimeAdaptersLookupAndFenceExecutionState(t *testing.T) {
 	server := newAgentServer(t)
 	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
@@ -258,6 +312,96 @@ func TestAgentLetsRuntimeAdaptersLookupAndFenceExecutionState(t *testing.T) {
 	if updated.EntityVersion != 4 || updated.Executions[0].State != "running" {
 		t.Fatalf("execution update must atomically advance task snapshot: %+v", updated)
 	}
+}
+
+// A fan-out has to answer "where did item 2 land" and "why did item 3 fail".
+// Without that the application keeps its own per-item store, and the Task layer
+// removes no plumbing at all.
+func TestAgentRecordsPerItemOutcomeForAFanOut(t *testing.T) {
+	server := newAgentServer(t)
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-batch", "type": "bulk-download", "definitionVersion": 1,
+	}, http.StatusCreated, nil)
+
+	type item struct{ execution, job string }
+	items := []item{{"exec-1", "bull-1"}, {"exec-2", "bull-2"}, {"exec-3", "bull-3"}}
+	for _, current := range items {
+		call(t, server, http.MethodPost, "/v1/tasks/task-batch/executions", map[string]any{
+			"id": current.execution, "runtime": "bullmq",
+		}, http.StatusCreated, nil)
+		call(t, server, http.MethodPost, "/v1/task-executions/"+current.execution+"/bind",
+			map[string]any{"runtime": "bullmq", "externalId": current.job},
+			http.StatusOK, nil)
+	}
+
+	var execution rhinoq.TaskExecution
+	call(t, server, http.MethodGet,
+		"/v1/task-executions/lookup?runtime=bullmq&externalId=bull-2", nil,
+		http.StatusOK, &execution)
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-2/state", map[string]any{
+		"expectedVersion": execution.Version, "state": "running",
+	}, http.StatusOK, nil)
+	call(t, server, http.MethodGet, "/v1/task-executions/exec-2", nil, http.StatusOK, &execution)
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-2/state", map[string]any{
+		"expectedVersion": execution.Version, "state": "succeeded",
+	}, http.StatusOK, nil)
+	call(t, server, http.MethodGet, "/v1/task-executions/exec-2", nil, http.StatusOK, &execution)
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-2/result", map[string]any{
+		"expectedVersion": execution.Version,
+		"reference":       "s3://videos/batch/item-2.mp4",
+	}, http.StatusOK, nil)
+
+	call(t, server, http.MethodGet, "/v1/task-executions/exec-3", nil, http.StatusOK, &execution)
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-3/state", map[string]any{
+		"expectedVersion": execution.Version, "state": "running",
+	}, http.StatusOK, nil)
+	var snapshot rhinoq.TaskSnapshot
+	call(t, server, http.MethodGet, "/v1/task-executions/exec-3", nil, http.StatusOK, &execution)
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-3/state", map[string]any{
+		"expectedVersion": execution.Version,
+		"state":           "failed",
+		"reason":          "source mirror returned 404 after 3 attempts",
+	}, http.StatusOK, &snapshot)
+
+	// The snapshot carries the outcome but never the storage location.
+	byID := map[string]rhinoq.TaskExecutionSummary{}
+	for _, attempt := range snapshot.Executions {
+		byID[attempt.ID] = attempt
+	}
+	if !byID["exec-2"].HasResult || byID["exec-2"].FailureReason != "" {
+		t.Fatalf("succeeded item lost its result flag: %+v", byID["exec-2"])
+	}
+	if byID["exec-3"].HasResult ||
+		byID["exec-3"].FailureReason != "source mirror returned 404 after 3 attempts" {
+		t.Fatalf("failed item lost its reason: %+v", byID["exec-3"])
+	}
+	if byID["exec-1"].HasResult || byID["exec-1"].FailureReason != "" {
+		t.Fatalf("untouched item invented an outcome: %+v", byID["exec-1"])
+	}
+	if strings.Contains(marshal(t, snapshot), "s3://") {
+		t.Fatalf("the snapshot leaked a storage reference: %s", marshal(t, snapshot))
+	}
+
+	var results rhinoq.TaskExecutionResults
+	call(t, server, http.MethodGet, "/v1/tasks/task-batch/execution-results", nil,
+		http.StatusOK, &results)
+	if results.EntityVersion != snapshot.EntityVersion || len(results.Executions) != 3 {
+		t.Fatalf("unexpected execution results: %+v", results)
+	}
+	if results.Executions[1].Reference != "s3://videos/batch/item-2.mp4" ||
+		results.Executions[2].FailureReason != "source mirror returned 404 after 3 attempts" ||
+		results.Executions[0].Reference != "" {
+		t.Fatalf("per-item outcome did not round-trip: %+v", results.Executions)
+	}
+}
+
+func marshal(t *testing.T, value any) string {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 // A worker written in any language should be able to do the whole cycle over
@@ -590,6 +734,19 @@ func TestAgentRefusesRequestsWithoutAToken(t *testing.T) {
 	}
 	if !strings.Contains(body, "RHINOQ_UNAUTHORIZED") || !strings.Contains(body, "How to fix") {
 		t.Fatalf("the refusal should say how to authenticate:\n%s", body)
+	}
+
+	// The Task surface is read by end users, so its refusal must not hand out
+	// the deployer's remediation steps.
+	status, body = rawCall(t, server, http.MethodGet, "/v1/tasks/task-1", nil, "wrong-token-at-least-thirty-two-bytes")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("an unknown Task credential must be refused, got %d", status)
+	}
+	if !strings.Contains(body, "RHINOQ_UNAUTHORIZED") {
+		t.Fatalf("the Task refusal must keep the typed code:\n%s", body)
+	}
+	if strings.Contains(body, "RHINOQ_AGENT_TOKEN") || strings.Contains(body, "curl") {
+		t.Fatalf("the Task refusal leaked operator guidance:\n%s", body)
 	}
 }
 

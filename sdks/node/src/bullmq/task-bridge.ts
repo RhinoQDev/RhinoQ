@@ -4,6 +4,7 @@ import {
 } from '../gateway/client.js';
 import type {
   TaskCreateRequest,
+  TaskExecution,
   TaskProgress,
   TaskSnapshot,
   TaskState,
@@ -60,8 +61,13 @@ export interface BullMQTaskBridgeOptions {
    * Task. Use `execution-only` for fan-out: the bridge records each Execution,
    * while the application completes/fails the Task after its aggregate
    * outcome is known.
+   *
+   * There is deliberately no default. Only the application knows whether one
+   * job is the whole Task, and guessing `single-execution` for a fan-out drives
+   * the batch to a terminal `succeeded` on its first finished item — silently,
+   * and irreversibly, because terminal Task states are never reopened.
    */
-  terminalProjection?: 'single-execution' | 'execution-only';
+  terminalProjection: 'single-execution' | 'execution-only';
   /** Maps BullMQ progress into the portable Task progress contract. */
   progress?: (event: BullMQEvent) => TaskProgress | undefined;
   /**
@@ -70,8 +76,18 @@ export interface BullMQTaskBridgeOptions {
    * terminal. Omitting it leaves the Task running instead of falsely failing it.
    */
   isTerminalFailure?: (event: BullMQEvent) => Promise<boolean>;
-  /** Maps a completed BullMQ return value to an application-owned result ref. */
+  /**
+   * Maps a completed BullMQ return value to an application-owned result ref.
+   * The reference is recorded on the Execution that produced it, and — in
+   * `single-execution` mode, where one job is the whole Task — on the Task too.
+   */
   resultReference?: (event: BullMQEvent) => Promise<string | undefined>;
+  /**
+   * Explains one failed item to the user. Defaults to BullMQ's `failedReason`.
+   * Return undefined to record the failure without a reason; the Gateway bounds
+   * whatever is returned, because it is polled with the snapshot.
+   */
+  failureReason?: (event: BullMQEvent) => string | undefined;
   onError?: (error: unknown, event: BullMQEvent) => void;
 }
 
@@ -88,16 +104,30 @@ export class BullMQTaskBridge {
   private readonly progress: (event: BullMQEvent) => TaskProgress | undefined;
   private readonly isTerminalFailure?: (event: BullMQEvent) => Promise<boolean>;
   private readonly resultReference?: (event: BullMQEvent) => Promise<string | undefined>;
+  private readonly failureReason: (event: BullMQEvent) => string | undefined;
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
   private readonly listeners: Array<[QueueEvent, (event: BullMQEvent) => void]>;
 
   constructor(options: BullMQTaskBridgeOptions) {
     this.client = options.client;
     this.events = options.events;
-    this.terminalProjection = options.terminalProjection ?? 'single-execution';
+    // JavaScript callers get no compile-time check, so refuse at construction
+    // rather than at the first completed job.
+    if (
+      options.terminalProjection !== 'single-execution' &&
+      options.terminalProjection !== 'execution-only'
+    ) {
+      throw new TypeError(
+        "BullMQTaskBridge requires terminalProjection: 'single-execution' when one " +
+          "BullMQ job is the whole Task, or 'execution-only' when the Task fans out " +
+          'into several jobs and the application completes it.',
+      );
+    }
+    this.terminalProjection = options.terminalProjection;
     this.progress = options.progress ?? defaultProgress;
     this.isTerminalFailure = options.isTerminalFailure;
     this.resultReference = options.resultReference;
+    this.failureReason = options.failureReason ?? defaultFailureReason;
     this.onError = options.onError;
     this.listeners = [
       ['waiting', (event) => this.run(event, () => this.queue(event.jobId))],
@@ -197,11 +227,19 @@ export class BullMQTaskBridge {
 
   private async start(jobId: string): Promise<void> {
     const execution = await this.find(jobId);
-    if (!execution) {
-      return;
+    if (execution) {
+      await this.activate(execution);
     }
-    await this.ensureTask(execution.taskId, 'running');
+  }
+
+  /**
+   * Moves one attempt and its Task to running. The Execution goes first because
+   * the store advances the Task version in the same transaction, so the
+   * Snapshot returned here is the freshest one a caller can hold.
+   */
+  private async activate(execution: TaskExecution): Promise<TaskSnapshot> {
     await this.ensureExecution(execution.id, 'running');
+    return this.ensureTask(execution.taskId, 'running');
   }
 
   private async reportProgress(event: BullMQEvent): Promise<void> {
@@ -214,11 +252,16 @@ export class BullMQTaskBridge {
       if (!execution) {
         return;
       }
-      await this.start(event.jobId);
-      const task = await this.client.getTask(execution.taskId);
-      if (task.state === 'running' || task.state === 'cancel_requested') {
-        await this.client.reportTaskProgress(task.id, task.entityVersion, progress);
+      const task = await this.activate(execution);
+      if (task.state !== 'running' && task.state !== 'cancel_requested') {
+        return;
       }
+      // QueueEvents re-delivers progress after a reconnect. The Gateway treats
+      // an identical write as a no-op, so this only skips the round trip.
+      if (sameProgress(task.progress, progress)) {
+        return;
+      }
+      await this.client.reportTaskProgress(task.id, task.entityVersion, progress);
     });
   }
 
@@ -227,22 +270,33 @@ export class BullMQTaskBridge {
     if (!execution) {
       return;
     }
-    await this.start(event.jobId);
+    await this.activate(execution);
     await this.ensureExecution(execution.id, 'succeeded');
+
+    // The reference belongs to the attempt that produced it. Recording it here
+    // instead of only on the Task is what lets a fan-out answer "where did item
+    // 37 land" without the application keeping a parallel item store — and it
+    // is why `resultReference` used to do nothing at all in execution-only mode.
+    const reference = await this.resultReference?.(event);
+    if (reference) {
+      await this.converge(async () => {
+        const current = await this.client.getTaskExecution(execution.id);
+        await this.client.attachTaskExecutionResult(current.id, current.version, reference);
+      });
+    }
+
     if (this.terminalProjection === 'execution-only') {
       return;
     }
-    let task = await this.ensureTask(execution.taskId, 'succeeded');
-    if (this.resultReference) {
-      const reference = await this.resultReference(event);
-      if (reference) {
-        await this.converge(async () => {
-          task = await this.client.getTask(execution.taskId);
-          if (!task.hasResult) {
-            await this.client.attachTaskResult(task.id, task.entityVersion, reference);
-          }
-        });
-      }
+    // One job is the whole Task here, so its output is also the Task's.
+    await this.ensureTask(execution.taskId, 'succeeded');
+    if (reference) {
+      await this.converge(async () => {
+        const task = await this.client.getTask(execution.taskId);
+        if (!task.hasResult) {
+          await this.client.attachTaskResult(task.id, task.entityVersion, reference);
+        }
+      });
     }
   }
 
@@ -258,8 +312,8 @@ export class BullMQTaskBridge {
     if (!execution) {
       return;
     }
-    await this.start(event.jobId);
-    await this.ensureExecution(execution.id, 'failed');
+    await this.activate(execution);
+    await this.ensureExecution(execution.id, 'failed', this.failureReason(event));
     if (this.terminalProjection === 'single-execution') {
       await this.ensureTask(execution.taskId, 'failed');
     }
@@ -276,7 +330,11 @@ export class BullMQTaskBridge {
     }
   }
 
-  private async ensureExecution(executionId: string, target: 'running' | 'succeeded' | 'failed'): Promise<void> {
+  private async ensureExecution(
+    executionId: string,
+    target: 'running' | 'succeeded' | 'failed',
+    reason?: string,
+  ): Promise<void> {
     await this.converge(async () => {
       const execution = await this.client.getTaskExecution(executionId);
       if (execution.state === target) {
@@ -284,13 +342,13 @@ export class BullMQTaskBridge {
       }
       if ((target === 'succeeded' || target === 'failed') && execution.state === 'dispatched') {
         await this.ensureExecution(executionId, 'running');
-        return this.ensureExecution(executionId, target);
+        return this.ensureExecution(executionId, target, reason);
       }
       if (
         (execution.state === 'dispatched' && target === 'running') ||
         (execution.state === 'running' && (target === 'succeeded' || target === 'failed'))
       ) {
-        await this.client.transitionTaskExecution(execution.id, execution.version, target);
+        await this.client.transitionTaskExecution(execution.id, execution.version, target, reason);
       }
     });
   }
@@ -338,8 +396,21 @@ function isCode(error: unknown, code: string): boolean {
   return error instanceof RhinoQError && error.code === code;
 }
 
+function defaultFailureReason(event: BullMQEvent): string | undefined {
+  const reason = event.failedReason?.trim();
+  return reason ? reason : undefined;
+}
+
 function isVersionConflict(error: unknown): boolean {
   return isCode(error, 'RHINOQ_VERSION_CONFLICT');
+}
+
+// The Snapshot omits an absent total and an empty message, so compare on the
+// stored meaning rather than on key presence.
+function sameProgress(current: TaskProgress, next: TaskProgress): boolean {
+  return current.completed === next.completed &&
+    current.total === next.total &&
+    (current.message ?? '') === (next.message ?? '');
 }
 
 function defaultProgress(event: BullMQEvent): TaskProgress | undefined {

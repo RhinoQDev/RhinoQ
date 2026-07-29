@@ -47,11 +47,31 @@ type TaskProgress struct {
 }
 
 type TaskExecutionSummary struct {
-	ID      string `json:"id"`
-	Attempt int    `json:"attempt"`
-	Runtime string `json:"runtime"`
-	State   string `json:"state"`
-	Version int64  `json:"version"`
+	ID            string `json:"id"`
+	Attempt       int    `json:"attempt"`
+	Runtime       string `json:"runtime"`
+	State         string `json:"state"`
+	Version       int64  `json:"version"`
+	HasResult     bool   `json:"hasResult"`
+	FailureReason string `json:"failureReason,omitempty"`
+}
+
+// TaskExecutionResult is one item's outcome in a fan-out. The reference is
+// deliberately absent from TaskSnapshot and read here instead.
+type TaskExecutionResult struct {
+	ExecutionID   string    `json:"executionId"`
+	Attempt       int       `json:"attempt"`
+	State         string    `json:"state"`
+	Reference     string    `json:"reference,omitempty"`
+	FailureReason string    `json:"failureReason,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+type TaskExecutionResults struct {
+	SchemaVersion int                   `json:"schemaVersion"`
+	EntityVersion int64                 `json:"entityVersion"`
+	TaskID        string                `json:"taskId"`
+	Executions    []TaskExecutionResult `json:"executions"`
 }
 
 type TaskCancellation struct {
@@ -114,16 +134,12 @@ func (c *Client) CreateTask(ctx context.Context, request TaskCreateRequest) (Tas
 	if err != nil {
 		return TaskSnapshot{}, err
 	}
-	record, err := service.Create(ctx, taskapp.CreateInput{
+	snapshot, err := service.CreateSnapshot(ctx, taskapp.CreateInput{
 		ID:                domaintask.ID(request.ID),
 		Type:              request.Type,
 		OwnerID:           request.OwnerID,
 		DefinitionVersion: request.DefinitionVersion,
 	})
-	if err != nil {
-		return TaskSnapshot{}, err
-	}
-	snapshot, err := service.Get(ctx, record.ID)
 	return publicTaskSnapshot(snapshot), err
 }
 
@@ -211,6 +227,55 @@ func (c *Client) TransitionTaskExecution(
 	return publicTaskSnapshot(snapshot), err
 }
 
+// AttachTaskExecutionResult records where one attempt's own output landed.
+// Use it for fan-out items; AttachTaskResult stays the aggregate answer.
+func (c *Client) AttachTaskExecutionResult(
+	ctx context.Context,
+	executionID string,
+	expectedVersion int64,
+	reference string,
+) (TaskSnapshot, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	snapshot, err := service.AttachExecutionResult(
+		ctx, execution.ID(executionID), expectedVersion, reference,
+	)
+	return publicTaskSnapshot(snapshot), err
+}
+
+// FailTaskExecution is TransitionTaskExecution to failed plus the reason the
+// user is owed for this item.
+func (c *Client) FailTaskExecution(
+	ctx context.Context,
+	executionID string,
+	expectedVersion int64,
+	reason string,
+) (TaskSnapshot, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	snapshot, err := service.FailExecutionSnapshot(
+		ctx, execution.ID(executionID), expectedVersion, reason,
+	)
+	return publicTaskSnapshot(snapshot), err
+}
+
+// GetTaskExecutionResults answers "what happened to each item" in one read.
+func (c *Client) GetTaskExecutionResults(
+	ctx context.Context,
+	taskID string,
+) (TaskExecutionResults, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskExecutionResults{}, err
+	}
+	results, err := service.ListExecutionResults(ctx, domaintask.ID(taskID))
+	return publicTaskExecutionResults(results), err
+}
+
 func (c *Client) AttachTaskResult(
 	ctx context.Context,
 	id string,
@@ -282,8 +347,15 @@ func (c *Client) FailTask(ctx context.Context, id string, expectedVersion int64)
 	return c.transitionTask(ctx, id, expectedVersion, domaintask.Failed)
 }
 
+// RequestTaskCancellation is idempotent: repeating it on a Task that already
+// carries the request returns the current snapshot unchanged.
 func (c *Client) RequestTaskCancellation(ctx context.Context, id string, expectedVersion int64) (TaskSnapshot, error) {
-	return c.transitionTask(ctx, id, expectedVersion, domaintask.CancelRequested)
+	service, err := c.taskService()
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	snapshot, err := service.RequestCancellation(ctx, domaintask.ID(id), expectedVersion)
+	return publicTaskSnapshot(snapshot), err
 }
 
 func (c *Client) CancelTask(ctx context.Context, id string, expectedVersion int64) (TaskSnapshot, error) {
@@ -336,11 +408,13 @@ func publicTaskSnapshot(snapshot taskcontract.Snapshot) TaskSnapshot {
 	executions := make([]TaskExecutionSummary, len(snapshot.Executions))
 	for i, attempt := range snapshot.Executions {
 		executions[i] = TaskExecutionSummary{
-			ID:      attempt.ID,
-			Attempt: attempt.Attempt,
-			Runtime: attempt.Runtime,
-			State:   attempt.State,
-			Version: attempt.Version,
+			ID:            attempt.ID,
+			Attempt:       attempt.Attempt,
+			Runtime:       attempt.Runtime,
+			State:         attempt.State,
+			Version:       attempt.Version,
+			HasResult:     attempt.HasResult,
+			FailureReason: attempt.FailureReason,
 		}
 	}
 	return TaskSnapshot{
@@ -370,6 +444,26 @@ func publicTaskExecution(record execution.Record) TaskExecution {
 	return TaskExecution{
 		ID: record.ID.String(), TaskID: record.TaskID, Runtime: record.Runtime,
 		State: record.State.String(), Version: record.Version,
+	}
+}
+
+func publicTaskExecutionResults(results taskcontract.ExecutionResults) TaskExecutionResults {
+	executions := make([]TaskExecutionResult, len(results.Executions))
+	for i, item := range results.Executions {
+		executions[i] = TaskExecutionResult{
+			ExecutionID:   item.ExecutionID,
+			Attempt:       item.Attempt,
+			State:         item.State,
+			Reference:     item.Reference,
+			FailureReason: item.FailureReason,
+			UpdatedAt:     item.UpdatedAt,
+		}
+	}
+	return TaskExecutionResults{
+		SchemaVersion: results.SchemaVersion,
+		EntityVersion: results.EntityVersion,
+		TaskID:        results.TaskID,
+		Executions:    executions,
 	}
 }
 

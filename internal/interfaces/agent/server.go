@@ -170,12 +170,14 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /v1/tasks/{id}/cancellation", s.guard(s.handleResolveTaskCancellation))
 	mux.HandleFunc("POST /v1/tasks/{id}/progress", s.guard(s.handleTaskProgress))
 	mux.HandleFunc("GET /v1/tasks/{id}/result", s.taskGuard(s.handleGetTaskResult))
+	mux.HandleFunc("GET /v1/tasks/{id}/execution-results", s.taskGuard(s.handleGetTaskExecutionResults))
 	mux.HandleFunc("POST /v1/tasks/{id}/result", s.guard(s.handleAttachTaskResult))
 	mux.HandleFunc("POST /v1/tasks/{id}/executions", s.guard(s.handleCreateTaskExecution))
 	mux.HandleFunc("GET /v1/task-executions/lookup", s.guard(s.handleLookupTaskExecution))
 	mux.HandleFunc("GET /v1/task-executions/{id}", s.guard(s.handleGetTaskExecution))
 	mux.HandleFunc("POST /v1/task-executions/{id}/bind", s.guard(s.handleBindTaskExecution))
 	mux.HandleFunc("POST /v1/task-executions/{id}/state", s.guard(s.handleTransitionTaskExecution))
+	mux.HandleFunc("POST /v1/task-executions/{id}/result", s.guard(s.handleAttachTaskExecutionResult))
 
 	// Worker surface: the four things an SDK does.
 	mux.HandleFunc("POST /v1/claim", s.guard(s.handleClaim))
@@ -222,7 +224,7 @@ func (s *Server) taskGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := s.taskPrincipal(r)
 		if !ok {
-			status, body := unauthorized()
+			status, body := unauthorizedTask()
 			writeJSON(w, status, errorResponse{Error: body})
 			return
 		}
@@ -388,10 +390,8 @@ func (s *Server) handleRequestTaskCancellation(w http.ResponseWriter, r *http.Re
 		s.fail(w, rhinoq.ErrTaskNotFound)
 		return
 	}
-	if snapshot.State == rhinoq.TaskCancelRequested {
-		writeJSON(w, http.StatusOK, snapshot)
-		return
-	}
+	// The repeat-safety of this command lives in the Task domain, not here: a
+	// read-then-skip at the edge would race any concurrent writer.
 	snapshot, err = s.client.RequestTaskCancellation(
 		r.Context(),
 		snapshot.ID,
@@ -484,6 +484,9 @@ func (s *Server) handleGetTaskExecution(w http.ResponseWriter, r *http.Request) 
 type transitionTaskExecutionRequest struct {
 	ExpectedVersion int64  `json:"expectedVersion"`
 	State           string `json:"state"`
+	// Reason is honoured for the failed state only: it is the per-item
+	// explanation a batch view shows next to the item that did not make it.
+	Reason string `json:"reason,omitempty"`
 }
 
 func (s *Server) handleTransitionTaskExecution(w http.ResponseWriter, r *http.Request) {
@@ -491,14 +494,66 @@ func (s *Server) handleTransitionTaskExecution(w http.ResponseWriter, r *http.Re
 	if !decode(w, r, &request) {
 		return
 	}
-	snapshot, err := s.client.TransitionTaskExecution(
-		r.Context(), r.PathValue("id"), request.ExpectedVersion, request.State,
+	id := r.PathValue("id")
+	var (
+		snapshot rhinoq.TaskSnapshot
+		err      error
+	)
+	if request.State == "failed" {
+		snapshot, err = s.client.FailTaskExecution(
+			r.Context(), id, request.ExpectedVersion, request.Reason,
+		)
+	} else {
+		snapshot, err = s.client.TransitionTaskExecution(
+			r.Context(), id, request.ExpectedVersion, request.State,
+		)
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+type attachTaskExecutionResultRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Reference       string `json:"reference"`
+}
+
+func (s *Server) handleAttachTaskExecutionResult(w http.ResponseWriter, r *http.Request) {
+	var request attachTaskExecutionResultRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.AttachTaskExecutionResult(
+		r.Context(), r.PathValue("id"), request.ExpectedVersion, request.Reference,
 	)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+// handleGetTaskExecutionResults is owner-scoped for the same reason the Task
+// result is: these references are storage locations, and one of them belonging
+// to another tenant is exactly the leak this contract exists to prevent.
+func (s *Server) handleGetTaskExecutionResults(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := s.client.GetTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
+		s.fail(w, rhinoq.ErrTaskNotFound)
+		return
+	}
+	results, err := s.client.GetTaskExecutionResults(r.Context(), snapshot.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 type transitionTaskRequest struct {

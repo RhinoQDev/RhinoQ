@@ -92,7 +92,7 @@ claims. Their current limits are documented below and in
 | Capability | Status |
 |---|---|
 | Go Task facade; Task and Execution domains | implemented and tested |
-| PostgreSQL Task store and migrations 015–016 | implemented; real-PostgreSQL contract tested |
+| PostgreSQL Task store and migrations 015–017 | implemented; real-PostgreSQL contract tested |
 | Versioned HTTP polling snapshots | implemented and integration tested; includes owner metadata and cancellation outcome |
 | Typed Node Task client | `beta.1` published on npm; `beta.2` source adds a version-safe framework-neutral Task watcher |
 | Result-reference read/write API | implemented; payload proxy/download is not |

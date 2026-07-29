@@ -1,0 +1,21 @@
+// A second emit so a CommonJS application can `require('@rhinoq/node')`.
+// NestJS — the most common host for BullMQ — still compiles to CommonJS by
+// default, and an ESM-only package forces every touch point through
+// `await import()`, which a Nest constructor cannot do.
+//
+// Types and source maps come from the ESM build; this one only emits runtime
+// JavaScript into dist/cjs, where scripts/mark-cjs.mjs drops the
+// {"type":"commonjs"} marker Node needs to read .js files there as CommonJS.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "dist/cjs",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "verbatimModuleSyntax": false
+  },
+  "include": ["src/**/*.ts"]
+}

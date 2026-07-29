@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -86,6 +87,80 @@ func TestLifecycleAndProgressCommandsFenceStaleVersions(t *testing.T) {
 	}
 	if _, err := service.UpdateProgress(ctx, record.ID, running.EntityVersion, task.Progress{Completed: 5}); !errors.Is(err, ports.ErrVersionConflict) {
 		t.Fatalf("expected stale command rejection, got %v", err)
+	}
+}
+
+// GAP-5: a duplicate is what a reconnecting fan-out bridge produces. It must
+// neither consume a version nor be answered with a conflict, even when the
+// writer's expectedVersion has been overtaken.
+func TestDuplicateProgressAndCancellationCommandsAreIdempotent(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)
+	store := memory.NewTaskStore()
+	service, err := New(store, store, func() time.Time {
+		now = now.Add(time.Second)
+		return now
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := service.Create(ctx, CreateInput{ID: "task-1", Type: "bulk-download", DefinitionVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := service.Transition(ctx, record.ID, record.Version, task.Queued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := service.Transition(ctx, record.ID, queued.EntityVersion, task.Running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := task.Progress{Completed: 6, Total: 10, HasTotal: true}
+	first, err := service.UpdateProgress(ctx, record.ID, running.EntityVersion, progress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		repeated, err := service.UpdateProgress(ctx, record.ID, first.EntityVersion, progress)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if repeated.EntityVersion != first.EntityVersion || !reflect.DeepEqual(repeated, first) {
+			t.Fatalf("re-delivery %d changed the snapshot: got=%+v want=%+v", attempt, repeated, first)
+		}
+	}
+	// The stale writer is the one this used to punish: its version is behind
+	// only because a duplicate moved it.
+	stale, err := service.UpdateProgress(ctx, record.ID, running.EntityVersion, progress)
+	if err != nil {
+		t.Fatalf("an identical write cannot lose an update, so it must not conflict: %v", err)
+	}
+	if stale.EntityVersion != first.EntityVersion {
+		t.Fatalf("no-op must not advance the version: %+v", stale)
+	}
+
+	requested, err := service.RequestCancellation(ctx, record.ID, first.EntityVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested.State != string(task.CancelRequested) ||
+		requested.EntityVersion != first.EntityVersion+1 {
+		t.Fatalf("unexpected cancellation snapshot: %+v", requested)
+	}
+	repeated, err := service.RequestCancellation(ctx, record.ID, first.EntityVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repeated, requested) {
+		t.Fatalf("repeated cancellation must be a no-op: got=%+v want=%+v", repeated, requested)
+	}
+	// Progress still flows while cancellation is pending, and a real change is
+	// still fenced.
+	if _, err := service.UpdateProgress(
+		ctx, record.ID, first.EntityVersion, task.Progress{Completed: 7, Total: 10, HasTotal: true},
+	); !errors.Is(err, ports.ErrVersionConflict) {
+		t.Fatalf("a genuine change from a stale version must still conflict, got %v", err)
 	}
 }
 

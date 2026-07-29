@@ -37,7 +37,8 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | Application Task service | implemented, unit-tested | create Task, public create/bind Execution, read Snapshot |
 | Versioned Snapshot DTO | implemented, contract-tested | trả `ownerId` để application authorize; không lộ runtime reference; shared Go/Node golden fixture locks Snapshot/Result v1 |
 | Lifecycle/progress commands | implemented, unit-tested | expected-version fencing; completed không giảm và known total không đổi |
-| PostgreSQL store và migrations 015–016 | implemented, real-DB contract passed | optimistic updates; cancellation outcome; concurrent per-Task attempt allocation has no gaps/duplicates |
+| Idempotent duplicate commands | implemented, contract-tested | progress trùng giá trị và cancellation request lặp không tăng `entityVersion`, không ghi store, không conflict |
+| PostgreSQL store và migrations 015–017 | implemented, real-DB contract passed | optimistic updates; cancellation outcome; per-attempt result/failure reason; concurrent per-Task attempt allocation has no gaps/duplicates |
 | Public Task facade | implemented, unit-tested | create/read/progress/result, create/bind Execution và explicit lifecycle commands |
 | Polling delivery | implemented, integration-tested | HTTP `POST/GET /v1/tasks`; typed Node client; stale write trả typed `409` |
 | Framework-neutral Node Task watcher | implemented, SDK-tested | non-overlapping polling; only newer aggregate versions are yielded; terminal/abort stop |
@@ -111,10 +112,47 @@ Progress hỗ trợ hai dạng:
 
 Frontend không được tự bịa phần trăm khi worker không biết total.
 
+Command ghi trùng là no-op, không phải conflict. Một progress write mang đúng
+giá trị đang lưu, và một cancellation request trên Task đã `cancel_requested`,
+đều trả `200` với snapshot hiện tại, **không tăng `entityVersion`** và không
+chạm store. Hai command này cũng không bị fence: một write không thay đổi gì thì
+không thể mất update, nên `expectedVersion` cũ vẫn được chấp nhận. Mọi thay đổi
+thật vẫn bị fence như cũ.
+
+Điều này quan trọng vì queue re-deliver event khi reconnect: nếu no-op tăng
+version thì `watchTask()` đẩy một snapshot trùng nội dung cho mọi client, và
+writer đang giữ version trước đó ăn `RHINOQ_VERSION_CONFLICT` do một bản trùng
+gây ra. Ràng buộc này nằm ở domain (`internal/domain/task`), không phải ở HTTP
+handler — vá bằng read-then-skip ở edge sẽ race với writer đồng thời.
+
 Result payload không nằm trong Snapshot. Application ghi một storage reference
 qua version-fenced command; client đọc reference bằng endpoint riêng. Cách này
 giữ polling response nhỏ và tránh gửi lặp storage location ở mỗi poll. RhinoQ
 chưa proxy/download payload và chưa áp tenant-level authorization.
+
+## Kết quả từng item
+
+Task giữ **một** aggregate result reference. Fan-out cần một cái cho mỗi item,
+nếu không application buộc phải nuôi store per-item song song — và chính store
+đó giữ cho lớp plumbing cũ không chết được, tức là Task layer không bỏ hộ việc
+gì cả.
+
+Vì vậy mỗi Execution mang thêm:
+
+- `resultRef`: artifact của riêng attempt đó (`POST /v1/task-executions/{id}/result`);
+- `failureReason`: prose user-facing cho một item hỏng, ghi kèm khi chuyển sang
+  `failed` (`{"state":"failed","reason":"..."}`), bị cắt ở
+  `execution.MaxFailureReasonLength` vì nó đi cùng mỗi lần poll.
+
+Snapshot chỉ lộ `hasResult` và `failureReason` cho từng Execution, **không lộ
+reference** — cùng nguyên tắc với Task result, vì storage location là thứ nhạy
+cảm và không nên gửi lặp ở mỗi poll. Đọc reference bằng
+`GET /v1/tasks/{id}/execution-results`, owner-scoped như endpoint result.
+
+Bridge BullMQ map `resultReference` vào Execution trước; ở `single-execution`
+thì gắn lên Task luôn vì một job đúng là cả Task. Trước thay đổi này,
+`resultReference` bị **bỏ qua hoàn toàn** ở `execution-only` — option có mà
+không làm gì, đúng ở chế độ cần nó nhất.
 
 ## Execution lifecycle
 
@@ -139,7 +177,12 @@ Execution mới với attempt tăng lên.
 Với fan-out, bridge dùng `terminalProjection: 'execution-only'`. Completion
 hoặc failure của item chỉ terminalize Execution tương ứng; application sở hữu
 điều kiện aggregate (ví dụ ZIP đã tồn tại) và gọi Task terminal command sau đó.
-Default `single-execution` chỉ đúng khi một job đại diện toàn bộ Task.
+`single-execution` chỉ đúng khi một job đại diện toàn bộ Task.
+
+Option này **bắt buộc, không có default**. Chỉ application biết một job có phải
+là cả Task hay không, và đoán `single-execution` cho fan-out sẽ đẩy batch sang
+`succeeded` ngay khi item đầu tiên xong — im lặng và không thể sửa, vì Task
+terminal không bao giờ mở lại. Bridge từ chối construct nếu thiếu.
 
 ## Provider support
 

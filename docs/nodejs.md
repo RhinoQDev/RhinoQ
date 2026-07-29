@@ -20,7 +20,11 @@ actual problem.
 The Task API is polling-first. `createTask`, `getTask`, `transitionTask` and
 `reportTaskProgress` return `TaskSnapshot` with monotonic `entityVersion`.
 `attachTaskResult` and `getTaskResult` exchange a storage reference separately
-from the polling snapshot.
+from the polling snapshot. A `reportTaskProgress` call carrying the value the
+Task already holds is a no-op: it returns `200` with the current snapshot,
+leaves `entityVersion` alone and is never answered with a version conflict. The
+same holds for repeating a cancellation request. Re-delivered queue events are
+therefore safe to forward without deduplicating them first.
 `createTaskExecution` and `bindTaskExecution` let an adapter register one
 attempt and its stable native/external runtime identity. Both return the newest
 aggregate Snapshot; they do not dispatch work themselves.
@@ -762,8 +766,9 @@ reproducible.
 ## Current limitations
 
 - The npm package and prebuilt CLI binaries are not released yet.
-- The preview package is ESM-only; CommonJS/NestJS packaging is not committed
-  until the framework integration is validated.
+- The package ships an ESM and a CommonJS entry point, verified from a clean
+  install of the packed tarball in both module systems. A NestJS *module* — DI
+  wiring, lifecycle hooks — is still not provided; only `require()` works.
 - Node workers require the HTTP Gateway; there is no native Node lease engine.
 - NestJS integration and framework lifecycle hooks are not implemented.
 - Gateway multi-tenant isolation and per-job HTTP RBAC are not complete.

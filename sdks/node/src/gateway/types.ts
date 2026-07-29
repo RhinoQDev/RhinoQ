@@ -64,6 +64,32 @@ export interface TaskExecutionSummary {
   runtime: string;
   state: string;
   version: number;
+  /**
+   * Whether this attempt recorded its own artifact. The reference itself is
+   * not in the snapshot: polling must not repeatedly ship a storage location.
+   * Read it with `getTaskExecutionResults`.
+   */
+  hasResult?: boolean;
+  /** User-facing prose for one failed item; bounded by the Gateway. */
+  failureReason?: string;
+}
+
+/** One item's outcome in a fan-out, read separately from the snapshot. */
+export interface TaskExecutionResult {
+  executionId: string;
+  attempt: number;
+  state: string;
+  reference?: string;
+  failureReason?: string;
+  updatedAt: string;
+}
+
+export interface TaskExecutionResults {
+  schemaVersion: 1;
+  /** The Task version this list was read at. */
+  entityVersion: number;
+  taskId: string;
+  executions: TaskExecutionResult[];
 }
 
 export interface TaskExecutionCreateRequest {
