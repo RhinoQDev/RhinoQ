@@ -69,5 +69,4 @@ its code, tests, documentation and evidence agree.
 2. Measure the BullMQ lifecycle bridge in a two-Task application before adding
    dispatch, retry, cancellation or reconciliation contracts.
 3. ProviderOperation domain with idempotency, confirmation and `uncertain`.
-4. Add generated/golden contract parity before a second SDK.
-5. Reconnect/stale-version property and browser tests before realtime.
+4. Reconnect/stale-version property and browser tests before realtime.

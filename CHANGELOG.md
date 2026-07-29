@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a shared Task wire-contract golden fixture consumed by both Go and
+  Node tests. `TaskSnapshot` and `TaskResult` v1 field names, nesting,
+  timestamps and execution summaries now fail CI when one language drifts
+  without an explicit contract/version update.
+
 - Fixed the PostgreSQL Finding suppression contract fixture to use the database
   clock instead of a calendar date that eventually expired. Added regression
   coverage proving active suppression stays hidden and expired suppression

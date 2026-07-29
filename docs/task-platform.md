@@ -35,7 +35,7 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | Task/Execution store ports | implemented, unit-tested | optimistic version checks và atomic attempt allocation |
 | Memory adapter | implemented, unit-tested | create/update/read Task và Execution |
 | Application Task service | implemented, unit-tested | create Task, public create/bind Execution, read Snapshot |
-| Versioned Snapshot DTO | implemented, contract-tested | không lộ owner hoặc runtime reference |
+| Versioned Snapshot DTO | implemented, contract-tested | không lộ owner hoặc runtime reference; shared Go/Node golden fixture locks Snapshot/Result v1 |
 | Lifecycle/progress commands | implemented, unit-tested | expected-version fencing; progress chỉ khi running/cancel requested |
 | PostgreSQL store và migration 015 | implemented, real-DB contract passed | optimistic updates; concurrent per-Task attempt allocation has no gaps/duplicates |
 | Public Task facade | implemented, unit-tested | create/read/progress/result, create/bind Execution và explicit lifecycle commands |

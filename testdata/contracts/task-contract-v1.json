@@ -1,0 +1,33 @@
+{
+  "snapshot": {
+    "schemaVersion": 1,
+    "entityVersion": 7,
+    "id": "task-contract-01",
+    "type": "report.export",
+    "state": "running",
+    "progress": {
+      "completed": 4,
+      "total": 10,
+      "message": "rendering"
+    },
+    "hasResult": true,
+    "executions": [
+      {
+        "id": "execution-contract-01",
+        "attempt": 1,
+        "runtime": "bullmq",
+        "state": "running",
+        "version": 3
+      }
+    ],
+    "createdAt": "2026-07-29T14:00:00Z",
+    "updatedAt": "2026-07-29T14:02:00Z"
+  },
+  "result": {
+    "schemaVersion": 1,
+    "entityVersion": 7,
+    "taskId": "task-contract-01",
+    "reference": "s3://reports/task-contract-01.pdf",
+    "updatedAt": "2026-07-29T14:02:00Z"
+  }
+}

@@ -23,6 +23,7 @@ without migrating their queue.
 - [x] Node Task client
 - [x] framework-neutral Node Task watcher with stale-version rejection,
   terminal stop and abort semantics
+- [x] shared Go/Node golden wire fixture for Task Snapshot and Result v1
 - [x] version-fenced result-reference read/write through Go, HTTP and Node
 - [x] BullMQ lifecycle bridge for explicitly tracked existing jobs
 - [ ] dispatch/retry/cancel/reconciliation contract for BullMQ adoption
