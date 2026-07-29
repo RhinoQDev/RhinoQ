@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -28,7 +30,7 @@ func main() {
 }
 
 func run() error {
-	address := envOr("RHINOQ_AGENT_ADDRESS", ":8080")
+	address := envOr("RHINOQ_AGENT_ADDRESS", "127.0.0.1:8080")
 	token := os.Getenv("RHINOQ_AGENT_TOKEN")
 	open := os.Getenv("RHINOQ_AGENT_ALLOW_UNAUTHENTICATED") == "true"
 	if token == "" && !open {
@@ -51,12 +53,17 @@ How to fix
   export RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true
 
   PowerShell:
-  $env:RHINOQ_AGENT_TOKEN = '<long-random-secret>'
+  $bytes = New-Object byte[] 32
+  [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+  $env:RHINOQ_AGENT_TOKEN = [Convert]::ToBase64String($bytes)
   or, for local development only:
   $env:RHINOQ_AGENT_ALLOW_UNAUTHENTICATED = 'true'
 
 Verify
   curl -H "Authorization: Bearer $RHINOQ_AGENT_TOKEN" localhost:8080/health/ready`)
+	}
+	if err := validateAgentAddress(address, open); err != nil {
+		return err
 	}
 
 	client, closeStore, err := openClient()
@@ -78,8 +85,12 @@ Verify
 	defer stop()
 
 	httpServer := &http.Server{
-		Addr: address, Handler: server,
+		Addr:              address,
+		Handler:           server,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 << 10,
 	}
 	listening := make(chan error, 1)
 	go func() {
@@ -103,6 +114,27 @@ Verify
 	defer cancel()
 	log.Println("rhinoq-agent draining")
 	return httpServer.Shutdown(graceCtx)
+}
+
+func validateAgentAddress(address string, allowUnauthenticated bool) error {
+	if !allowUnauthenticated {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("RHINOQ_AGENT_ADDRESS must be host:port: %w", err)
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New(
+			"RHINOQ_AGENT_ALLOW_UNAUTHENTICATED may only bind to a loopback address",
+		)
+	}
+	return nil
 }
 
 // openClient builds the queue client. The official Gateway binary registers

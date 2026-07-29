@@ -2,6 +2,26 @@
 
 Tài liệu này là blueprint triển khai cho RhinoQ: cách chia module, dependency, runtime và lộ trình scale để hệ thống còn dễ sửa chữa, nâng cấp. Product contract và trạng thái thực thi nằm ở [`README.md`](./README.md) và [`docs/`](./docs/).
 
+Product baseline hiện tại là **Task Platform với capability Verified Tasks**.
+Task là user-facing abstraction mới; `Job` vẫn là execution/runtime primitive
+đã có và không bị đổi tên trong slice đầu tiên. Verified Tasks dùng lại
+Effect Ledger, Outcome, Rule và Finding cho các task cần chứng minh business
+result. Chi tiết baseline nằm ở [`.ai/PRODUCT_BASELINE.md`](./.ai/PRODUCT_BASELINE.md)
+và ADR-0014.
+
+Mô hình quan hệ mục tiêu:
+
+```text
+Task 1:N Execution
+Execution 0:1 Job
+Execution 0:N ProviderOperation
+Task 0:1 VerifiedTaskPolicy
+```
+
+Task state, Execution/Job state, Effect state và Outcome state là các state
+machine độc lập. Provider integration chỉ cung cấp lifecycle/evidence của
+external operation; business logic vẫn thuộc application.
+
 **Quyết định ngôn ngữ:** Go là authoritative engine/runtime và cũng là nơi
 triển khai CLI chính thức. Node.js/TypeScript là SDK preview cho producer,
 worker lifecycle và operator API. Correctness không nằm trong SDK.
@@ -35,8 +55,8 @@ flowchart TB
   U --> API --> APP
   APP --> DOM
   APP --> RUN
+  APP --> PORTS
   RUN --> PORTS
-  DOM --> PORTS
   ADP -. implements .-> PORTS
   ADP --> DATA
   ADP --> EXT
@@ -52,12 +72,17 @@ flowchart TB
 Chứa các kiểu dữ liệu và giao thức ổn định mà người dùng nhìn thấy:
 
 - `JobDefinition`, `JobPayload`, `JobContext`
+- versioned `TaskSnapshot` với `schemaVersion` và `entityVersion`
+- `TaskProgress`, `TaskExecutionSummary` và command precondition
 - `EffectDefinition`, `ConfirmationPolicy`, `EffectState`
 - `OutcomeContract`, `OutcomeState`
 - `RetryPolicy`, `Lease`, `Attempt`, `Finding`, `RepairPlan`
 - error envelope, event envelope, correlation và tenant context
 
 Không đặt implementation vào đây. Contract phải có version và backward-compatibility policy.
+`TaskSnapshot.entityVersion` là aggregate revision: Task mutation và
+create/update Execution đều phải tăng nó trong cùng store transaction. Nếu chỉ
+tăng `Execution.Version`, stale-response rejection ở frontend sẽ không sound.
 
 ### Tầng 2 — Domain (Go)
 
@@ -186,7 +211,7 @@ Quy tắc import:
 
 Nếu cần một chiều ngược, dùng event hoặc port, không dùng import vòng.
 
-## 4. Cấu trúc repository đề xuất
+## 4. Cấu trúc repository hiện tại và hướng mở rộng
 
 ```text
 cmd/
@@ -194,16 +219,18 @@ cmd/
   rhinoq-worker/
   rhinoq/
 internal/
+  contracts/       # DTO/protocol thuần, không import domain
   domain/
   application/
   runtime/
   ports/
   adapters/
   infrastructure/
+  interfaces/
 proto/
   rhinoq/v1/
 sdks/
-  typescript/
+  node/
     src/
   python/       # sau này
 tests/
@@ -215,6 +242,12 @@ tests/
 ```
 
 Mỗi feature nên đi theo vertical slice bên trong các tầng: `enqueue`, `effect`, `outcome`, `recovery`. Không tạo một thư mục khổng lồ kiểu `services/` chứa mọi logic.
+
+Dependency direction được khóa bằng
+`tests/unit/architecture_test.go`. Contract chỉ chứa dữ liệu/version/validation;
+mapping domain ↔ contract nằm ở Application. Audit chi tiết và những pattern
+được chọn hoặc từ chối nằm tại
+[`docs/architecture-review.md`](docs/architecture-review.md).
 
 Sơ đồ sequence chuẩn để review implementation và vẽ Console nằm tại [`docs/runtime-flows.md`](docs/runtime-flows.md).
 

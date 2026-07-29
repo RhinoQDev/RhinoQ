@@ -41,6 +41,42 @@ Do not use `npm install @rhinoq/node` until a tagged npm release exists.
 | enqueue in the current business transaction | `PostgresProducer` with `PoolClient` | No |
 | run JavaScript/TypeScript handlers | `RhinoQWorker` | Yes |
 | inspect, pause, cancel, replay or triage | `RhinoQClient` | Yes |
+| create, update or poll a Task snapshot | `RhinoQClient` | Yes |
+
+## Task polling
+
+```ts
+const task = await client.createTask({
+  id: "report_01",
+  type: "report.export",
+  definitionVersion: 1,
+});
+
+const withExecution = await client.createTaskExecution(task.id, {
+  id: "exec_01",
+  runtime: "bullmq",
+});
+const bound = await client.bindTaskExecution("exec_01", {
+  runtime: "bullmq",
+  externalId: "bull_job_01",
+});
+const queued = await client.transitionTask(
+  bound.id,
+  bound.entityVersion,
+  "queued",
+);
+const latest = await client.getTask(queued.id);
+const result = await client.attachTaskResult(
+  latest.id,
+  latest.entityVersion,
+  "s3://reports/report_01.pdf",
+);
+```
+
+Use `entityVersion` as the optimistic write precondition and ignore a polling
+response older than the highest version already rendered.
+Result methods exchange a reference only; downloading or authorizing the
+payload remains the application's responsibility.
 
 ## Producer-only
 

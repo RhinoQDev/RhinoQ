@@ -12,6 +12,7 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/adapters/postgres"
 	attentionapp "github.com/madebyduy/RhinoQ/internal/application/attention"
 	"github.com/madebyduy/RhinoQ/internal/application/operations"
+	taskapp "github.com/madebyduy/RhinoQ/internal/application/tasks"
 	"github.com/madebyduy/RhinoQ/internal/domain/admission"
 	"github.com/madebyduy/RhinoQ/internal/domain/attempt"
 	"github.com/madebyduy/RhinoQ/internal/domain/job"
@@ -324,6 +325,7 @@ type Client struct {
 	effects  ports.EffectStore
 	outcomes ports.OutcomeStore
 	recovery ports.RecoveryStore
+	tasks    *taskapp.Service
 	handlers *worker.HandlerRegistry
 	// retry is the policy applied to failures reported through the remote
 	// worker API, where no in-process worker owns a policy.
@@ -345,6 +347,11 @@ func (c *Client) SetRetryPolicy(maxAttempts int, baseDelay, maxDelay time.Durati
 
 func NewInMemory() *Client {
 	jobs := memory.NewJobStore()
+	taskStore := memory.NewTaskStore()
+	taskService, err := taskapp.New(taskStore, taskStore, nil)
+	if err != nil {
+		panic(err)
+	}
 	effects, err := memory.NewEffectStore(jobs)
 	if err != nil {
 		panic(err)
@@ -360,6 +367,7 @@ func NewInMemory() *Client {
 	}
 	return &Client{
 		store: jobs, effects: effects, outcomes: outcomes, recovery: recoveryStore,
+		tasks: taskService,
 		IntegrityClient: &IntegrityClient{
 			findings: findingStore, rules: ruleStore, ruleSchedules: ruleStore,
 			subjectOutcomes: subjectOutcomes,
@@ -372,6 +380,14 @@ func NewInMemory() *Client {
 
 func NewPostgres(db *sql.DB) (*Client, error) {
 	store, err := postgres.NewJobStore(db)
+	if err != nil {
+		return nil, err
+	}
+	taskStore, err := postgres.NewTaskStore(db)
+	if err != nil {
+		return nil, err
+	}
+	taskService, err := taskapp.New(taskStore, taskStore, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -413,6 +429,7 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	}
 	return &Client{
 		store: store, effects: effects, outcomes: outcomes, recovery: recoveryStore,
+		tasks: taskService,
 		IntegrityClient: &IntegrityClient{
 			findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
 			ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
@@ -458,6 +475,11 @@ func NewWithStore(store ports.JobStore) *Client {
 	}
 	if changes, ok := store.(ports.ChangeStore); ok {
 		client.changes = changes
+	}
+	taskStore, hasTasks := store.(ports.TaskStore)
+	executionStore, hasExecutions := store.(ports.ExecutionStore)
+	if hasTasks && hasExecutions {
+		client.tasks, _ = taskapp.New(taskStore, executionStore, nil)
 	}
 	return client
 }

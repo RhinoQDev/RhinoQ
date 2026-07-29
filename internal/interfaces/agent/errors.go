@@ -6,6 +6,7 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/contracts/diagnostic"
 	"github.com/madebyduy/RhinoQ/internal/domain/admission"
+	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
 	"github.com/madebyduy/RhinoQ/internal/ports"
@@ -55,6 +56,27 @@ func describe(err error) (int, ErrorBody) {
 	if errors.Is(err, ports.ErrJobNotFound) {
 		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_JOB_NOT_FOUND", Message: err.Error()}
 	}
+	if errors.Is(err, ports.ErrTaskNotFound) {
+		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_TASK_NOT_FOUND", Message: err.Error()}
+	}
+	if errors.Is(err, ports.ErrTaskResultNotFound) {
+		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_TASK_RESULT_NOT_FOUND", Message: err.Error()}
+	}
+	if errors.Is(err, ports.ErrExecutionNotFound) {
+		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_EXECUTION_NOT_FOUND", Message: err.Error()}
+	}
+	if errors.Is(err, ports.ErrVersionConflict) {
+		return http.StatusConflict, ErrorBody{Code: "RHINOQ_VERSION_CONFLICT", Message: err.Error()}
+	}
+	if errors.Is(err, ports.ErrAlreadyExists) {
+		return http.StatusConflict, ErrorBody{Code: "RHINOQ_ALREADY_EXISTS", Message: err.Error()}
+	}
+	if errors.Is(err, execution.ErrAlreadyBound) {
+		return http.StatusConflict, ErrorBody{Code: "RHINOQ_EXECUTION_ALREADY_BOUND", Message: err.Error()}
+	}
+	if errors.Is(err, execution.ErrInvalidReference) {
+		return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_EXECUTION_INVALID_REFERENCE", Message: err.Error()}
+	}
 	if errors.Is(err, ports.ErrFindingNotFound) {
 		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_FINDING_NOT_FOUND", Message: err.Error()}
 	}
@@ -85,7 +107,9 @@ func describe(err error) (int, ErrorBody) {
 		errors.Is(err, rule.ErrIntervalRequired):
 		return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_RULE_INVALID", Message: err.Error()}
 	}
-	return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_INVALID_REQUEST", Message: err.Error()}
+	return http.StatusBadRequest, ErrorBody{
+		Code: "RHINOQ_INVALID_REQUEST", Message: "the request was invalid",
+	}
 }
 
 func unauthorized() (int, ErrorBody) {

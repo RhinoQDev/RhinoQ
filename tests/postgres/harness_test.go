@@ -139,7 +139,8 @@ func newClient(t *testing.T) *rhinoq.Client {
 func truncate(t *testing.T) {
 	t.Helper()
 	_, err := testDB.Exec(`
-		TRUNCATE rhinoq_subject_changes, rhinoq_subject_outcomes,
+		TRUNCATE rhinoq_task_executions, rhinoq_tasks,
+		         rhinoq_subject_changes, rhinoq_subject_outcomes,
 		         rhinoq_rule_explanations, rhinoq_rules,
 		         rhinoq_finding_events, rhinoq_findings,
 		         rhinoq_audit, rhinoq_attempt_events, rhinoq_effects, rhinoq_outcomes, rhinoq_outbox,

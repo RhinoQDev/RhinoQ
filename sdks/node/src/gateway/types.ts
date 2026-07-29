@@ -36,6 +36,69 @@ export type JobState =
   | 'succeeded'
   | 'cancelled';
 
+export type TaskState =
+  | 'pending'
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancel_requested'
+  | 'cancelled';
+
+export interface TaskCreateRequest {
+  id: string;
+  type: string;
+  ownerId?: string;
+  definitionVersion: number;
+}
+
+export interface TaskProgress {
+  completed: number;
+  total?: number;
+  message?: string;
+}
+
+export interface TaskExecutionSummary {
+  id: string;
+  attempt: number;
+  runtime: string;
+  state: string;
+  version: number;
+}
+
+export interface TaskExecutionCreateRequest {
+  id: string;
+  runtime: string;
+}
+
+export interface TaskExecutionBinding {
+  runtime: string;
+  jobId?: string;
+  externalId?: string;
+}
+
+export interface TaskSnapshot {
+  schemaVersion: 1;
+  /** Monotonic for one Task; ignore responses older than the latest seen value. */
+  entityVersion: number;
+  id: string;
+  type: string;
+  state: TaskState;
+  progress: TaskProgress;
+  hasResult: boolean;
+  executions: TaskExecutionSummary[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskResult {
+  schemaVersion: 1;
+  entityVersion: number;
+  taskId: string;
+  reference: string;
+  updatedAt: string;
+}
+
 export interface LeaseToken {
   jobId: string;
   owner: string;

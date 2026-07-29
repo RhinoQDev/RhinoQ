@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+- Hardened the security baseline after a repository audit. Go now requires
+  1.25 and prefers patched toolchain 1.26.5; pgx is upgraded to 5.9.2 and
+  x/text to 0.39.0. `govulncheck` now reports no reachable vulnerabilities in
+  either Go module, `npm audit` reports none in the Node SDK, and Gitleaks found
+  no secrets in history or the working tree. CI now repeats those checks.
+  The HTTP Gateway defaults to loopback, requires a bearer token of at least 32
+  bytes, hashes both sides before constant-time comparison, rejects
+  unauthenticated non-loopback binding and trailing JSON, bounds header/read
+  resources, and stops returning raw parser/store errors. Codex Security
+  0.1.1/plugin 0.1.14 was run natively and in Linux but failed to seal
+  `scan-manifest.json`; the audit records this as tool failure, not a clean
+  scan, and keeps tenant/role auth, TLS, redaction and abuse controls as release
+  blockers.
+
+- Repositioned RhinoQ as a Task Platform with optional Verified Tasks and added
+  the first domain foundation. `Task` now has an independent lifecycle,
+  versioned known/indeterminate progress and result references; `Execution`
+  links each attempt immutably to either a native RhinoQ Job or a stable
+  external-runtime ID. Retry creates a new Execution rather than reopening a
+  terminal attempt. Store ports, an optimistic-concurrency memory adapter and
+  application create/bind/read use cases are included; attempt allocation is
+  atomic at the store boundary so concurrent retries cannot choose the same
+  number. A versioned Snapshot DTO omits ownership and runtime-internal IDs,
+  and lifecycle/progress commands reject stale entity versions; indeterminate
+  progress omits `total` instead of inventing a percentage. PostgreSQL
+  migration 015 and a Task/Execution store are implemented with optimistic
+  updates and per-Task atomic attempt allocation; its real-database contract
+  and an eight-writer concurrent-attempt test pass on PostgreSQL 16. A public Go
+  facade, versioned HTTP create/read/state/progress endpoints and typed Node
+  polling client now expose the first Task slice with stale-write conflicts.
+  A separate version-fenced result-reference API avoids repeating storage
+  locations in every Snapshot poll. BullMQ/native automatic dispatch, result
+  payload proxying, realtime transport and frontend components remain
+  explicitly unimplemented.
+
+- Fixed Snapshot convergence before exposing Execution binding publicly.
+  Creating or binding a child Execution now advances the parent Task version
+  atomically in the memory lock/PostgreSQL transaction. Previously two
+  snapshots could share one `entityVersion` while containing different
+  Execution state, making stale-response rejection unsound. Go, HTTP and Node
+  now expose create/bind operations that return the new aggregate Snapshot;
+  runtime-internal job/external IDs remain write-only.
+
+- Added an evidence-scoped product-strengths document and a matching README
+  summary. Implemented strengths are now separated from architectural
+  advantages and unproven product claims, so “keep your queue” and code
+  reduction cannot be advertised before a real adapter and before/after
+  adoption measurement exist.
+
+- Audited repository boundaries against Temporal, Hatchet, Inngest and
+  Trigger.dev. Task wire contracts are now data-only and no longer import
+  domain records; the application owns domain-to-contract mapping. A regression
+  test parses Go imports and rejects forbidden layer dependencies. The audit
+  also records why RhinoQ remains a modular monolith instead of copying mature
+  projects' service/package count.
+
 - Table Rules can page on `(changed_at, subject_id)` instead of `subject_id`
   alone, via `Cursor: rhinoq.CursorChanged` and migration 014. A row that just
   moved is then seen on the next page rather than after a full pass. The

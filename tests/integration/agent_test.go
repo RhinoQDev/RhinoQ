@@ -14,7 +14,90 @@ import (
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
-const agentToken = "test-token"
+const agentToken = "test-token-at-least-thirty-two-bytes"
+
+func TestAgentTaskPollingContractRejectsStaleWrites(t *testing.T) {
+	server := newAgentServer(t)
+	var created rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-1", "type": "report.export",
+		"ownerId": "private-owner", "definitionVersion": 1,
+	}, http.StatusCreated, &created)
+	if created.SchemaVersion != 1 || created.EntityVersion != 1 ||
+		created.State != rhinoq.TaskPending {
+		t.Fatalf("unexpected initial snapshot: %+v", created)
+	}
+
+	var withExecution rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks/task-1/executions", map[string]any{
+		"id": "exec-1", "runtime": "bullmq",
+	}, http.StatusCreated, &withExecution)
+	var bound rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-1/bind", map[string]any{
+		"runtime": "bullmq", "externalId": "bull-job-1",
+	}, http.StatusOK, &bound)
+	if bound.EntityVersion != created.EntityVersion+2 ||
+		len(bound.Executions) != 1 || bound.Executions[0].State != "dispatched" {
+		t.Fatalf("execution binding must advance the aggregate snapshot: %+v", bound)
+	}
+	var bindConflict struct {
+		Error agent.ErrorBody `json:"error"`
+	}
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-1/bind", map[string]any{
+		"runtime": "bullmq", "externalId": "bull-job-1",
+	}, http.StatusConflict, &bindConflict)
+	if bindConflict.Error.Code != "RHINOQ_EXECUTION_ALREADY_BOUND" {
+		t.Fatalf("repeated binding needs a typed conflict: %+v", bindConflict.Error)
+	}
+
+	var queued rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks/task-1/state", map[string]any{
+		"expectedVersion": bound.EntityVersion, "state": rhinoq.TaskQueued,
+	}, http.StatusOK, &queued)
+	var running rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks/task-1/state", map[string]any{
+		"expectedVersion": queued.EntityVersion, "state": rhinoq.TaskRunning,
+	}, http.StatusOK, &running)
+
+	total := int64(10)
+	var progressed rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/tasks/task-1/progress", map[string]any{
+		"expectedVersion": running.EntityVersion,
+		"progress": map[string]any{
+			"completed": 4, "total": total, "message": "exporting",
+		},
+	}, http.StatusOK, &progressed)
+
+	var polled rhinoq.TaskSnapshot
+	call(t, server, http.MethodGet, "/v1/tasks/task-1", nil, http.StatusOK, &polled)
+	if polled.EntityVersion != progressed.EntityVersion ||
+		polled.Progress.Completed != 4 || polled.Progress.Total == nil ||
+		*polled.Progress.Total != total {
+		t.Fatalf("polling did not return the latest snapshot: %+v", polled)
+	}
+
+	var conflict struct {
+		Error agent.ErrorBody `json:"error"`
+	}
+	call(t, server, http.MethodPost, "/v1/tasks/task-1/state", map[string]any{
+		"expectedVersion": running.EntityVersion, "state": rhinoq.TaskSucceeded,
+	}, http.StatusConflict, &conflict)
+	if conflict.Error.Code != "RHINOQ_VERSION_CONFLICT" {
+		t.Fatalf("stale task writes need a typed conflict: %+v", conflict.Error)
+	}
+
+	var result rhinoq.TaskResult
+	call(t, server, http.MethodPost, "/v1/tasks/task-1/result", map[string]any{
+		"expectedVersion": progressed.EntityVersion,
+		"reference":       "s3://reports/task-1.pdf",
+	}, http.StatusOK, &result)
+	var loadedResult rhinoq.TaskResult
+	call(t, server, http.MethodGet, "/v1/tasks/task-1/result", nil, http.StatusOK, &loadedResult)
+	if loadedResult.Reference != result.Reference ||
+		loadedResult.EntityVersion != result.EntityVersion {
+		t.Fatalf("result reference did not round-trip: %+v", loadedResult)
+	}
+}
 
 // A worker written in any language should be able to do the whole cycle over
 // HTTP without knowing anything about leases, retries or SQL.

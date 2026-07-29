@@ -20,6 +20,13 @@ import {
   type JobSummary,
   type LeaseToken,
   type LeasedJob,
+  type TaskCreateRequest,
+  type TaskExecutionBinding,
+  type TaskExecutionCreateRequest,
+  type TaskProgress,
+  type TaskResult,
+  type TaskSnapshot,
+  type TaskState,
 } from './types.js';
 
 export class RhinoQError extends Error {
@@ -102,6 +109,107 @@ export class RhinoQClient {
       payload: encodePayload(request.payload),
     });
     return response.jobId;
+  }
+
+  async createTask(request: TaskCreateRequest): Promise<TaskSnapshot> {
+    if (!request?.id || !request.type) {
+      throw new TypeError('task id and type are required');
+    }
+    if (!Number.isInteger(request.definitionVersion) || request.definitionVersion <= 0) {
+      throw new RangeError('task definitionVersion must be a positive integer');
+    }
+    return this.send<TaskSnapshot>('POST', '/v1/tasks', request);
+  }
+
+  async getTask(taskId: string): Promise<TaskSnapshot> {
+    return this.send<TaskSnapshot>(
+      'GET',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}`,
+    );
+  }
+
+  async createTaskExecution(
+    taskId: string,
+    request: TaskExecutionCreateRequest,
+  ): Promise<TaskSnapshot> {
+    if (!request?.id || !request.runtime) {
+      throw new TypeError('execution id and runtime are required');
+    }
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/executions`,
+      request,
+    );
+  }
+
+  async bindTaskExecution(
+    executionId: string,
+    binding: TaskExecutionBinding,
+  ): Promise<TaskSnapshot> {
+    if (!binding?.runtime) {
+      throw new TypeError('execution runtime is required');
+    }
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/task-executions/${requiredPath(executionId, 'execution id')}/bind`,
+      binding,
+    );
+  }
+
+  async attachTaskResult(
+    taskId: string,
+    expectedVersion: number,
+    reference: string,
+  ): Promise<TaskResult> {
+    validateEntityVersion(expectedVersion);
+    if (!reference?.trim()) {
+      throw new TypeError('task result reference is required');
+    }
+    return this.send<TaskResult>(
+      'POST',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/result`,
+      { expectedVersion, reference },
+    );
+  }
+
+  async getTaskResult(taskId: string): Promise<TaskResult> {
+    return this.send<TaskResult>(
+      'GET',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/result`,
+    );
+  }
+
+  async transitionTask(
+    taskId: string,
+    expectedVersion: number,
+    state: Exclude<TaskState, 'pending'>,
+  ): Promise<TaskSnapshot> {
+    validateEntityVersion(expectedVersion);
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/state`,
+      { expectedVersion, state },
+    );
+  }
+
+  async reportTaskProgress(
+    taskId: string,
+    expectedVersion: number,
+    progress: TaskProgress,
+  ): Promise<TaskSnapshot> {
+    validateEntityVersion(expectedVersion);
+    if (!Number.isInteger(progress?.completed) || progress.completed < 0) {
+      throw new RangeError('task progress completed must be a non-negative integer');
+    }
+    if (progress.total !== undefined &&
+      (!Number.isInteger(progress.total) || progress.total < progress.completed)) {
+      throw new RangeError('task progress total must be an integer at or above completed');
+    }
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/tasks/${requiredPath(taskId, 'task id')}/progress`,
+      { expectedVersion, progress },
+    );
   }
 
   async listJobs(query: JobQuery = {}): Promise<JobSummary[]> {
@@ -421,6 +529,12 @@ function validateEnqueue(request: EnqueueRequest): void {
   }
   if (request.priority !== undefined && (!Number.isInteger(request.priority) || request.priority < -100 || request.priority > 100)) {
     throw new RangeError('priority must be an integer between -100 and 100');
+  }
+}
+
+function validateEntityVersion(version: number): void {
+  if (!Number.isInteger(version) || version <= 0) {
+    throw new RangeError('expectedVersion must be a positive integer');
   }
 }
 

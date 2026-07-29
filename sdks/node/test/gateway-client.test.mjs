@@ -6,6 +6,83 @@ import {
   RhinoQError,
 } from '../dist/index.js';
 
+test('Gateway client exposes the versioned Task polling contract', async () => {
+  const requests = [];
+  const snapshot = {
+    schemaVersion: 1,
+    entityVersion: 2,
+    id: 'task_01',
+    type: 'report.export',
+    state: 'queued',
+    progress: { completed: 0 },
+    hasResult: false,
+    executions: [],
+    createdAt: '2026-07-29T00:00:00Z',
+    updatedAt: '2026-07-29T00:00:01Z',
+  };
+  const client = new RhinoQClient({
+    url: 'http://gateway.test',
+    fetch: async (url, options) => {
+      requests.push({
+        url,
+        method: options.method,
+        body: options.body ? JSON.parse(options.body) : undefined,
+      });
+      return Response.json(snapshot);
+    },
+  });
+
+  await client.createTask({
+    id: 'task_01',
+    type: 'report.export',
+    ownerId: 'user_01',
+    definitionVersion: 1,
+  });
+  await client.createTaskExecution('task_01', {
+    id: 'exec_01',
+    runtime: 'bullmq',
+  });
+  await client.bindTaskExecution('exec_01', {
+    runtime: 'bullmq',
+    externalId: 'bull_job_01',
+  });
+  const polled = await client.getTask('task_01');
+  await client.transitionTask('task_01', polled.entityVersion, 'running');
+  await client.reportTaskProgress('task_01', polled.entityVersion, {
+    completed: 1,
+    total: 4,
+  });
+  await client.attachTaskResult(
+    'task_01',
+    polled.entityVersion,
+    's3://reports/task_01.pdf',
+  );
+  await client.getTaskResult('task_01');
+
+  assert.deepEqual(requests.map((request) => [request.method, request.url]), [
+    ['POST', 'http://gateway.test/v1/tasks'],
+    ['POST', 'http://gateway.test/v1/tasks/task_01/executions'],
+    ['POST', 'http://gateway.test/v1/task-executions/exec_01/bind'],
+    ['GET', 'http://gateway.test/v1/tasks/task_01'],
+    ['POST', 'http://gateway.test/v1/tasks/task_01/state'],
+    ['POST', 'http://gateway.test/v1/tasks/task_01/progress'],
+    ['POST', 'http://gateway.test/v1/tasks/task_01/result'],
+    ['GET', 'http://gateway.test/v1/tasks/task_01/result'],
+  ]);
+  assert.deepEqual(requests[4].body, {
+    expectedVersion: 2,
+    state: 'running',
+  });
+  assert.deepEqual(requests[5].body, {
+    expectedVersion: 2,
+    progress: { completed: 1, total: 4 },
+  });
+  assert.deepEqual(requests[6].body, {
+    expectedVersion: 2,
+    reference: 's3://reports/task_01.pdf',
+  });
+});
+
 test('Gateway client sends UTF-8 JSON safely without argument spreading limits', async () => {
   let request;
   const client = new RhinoQClient({

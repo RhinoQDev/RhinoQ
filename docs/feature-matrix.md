@@ -22,6 +22,8 @@ execution platforms.
 | Stalled/poison protection | `maxStalledCount` | crash budget per job implemented; distinct-worker tracking pending |
 | Producer backpressure | not native | admission control with reserved critical budget implemented; `route` and `sample` overflow modes pending |
 | Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
+| User-facing Task snapshot | application-specific | Snapshot v1 across Go/HTTP/Node with lifecycle, progress, native/external Execution binding, aggregate entity version and stale-write rejection |
+| Task result availability | application-specific | version-fenced storage reference is read separately from polling Snapshot; payload proxy and tenant authorization pending |
 | DLQ / Needs Attention | failed-job and operational views | one bounded inbox merges execution attention and live persistent Findings; resolved/suppressed Findings are excluded |
 | Reverse reconciliation | application-specific | bounded `scan` plus durable `Changed()` signals; stable `(changed_at, subject_id, sequence)` cursor; scheduled scans remain the missed-signal fallback |
 | Observe-only correlation | application-specific | external source/job/business-key and subject references implemented; reverse search by external execution remains pending |

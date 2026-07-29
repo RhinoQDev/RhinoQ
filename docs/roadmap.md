@@ -1,8 +1,33 @@
 # Implementation roadmap
 
-The roadmap separates execution maturity from product differentiation. The
-native PostgreSQL queue remains part of the core product; v0.1 is not considered
-useful until Rules and Findings work on at least one real business subject.
+The roadmap separates the Task Platform entry point, execution backends and the
+optional Verified Tasks capability. Native PostgreSQL remains the first runtime
+backend; it is not the product identity and existing runtimes may integrate
+without migrating their queue.
+
+## v0.1 — Task Platform foundation
+
+- [x] product baseline and ADR-0014
+- [x] independent Task lifecycle, version, progress and result reference domain
+- [x] Execution lifecycle with immutable native/external runtime binding
+- [x] Task/Execution store ports and memory adapter
+- [x] application create, bind and read use cases
+- [x] public native/external Execution create/bind with aggregate version bump
+- [x] application progress and lifecycle commands with expected-version checks
+- [x] versioned snapshot DTO and contract tests
+- [x] polling delivery through a public application boundary
+- [x] PostgreSQL schema and store implementation after contract tests stabilized
+- [x] execute migration 015 and the Task store contract against real PostgreSQL
+- [x] add the Task store contract to CI's PostgreSQL job
+- [x] public Go Task facade
+- [x] Node Task client
+- [x] version-fenced result-reference read/write through Go, HTTP and Node
+- [ ] one BullMQ reference adapter
+- [ ] ProviderOperation domain foundation
+
+Realtime transports, React hooks, streams and Redis fan-out are not part of the
+first persistence slice. They follow only after snapshot convergence semantics
+are tested.
 
 ## Foundation — COMMIT and RUN
 
@@ -22,7 +47,7 @@ useful until Rules and Findings work on at least one real business subject.
 - [x] Node.js producer/worker/operator SDK preview with automated tests
 - [x] embedded read-only developer Workbench with demo/live PostgreSQL modes
 
-## v0.1 — Integrity Slice
+## Verified Tasks foundation — previously v0.1 Integrity Slice
 
 The release demonstration must detect one real business mismatch without
 requiring the application's current queue to be replaced.
@@ -62,7 +87,7 @@ requiring the application's current queue to be replaced.
 - [x] no-cutover quickstart that produces the first Finding
 - [ ] tagged npm release and prebuilt CLI binaries for Node adopters
 
-## v0.2 — Integrity Hardening
+## Verified Tasks hardening
 
 - [x] versioned Rule contracts
 - [x] crash-safe scheduled Rule evaluation
@@ -73,7 +98,7 @@ requiring the application's current queue to be replaced.
 - [ ] adaptive reconciliation budgets and producer backpressure
 - [ ] handler and verifier version evidence
 
-## v0.3 — Safe Recovery
+## Verified Tasks safe recovery
 
 - [ ] resumable execution checkpoints
 - [ ] repair dry-run and precondition checks
@@ -89,6 +114,7 @@ requiring the application's current queue to be replaced.
 - [ ] reproducible fault and benchmark suites
 - [ ] public release and license decision
 
-Do not start a second adapter, DAG engine, automatic repair, or Outcome Level 2
-before three design partners validate the same class of business finding. The
-differentiator itself must exist before recruiting those partners.
+Do not start a second external-runtime adapter, DAG engine, automatic repair or
+Outcome Level 2 before the Task slice and one BullMQ integration are validated
+in a real application. Provider connectors remain examples until repeated
+demand proves a reusable contract.

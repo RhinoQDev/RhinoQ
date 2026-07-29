@@ -38,6 +38,32 @@ Node.js SDK tham chiếu nằm ở [`sdks/node`](../sdks/node). SDK gồm
 `PostgresProducer` cho đường không cần Gateway, `RhinoQClient` cho wire API và
 `RhinoQWorker` cho vòng đời claim/heartbeat/shutdown.
 
+## Task API polling-first
+
+Gateway hiện có tám endpoint Task đi qua public facade và Application:
+
+| Endpoint | Ý nghĩa |
+|---|---|
+| `POST /v1/tasks` | tạo Task và trả Snapshot v1 |
+| `GET /v1/tasks/{id}` | đọc Snapshot mới nhất để BE/FE polling |
+| `POST /v1/tasks/{id}/state` | lifecycle command với `expectedVersion` |
+| `POST /v1/tasks/{id}/progress` | progress command với `expectedVersion` |
+| `POST /v1/tasks/{id}/result` | ghi result reference với `expectedVersion` |
+| `GET /v1/tasks/{id}/result` | đọc result reference riêng khỏi Snapshot |
+| `POST /v1/tasks/{id}/executions` | tạo attempt cho native/external runtime |
+| `POST /v1/task-executions/{id}/bind` | bind một lần tới `jobId` hoặc `externalId` |
+
+Snapshot có `schemaVersion` cho wire compatibility và aggregate
+`entityVersion` tăng theo Task mutation lẫn create/bind Execution. Client phải
+giữ version cao nhất đã thấy và bỏ response cũ. Một write dùng version stale
+trả `409 RHINOQ_VERSION_CONFLICT`; caller phải đọc lại trước khi quyết định
+command tiếp theo.
+
+Đây chưa phải realtime API. Không có SSE/WebSocket và Gateway không proxy result
+payload. `hasResult` chỉ báo availability; endpoint result trả storage
+reference. Gateway hiện dùng một bearer token cấp deployment và chưa có
+tenant-level authorization, nên không đưa endpoint này ra public Internet.
+
 ## Khi chỉ cần transactional enqueue
 
 Migration `003_sql_enqueue.sql` tạo hàm `rhinoq.enqueue()`. Producer role phải
@@ -101,7 +127,7 @@ rồi đặt token:
 
 ```bash
 export RHINOQ_DATABASE_URL='postgres://...'
-export RHINOQ_AGENT_TOKEN='a-long-random-secret'
+export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
 
 rhinoq migrate plan
 rhinoq migrate apply
@@ -112,7 +138,9 @@ PowerShell:
 
 ```powershell
 $env:RHINOQ_DATABASE_URL = 'postgres://...'
-$env:RHINOQ_AGENT_TOKEN = 'a-long-random-secret'
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:RHINOQ_AGENT_TOKEN = [Convert]::ToBase64String($bytes)
 
 go run ./cmd/rhinoq migrate plan
 go run ./cmd/rhinoq migrate apply
@@ -125,12 +153,13 @@ go run ./cmd/rhinoq-agent
 |---|---|:---:|
 | `rhinoq migrate plan` | kiểm migration/checksum, không ghi database | Không |
 | `rhinoq migrate apply` | apply schema đã review | Không |
-| `go run ./cmd/rhinoq-agent` | chạy HTTP Gateway tại `:8080` mặc định | Có |
+| `go run ./cmd/rhinoq-agent` | chạy HTTP Gateway tại `127.0.0.1:8080` mặc định | Có |
 | `node worker.mjs` | chạy handler của ứng dụng Node | Có |
 
 Gateway từ chối khởi động nếu không có token, trừ khi operator chủ động đặt
 `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true`. Không dùng tùy chọn đó ngoài local
-development.
+development. Token phải dài ít nhất 32 byte. Chế độ unauthenticated bị từ chối
+nếu `RHINOQ_AGENT_ADDRESS` không phải loopback.
 
 Các biến cấu hình Gateway:
 
@@ -138,12 +167,16 @@ Các biến cấu hình Gateway:
 |---|---:|---|
 | `RHINOQ_DATABASE_URL` | memory store | PostgreSQL durable store; để trống chỉ dành cho demo |
 | `RHINOQ_DATABASE_DRIVER` | `pgx` | tên driver `database/sql`; custom driver cần custom build |
-| `RHINOQ_AGENT_ADDRESS` | `:8080` | địa chỉ HTTP lắng nghe |
-| `RHINOQ_AGENT_TOKEN` | empty | bearer token cho mọi endpoint được bảo vệ |
+| `RHINOQ_AGENT_ADDRESS` | `127.0.0.1:8080` | địa chỉ HTTP lắng nghe |
+| `RHINOQ_AGENT_TOKEN` | empty | bearer token tối thiểu 32 byte cho mọi endpoint được bảo vệ |
 | `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED` | false | cho phép không token, chỉ dành cho local development |
 | `RHINOQ_AGENT_HEARTBEAT` | `10s` | heartbeat interval trả cho SDK khi handshake |
 | `RHINOQ_AGENT_SHUTDOWN_GRACE` | `20s` | thời gian drain HTTP khi dừng |
 | `RHINOQ_MAX_PAYLOAD_BYTES` | `1048576` | hard limit request body/payload |
+
+Gateway không tự terminate TLS. Nếu bind ra non-loopback, đặt nó sau HTTPS
+reverse proxy/service mesh và network policy; không expose cổng HTTP trực tiếp.
+Bearer token hiện là deployment credential chung, chưa phải end-user token.
 
 Kiểm tra readiness:
 
@@ -242,6 +275,8 @@ restart loop.
 ## Giới hạn hiện tại
 
 - Chưa có tenant isolation và HTTP-layer per-job-name RBAC.
+- Chưa có TLS termination, HTTP rate limit, token rotation hoặc failed-auth
+  audit; xem [security audit](./security-audit-2026-07-29.md).
 - Chưa có gRPC/Unix socket, streaming claim hoặc compression.
 - Node.js là SDK preview duy nhất; chưa cam kết SDK Python/Java/.NET.
 - Package `@rhinoq/node` chưa phát hành lên npm; hiện chỉ build/pack từ source.

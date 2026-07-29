@@ -4,6 +4,8 @@
 
 RhinoQ đang ở active development và chưa có production-ready release. Chưa có
 version nào được hỗ trợ security patch dài hạn; fix bảo mật đi vào `main`.
+Kết quả audit gần nhất và các release blocker còn mở nằm ở
+[`docs/security-audit-2026-07-29.md`](./docs/security-audit-2026-07-29.md).
 
 Không đưa secret, access token, refresh token, production payload hoặc thông
 tin khách hàng vào repository, issue, log hay commit.

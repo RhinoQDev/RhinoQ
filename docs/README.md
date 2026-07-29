@@ -9,8 +9,10 @@
 - [Configuration](./configuration.md)
 - [PostgreSQL production client](./postgres.md)
 - [Architecture](./architecture.md)
+- [Architecture review and repository organization](./architecture-review.md)
 - [Runtime flows và ranh giới tầng](./runtime-flows.md)
 - [HTTP Gateway tùy chọn và tích hợp đa ngôn ngữ (không AI/LLM)](./agent.md)
+- [Security audit 2026-07-29](./security-audit-2026-07-29.md)
 
 ## Vận hành
 
@@ -21,6 +23,9 @@
 
 ## Thiết kế
 
+- [Task Platform contract và implementation status](./task-platform.md)
+- [Product evidence and validation log](./product-evidence.md)
+- [Implemented product strengths and proof boundaries](./product-strengths.md)
 - [Feature matrix](./feature-matrix.md)
 - [Integrity Rules](./rules.md)
 - [Competitive landscape](./competitive-landscape.md)

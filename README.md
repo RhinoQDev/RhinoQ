@@ -1,21 +1,21 @@
 # RhinoQ
 
 <p align="center">
-  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — verify that your background work actually worked" width="100%" />
+  <img src="./docs/assets/rhinoq-hero.png" alt="RhinoQ — make long-running work easy to build and safe to operate" width="100%" />
 </p>
 
 <p align="center">
-  <strong>Your queue says the job succeeded. RhinoQ tells you whether the business result is actually correct.</strong>
+  <strong>Your queue stays. Your workers stay. RhinoQ adds the user-facing task layer.</strong>
 </p>
 
 <p align="center">
-  PostgreSQL-native integrity verification · optional durable job runtime · no new infrastructure
+  Durable task lifecycle · existing-runtime adapters · optional business verification
 </p>
 
 <p align="center">
   <a href="https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml"><img src="https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml"><img src="https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg" alt="Security" /></a>
-  <img src="https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.22+" />
+  <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.25+" />
   <img src="https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16 tested" />
   <img src="https://img.shields.io/badge/status-active_development-f59e0b" alt="Active development" />
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0" /></a>
@@ -27,7 +27,70 @@
 > environments until the release gates in [`docs/roadmap.md`](./docs/roadmap.md)
 > are complete.
 
-## Your queue is telling you a job succeeded. It cannot tell you the result is correct.
+The current security baseline and its unresolved release blockers are recorded
+in [the 2026-07-29 security audit](./docs/security-audit-2026-07-29.md).
+The optional HTTP Gateway binds to loopback by default and requires a bearer
+token of at least 32 bytes; remote deployment still requires TLS termination,
+network policy and a future role/tenant authorization model.
+
+## RhinoQ is a Task Platform with an optional Verified Tasks layer
+
+RhinoQ gives applications a durable, user-facing lifecycle for asynchronous
+work: task ownership, execution, progress, cancellation, retry, history and
+result delivery. It is designed to sit above an existing queue or worker, so a
+team can adopt the task layer without rewriting its business logic or moving
+its queue on day one.
+
+The current repository is still in active development. A first Go Task facade,
+versioned HTTP polling endpoint, result-reference delivery and typed Node
+client now exist. ProviderOperation, runtime adapters, result payload transport
+and a frontend component are not complete yet. The mature capability today
+remains the Go/PostgreSQL job runtime and the optional Verified Tasks foundation
+described below.
+
+When a task has an irreversible external effect or a business invariant that
+must be proved, Verified Tasks adds Effect Ledger, outcome observation, Rules,
+Findings and reconciliation.
+
+### First Task polling slice
+
+The initial public contract is intentionally polling-first:
+
+```go
+client := rhinoq.NewInMemory() // use NewPostgres(db) for durable state
+snapshot, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{
+    ID: "report_01", Type: "report.export", DefinitionVersion: 1,
+})
+snapshot, err = client.QueueTask(ctx, snapshot.ID, snapshot.EntityVersion)
+snapshot, err = client.GetTask(ctx, snapshot.ID)
+result, err := client.AttachTaskResult(
+    ctx, snapshot.ID, snapshot.EntityVersion, "s3://reports/report_01.pdf",
+)
+```
+
+Every mutation requires the last `EntityVersion`; stale writers receive
+`ErrTaskVersionConflict`. The optional Gateway exposes the same contract at
+`POST /v1/tasks` and `GET /v1/tasks/{id}`. Result references use a separate
+endpoint so ordinary polling does not repeatedly expose storage locations.
+This slice does not yet dispatch a Task to BullMQ/native Job automatically or
+proxy result payloads.
+
+## Strengths that exist in the repository today
+
+| Strength | Current evidence | Boundary |
+|---|---|---|
+| One Task contract for BE and FE | Go facade, HTTP Snapshot v1 and typed Node client share version/progress/result/execution semantics | no React hook or realtime transport yet |
+| Stale writes fail closed | Task and child Execution mutations advance one aggregate `entityVersion`; memory, HTTP and PostgreSQL tests cover conflicts | multi-client reconnect still needs browser/property tests |
+| Runtime correctness stays server-side | lease epoch fencing, DB-authored time, bounded retry/reaper and Effect Ledger live in Go/PostgreSQL | external-runtime adapter is not implemented yet |
+| Existing systems are not forced into Verified Tasks | Task state is independent from Effect, Outcome, Rule and Finding state | no real design-partner adoption measurement yet |
+| Unknown provider outcomes are modeled safely | Effect Ledger distinguishes pending, confirmed and uncertain instead of treating callback return as business success | generic ProviderOperation remains planned |
+
+These are implementation strengths, not proof that RhinoQ reduces plumbing or
+wins adoption. Those product hypotheses and their failure criteria are tracked
+in [Product strengths](./docs/product-strengths.md) and
+[Product evidence](./docs/product-evidence.md).
+
+## Verified Tasks: technical success is not business success
 
 A job queue knows one thing: whether your handler returned without throwing. If
 it did, the job is marked succeeded and disappears from the dashboard.
@@ -286,6 +349,7 @@ lock the database it is recovering.
 
 | Area | State |
 |---|---|
+| TASK | **First polling slice.** Domains, PostgreSQL store, public Go facade, versioned HTTP polling, external/native Execution binding, separate result-reference API and typed Node client exist; runtime dispatch adapters, result payload transport and frontend components do not. |
 | COMMIT · RUN | Mature. Fencing, retries, cancellation, admission, poison protection, all covered by a real-PostgreSQL suite. |
 | VERIFY | Working and differentiated. Versioned Rules, Explain gate, three-state observations, bounded scans, durable scheduler. |
 | RECOVER | **Split.** Runtime recovery — guarded replay of a dead job with audit — exists. **Business repair — investigate, propose, dry-run, approve, fix, re-verify — does not.** A finding today tells you something is wrong; acting on it is manual. |
@@ -300,6 +364,9 @@ adoption. Both are deliberately unflattering.
 
 | Document | Contents |
 |---|---|
+| [Task Platform](./docs/task-platform.md) | product model, implemented foundation and planned slices |
+| [Product evidence](./docs/product-evidence.md) | market evidence, unproven hypotheses and validation gates |
+| [Product strengths](./docs/product-strengths.md) | implemented strengths, limits and proof still required |
 | [Getting started](./docs/getting-started.md) | install, migrate, first job |
 | [Integrity Rules](./docs/rules.md) | Rule contract, Explain, unknown handling, cursors |
 | [CLI reference](./docs/cli.md) | every command, flag, exit code and write boundary |
@@ -308,6 +375,7 @@ adoption. Both are deliberately unflattering.
 | [Failure semantics](./docs/failure-semantics.md) | retry and Effect Ledger decisions |
 | [Competitive landscape](./docs/competitive-landscape.md) | sourced comparison with adjacent tools |
 | [Architecture](./ARCHITECTURE.md) | module boundaries and runtime layout |
+| [Architecture review](./docs/architecture-review.md) | repository audit, large-repo comparison and accepted/refused patterns |
 
 ## Contributing
 

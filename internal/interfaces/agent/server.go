@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +15,8 @@ import (
 
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
+
+const minTokenBytes = 32
 
 // Config wires one Agent process.
 type Config struct {
@@ -36,7 +40,7 @@ type Config struct {
 // Server is the HTTP surface of a RhinoQ Agent.
 type Server struct {
 	client            *rhinoq.Client
-	token             string
+	tokenHash         [sha256.Size]byte
 	open              bool
 	heartbeatInterval time.Duration
 	maxPayloadBytes   int
@@ -58,6 +62,9 @@ func New(config Config) (*Server, error) {
 	if config.Token == "" && !config.AllowUnauthenticated {
 		return nil, errors.New("agent requires a token; set AllowUnauthenticated only for local development")
 	}
+	if config.Token != "" && len(config.Token) < minTokenBytes {
+		return nil, fmt.Errorf("agent token must be at least %d bytes", minTokenBytes)
+	}
 	if config.HeartbeatInterval <= 0 {
 		config.HeartbeatInterval = 10 * time.Second
 	}
@@ -71,7 +78,8 @@ func New(config Config) (*Server, error) {
 		config.Version = "0.1.0-dev"
 	}
 	server := &Server{
-		client: config.Client, token: config.Token, open: config.AllowUnauthenticated,
+		client: config.Client, tokenHash: sha256.Sum256([]byte(config.Token)),
+		open:              config.AllowUnauthenticated,
 		heartbeatInterval: config.HeartbeatInterval, maxPayloadBytes: config.MaxPayloadBytes,
 		maxRequestBytes: config.MaxRequestBytes, version: config.Version,
 	}
@@ -106,6 +114,17 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /v1/jobs/{id}/replay", s.guard(s.handleReplay))
 	mux.HandleFunc("GET /v1/jobs/{id}/audit", s.guard(s.handleAudit))
 	mux.HandleFunc("GET /v1/jobs/{id}/attempts", s.guard(s.handleAttempts))
+
+	// User-facing Task surface. GET is deliberately polling-first; realtime
+	// delivery can be added later without changing the versioned snapshot.
+	mux.HandleFunc("POST /v1/tasks", s.guard(s.handleCreateTask))
+	mux.HandleFunc("GET /v1/tasks/{id}", s.guard(s.handleGetTask))
+	mux.HandleFunc("POST /v1/tasks/{id}/state", s.guard(s.handleTransitionTask))
+	mux.HandleFunc("POST /v1/tasks/{id}/progress", s.guard(s.handleTaskProgress))
+	mux.HandleFunc("GET /v1/tasks/{id}/result", s.guard(s.handleGetTaskResult))
+	mux.HandleFunc("POST /v1/tasks/{id}/result", s.guard(s.handleAttachTaskResult))
+	mux.HandleFunc("POST /v1/tasks/{id}/executions", s.guard(s.handleCreateTaskExecution))
+	mux.HandleFunc("POST /v1/task-executions/{id}/bind", s.guard(s.handleBindTaskExecution))
 
 	// Worker surface: the four things an SDK does.
 	mux.HandleFunc("POST /v1/claim", s.guard(s.handleClaim))
@@ -157,7 +176,8 @@ func (s *Server) authorized(r *http.Request) bool {
 	if presented == header {
 		presented = ""
 	}
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(s.token)) == 1
+	presentedHash := sha256.Sum256([]byte(presented))
+	return subtle.ConstantTimeCompare(presentedHash[:], s.tokenHash[:]) == 1
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +192,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	// looks healthy from the outside and accepts work it cannot persist.
 	if _, err := s.client.JobCounts(r.Context(), ""); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"status": "unready", "reason": "job store is unreachable: " + err.Error(),
+			"status": "unready", "reason": "job store is unreachable",
 		})
 		return
 	}
@@ -204,6 +224,155 @@ type enqueueRequest struct {
 	Priority       int    `json:"priority,omitempty"`
 	ResourceClass  string `json:"resourceClass,omitempty"`
 	RunAfterMs     int64  `json:"runAfterMs,omitempty"`
+}
+
+func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	var request rhinoq.TaskCreateRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.CreateTask(r.Context(), request)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, snapshot)
+}
+
+func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := s.client.GetTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) handleGetTaskResult(w http.ResponseWriter, r *http.Request) {
+	result, err := s.client.GetTaskResult(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+type attachTaskResultRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Reference       string `json:"reference"`
+}
+
+func (s *Server) handleAttachTaskResult(w http.ResponseWriter, r *http.Request) {
+	var request attachTaskResultRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	result, err := s.client.AttachTaskResult(
+		r.Context(),
+		r.PathValue("id"),
+		request.ExpectedVersion,
+		request.Reference,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleCreateTaskExecution(w http.ResponseWriter, r *http.Request) {
+	var request rhinoq.TaskExecutionCreateRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.CreateTaskExecution(
+		r.Context(),
+		r.PathValue("id"),
+		request,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, snapshot)
+}
+
+func (s *Server) handleBindTaskExecution(w http.ResponseWriter, r *http.Request) {
+	var request rhinoq.TaskExecutionBinding
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.BindTaskExecution(
+		r.Context(),
+		r.PathValue("id"),
+		request,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+type transitionTaskRequest struct {
+	ExpectedVersion int64            `json:"expectedVersion"`
+	State           rhinoq.TaskState `json:"state"`
+}
+
+func (s *Server) handleTransitionTask(w http.ResponseWriter, r *http.Request) {
+	var request transitionTaskRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	id := r.PathValue("id")
+	var (
+		snapshot rhinoq.TaskSnapshot
+		err      error
+	)
+	switch request.State {
+	case rhinoq.TaskQueued:
+		snapshot, err = s.client.QueueTask(r.Context(), id, request.ExpectedVersion)
+	case rhinoq.TaskRunning:
+		snapshot, err = s.client.StartTask(r.Context(), id, request.ExpectedVersion)
+	case rhinoq.TaskSucceeded:
+		snapshot, err = s.client.CompleteTask(r.Context(), id, request.ExpectedVersion)
+	case rhinoq.TaskFailed:
+		snapshot, err = s.client.FailTask(r.Context(), id, request.ExpectedVersion)
+	case rhinoq.TaskCancelRequested:
+		snapshot, err = s.client.RequestTaskCancellation(r.Context(), id, request.ExpectedVersion)
+	case rhinoq.TaskCancelled:
+		snapshot, err = s.client.CancelTask(r.Context(), id, request.ExpectedVersion)
+	default:
+		err = fmt.Errorf("unsupported task target state %q", request.State)
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+type taskProgressRequest struct {
+	ExpectedVersion int64               `json:"expectedVersion"`
+	Progress        rhinoq.TaskProgress `json:"progress"`
+}
+
+func (s *Server) handleTaskProgress(w http.ResponseWriter, r *http.Request) {
+	var request taskProgressRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.ReportTaskProgress(
+		r.Context(),
+		r.PathValue("id"),
+		request.ExpectedVersion,
+		request.Progress,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
@@ -667,7 +836,14 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	if err := decoder.Decode(target); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: ErrorBody{
 			Code:    "RHINOQ_INVALID_REQUEST",
-			Message: fmt.Sprintf("the request body could not be read: %v", err),
+			Message: "the request body must be valid JSON and match the endpoint schema",
+		}})
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: ErrorBody{
+			Code:    "RHINOQ_INVALID_REQUEST",
+			Message: "the request body must contain exactly one JSON value",
 		}})
 		return false
 	}

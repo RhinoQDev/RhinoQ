@@ -1,24 +1,26 @@
 # Implementation status
 
-This assessment tracks the current v0.1 Integrity Slice. It
-separates a mature queue foundation from the still-incomplete product
-differentiator.
+This assessment tracks the current Task Platform baseline and separates the
+existing runtime/Verified Tasks foundation from the incremental Task facade.
 
 | Area | Status | Evidence and remaining work |
 |---|---:|---|
+| TASK | 5/6 | Domains, PostgreSQL contract, public Go facade, aggregate-versioned HTTP polling, public Execution binding, result-reference API and typed Node client are tested; runtime dispatch adapters, result payload/realtime delivery and ProviderOperation remain |
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
 | RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
 | VERIFY | 4/5 | fenced Effect Ledger, versioned Rules, Explain gate, bounded evaluation and crash-safe periodic scheduling exist; external execution correlation and signal-first verification remain |
-| RECOVER | 5/6 | Rule observations manage persistent Findings and Needs Attention merges live Findings with execution/effect/outcome attention; the business-key timeline remains |
-| ADOPTION | 0/4 | observe-only ingestion, an existing-queue recipe, business-key verification command and no-cutover quickstart remain |
-| DX | 8/10 | embedded Go quickstart, topic-aware terminal help plus a complete CLI reference, direct PostgreSQL migration/doctor/operations CLI, `rhinoq explain`, an explained/tested Node producer/worker/operator preview, and a local read-only Workbench exist; npm/CLI releases, scan, business-key timeline and framework integration remain |
+| RECOVER | 5/6 | Rule observations manage persistent Findings, Needs Attention merges execution/effect/outcome attention, and the business-subject timeline exists; reverse search from an external execution remains |
+| ADOPTION | 1/4 | bounded scan and observe-only integrity evaluation exist; existing-queue recipe, business-key verification command and no-cutover Task quickstart remain |
+| DX | 8/10 | embedded Go quickstart, topic-aware terminal help plus a complete CLI reference, direct PostgreSQL migration/doctor/operations CLI, `rhinoq explain`, an explained/tested Node producer/worker/operator preview, bounded scan and a local read-only Workbench exist; npm/CLI releases, business-key timeline, Task SDK and framework integration remain |
 | Infrastructure | 9/11 | configuration, health, metrics, checksum-tracked migration runner, real PostgreSQL tests, Rule budgets, audit chain, DB clock and SQL enqueue with invoking-login authorization exist; fault injection, retention/partitioning, restricted Rule role and benchmark evidence remain |
 
 ## Estimates
 
+- Task Platform foundation has passed **5/6 tracked gates**. This is not a
+  product-readiness percentage: public adoption and delivery are still absent.
 - Queue/runtime capability implementation: approximately **70–75%** of the
   documented long-term foundation.
-- v0.1 Integrity Slice implementation: approximately **65–70%**.
+- Verified Tasks foundation implementation: approximately **65–70%**.
 - Production release readiness: approximately **35–40%**.
 
 These are planning estimates, not product KPIs. A capability only advances when
@@ -31,7 +33,15 @@ its code, tests, documentation and evidence agree.
 - `maxDistinctWorkersFailed` and overflow modes `route`/`sample` are not
   implemented.
 - The optional HTTP Gateway lacks gRPC/Unix-socket transport, tenant isolation
-  and HTTP-layer job RBAC.
+  and HTTP-layer job RBAC. It now defaults to loopback, enforces a 32-byte
+  bearer-token minimum and refuses unauthenticated non-loopback binding, but
+  TLS termination, rate limiting, credential rotation and failed-auth audit
+  remain release blockers.
+- Codex Security CLI 0.1.1/plugin 0.1.14 reached analysis but failed to seal an
+  empty output directory with the same missing `scan-manifest.json` error on
+  native Windows and a Linux volume. This is tool failure, not zero findings.
+  `docs/security-audit-2026-07-29.md` records the fallback audit and remaining
+  coverage.
 - The Node SDK is tested from source but has no tagged npm release; non-Go
   adopters still need a separately distributed `rhinoq` CLI binary.
 - The Go module path now matches the hosting repository, so `go get` resolves
@@ -42,16 +52,23 @@ its code, tests, documentation and evidence agree.
   in a queue-filtered view.
 - No execution adapter yet correlates an existing BullMQ, pg-boss, DBOS or
   custom job with a RhinoQ business subject.
+- Public Execution create/bind exists, but composed retry with command identity
+  and crash recovery across “new Execution → queued Task” is not implemented;
+  `QueueTask` is only a lifecycle primitive.
 - Existing pre-runner RhinoQ schemas require a manual baseline workflow; the
   migration runner intentionally refuses to infer one.
 - The race detector cannot run in the current environment because the cgo
   toolchain is unavailable.
+- The full PostgreSQL suite currently fails an existing Finding suppression
+  test whose fixed `suppressed_until` fixture is already in the past relative
+  to the database clock. Migration 015 and `TestTaskStoreContract` pass against
+  PostgreSQL 16; the unrelated fixture was not changed in this Task slice.
 
 ## Next priorities
 
-1. External execution correlation and a stable business-key identity contract.
-2. Correlation timeline across jobs, attempts, effects, Rules, Findings and
-   current business state.
-3. Bounded `rhinoq scan` and `init --from-scan` planning workflow.
-4. One no-cutover reference integration against an existing queue.
-5. Fault, retention, security and reproducible benchmark evidence.
+1. Measure code/endpoints removed in one real two-task application.
+2. One BullMQ reference adapter without moving correctness into the SDK.
+3. ProviderOperation domain with idempotency, confirmation and `uncertain`.
+4. Add generated/golden contract parity before a second SDK.
+5. Reconnect/stale-version property and browser tests before realtime.
+6. Repair the independent time-sensitive Finding suppression test fixture.

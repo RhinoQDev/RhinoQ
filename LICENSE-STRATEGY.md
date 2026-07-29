@@ -30,10 +30,9 @@ riêng.
 - [ ] Audit license của toàn bộ dependency và lưu bằng chứng. Hiện tại chỉ có
       `jackc/pgx` (MIT) và `golang.org/x` (BSD-3-Clause); Node SDK không có
       runtime dependency.
-- [ ] Xác nhận không có secret hoặc customer data trong git history trước khi
-      chuyển repository sang public. Một lần quét pattern thủ công trên toàn bộ
-      history (2026-07-28) không tìm thấy key, token hay file `.env`/`.pem` nào;
-      cần chạy thêm một secret scanner chuyên dụng để có bằng chứng đủ mạnh.
+- [x] Quét secret bằng Gitleaks 8.30.1 trên 42 commit và working tree
+      (2026-07-29): không tìm thấy leak. Đây là snapshot, không thay thế
+      continuous scan; xem `docs/security-audit-2026-07-29.md`.
 - [ ] Chốt nơi giữ code proprietary khi bắt đầu open-core.
 
 ## Ràng buộc cho thay đổi sau này

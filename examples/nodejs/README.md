@@ -62,7 +62,7 @@ Worker:
 
 ```bash
 export RHINOQ_GATEWAY_URL='http://127.0.0.1:8080'
-export RHINOQ_GATEWAY_TOKEN='development-secret-change-me'
+export RHINOQ_GATEWAY_TOKEN='development-only-rhinoq-token-00000000000000000000'
 node worker.mjs
 ```
 

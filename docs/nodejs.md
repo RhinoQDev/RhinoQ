@@ -14,6 +14,17 @@ actual problem.
 | Commit a business row and job atomically | `PostgresProducer` with the current transaction client | puts both writes in the same PostgreSQL transaction | No |
 | Run handlers in Node.js | `RhinoQWorker` | claims, heartbeats and reports results through the HTTP Gateway | Yes |
 | Inspect or control work from Node.js | `RhinoQClient` | calls the typed Gateway operator API | Yes |
+| Create, update or poll user-facing Tasks | `RhinoQClient` | calls the versioned Task HTTP API | Yes |
+
+The Task API is polling-first. `createTask`, `getTask`, `transitionTask` and
+`reportTaskProgress` return `TaskSnapshot` with monotonic `entityVersion`.
+`attachTaskResult` and `getTaskResult` exchange a storage reference separately
+from the polling snapshot.
+`createTaskExecution` and `bindTaskExecution` let an adapter register one
+attempt and its stable native/external runtime identity. Both return the newest
+aggregate Snapshot; they do not dispatch work themselves.
+Callers must pass that version on writes and ignore an older polling response.
+Realtime subscriptions and result-payload proxying are not implemented.
 
 The Gateway is deterministic Go infrastructure, not an AI agent. It does not
 run a model or require an LLM.
@@ -301,7 +312,7 @@ Start the optional Gateway after migrations:
 
 ```bash
 export RHINOQ_DATABASE_URL='postgres://...'
-export RHINOQ_AGENT_TOKEN='replace-with-a-long-random-secret'
+export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
 go run ./cmd/rhinoq-agent
 ```
 
@@ -309,13 +320,15 @@ PowerShell:
 
 ```powershell
 $env:RHINOQ_DATABASE_URL = 'postgres://...'
-$env:RHINOQ_AGENT_TOKEN = 'replace-with-a-long-random-secret'
+$bytes = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:RHINOQ_AGENT_TOKEN = [Convert]::ToBase64String($bytes)
 go run ./cmd/rhinoq-agent
 ```
 
 This process:
 
-- listens on `:8080` by default;
+- listens on `127.0.0.1:8080` by default;
 - uses the built-in `pgx` driver;
 - refuses to start without authentication unless local development explicitly
   sets `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED=true`;
@@ -650,7 +663,7 @@ Register `generate-report` in `rhinoq.job_allowlist` through your migration,
 
 ```bash
 export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app'
-export RHINOQ_AGENT_TOKEN='development-secret-change-me'
+export RHINOQ_AGENT_TOKEN='development-only-rhinoq-token-00000000000000000000'
 go run ./cmd/rhinoq-agent
 ```
 
@@ -660,7 +673,7 @@ Keep this process running.
 
 ```bash
 export RHINOQ_GATEWAY_URL='http://127.0.0.1:8080'
-export RHINOQ_GATEWAY_TOKEN='development-secret-change-me'
+export RHINOQ_GATEWAY_TOKEN='development-only-rhinoq-token-00000000000000000000'
 node worker.mjs
 ```
 

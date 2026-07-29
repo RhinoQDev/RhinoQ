@@ -65,7 +65,7 @@
 
 ## ADR-0007 — v0.1 là Integrity Slice trong một PostgreSQL job queue
 
-- **Status:** accepted
+- **Status:** superseded by ADR-0014
 - **Context:** PostgreSQL queue parity có switching cost cao và không tạo khác biệt đủ mạnh so với BullMQ, pg-boss, Graphile Worker, PGMQ hoặc các durable execution platform. Hoãn VERIFY/RECOVER tới sau khi có user tạo vòng lặp không thể đạt: sản phẩm cần differentiator để có design partner.
 - **Decision:** RhinoQ vẫn là PostgreSQL job queue. v0.1 phải kiểm chứng một business invariant từ record ngược về execution/effect, lưu finding bền vững và hỗ trợ operator lifecycle có audit. `scan`/observe-only cho phép đánh giá trên execution system hiện hữu trước khi người dùng quyết định adopt queue.
 - **Alternatives:** release queue foundation trước; yêu cầu migrate queue; chỉ trả `needs_decision` mà không có verifier/reconciliation.
@@ -156,6 +156,113 @@
   license cho các release về sau, và cần đồng thuận của mọi contributor giữ
   copyright.
 - **Owner:** maintainer
+
+## ADR-0014 — Task Platform với Verified Tasks là hai lớp sản phẩm
+
+- **Status:** accepted
+- **Context:** định hướng hiện tại tập trung vào integrity workflow, trong khi
+  nhu cầu user-facing async task có cửa vào rộng hơn. Repository đã có runtime,
+  fencing, retry, Effect Ledger, Outcome, Rule và Finding; xóa chúng sẽ làm mất
+  tài sản correctness, nhưng đưa toàn bộ integrity vào onboarding Task sẽ làm
+  sản phẩm nặng và khó kiểm chứng.
+- **Decision:** RhinoQ đặt **Task Platform** làm cửa vào sản phẩm. Task sở hữu
+  lifecycle user-facing, execution, progress, cancel, retry, history, result và
+  delivery. **Verified Tasks** là capability tùy chọn cho effect, outcome,
+  Finding và reconciliation. Mô hình mới thêm `Task` phía trên `Execution`; Job
+  hiện tại tiếp tục là execution/runtime primitive trong slice đầu tiên.
+- **Runtime boundary:** Native Go/PostgreSQL là backend đầu tiên; runtime hiện
+  có của người dùng, bắt đầu với BullMQ, được tích hợp qua adapter. RhinoQ không
+  yêu cầu migration queue để dùng Task Platform.
+- **Provider boundary:** ProviderOperation là primitive generic cho request ID,
+  polling/webhook, timeout, idempotency, confirmation và `uncertain`. Không xây
+  marketplace hoặc business connector hàng loạt trong slice đầu tiên.
+- **Delivery boundary:** durable snapshot/state model đi trước realtime. Polling
+  là transport đầu tiên; SSE, stream, Redis fan-out và WebSocket chỉ được thêm
+  sau khi snapshot, versioning, retry và reconnect semantics có test.
+- **Alternatives:** giữ integrity làm cửa vào duy nhất (hẹp và onboarding nặng);
+  bỏ integrity (mất khác biệt correctness); xây song song hai sản phẩm độc lập
+  (trùng infrastructure và tăng scope).
+- **Consequences:** phải định nghĩa quan hệ Task–Execution–Job, giữ backward
+  compatibility cho API Job, tách Task state khỏi Outcome/Effect state, và
+  cập nhật README/architecture/status trước khi thêm code Task. Các phần Rule,
+  Finding và Effect Ledger không bị xóa.
+- **Rollback:** nếu validation không chứng minh được nhu cầu Task, giữ Task
+  model như facade/adjacent capability và quay lại ưu tiên Verified Tasks mà
+  không cần xóa runtime hoặc integrity foundation.
+- **Owner:** product + engine
+
+## ADR-0015 — Contract thuần dữ liệu và dependency gate tự động
+
+- **Status:** accepted
+- **Context:** Snapshot contract ban đầu tự import Domain để dựng DTO. Cách này
+  tiện trong một file nhưng tạo dependency hai chiều ở cấp kiến trúc vì Domain
+  được phép import contract. Khi thêm HTTP, SDK và provider, contract sẽ dễ trở
+  thành nơi chứa mapper/business logic và có thể tạo import cycle thật.
+- **Decision:** `internal/contracts` chỉ chứa data, schema version và validation
+  không phụ thuộc Domain. Mapping Domain ↔ contract thuộc Application. Test
+  `tests/unit/architecture_test.go` parse import của production Go files và
+  fail khi contracts/domain/ports/application/runtime/adapters đi sai hướng.
+- **Evidence:** Temporal tách API/proto khỏi server services; Hatchet có
+  `api-contracts`, `api`, `internal`, `pkg`, `sdks`, `sql`; Temporal TypeScript
+  SDK tách client/worker/workflow/common/proto thành package riêng. RhinoQ áp
+  dụng dependency separation nhưng không sao chép số lượng package/service.
+- **Consequences:** mapper có thể nhiều hơn một bước nhưng wire DTO không kéo
+  state nội bộ vào SDK/transport. Mọi layer mới phải thêm rule vào architecture
+  test nếu nó tạo một boundary mới. `pkg/rhinoq` tiếp tục tách file theo
+  capability; không dồn Task vào `client.go`.
+- **Rollback:** có thể bỏ gate test mà không đổi runtime/schema, nhưng không
+  chuyển mapper ngược vào contracts trừ khi ADR này được thay thế.
+- **Owner:** engine + SDK
+
+## ADR-0016 — Task version là aggregate Snapshot revision
+
+- **Status:** accepted
+- **Context:** Snapshot chứa cả Task fields và danh sách Execution. Nếu
+  create/bind Execution chỉ tăng `Execution.Version`, hai Snapshot có thể cùng
+  `entityVersion` nhưng khác nội dung. FE bỏ response cũ theo Task version khi
+  đó không còn sound, đặc biệt khi request hoàn thành sai thứ tự.
+- **Decision:** mọi insert/update Execution tăng parent `Task.Version` và
+  `updated_at` trong cùng memory lock hoặc PostgreSQL transaction. Public
+  create/bind Execution trả Snapshot mới. `Execution.Version` vẫn dùng để fence
+  mutation của riêng attempt; `Task.Version` là revision của toàn aggregate
+  được render.
+- **Alternatives:** version tuple/merge client-side (tăng complexity cho mọi
+  SDK và vẫn khó xử lý missing child); bỏ Execution khỏi Snapshot (mất history
+  cần cho Task UI); event sequence riêng (thêm schema trước khi polling được
+  chứng minh).
+- **Consequences:** một Execution update làm stale Task command đang giữ version
+  cũ, buộc caller đọc lại trước khi quyết định. Store contract đổi signature để
+  trả aggregate version; adapter phải update cả hai record atomically.
+- **Rollback:** cần contract version mới; không được quay lại semantics cũ trong
+  Snapshot v1.
+- **Owner:** engine + SDK
+
+## ADR-0017 — Patched toolchain và Gateway fail-closed ở local boundary
+
+- **Status:** accepted
+- **Context:** `govulncheck` tìm thấy reachable advisories trong pgx 5.7.2,
+  x/text 0.21.0 và Go 1.26.2. Bản vá pgx/x.text yêu cầu Go 1.25. Gateway đồng
+  thời bind mọi interface mặc định, chấp nhận token ngắn và cho phép
+  unauthenticated mode bind ra network nếu operator cấu hình nhầm.
+- **Decision:** minimum Go baseline là 1.25.0 và preferred toolchain là bản vá
+  1.26.5; CI phải dùng setup-go có hiểu `toolchain` directive và chạy
+  `govulncheck` cho cả hai module. Gateway mặc định bind
+  `127.0.0.1:8080`, token phải ít nhất 32 byte, unauthenticated mode chỉ chạy
+  trên loopback, và HTTP/parser boundary phải bounded, không phản chiếu raw
+  internal error.
+- **Boundary:** đây không phải tenant/role auth. Một Agent token vẫn là
+  deployment credential chung; remote traffic phải qua TLS termination và
+  network policy. Task `ownerId` chưa phải authorization claim.
+- **Alternatives:** giữ Go 1.22 và chấp nhận dependency dễ tổn thương (refused);
+  fork/backport pgx (tăng supply-chain ownership); thêm TLS/JWT/RBAC vội trong
+  cùng change (sai vì chưa có auth model chuẩn hóa).
+- **Consequences:** consumer cần Go 1.25+; CI/dev có thể tải preferred toolchain.
+  Deployment trước đây dựa vào default `:8080` phải đặt
+  `RHINOQ_AGENT_ADDRESS` rõ ràng và chịu trách nhiệm TLS/network policy.
+- **Rollback:** chỉ hạ baseline nếu dependency graph được chứng minh sạch bằng
+  scanner và có bản vá tương thích. Không rollback fail-closed bind/token rule
+  nếu chưa có security review thay thế.
+- **Owner:** engine + security
 
 ## Template cho ADR mới
 

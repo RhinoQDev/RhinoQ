@@ -12,7 +12,7 @@ Gateway; chỉ Node worker mới cần Gateway.
 
 ## Yêu cầu
 
-- Go 1.22+
+- Go 1.25+; the module pins the preferred patched toolchain
 - PostgreSQL 16 (phiên bản hiện được chạy trong CI; các phiên bản khác chưa
   được release-certify)
 - driver `database/sql` cho PostgreSQL; ví dụ này dùng `pgx`
