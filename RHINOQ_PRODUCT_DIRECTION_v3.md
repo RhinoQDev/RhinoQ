@@ -18,6 +18,34 @@
 
 ---
 
+## 0.0. Kiểm toán mức độ triển khai — 2026-07-29
+
+**Kết luận ngắn:** chưa. v3 là đích kiến trúc/sản phẩm dài hạn, không phải
+danh sách chức năng đã hoàn thành. Không được dùng một mục trong v3 làm claim
+public hoặc giả định rằng nó đã có trong SDK/API. Với tình trạng hiện tại, xem
+[`README.md`](./README.md) là contract bề mặt, [`docs/task-platform.md`](./docs/task-platform.md)
+là phạm vi Task đã triển khai, và [`.ai/STATUS.md`](./.ai/STATUS.md) là bảng
+tiến độ có thể kiểm chứng.
+
+| Lớp v3 | Trạng thái có thể kiểm chứng | Phần còn thiếu quan trọng |
+| --- | --- | --- |
+| Task core | **Một phần.** Có Task/Execution snapshot versioned, polling HTTP, result reference và lifecycle nền tảng. | Retry/cancel là command end-user hoàn chỉnh (identity, attempt mới, recovery) chưa được compose. |
+| BullMQ adoption | **V1 hẹp.** Có bridge theo dõi job đã track và reconcile một job đã biết sau khoảng mất kết nối. | Không có dispatch, auto-discovery/quét queue, retry/cancel orchestration hoặc outage-wide reconciliation. |
+| Delivery & frontend | **Chưa có Task Center.** Có operator Workbench read-only và polling snapshot. | React hooks/provider, SSE/WebSocket/sync engine, end-user screens và hành động task. |
+| Provider operation | **Chưa triển khai.** | Generic ProviderOperation, confirmation/reconciliation policy và UI tương ứng. |
+| Authorization | **Chưa triển khai theo tenant/end-user.** | Tenant scope, RBAC/token scopes và authorization cho result/action. |
+| Native engine & VERIFY | **Nền tảng đã có đáng kể.** Go/Postgres runtime, effect/rule/finding là capability riêng. | Không tự biến thành user-facing Task flow nếu chưa có adapter và contract ở các hàng trên. |
+| Phát hành | **Pipeline prerelease đã chuẩn bị.** | Chưa có package `@rhinoq/node` public trên npm, chưa có tagged public release; cần owner hoàn tất npm Trusted Publishing. |
+
+Ưu tiên trước khi tích hợp BullMQ thật: dùng bridge V1 với 1--2 task thực để
+lấy evidence, chốt contract retry/cancel theo semantics của ứng dụng, rồi mới
+mở rộng reconcile và Task Center. Không nên cố triển khai toàn bộ v3 cùng lúc:
+đó sẽ biến RhinoQ thành một workflow/runtime khác mà chưa chứng minh nhu cầu.
+Danh sách hạng mục chưa làm và thứ tự đánh đổi nằm ở
+[`docs/roadmap.md`](./docs/roadmap.md).
+
+---
+
 ## 0. Trạng thái tài liệu
 
 - Tài liệu này ghi lại hướng sản phẩm đề xuất sau khi không còn lấy `VERIFY`, reconciliation và PostgreSQL integrity làm cửa vào chính.
