@@ -11,8 +11,11 @@ repeatable without claiming production readiness.
   exact version while the public contract remains unstable.
 - It does not imply a Go CLI archive, a GitHub release or production readiness.
 
-The Node SDK is not `latest` until the project has a stable public contract and
-production evidence.
+The npm registry currently resolves `latest` to this first published version.
+That is a registry tag, not a stability claim: documentation and consumers
+must pin the explicit prerelease or use `next` until a stable public contract
+and production evidence exist. The first stable release must deliberately move
+`latest` to its stable version.
 
 ## One-time npm owner setup
 
