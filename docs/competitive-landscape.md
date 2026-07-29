@@ -1,118 +1,84 @@
 # Competitive landscape
 
-> Last reviewed: 2026-07-28. This document compares product boundaries, not
-> benchmark performance. Claims should be rechecked against primary sources
-> before publication.
+> Last reviewed: 2026-07-29. This document compares product boundaries, not
+> benchmark performance. Recheck primary sources before publication.
 
-RhinoQ does not enter an empty category. PostgreSQL queues, durable execution
-runtimes, and workflow platforms already solve large parts of reliable
-background execution. The product hypothesis is narrower:
+RhinoQ does not enter an empty category. Queue libraries, durable execution
+runtimes and workflow platforms already solve large parts of reliable
+background execution. RhinoQ's primary hypothesis is narrower:
 
-> Can a PostgreSQL queue package business-outcome rules, findings and
-> correlation timelines better than queue dashboards or application cron jobs,
-> while offering a no-cutover scan as the first evaluation step?
+> A team with an existing queue or worker can add a durable, user-facing Task
+> contract without rebuilding status/result/UI plumbing or migrating its whole
+> execution model.
 
-This is a hypothesis to validate, not a claim that no other system can express
-an invariant in application code.
+The optional Verified Tasks layer has a second hypothesis: effect evidence,
+outcome observation and Findings help the smaller set of tasks where technical
+completion is not enough. Neither hypothesis means competitors cannot implement
+the behavior in application code.
 
 ## Category map
 
-### Queue libraries and PostgreSQL queue primitives
+| Category | Established strengths | RhinoQ boundary |
+|---|---|---|
+| [BullMQ](https://github.com/taskforcesh/bullmq) | Redis queue, workers, progress, results, retry, cancellation, events and operations ecosystem | RhinoQ must not claim queue replacement, higher throughput or an existing adapter it does not have |
+| [Bull Board](https://github.com/felixmosh/bull-board) | queue/job inspection and operator actions | operator UI, not a user-facing Task ownership/snapshot layer |
+| [pg-boss](https://github.com/timgit/pg-boss), [Graphile Worker](https://worker.graphile.org/docs) and [PGMQ](https://github.com/pgmq/pgmq) | PostgreSQL queue primitives, transactional enqueue and workers | PostgreSQL and ACID enqueue are table stakes, not differentiation |
+| [Trigger.dev](https://trigger.dev/docs/introduction) and [Inngest](https://www.inngest.com/docs) | managed task/runtime models, retries, observability and frontend/realtime tooling | RhinoQ cannot win on generic task features; it must show lower migration cost for current-worker teams |
+| [Hatchet](https://github.com/hatchet-dev/hatchet), [Temporal](https://docs.temporal.io/), [Restate](https://docs.restate.dev/) and [DBOS](https://docs.dbos.dev/) | durable execution/workflows, state, retries and broad operational systems | use these when durable workflow semantics or their execution model is the central need |
+| transport products | channels, messages and subscriptions | transport does not own Task lifecycle, attempts, history or business authorization |
 
-| Product                                             | Model                                     | Established strengths                                                                   | Consequence for RhinoQ                                                                              |
-| --------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| [BullMQ](https://github.com/taskforcesh/bullmq)     | Redis-backed Node.js queue                | mature queue ergonomics, retries, delayed jobs, rate limiting, events, flows, ecosystem | benchmark for RUN ergonomics; RhinoQ must not claim higher throughput without reproducible evidence |
-| [pg-boss](https://github.com/timgit/pg-boss)        | PostgreSQL-backed Node.js queue           | transactional enqueue, `SKIP LOCKED`, scheduling, retries, no Redis dependency          | PostgreSQL and ACID enqueue are table stakes, not differentiation                                   |
-| [Graphile Worker](https://worker.graphile.org/docs) | PostgreSQL worker, embedded or standalone | SQL enqueue, `SKIP LOCKED`, `LISTEN/NOTIFY`, cron, backfill and batch jobs              | a strong low-friction option for Node/PostgreSQL teams                                              |
-| [PGMQ](https://github.com/pgmq/pgmq)                | PostgreSQL extension and SQL API          | visibility timeout, archive, FIFO/group/topic primitives                                | queue storage primitives alone do not justify RhinoQ                                                |
+BullMQ itself has progress, result, retry and cancellation primitives. The gap
+is not “BullMQ cannot model a job.” The application still has to decide task
+identity, user/tenant ownership, UI-safe state, result delivery and how to
+converge after reload or out-of-order responses.
 
-### Durable execution and orchestration
+Trigger.dev and Inngest already offer rich frontend/realtime task experience.
+RhinoQ's future wedge is keeping an existing execution runtime—not feature
+parity. The first intended proof is a BullMQ adapter that does not require a
+business-handler rewrite. That adapter is not implemented today.
 
-| Product                                                      | Model                                                           | Established strengths                                                                                                                                    | Relevant boundary                                                          |
-| ------------------------------------------------------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| [DBOS](https://docs.dbos.dev/)                               | in-process durable workflows with execution state in PostgreSQL | checkpoints, queues, recovery, transactions and language SDKs; [Lakebase integration](https://www.dbos.dev/blog/building-durable-agents-dbos-databricks) | eliminates many replay windows, especially for transactional database work |
-| [Hatchet](https://github.com/hatchet-dev/hatchet)            | PostgreSQL-backed task and workflow platform                    | queues, DAGs, durable tasks, OTel, rate limits, priorities, fair scheduling, multi-tenancy and UI                                                        | substantially broader orchestration and operations surface                 |
-| [Restate](https://docs.restate.dev/foundations/key-concepts) | durable runtime and SDKs                                        | journaled execution, reliable service calls, durable state, workflows and signals                                                                        | stronger durable-call abstraction than a conventional queue                |
-| [Temporal](https://docs.temporal.io/)                        | durable workflow service or cloud                               | workflow history, activities, timers, signals, retries, versioning and production ecosystem                                                              | preferred when durable workflow semantics are the central problem          |
-| [Inngest](https://www.inngest.com/docs)                      | event-driven durable functions                                  | managed execution, steps, retries, waits and observability                                                                                               | competes on adoption and developer experience                              |
-| [Trigger.dev](https://trigger.dev/docs/introduction)         | managed or self-hosted background task platform                 | long-running tasks, checkpoint/resume, deployment and operational tooling                                                                                | competes on developer workflow and hosted operations                       |
+## RhinoQ product boundary
 
-## The DBOS boundary
+| Layer | Boundary | Status |
+|---|---|---|
+| Task Platform | Task identity, versioned snapshot, progress, result reference, lifecycle and execution history | first polling slice implemented |
+| Existing-runtime adoption | adapter dispatches and observes an existing worker | external runtime reference exists; adapter is planned |
+| Delivery | polling now; frontend/realtime later | HTTP polling and typed Node client implemented; no React/realtime |
+| Verified Tasks | effect evidence, outcome observation, Rules and Findings | optional foundation implemented |
 
-DBOS materially weakens a broad claim that only an Effect Ledger can survive a
-process crash around a side effect. Checkpointed workflows can skip work whose
-completion was durably recorded, and a DBOS datasource transaction can provide
-exactly-once database writes.
+The external Execution reference is deliberately not called an adapter. It
+records a stable runtime ID but does not enqueue to BullMQ, listen to its events
+or provide its liveness/cancellation semantics.
 
-It is still incorrect to generalize this to exactly-once execution for every
-external API. The official [DBOS Go Steps
-tutorial](https://docs.dbos.dev/golang/tutorials/step-tutorial) states that
-steps execute at least once: a crash after the side effect but before its
-checkpoint can cause re-execution. An external Stripe, email, object-storage or
-media-provider call therefore still needs one or more of:
+## Verification boundary
 
-- provider-enforced idempotency;
-- a durable-call protocol with suitable guarantees;
-- explicit effect evidence and confirmation;
-- post-event reconciliation.
+DBOS, Hatchet, Restate and Temporal weaken any broad claim that a queue cannot
+recover from a crash or that RhinoQ alone can protect an external side effect.
+External APIs still need provider idempotency, a suitable durable-call protocol,
+explicit evidence/confirmation or reconciliation. RhinoQ's Effect Ledger is one
+explicit evidence model; it is not exactly-once external execution.
 
-RhinoQ must present its Effect Ledger as one explicit evidence model for this
-boundary, not as the only solution to durable external effects.
+## How to validate or falsify the product
 
-## Differentiation hypothesis
+| Workload | Strong alternative | RhinoQ must demonstrate |
+|---|---|---|
+| two user-visible tasks on an existing queue | hand-written status endpoints/UI, Trigger.dev or Inngest | no business-handler rewrite and materially less durable task plumbing |
+| database-only workflow | DBOS transaction or application transaction | no advantage is expected; document when not to use RhinoQ |
+| external provider with idempotency | durable step plus provider key | clearer evidence without weakening safety |
+| completed execution with inconsistent business state | application cron, SQL alert or monitoring rule | optional Finding lifecycle is worth adopting |
 
-The candidate product boundary is:
-
-- **VERIFY** — define an indexed business invariant, schedule verification,
-  preserve evidence, and distinguish request acceptance, effect confirmation,
-  and outcome achievement.
-- **RECOVER** — scan from a business record back to intent, execution and
-  effect evidence; deduplicate a persistent finding; apply acknowledgement,
-  suppression, resolution and regression semantics; require preconditions and
-  audit for repair.
-- **Observe-only adoption** — correlate an existing BullMQ, pg-boss, DBOS or
-  custom execution without moving producer and worker traffic first.
-
-Not finding this as a packaged primitive in the reviewed documentation does
-not prove demand. Three explanations remain viable:
-
-1. this is a genuine reusable product gap;
-2. teams consider it application-domain responsibility;
-3. durable execution plus application-specific reconciliation is sufficient.
-
-## How to falsify the hypothesis
-
-Before expanding queue parity or adding a second adapter, run design-partner
-tests against three workloads:
-
-| Workload                                             | Strong alternative                             | RhinoQ must demonstrate                                                          |
-| ---------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------- |
-| database-only workflow                               | DBOS transaction or application transaction    | no advantage is expected; document when not to use RhinoQ                        |
-| external provider with idempotency                   | durable step plus provider key                 | clearer evidence or operations without weakening safety                          |
-| completed execution with inconsistent business state | application cron, SQL alert or monitoring rule | lower adoption cost, persistent finding lifecycle and safer investigation/repair |
-
-The v0.1 thesis fails if teams do not value the third row as a reusable product
-capability or will only keep its invariant and repair logic inside the
-application.
+The primary thesis fails if teams must rewrite handlers, retain per-feature
+status glue, or prefer an execution-platform migration. The optional Verified
+Tasks thesis fails if teams keep verification entirely inside their application.
 
 ## Positioning rules
 
-- Do not describe all other queues as “blind retry” systems. They manage
-  execution or delivery state; an application may add idempotency,
-  verification and reconciliation.
+- Do not describe other queues as “blind retry” systems.
 - Do not use PostgreSQL, transactional enqueue, checkpointing or worker resume
   as unique claims.
-- Do not publish relative throughput or latency without a reproducible
-  benchmark recording hardware, payload, durability, concurrency and workload.
-- Do not require a queue migration before a team can observe its first finding.
-- Recommend the better-fitting product when the user only needs a queue, DAG,
-  durable workflow, hosted task runner or Redis throughput.
-
-## Review cadence
-
-Recheck this file before each release candidate and record:
-
-- source URL and review date;
-- capability changes that alter a comparison;
-- tested behavior versus documentation-only claims;
-- any RhinoQ claim that should be narrowed or removed.
+- Do not call the external Execution boundary an adapter until it dispatches and
+  observes a runtime.
+- Do not publish throughput, latency or reliability comparisons without a
+  reproducible benchmark.
+- Recommend the better-fitting product for a queue-only, workflow-only, hosted
+  runtime or stream-throughput need.

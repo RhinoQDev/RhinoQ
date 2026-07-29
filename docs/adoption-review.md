@@ -1,119 +1,73 @@
 # Adoption and usability review
 
-Reviewed: 2026-07-28
+Reviewed: 2026-07-29.
 
-This review asks whether a new user can install RhinoQ, get a trustworthy first
-result, and control work without understanding the engine internals. It uses
-official product documentation as UX references, not as feature claims about
-RhinoQ.
+This review asks whether a team can evaluate RhinoQ as a user-facing Task layer
+for existing background work. It separates the current implementation from the
+intended existing-worker adoption path.
 
 ## Current verdict
 
 | Journey | Current state | Verdict |
 |---|---|---|
-| Go producer + worker | documented embedded API, migrations and doctor | usable for repository evaluation |
-| Go library install | Apache-2.0 licensed, module path matches the repository, `go get` resolves a branch pseudo-version | usable; no semver tag yet |
-| Node producer | tested `PostgresProducer`, but package is source-only | technically usable, distribution not ready |
-| Node worker | tested high-level worker, but requires Gateway and source-only package | preview |
-| Operations | direct CLI plus an embedded read-only Workbench for jobs, evidence, attention, Findings, Rules and business-subject investigation | useful for local development; browser writes remain intentionally absent |
-| First integrity finding | integrity-only facade, bounded `scan` and a runnable missing-report-output workload | repository evaluation path exists; package distribution is still preview |
-| Production evidence | real PostgreSQL contracts exist; benchmark/fault/restore evidence incomplete | not production-ready |
+| Go Task contract | public facade, PostgreSQL store and versioned snapshots | usable for controlled evaluation |
+| HTTP/Node Task polling | typed source-only Node client and Gateway endpoints | technically usable; not published or tenant-safe |
+| Existing BullMQ worker | external Execution reference can be written manually | not an adapter; no-cutover promise unproven |
+| Native Go/PostgreSQL runtime | transactional enqueue, worker and operational tooling | usable for repository evaluation |
+| Verified Tasks | Rules, Findings and read-only investigation | optional evaluation path, not the main onboarding path |
+| Frontend experience | no React hook, Task Center, realtime or reconnect test | not ready |
+| Production evidence | contracts exist; benchmark, fault, retention and auth evidence incomplete | not production-ready |
 
-The product is easier to evaluate than before, but not yet easy to install for
-a Node team outside this repository.
+## The activation event that matters
 
-## What strong onboarding products do well
+The first meaningful Task Platform activation is not a job reaching
+`succeeded`. It is a product team adding a second long-running feature and not
+rebuilding task identity, status endpoints, stale-response handling, result
+delivery and history again.
 
-- [BullMQ Quick Start](https://docs.bullmq.io/readme-1) introduces two concepts,
-  `Queue` and `Worker`, immediately after one package install. The first code
-  sample creates observable work before advanced configuration appears.
-- [pg-boss](https://timgit.github.io/pg-boss/) combines a Node API with
-  transactional/ORM paths, while its
-  [CLI](https://timgit.github.io/pg-boss/cli) exposes migration plans, version
-  and doctor behavior for deployment automation.
-- [Graphile Worker CLI quickstart](https://worker.graphile.org/docs/cli) uses a
-  task directory and one local command; its
-  [library runner](https://worker.graphile.org/docs/library/run) also supports
-  embedded operation and a graceful `stop()` lifecycle.
-- [DBOS TypeScript](https://docs.dbos.dev/typescript/programming-guide) provides
-  a project template and a command to start local PostgreSQL, then gets to a
-  first durable function quickly.
-- [Trigger.dev quickstart](https://trigger.dev/docs/quick-start) optimizes for
-  a visible first run by generating an example task and linking the local
-  process to a run view.
-- [node-postgres transaction guidance](https://node-postgres.com/features/transactions)
-  requires every statement in a transaction to use the same checked-out
-  client. `PostgresProducer` follows this instead of hiding pool ownership.
-- [Node.js release guidance](https://nodejs.org/en/about/previous-releases)
-  recommends supported LTS lines for production. Node 20 is EOL, so the SDK
-  requires Node 22+ and CI covers Node 22 and 24.
+The optional Verified Tasks activation is separate: a real mismatch becomes a
+deduplicated Finding with enough evidence to investigate. It should not be a
+prerequisite for someone who only needs import/export progress.
 
-## Decisions applied to RhinoQ
+## Adoption blockers
 
-1. Node producer is the shortest path. It uses the application's current pool
-   or transaction and does not require a Gateway.
-2. Node worker is a high-level runtime. Users register handlers; the SDK handles
-   protocol negotiation, queue-filtered claim, heartbeat and shutdown.
-3. Correctness remains in Go. The SDK reports intent and observations; it does
-   not calculate retry schedules or mutate job state locally.
-4. Developer inspection works without a hosted Console. The Workbench exposes
-   bounded payload-free evidence; CLI and Node client retain explicit controls.
-5. Documentation says “preview” until installation is genuinely public.
+### P0 — required before recruiting existing-worker design partners
 
-## Remaining adoption blockers
+1. Ship one BullMQ reference adapter that creates/binds/observes Executions
+   without moving correctness logic into an SDK or requiring a handler rewrite.
+2. Add a two-task reference application and measure endpoints/files/LOC removed
+   compared with hand-built task plumbing.
+3. Define tenant/user scope and authorization before exposing Task reads,
+   cancellation or result references to end users.
+4. Publish a tagged Node package and prebuilt CLI binaries; the SDK is currently
+   tested from source only.
 
-### P0 — required before recruiting Node design partners
+### P1 — required for a credible frontend task experience
 
-1. The license boundary is now decided: core is Apache-2.0 (ADR-0013), and the
-   Go module path matches the hosting repository, so `go get` works without a
-   `replace`. What remains is a tagged `@rhinoq/node` with checksums and
-   provenance. Reserve or prove ownership of the `@rhinoq` npm scope first; the
-   package currently returns `404`, which proves it is unpublished but not that
-   this project can publish under that scope.
-2. Publish prebuilt `rhinoq` CLI binaries for Linux, macOS and Windows so a
-   Node user does not need a Go toolchain. The GoReleaser pipeline and the
-   tag-triggered workflow are committed, and the CLI version is stamped from the
-   tag; the first `v*` tag has not been pushed, so the pipeline is unproven.
-3. Ship one end-to-end Node starter that starts PostgreSQL, applies reviewed
-   migrations, enqueues a job, runs a handler and shows Needs Attention.
-4. Validate the implemented external execution correlation and no-cutover first
-   Finding with a design partner. Reverse lookup from an external job or
-   business key remains incomplete.
+1. Add a small polling-first React hook or framework-neutral browser contract.
+2. Test reload, delayed response, retry and stale/out-of-order update behavior.
+3. Add cancellation/retry composition with command identity and crash recovery.
+4. Add result payload delivery only after result-reference authorization is
+   defined.
 
-### P1 — improve activation and daily control
+### P2 — only after the durable state model is validated
 
-1. `rhinoq init --node` should generate a plan, never overwrite silently, and
-   create package scripts only after confirmation.
-2. Extend the current subject investigation view with reverse business-key and
-   external-job search. Add browser mutations only with actor/reason
-   confirmation and application-use-case audit.
-3. Add NestJS lifecycle hooks only after the framework-neutral worker is
-   validated by a real user.
-4. Add `LISTEN/NOTIFY` as an optional wake-up hint while retaining polling as
-   the correctness fallback; benchmark before claiming latency improvement.
-5. Add an explicit confirmation deadline and operator view for
-   `external-signal`/`verify` effects. A pending async effect is not automatically
-   an error, so escalation must use a declared SLA instead of guessing.
+1. Realtime/SSE, streams and fan-out with polling as the convergence fallback.
+2. Generic ProviderOperation validated against two providers with different
+   polling/webhook semantics.
+3. Benchmarks, fault campaigns, retention/partitioning and restore evidence.
 
-### P2 — scale and confidence
+## Measurement targets
 
-1. Reproducible Node producer/worker benchmarks with hardware, payload, pool,
-   concurrency and durability recorded.
-2. Fault tests for Gateway loss, delayed heartbeat, process kill and shutdown
-   overrun.
-3. Retention, partition, backup/restore and schema-upgrade evidence.
+These are design-partner measurements, not current claims:
 
-## Activation targets
+- time from existing worker to first visible Task;
+- number of business handlers changed during integration;
+- status/result/UI glue removed for two Task types;
+- stale/reconnect failures observed in browser tests;
+- time for a user to get an authorized result or retry/cancel command;
+- number of provider outcomes that correctly remain `uncertain` rather than
+  being retried blindly.
 
-These are targets to measure with design partners, not current claims:
-
-- time from package install to first enqueue;
-- time from clone to first completed Node handler;
-- time from existing business table to first Finding;
-- number of required processes for each integration path;
-- percentage of setup failures explained by `doctor`;
-- number of operator incidents resolved without ad-hoc SQL.
-
-The first differentiating activation event is **a real business mismatch
-appearing as one deduplicated Finding**, not merely a job reaching
-`succeeded`.
+The existing-worker thesis fails if adoption requires a worker rewrite, adds as
+much glue as it removes, or teams prefer a hosted/runtime migration instead.

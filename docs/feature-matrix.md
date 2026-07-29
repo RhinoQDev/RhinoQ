@@ -1,7 +1,10 @@
-# Feature matrix
+# Runtime foundation and implementation matrix
 
-This is an implementation matrix using BullMQ as a queue-ergonomics reference,
-not a complete competitor comparison. See the [competitive
+This is an implementation inventory for RhinoQ's native runtime and optional
+Verified Tasks foundation. It uses BullMQ as a queue-ergonomics reference; it
+is not the product's buyer narrative and does not describe an implemented
+BullMQ adapter. Start with [Product positioning](./product-positioning.md) and
+[Task Platform](./task-platform.md). See the [competitive
 landscape](./competitive-landscape.md) for PostgreSQL queues and durable
 execution platforms.
 
@@ -43,8 +46,9 @@ execution platforms.
 | Developer UI | separate product | embedded loopback-only Workbench preview implemented: payload-free jobs, Needs Attention, Findings, Rules, per-job evidence and business-subject investigation; read-only, no remote hosting |
 
 BullMQ is a mature Redis-based queue with worker, events, delayed jobs,
-concurrency and operational features. RhinoQ uses it as one RUN reference, but
-must not delay VERIFY/RECOVER until complete feature parity. Observe-only
-adoption allows integrity behavior to be tested without replacing a mature
-queue. See the [BullMQ repository](https://github.com/taskforcesh/bullmq) for
-the queue reference model.
+concurrency and operational features. RhinoQ uses it as one runtime reference;
+the planned adapter must not claim queue replacement or feature parity. The
+current externally correlated/observe-only path belongs to optional Verified
+Tasks, not to the unfinished user-facing Task adapter. See the
+[BullMQ repository](https://github.com/taskforcesh/bullmq) for the queue
+reference model.

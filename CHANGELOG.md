@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Completed the documentation narrative migration to Task Platform first.
+  README, documentation index and Getting Started now begin with the
+  user-facing Task contract; the native queue/runtime and Verified Tasks are
+  explicit optional paths. A concise `docs/product-positioning.md` now separates
+  the intended existing-worker adoption wedge from capabilities that are only
+  planned. `RHINOQ_PRODUCT_DIRECTION_v3.md` is labeled as long-range research,
+  so its BullMQ adapter, realtime, frontend and provider proposals cannot be
+  mistaken for implemented behavior.
+
 - Hardened the security baseline after a repository audit. Go now requires
   1.25 and prefers patched toolchain 1.26.5; pgx is upgraded to 5.9.2 and
   x/text to 0.39.0. `govulncheck` now reports no reachable vulnerabilities in

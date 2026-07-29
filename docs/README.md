@@ -2,8 +2,8 @@
 
 ## Bắt đầu
 
+- [Product positioning: ai dùng, giải quyết gì, claim nào được phép](./product-positioning.md)
 - [Getting started](./getting-started.md)
-- [Integrity-only example](../examples/integrity-only/)
 - [CLI command reference](./cli.md)
 - [Node.js integration](./nodejs.md)
 - [Configuration](./configuration.md)
@@ -26,11 +26,17 @@
 - [Task Platform contract và implementation status](./task-platform.md)
 - [Product evidence and validation log](./product-evidence.md)
 - [Implemented product strengths and proof boundaries](./product-strengths.md)
-- [Feature matrix](./feature-matrix.md)
+- [Runtime foundation and implementation matrix](./feature-matrix.md)
 - [Integrity Rules](./rules.md)
 - [Competitive landscape](./competitive-landscape.md)
 - [Adoption and usability review](./adoption-review.md)
 - [Roadmap](./roadmap.md)
 - [Architecture decision records](../.ai/DECISIONS.md)
+
+## Optional Verified Tasks
+
+- [Integrity-only example](../examples/integrity-only/)
+- [Integrity Rules](./rules.md)
+- [Recovery boundary](./recovery.md)
 
 Tài liệu phải phân biệt rõ: documented, implemented, tested và production-evidenced.

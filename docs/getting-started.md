@@ -1,280 +1,185 @@
-# Bắt đầu với RhinoQ
+# Getting started with the Task Platform
 
-RhinoQ mặc định chạy **embedded trong ứng dụng Go** và lưu state ở PostgreSQL.
-Bạn không cần Agent, LLM, control plane hay một server RhinoQ riêng.
+> Status: evaluation only. This guide demonstrates the implemented Task
+> contract; it does not claim an automatic BullMQ, React, realtime or
+> tenant-authorized integration.
 
-Nếu application dùng Node.js, xem [Node.js integration](./nodejs.md). Producer
-Node có thể enqueue trực tiếp trong transaction PostgreSQL và không cần
-Gateway; chỉ Node worker mới cần Gateway.
+RhinoQ's first product path is a user-facing Task: a durable record that a
+backend and frontend can both understand. A Task is not a queue job. It has an
+application-facing lifecycle, a monotonic snapshot version, progress, result
+availability and one or more execution attempts.
 
-> RhinoQ đang ở active development. Hãy pin version trong `go.mod`, review
-> migration và chỉ dùng ở môi trường kiểm soát cho tới khi có stable release.
+## Prerequisites
 
-## Yêu cầu
+- Go 1.25+ for the embedded API.
+- PostgreSQL 16 is the database version covered by the Task store contract.
+- Node.js 22+ only if evaluating the source-only Node Gateway client.
 
-- Go 1.25+; the module pins the preferred patched toolchain
-- PostgreSQL 16 (phiên bản hiện được chạy trong CI; các phiên bản khác chưa
-  được release-certify)
-- driver `database/sql` cho PostgreSQL; ví dụ này dùng `pgx`
-- CLI `rhinoq` để migrate, kiểm tra và vận hành
-
-## 1. Cài library và CLI
-
-Thêm library vào application đang có:
-
-```bash
-go get github.com/madebyduy/RhinoQ/pkg/rhinoq@latest
-go get github.com/jackc/pgx/v5
-```
-
-Cài CLI để migrate, kiểm tra và vận hành:
+`NewInMemory()` is useful for a small contract experiment. Use PostgreSQL for
+durable Task data, after applying the repository migrations.
 
 ```bash
 go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
-rhinoq version
+
+export RHINOQ_DATABASE_URL='postgres://user:pass@localhost:5432/app?sslmode=disable'
+rhinoq migrate plan
+rhinoq migrate apply
+rhinoq doctor --ci
 ```
 
-Chưa có semver tag, nên `@latest` trả về pseudo-version của default branch.
-Hãy pin đúng pseudo-version mà `go get` ghi vào `go.mod` thay vì resolve lại
-mỗi lần build, vì public API còn chưa ổn định.
+No release is tagged yet, so pin an evaluation revision rather than treating
+`@latest` as a stable production version.
 
-Nếu chưa cài CLI, có thể chạy trực tiếp ngay trong repository:
+## 1. Create a Task
 
-```bash
-go run ./cmd/rhinoq version
-go run ./cmd/rhinoq help
-```
-
-CLI tự mô tả từng command bằng `rhinoq help <command>`. Bảng đầy đủ về mục
-đích, flags, write boundary, exit code và ví dụ nằm tại
-[CLI command reference](./cli.md).
-
-## 2. Chuẩn bị database
-
-```bash
-export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app?sslmode=disable'
-```
-
-Luồng migration luôn explicit:
-
-```bash
-rhinoq migrate plan       # chỉ đọc, không sửa database
-rhinoq migrate sql        # in SQL pending để DBA review
-rhinoq migrate apply      # action ghi dữ liệu rõ ràng
-rhinoq doctor --ci        # kiểm config, kết nối và schema
-```
-
-Runner kiểm checksum của migration đã apply, lấy advisory lock và commit từng
-migration trong một transaction. Nếu database có bảng RhinoQ cũ nhưng chưa có
-metadata migration, CLI dừng lại để operator baseline thủ công; nó không đoán
-schema.
-
-## 3. Tạo durable client
+Use the public Go facade with your application's existing `*sql.DB`.
 
 ```go
-package jobs
+package reports
 
 import (
     "context"
     "database/sql"
-    "os"
 
-    _ "github.com/jackc/pgx/v5/stdlib"
     "github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
-func Open(ctx context.Context) (*rhinoq.Client, *sql.DB, error) {
-    db, err := sql.Open("pgx", os.Getenv("RHINOQ_DATABASE_URL"))
+func startExport(ctx context.Context, db *sql.DB, reportID string) (rhinoq.TaskSnapshot, error) {
+    client, err := rhinoq.NewPostgres(db)
     if err != nil {
-        return nil, nil, err
+        return rhinoq.TaskSnapshot{}, err
     }
-    if err := db.PingContext(ctx); err != nil {
-        _ = db.Close()
-        return nil, nil, err
-    }
-    queue, err := rhinoq.NewPostgres(db)
+
+    task, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{
+        ID:                "report-export-" + reportID,
+        Type:              "report.export",
+        OwnerID:           "user-123", // metadata today; not an authorization boundary
+        DefinitionVersion: 1,
+    })
     if err != nil {
-        _ = db.Close()
-        return nil, nil, err
+        return rhinoq.TaskSnapshot{}, err
     }
-    return queue, db, nil
+    return client.QueueTask(ctx, task.ID, task.EntityVersion)
 }
 ```
 
-Application sở hữu `*sql.DB`, nên phải đặt `MaxOpenConns`, `MaxIdleConns` và
-connection lifetime theo budget chung của hệ thống.
+`EntityVersion` is a precondition on every write. If a command returns
+`rhinoq.ErrTaskVersionConflict`, read the current snapshot and decide again;
+never retry an old mutation blindly.
 
-## 4. Đăng ký handler và enqueue
+## 2. Bind one execution attempt
+
+An Execution identifies one attempt and which runtime owns it. The current
+contract can bind a stable external ID, but it does **not** enqueue to BullMQ or
+subscribe to its events. This code is the explicit integration boundary that a
+future adapter will automate.
 
 ```go
-if err := queue.Handle("generate-report", func(ctx context.Context, job rhinoq.Job) error {
-    return reports.Generate(ctx, job.Payload)
-}); err != nil {
-    return err
-}
+task, err = client.CreateTaskExecution(ctx, task.ID,
+    rhinoq.TaskExecutionCreateRequest{ID: "exec-report-01", Runtime: "bullmq"})
+if err != nil { /* handle */ }
 
-jobID, err := queue.Enqueue(ctx, rhinoq.JobRequest{
-    Name:           "generate-report",
-    Payload:        payload,
-    IdempotencyKey: "report:" + reportID,
-    CorrelationID:  reportID,
-    Priority:       10,
-    Class:          rhinoq.ClassInteractive,
+task, err = client.BindTaskExecution(ctx, "exec-report-01",
+    rhinoq.TaskExecutionBinding{Runtime: "bullmq", ExternalID: "bullmq-job-981"})
+if err != nil { /* handle */ }
+```
+
+The runtime reference is write-only. User-facing snapshots intentionally expose
+only execution summaries, not a queue or provider identifier.
+
+## 3. Report lifecycle and progress
+
+The worker or integration boundary uses the latest Task version as it updates
+the user-visible state.
+
+```go
+task, err = client.StartTask(ctx, task.ID, task.EntityVersion)
+if err != nil { /* handle */ }
+
+total := int64(20)
+task, err = client.ReportTaskProgress(ctx, task.ID, task.EntityVersion,
+    rhinoq.TaskProgress{Completed: 8, Total: &total, Message: "Generating pages"})
+if err != nil { /* handle */ }
+
+task, err = client.CompleteTask(ctx, task.ID, task.EntityVersion)
+if err != nil { /* handle */ }
+
+_, err = client.AttachTaskResult(ctx, task.ID, task.EntityVersion,
+    "s3://app-reports/report-01.pdf")
+if err != nil { /* handle */ }
+```
+
+Progress can also be indeterminate: omit `Total` and provide a message. The UI
+must not invent a percentage when the worker does not know a total.
+
+## 4. Read the snapshot and result
+
+```go
+snapshot, err := client.GetTask(ctx, "report-export-42")
+if err != nil { /* handle */ }
+
+if snapshot.HasResult {
+    result, err := client.GetTaskResult(ctx, snapshot.ID)
+    if err != nil { /* handle */ }
+    _ = result.Reference
+}
+```
+
+The HTTP Gateway exposes the same polling-first contract. The typed Node client
+has `createTask`, `getTask`, `transitionTask`, `reportTaskProgress`,
+`attachTaskResult`, `createTaskExecution` and `bindTaskExecution`; see
+[Node.js integration](./nodejs.md). Gateway deployment is not end-user auth:
+keep it on loopback or put it behind your own TLS, network policy and access
+control.
+
+## What this proves—and what it does not
+
+This path proves a versioned Task contract across Go, PostgreSQL, HTTP and Node.
+It does not yet prove the product's intended adoption promise:
+
+- no BullMQ adapter exists;
+- no automatic Task-to-native-job dispatch exists;
+- no composed retry command creates a new Execution atomically;
+- no React hook, Task Center, SSE/WebSocket or stream transport exists;
+- `OwnerID` is not tenant/user authorization;
+- result references are not proxied or downloaded by RhinoQ.
+
+Read [Task Platform](./task-platform.md) for the exact implementation status.
+
+## Native runtime is a separate optional path
+
+RhinoQ also includes a native Go/PostgreSQL job runtime with transactional
+enqueue, fenced leases, retries, cancellation and a worker. That runtime is an
+execution backend, not a requirement for an application that already has a
+queue.
+
+```go
+queue, err := rhinoq.NewPostgres(db)
+if err != nil { /* handle */ }
+
+err = queue.Handle("reports", "generate-report", func(ctx context.Context, job rhinoq.Job) error {
+    // application work
+    return nil
 })
-if err != nil {
-    return err
-}
-```
+if err != nil { /* handle */ }
 
-`reports.Generate` ở đây là hàm business của application, không phải API của
-RhinoQ. Thay nó bằng use case/service hiện có và truyền `ctx` xuống I/O để
-cancellation hoạt động.
-
-`IdempotencyKey` được scope theo job name. `CorrelationID` liên kết execution
-với business subject và nên được đặt ngay từ đầu.
-
-## 5. Chạy worker
-
-```go
-if err := queue.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-    return err
-}
-```
-
-Khi context bị hủy, worker ngừng claim, drain handler theo grace period và
-không release lease của handler vẫn còn chạy. Worker khác chỉ được nhận lại job
-sau khi lease hết hạn.
-
-## 6. Thêm Rule xác minh business state
-
-Rule table nhận:
-
-- `$1`: baseline timestamp;
-- `$2`: cursor `subject_id` cuối cùng;
-- `$3`: hard row limit.
-
-Và phải trả đúng ba cột:
-
-```text
-subject_id text | violated boolean | evidence jsonb/text
-```
-
-```go
-record, err := queue.RegisterRule(ctx, rhinoq.RuleDefinition{
-    ID:          "ready-report-has-output",
-    Name:        "Ready reports have an output object",
-    Scope:       rhinoq.RuleScopeTable,
-    SubjectType: "report",
-    Query: `
-        SELECT id::text AS subject_id,
-               output_key IS NULL AS violated,
-               jsonb_build_object('status', status) AS evidence
-        FROM reports
-        WHERE created_at >= $1 AND id::text > $2
-        ORDER BY id::text
-        LIMIT $3`,
-    BaselineAt: time.Now().Add(-24 * time.Hour),
-    Every:      10 * time.Minute,
-    MaxRows:    250,
+_, err = queue.Enqueue(ctx, rhinoq.JobRequest{
+    QueueName: "reports", JobName: "generate-report", Payload: []byte(`{"reportId":"42"}`),
 })
-if err != nil {
-    return err
-}
+if err != nil { /* handle */ }
 
-_, explanation, err := queue.EnableRule(ctx, record.ID)
-if err != nil {
-    return fmt.Errorf("Rule unsafe: %w (%v)", err, explanation.Reasons)
-}
+// queue.Run(ctx) runs registered handlers until ctx is cancelled.
 ```
 
-Enable chỉ thành công sau PostgreSQL Explain gate. Chạy scheduler embedded:
+See [runtime operations](./operations.md) and [failure semantics](./failure-semantics.md)
+before using the native runtime beyond evaluation.
 
-```go
-go queue.RunRuleScheduler(ctx, rhinoq.RuleSchedulerConfig{
-    Owner:        "integrity-1",
-    PollInterval: time.Second,
-    Lease:        time.Minute,
-    ClaimBatch:   4,
-})
-```
+## Optional: verify a business outcome
 
-Hoặc giữ scheduler thành process thủ công:
+When a Task has an irreversible external effect or a business result that must
+be independently checked, add the Verified Tasks capability. It records effect
+evidence and evaluates bounded SQL Rules into persistent Findings. It is not
+needed for an ordinary task status/progress UI.
 
-```bash
-rhinoq rules run --owner integrity-1
-```
-
-Không có auto-tuning ngầm. Developer review telemetry rồi mới thay config/flag.
-
-## 7. Kiểm soát vận hành
-
-```bash
-rhinoq jobs list --queue generate-report --states pending,blocked,dead
-rhinoq queue counts generate-report
-rhinoq queue pause generate-report
-rhinoq queue resume generate-report
-rhinoq attention
-rhinoq findings list
-rhinoq rules list
-rhinoq explain ready-report-has-output
-```
-
-Các list command không trả payload mặc định. `attention` gộp lỗi execution,
-effect uncertain, outcome mismatch và Finding đang sống.
-
-Không có lệnh `rhinoq enqueue` hoặc `rhinoq work` ở preview hiện tại.
-Application enqueue trong transaction qua Go API, Node `PostgresProducer` hoặc
-`rhinoq.enqueue()`; handler Go chạy embedded, handler Node chạy bằng
-`RhinoQWorker`. Điều này giúp người dùng không nhầm CLI vận hành với runtime
-chứa business code.
-
-Mở Workbench local để xem cùng dữ liệu theo bảng dành cho developer:
-
-```bash
-rhinoq workbench
-
-# Không cần PostgreSQL khi chỉ muốn thử giao diện:
-rhinoq workbench --demo
-```
-
-Workbench chỉ bind `127.0.0.1`, tự mở browser mặc định, không trả payload và
-hiện chỉ read-only. CLI vẫn là bề mặt automation và write action có chủ ý.
-Xem [workbench.md](./workbench.md).
-
-## Hai đường tích hợp khác
-
-- Chỉ cần enqueue từ service khác ngôn ngữ: dùng hàm SQL
-  `rhinoq.enqueue()` ngay trong transaction nghiệp vụ.
-- Cần worker không phải Go: cân nhắc HTTP Gateway tùy chọn trong
-  [agent.md](./agent.md). Gateway không dùng AI/LLM.
-
-Không đưa Gateway vào deployment chỉ để gọi CLI hoặc chạy Rule scheduler.
-
-## Local test
-
-Memory adapter dành cho test/demo:
-
-```go
-queue := rhinoq.NewInMemory()
-```
-
-Nó không durable. Để chạy PostgreSQL suite của repository:
-
-```bash
-docker compose -f tests/postgres/docker-compose.yml up -d --wait
-cd tests/postgres
-RHINOQ_TEST_DATABASE_URL='postgres://rhinoq:rhinoq@localhost:55432/rhinoq?sslmode=disable' go test ./... -count=1
-```
-
-## Khi setup lỗi
-
-| Triệu chứng | Kiểm tra |
-|---|---|
-| `RHINOQ_DATABASE_URL is empty` | export đúng URL cho process CLI/application |
-| `migration state` fail | chạy `rhinoq migrate plan`; không sửa migration đã apply |
-| `untracked schema` | dừng auto-apply, review/baseline database thủ công |
-| Rule không enable | chạy `rhinoq explain <id>` và sửa shape/index/query budget |
-| job không được claim | kiểm pause, rate limit, `not_before`, admission và handler name |
-
-Tiếp theo: [PostgreSQL](./postgres.md), [Operations](./operations.md),
-[Integrity Rules](./rules.md), và [Failure semantics](./failure-semantics.md).
+The runnable no-cutover example is [integrity-only](../examples/integrity-only/).
+Read [Rules](./rules.md) and [recovery](./recovery.md) for its safety boundary.

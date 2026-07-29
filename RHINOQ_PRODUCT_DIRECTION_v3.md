@@ -1,4 +1,12 @@
-# RHINOQ — ĐỊNH HƯỚNG SẢN PHẨM VÀ KẾ HOẠCH TÁI CẤU TRÚC (v2)
+# RHINOQ — ĐỊNH HƯỚNG SẢN PHẨM VÀ KẾ HOẠCH TÁI CẤU TRÚC (v3)
+
+> **Trạng thái:** tài liệu nghiên cứu và định hướng dài hạn. Nó không phải là
+> danh sách capability đã có, cũng không thay thế product contract trong
+> [`README.md`](./README.md),
+> [`docs/product-positioning.md`](./docs/product-positioning.md),
+> [`docs/task-platform.md`](./docs/task-platform.md) và
+> [`.ai/PRODUCT_BASELINE.md`](./.ai/PRODUCT_BASELINE.md). Khi có mâu thuẫn,
+> contract, test và implementation status thắng.
 
 > **Định vị:** RhinoQ là lớp `Task` nằm giữa queue và giao diện người dùng. Nó quản lý toàn bộ vòng đời của tác vụ bất đồng bộ hướng tới người dùng — từ lúc backend tạo task, runtime thực thi, provider bên ngoài xử lý, frontend nhận tiến độ/kết quả, cho tới cancel, retry, history và xác minh kết quả — **mà không yêu cầu đổi queue hay viết lại worker**.
 >
@@ -12,7 +20,11 @@
 
 ## 0. Trạng thái tài liệu
 
-- Tài liệu này thay thế định hướng sản phẩm RhinoQ trước đây lấy `VERIFY`, reconciliation và PostgreSQL integrity làm cửa vào chính.
+- Tài liệu này ghi lại hướng sản phẩm đề xuất sau khi không còn lấy `VERIFY`, reconciliation và PostgreSQL integrity làm cửa vào chính.
+- Phiên bản ngắn và public-facing của định vị nằm ở
+  [`docs/product-positioning.md`](./docs/product-positioning.md). Tài liệu này
+  giữ lại analysis, alternatives và các proposal chưa được accept để người làm
+  sau hiểu lý do, không được quảng bá chúng như code hiện có.
 - Những phần cũ không bị xóa bỏ mặc định. Chúng được phân loại lại thành:
   - nền tảng runtime;
   - reliability primitives;
