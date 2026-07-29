@@ -9,12 +9,13 @@
   require explicit `terminal: true`; the bridge does not scan Redis, discover
   jobs, dispatch, cancel or invent retry attempts.
 
-- Made the Node SDK release path publish-ready without publishing a package.
-  The first intended evaluation version is `@rhinoq/node@0.1.0-beta.1` under
-  npm's `next` tag. Tag releases now test, pack, verify tag/package version and
-  publish with npm provenance through GitHub OIDC after the owner configures
-  trusted publishing. `docs/releasing.md` records the account actions that
-  cannot safely be automated from this repository.
+- Published the first Node SDK evaluation prerelease:
+  `@rhinoq/node@0.1.0-beta.1`. It remains a development preview and must be
+  installed by exact version, not treated as a production or stable release.
+  Tag releases also test, pack, verify tag/package version and can publish with
+  npm provenance through GitHub OIDC after the owner configures trusted
+  publishing. `docs/releasing.md` records the account actions that cannot
+  safely be automated from this repository.
 
 - Refined the embedded, read-only Workbench into the **Obsidian Ledger** visual
   system: a calmer dark operational surface with a mineral palette, evidence

@@ -1,9 +1,9 @@
 # Node.js integration
 
-> Status: development preview. The SDK is tested in this repository but is not
-> published to npm yet. Do not put `npm install @rhinoq/node` in production
-> automation until a tagged package release exists. The first intended package
-> is `0.1.0-beta.1` on npm's `next` tag; see [releasing.md](./releasing.md).
+> Status: development preview. The first evaluation package,
+> `@rhinoq/node@0.1.0-beta.1`, is published to npm. Pin that exact version for
+> an evaluation; do not put it in production automation or depend on `latest`.
+> See [releasing.md](./releasing.md) for the release boundary.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
 with two separate integration paths. Choose the smaller path that solves the
@@ -36,7 +36,7 @@ There are three different command surfaces. They are not interchangeable:
 
 | Surface | Example | Purpose |
 |---|---|---|
-| repository commands | `npm test`, `npm pack` | build and evaluate the unpublished SDK |
+| repository commands | `npm test`, `npm pack` | build and inspect the SDK artifact |
 | RhinoQ CLI | `rhinoq migrate apply`, `rhinoq doctor` | prepare and inspect PostgreSQL |
 | application process | `node worker.mjs` | run your producer or long-lived Node worker |
 
@@ -45,10 +45,10 @@ Enqueueing belongs to the application transaction. Node handlers run from the
 application's `RhinoQWorker` process, where real handler functions are
 available.
 
-## Evaluate the package from this repository
+## Build the package from this repository
 
-Until the first npm release, build and pack the preview locally. Start in the
-repository root:
+Build and inspect the preview locally when contributing or validating a change.
+Start in the repository root:
 
 ```bash
 cd sdks/node

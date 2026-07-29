@@ -1,28 +1,26 @@
 # Releasing RhinoQ
 
-RhinoQ has no public package or binary release yet. This guide makes the first
-evaluation release repeatable without claiming production readiness.
+RhinoQ has published the Node evaluation prerelease
+`@rhinoq/node@0.1.0-beta.1`. It has no stable package, tagged GitHub release or
+public CLI binary release yet. This guide keeps subsequent evaluation releases
+repeatable without claiming production readiness.
 
-## What a first release contains
+## Published evaluation release
 
-- `@rhinoq/node@0.1.0-beta.1` under npm's `next` tag;
-- Go CLI archives and checksums produced by GoReleaser from the same Git tag;
-- release notes that retain the active-development warning and list known
-  limitations.
+- `@rhinoq/node@0.1.0-beta.1` is published on npm; consumers must pin the
+  exact version while the public contract remains unstable.
+- It does not imply a Go CLI archive, a GitHub release or production readiness.
 
 The Node SDK is not `latest` until the project has a stable public contract and
 production evidence.
 
 ## One-time npm owner setup
 
-1. Create or claim the npm organization `@rhinoq` while signed into the owner
-   account, then verify that `@rhinoq/node` is available before the first
-   publish.
-2. In npm package settings, configure **trusted publishing** for the GitHub
+1. In npm package settings, configure **trusted publishing** for the GitHub
    repository `madebyduy/RhinoQ` and workflow `.github/workflows/release.yml`.
-3. Do not add a long-lived `NPM_TOKEN` to repository secrets. The tag workflow
+2. Do not add a long-lived `NPM_TOKEN` to repository secrets. The tag workflow
    requests an OIDC identity and publishes with `--provenance`.
-4. Protect the `v*` tag rule in GitHub so a reviewed maintainer creates tags.
+3. Protect the `v*` tag rule in GitHub so a reviewed maintainer creates tags.
 
 These are external account actions; the repository cannot safely perform them.
 
@@ -53,7 +51,7 @@ These are external account actions; the repository cannot safely perform them.
    ```
 
 If trusted publishing is not configured, the workflow must fail rather than
-fall back to an unpublished or token-based release.
+fall back to a token-based release.
 
 ## Do not release yet if
 

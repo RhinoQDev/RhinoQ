@@ -93,7 +93,7 @@ claims. Their current limits are documented below and in
 | Go Task facade; Task and Execution domains | implemented and tested |
 | PostgreSQL Task store and migration 015 | implemented; real-PostgreSQL contract tested |
 | Versioned HTTP polling snapshots | implemented and integration tested |
-| Typed Node Task client | implemented from source; package not published to npm |
+| Typed Node Task client | evaluation prerelease published as [`@rhinoq/node@0.1.0-beta.1`](https://www.npmjs.com/package/@rhinoq/node/v/0.1.0-beta.1) on npm; install the explicit version, not `latest` |
 | Result-reference read/write API | implemented; payload proxy/download is not |
 | Native Go/PostgreSQL job runtime | implemented and tested |
 | Effect Ledger, Rules, Findings and read-only investigation | implemented as optional Verified Tasks foundation |
@@ -178,8 +178,9 @@ and the [integrity-only example](./examples/integrity-only/).
 ## Runtime and security boundaries
 
 Go is the authoritative engine/runtime. The Node.js/TypeScript SDK is a tested
-development preview for producers, worker lifecycle and the typed Gateway API;
-it has no tagged npm release. PostgreSQL is the durable store for Task state,
+development preview for producers, worker lifecycle and the typed Gateway API.
+Its first npm evaluation prerelease is `@rhinoq/node@0.1.0-beta.1`; it is not a
+stable or production-ready release. PostgreSQL is the durable store for Task state,
 execution history and verification evidence. Redis is not required by the
 current Task slice.
 
