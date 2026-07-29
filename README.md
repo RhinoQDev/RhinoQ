@@ -77,7 +77,8 @@ that an external provider completed work or that a business invariant holds.
   distinction inspectable instead of showing one misleading green “done”.
 - **Existing BullMQ stays owned by the application:** the narrow bridge observes
   explicitly tracked jobs without importing BullMQ into RhinoQ, taking over
-  Redis, or copying worker correctness into the SDK.
+  Redis, or copying worker correctness into the SDK. It re-reads after bounded
+  optimistic-version conflicts instead of silently losing an observed event.
 - **Verification is optional:** ordinary Task progress does not require Rules;
   high-risk work can add independent evidence and Findings when technical
   completion is insufficient.

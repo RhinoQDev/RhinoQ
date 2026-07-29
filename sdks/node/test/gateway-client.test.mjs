@@ -137,6 +137,25 @@ test('BullMQ Task bridge reconciles one known completed job after an offline gap
   bridge.close();
 });
 
+test('BullMQ Task bridge converges after a stale Task version conflict', async () => {
+  const events = new FakeQueueEvents();
+  const client = new FakeTaskClient();
+  const bridge = new BullMQTaskBridge({ client, events });
+
+  await bridge.track({
+    task: { id: 'task_bull_conflict', type: 'report.export', definitionVersion: 1 },
+    executionId: 'exec_bull_conflict',
+    jobId: 'bull_job_conflict',
+  });
+  client.taskVersionConflicts = 1;
+
+  await bridge.reconcile({ jobId: 'bull_job_conflict', state: 'active' });
+
+  assert.equal((await client.getTask('task_bull_conflict')).state, 'running');
+  assert.equal(client.executions.get('exec_bull_conflict').state, 'running');
+  bridge.close();
+});
+
 test('BullMQ Task bridge leaves an observed failed job running without terminal proof', async () => {
   const events = new FakeQueueEvents();
   const client = new FakeTaskClient();
@@ -308,6 +327,7 @@ class FakeTaskClient {
   tasks = new Map();
   executions = new Map();
   byExternalID = new Map();
+  taskVersionConflicts = 0;
 
   async createTask(request) {
     const task = snapshot({ id: request.id, type: request.type, state: 'pending' });
@@ -362,6 +382,11 @@ class FakeTaskClient {
 
   async transitionTask(taskId, expectedVersion, state) {
     const task = await this.getTask(taskId);
+    if (this.taskVersionConflicts > 0) {
+      this.taskVersionConflicts--;
+      this.bump(task);
+      throw new RhinoQError('RHINOQ_VERSION_CONFLICT', 'stale version', true, { status: 409 });
+    }
     assert.equal(task.entityVersion, expectedVersion);
     return this.bump(task, { state });
   }

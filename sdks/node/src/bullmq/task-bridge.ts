@@ -11,6 +11,11 @@ import type {
 
 type QueueEvent = 'waiting' | 'active' | 'progress' | 'completed' | 'failed';
 
+// Queue events and browser/API writes can legitimately race. The Gateway
+// rejects stale aggregate/execution versions, so the bridge must re-read and
+// converge instead of treating one optimistic conflict as a dropped event.
+const MAX_VERSION_CONVERGENCE_ATTEMPTS = 3;
+
 // This intentionally uses the small QueueEvents shape instead of importing
 // BullMQ. Applications already using BullMQ pass their QueueEvents instance;
 // RhinoQ neither owns their Redis connection nor bundles a second queue.
@@ -193,15 +198,17 @@ export class BullMQTaskBridge {
     if (!progress) {
       return;
     }
-    const execution = await this.find(event.jobId);
-    if (!execution) {
-      return;
-    }
-    await this.start(event.jobId);
-    const task = await this.client.getTask(execution.taskId);
-    if (task.state === 'running' || task.state === 'cancel_requested') {
-      await this.client.reportTaskProgress(task.id, task.entityVersion, progress);
-    }
+    await this.converge(async () => {
+      const execution = await this.find(event.jobId);
+      if (!execution) {
+        return;
+      }
+      await this.start(event.jobId);
+      const task = await this.client.getTask(execution.taskId);
+      if (task.state === 'running' || task.state === 'cancel_requested') {
+        await this.client.reportTaskProgress(task.id, task.entityVersion, progress);
+      }
+    });
   }
 
   private async complete(event: BullMQEvent): Promise<void> {
@@ -214,8 +221,13 @@ export class BullMQTaskBridge {
     let task = await this.ensureTask(execution.taskId, 'succeeded');
     if (this.resultReference) {
       const reference = await this.resultReference(event);
-      if (reference && !task.hasResult) {
-        await this.client.attachTaskResult(task.id, task.entityVersion, reference);
+      if (reference) {
+        await this.converge(async () => {
+          task = await this.client.getTask(execution.taskId);
+          if (!task.hasResult) {
+            await this.client.attachTaskResult(task.id, task.entityVersion, reference);
+          }
+        });
       }
     }
   }
@@ -249,37 +261,56 @@ export class BullMQTaskBridge {
   }
 
   private async ensureExecution(executionId: string, target: 'running' | 'succeeded' | 'failed'): Promise<void> {
-    const execution = await this.client.getTaskExecution(executionId);
-    if (execution.state === target) {
-      return;
-    }
-    if ((target === 'succeeded' || target === 'failed') && execution.state === 'dispatched') {
-      await this.ensureExecution(executionId, 'running');
-      return this.ensureExecution(executionId, target);
-    }
-    if (
-      (execution.state === 'dispatched' && target === 'running') ||
-      (execution.state === 'running' && (target === 'succeeded' || target === 'failed'))
-    ) {
-      await this.client.transitionTaskExecution(execution.id, execution.version, target);
-    }
+    await this.converge(async () => {
+      const execution = await this.client.getTaskExecution(executionId);
+      if (execution.state === target) {
+        return;
+      }
+      if ((target === 'succeeded' || target === 'failed') && execution.state === 'dispatched') {
+        await this.ensureExecution(executionId, 'running');
+        return this.ensureExecution(executionId, target);
+      }
+      if (
+        (execution.state === 'dispatched' && target === 'running') ||
+        (execution.state === 'running' && (target === 'succeeded' || target === 'failed'))
+      ) {
+        await this.client.transitionTaskExecution(execution.id, execution.version, target);
+      }
+    });
   }
 
   private async ensureTask(taskId: string, target: Exclude<TaskState, 'pending' | 'cancel_requested' | 'cancelled'>): Promise<TaskSnapshot> {
-    let task = await this.client.getTask(taskId);
-    if (task.state === target) {
+    return this.converge(async () => {
+      let task = await this.client.getTask(taskId);
+      if (task.state === target) {
+        return task;
+      }
+      if (task.state === 'pending') {
+        task = await this.client.transitionTask(task.id, task.entityVersion, 'queued');
+      }
+      if ((target === 'running' || target === 'succeeded' || target === 'failed') && task.state === 'queued') {
+        task = await this.client.transitionTask(task.id, task.entityVersion, 'running');
+      }
+      if ((target === 'succeeded' || target === 'failed') && (task.state === 'running' || task.state === 'cancel_requested')) {
+        task = await this.client.transitionTask(task.id, task.entityVersion, target);
+      }
       return task;
+    });
+  }
+
+  private async converge<T>(operation: () => Promise<T>): Promise<T> {
+    let lastConflict: unknown;
+    for (let attempt = 0; attempt < MAX_VERSION_CONVERGENCE_ATTEMPTS; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!isVersionConflict(error)) {
+          throw error;
+        }
+        lastConflict = error;
+      }
     }
-    if (task.state === 'pending') {
-      task = await this.client.transitionTask(task.id, task.entityVersion, 'queued');
-    }
-    if ((target === 'running' || target === 'succeeded' || target === 'failed') && task.state === 'queued') {
-      task = await this.client.transitionTask(task.id, task.entityVersion, 'running');
-    }
-    if ((target === 'succeeded' || target === 'failed') && (task.state === 'running' || task.state === 'cancel_requested')) {
-      task = await this.client.transitionTask(task.id, task.entityVersion, target);
-    }
-    return task;
+    throw lastConflict;
   }
 
   private run(event: BullMQEvent, operation: () => Promise<void>): void {
@@ -289,6 +320,10 @@ export class BullMQTaskBridge {
 
 function isCode(error: unknown, code: string): boolean {
   return error instanceof RhinoQError && error.code === code;
+}
+
+function isVersionConflict(error: unknown): boolean {
+  return isCode(error, 'RHINOQ_VERSION_CONFLICT');
 }
 
 function defaultProgress(event: BullMQEvent): TaskProgress | undefined {

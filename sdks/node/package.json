@@ -1,6 +1,6 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "Typed Node.js Task, BullMQ lifecycle and worker client for RhinoQ",
   "license": "Apache-2.0",
   "repository": {

@@ -115,7 +115,9 @@ await bridge.track({
 The bridge projects `waiting`, `active`, `progress`, `completed` and a failure
 that the application explicitly classifies as terminal. It is restart-safe for
 a repeated `track()` call because it looks up the durable runtime/external-ID
-binding. After an offline gap, read a known job from the application's BullMQ
+binding. It re-reads a bounded number of times after a Gateway optimistic
+version conflict, then reports the error rather than dropping the event. After
+an offline gap, read a known job from the application's BullMQ
 Queue and reconcile that one observation:
 
 ```ts
