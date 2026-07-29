@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Refined the embedded, read-only Workbench into the **Obsidian Ledger** visual
+  system: a calmer dark operational surface with a mineral palette, evidence
+  path motif and clearer type hierarchy. This is a presentation-only change;
+  it does not add browser writes, payload access, remote hosting or a new data
+  source.
+
 - Added a deliberately narrow, source-only Node BullMQ lifecycle bridge. An
   application continues to enqueue and own BullMQ/Redis, then calls `track()`
   for a job; the bridge durably creates/binds its Task Execution and projects

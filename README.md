@@ -185,6 +185,7 @@ and browser/reconnect tests before realtime transport is added.
 | [Product evidence](./docs/product-evidence.md) | validation hypotheses and kill signals |
 | [Product strengths](./docs/product-strengths.md) | evidence-backed implementation strengths |
 | [Native runtime](./docs/getting-started.md#native-runtime-is-a-separate-optional-path) | PostgreSQL queue/worker path |
+| [Workbench](./docs/workbench.md) | local, read-only Evidence Ledger for operational investigation |
 | [Node.js integration](./docs/nodejs.md) | source-only Node preview |
 | [Architecture](./ARCHITECTURE.md) | module, dependency and runtime boundaries |
 | [Roadmap](./docs/roadmap.md) | next implementation and release gates |

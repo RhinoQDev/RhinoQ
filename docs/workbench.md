@@ -67,6 +67,20 @@ request accepted  ≠  effect confirmed  ≠  outcome achieved
 It is visible in the Evidence Rail because it is also a correctness boundary in
 the engine.
 
+## Visual language: Obsidian Ledger
+
+The default dark theme is intentionally not a generic â€œneon queue dashboardâ€.
+It uses a low-glare obsidian surface, warm mineral brass only for the active
+lens and counts, and verdigris only for confirmed evidence. The **Proof Path**
+is a single horizontal line through COMMIT, RUN, VERIFY and RECOVER; it gives
+RhinoQ a recognizable navigation motif without adding a card for every number.
+
+Typography separates reading modes: an editorial serif for the question being
+investigated, a technical mono face for state/IDs, and a restrained UI face for
+controls. The result is dense enough for operators but leaves the hierarchy
+clear at a glance. This is presentation only: theme does not change state,
+permissions or evidence semantics.
+
 ## Safety and privacy
 
 Workbench v0 is deliberately read-only:
@@ -137,6 +151,11 @@ information architecture, vocabulary, code and assets:
   issue streams and regression visibility.
 - [Trigger.dev](https://github.com/triggerdotdev/trigger.dev) demonstrates
   searchable run views and observable retry history.
+- The [Anthropic frontend-design skill](https://github.com/anthropics/claude-code/blob/main/plugins/frontend-design/skills/frontend-design/SKILL.md),
+  [Emil Kowalski's design-engineering skill](https://github.com/emilkowalski/skill/blob/main/skills/emil-design-eng/SKILL.md)
+  and [OpenAI's frontend-skill](https://github.com/openai/skills/blob/main/skills/.curated/frontend-skill/SKILL.md)
+  informed the restraint rules: a deliberate art direction, no copied product
+  UI, clear type hierarchy and motion only where it clarifies state.
 
 RhinoQ does not copy their layout, code, visual assets or product categories.
 Its distinct primitives are the four-stage Flow Lens, the evidence separation,
