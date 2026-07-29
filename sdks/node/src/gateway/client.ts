@@ -23,6 +23,7 @@ import {
   type TaskCreateRequest,
   type TaskExecutionBinding,
   type TaskExecutionCreateRequest,
+	  type TaskExecution,
   type TaskProgress,
   type TaskResult,
   type TaskSnapshot,
@@ -153,6 +154,39 @@ export class RhinoQClient {
       'POST',
       `/v1/task-executions/${requiredPath(executionId, 'execution id')}/bind`,
       binding,
+    );
+  }
+
+  async lookupTaskExecution(runtime: string, externalId: string): Promise<TaskExecution> {
+    if (!runtime?.trim() || !externalId?.trim()) {
+      throw new TypeError('execution runtime and external id are required');
+    }
+    return this.send<TaskExecution>(
+      'GET',
+      `/v1/task-executions/lookup?${queryString({ runtime, externalId })}`,
+    );
+  }
+
+  async getTaskExecution(executionId: string): Promise<TaskExecution> {
+    return this.send<TaskExecution>(
+      'GET',
+      `/v1/task-executions/${requiredPath(executionId, 'execution id')}`,
+    );
+  }
+
+  async transitionTaskExecution(
+    executionId: string,
+    expectedVersion: number,
+    state: string,
+  ): Promise<TaskSnapshot> {
+    validateEntityVersion(expectedVersion);
+    if (!state?.trim()) {
+      throw new TypeError('execution state is required');
+    }
+    return this.send<TaskSnapshot>(
+      'POST',
+      `/v1/task-executions/${requiredPath(executionId, 'execution id')}/state`,
+      { expectedVersion, state },
     );
   }
 

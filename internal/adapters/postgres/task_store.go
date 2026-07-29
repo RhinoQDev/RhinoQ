@@ -140,6 +140,18 @@ func (s *TaskStore) GetExecution(ctx context.Context, id execution.ID) (executio
 	return record, err == nil, err
 }
 
+func (s *TaskStore) FindExecutionByExternalReference(
+	ctx context.Context,
+	runtime, externalID string,
+) (execution.Record, bool, error) {
+	record, err := scanExecution(s.db.QueryRowContext(ctx, executionSelect+`
+		WHERE runtime=$1 AND external_id=$2`, runtime, externalID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return execution.Record{}, false, nil
+	}
+	return record, err == nil, err
+}
+
 func (s *TaskStore) UpdateExecution(ctx context.Context, record execution.Record, expectedVersion int64) (execution.Record, int64, error) {
 	if expectedVersion <= 0 || record.Version != expectedVersion+1 {
 		return execution.Record{}, 0, ports.ErrVersionConflict

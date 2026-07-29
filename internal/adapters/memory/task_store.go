@@ -111,6 +111,17 @@ func (s *TaskStore) GetExecution(_ context.Context, id execution.ID) (execution.
 	return record, found, nil
 }
 
+func (s *TaskStore) FindExecutionByExternalReference(_ context.Context, runtime, externalID string) (execution.Record, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, record := range s.executions {
+		if record.Runtime == runtime && record.Reference.ExternalID == externalID {
+			return record, true, nil
+		}
+	}
+	return execution.Record{}, false, nil
+}
+
 func (s *TaskStore) UpdateExecution(_ context.Context, record execution.Record, expectedVersion int64) (execution.Record, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

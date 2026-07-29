@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  BullMQTaskBridge,
   RhinoQClient,
   RhinoQError,
 } from '../dist/index.js';
@@ -81,6 +82,39 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
     expectedVersion: 2,
     reference: 's3://reports/task_01.pdf',
   });
+});
+
+test('BullMQ Task bridge projects an existing job without owning the queue', async () => {
+  const events = new FakeQueueEvents();
+  const client = new FakeTaskClient();
+  const bridge = new BullMQTaskBridge({ client, events });
+
+  const queued = await bridge.track({
+    task: { id: 'task_bull_01', type: 'report.export', definitionVersion: 1 },
+    executionId: 'exec_bull_01',
+    jobId: 'bull_job_01',
+  });
+  assert.equal(queued.state, 'queued');
+  assert.equal(client.executions.get('exec_bull_01').state, 'dispatched');
+
+  events.emit('active', { jobId: 'bull_job_01' });
+  await flush();
+  assert.equal((await client.getTask('task_bull_01')).state, 'running');
+  assert.equal(client.executions.get('exec_bull_01').state, 'running');
+
+  events.emit('progress', { jobId: 'bull_job_01', data: { completed: 2, total: 5, message: 'rendering' } });
+  await flush();
+  assert.deepEqual((await client.getTask('task_bull_01')).progress, {
+    completed: 2, total: 5, message: 'rendering',
+  });
+
+  events.emit('completed', { jobId: 'bull_job_01' });
+  await flush();
+  assert.equal((await client.getTask('task_bull_01')).state, 'succeeded');
+  assert.equal(client.executions.get('exec_bull_01').state, 'succeeded');
+
+  bridge.close();
+  assert.equal(events.listeners.size, 0);
 });
 
 test('Gateway client sends UTF-8 JSON safely without argument spreading limits', async () => {
@@ -215,3 +249,122 @@ test('Gateway client preserves typed retry information', async () => {
     },
   );
 });
+
+class FakeQueueEvents {
+  listeners = new Map();
+
+  on(name, listener) {
+    this.listeners.set(name, listener);
+  }
+
+  off(name) {
+    this.listeners.delete(name);
+  }
+
+  emit(name, event) {
+    this.listeners.get(name)?.(event);
+  }
+}
+
+class FakeTaskClient {
+  tasks = new Map();
+  executions = new Map();
+  byExternalID = new Map();
+
+  async createTask(request) {
+    const task = snapshot({ id: request.id, type: request.type, state: 'pending' });
+    this.tasks.set(task.id, task);
+    return task;
+  }
+
+  async getTask(taskId) {
+    const task = this.tasks.get(taskId);
+    if (!task) {
+      throw new RhinoQError('RHINOQ_TASK_NOT_FOUND', 'not found', false, { status: 404 });
+    }
+    return task;
+  }
+
+  async createTaskExecution(taskId, request) {
+    const task = await this.getTask(taskId);
+    const execution = {
+      id: request.id, taskId, runtime: request.runtime, state: 'pending_dispatch', version: 1,
+    };
+    this.executions.set(execution.id, execution);
+    return this.bump(task, { executions: [execution] });
+  }
+
+  async bindTaskExecution(executionId, binding) {
+    const execution = this.executions.get(executionId);
+    execution.state = 'dispatched';
+    execution.version++;
+    this.byExternalID.set(binding.externalId, executionId);
+    return this.bump(await this.getTask(execution.taskId));
+  }
+
+  async lookupTaskExecution(_runtime, externalId) {
+    const executionId = this.byExternalID.get(externalId);
+    if (!executionId) {
+      throw new RhinoQError('RHINOQ_EXECUTION_NOT_FOUND', 'not found', false, { status: 404 });
+    }
+    return this.executions.get(executionId);
+  }
+
+  async getTaskExecution(executionId) {
+    return this.executions.get(executionId);
+  }
+
+  async transitionTaskExecution(executionId, expectedVersion, state) {
+    const execution = this.executions.get(executionId);
+    assert.equal(execution.version, expectedVersion);
+    execution.state = state;
+    execution.version++;
+    return this.bump(await this.getTask(execution.taskId));
+  }
+
+  async transitionTask(taskId, expectedVersion, state) {
+    const task = await this.getTask(taskId);
+    assert.equal(task.entityVersion, expectedVersion);
+    return this.bump(task, { state });
+  }
+
+  async reportTaskProgress(taskId, expectedVersion, progress) {
+    const task = await this.getTask(taskId);
+    assert.equal(task.entityVersion, expectedVersion);
+    return this.bump(task, { progress });
+  }
+
+  async attachTaskResult() {
+    throw new Error('not expected');
+  }
+
+  bump(task, fields = {}) {
+    const next = {
+      ...task,
+      ...fields,
+      entityVersion: task.entityVersion + 1,
+      updatedAt: '2026-07-29T00:00:01Z',
+    };
+    this.tasks.set(next.id, next);
+    return next;
+  }
+}
+
+function snapshot({ id, type, state }) {
+  return {
+    schemaVersion: 1,
+    entityVersion: 1,
+    id,
+    type,
+    state,
+    progress: { completed: 0 },
+    hasResult: false,
+    executions: [],
+    createdAt: '2026-07-29T00:00:00Z',
+    updatedAt: '2026-07-29T00:00:00Z',
+  };
+}
+
+async function flush() {
+  await new Promise((resolve) => setImmediate(resolve));
+}

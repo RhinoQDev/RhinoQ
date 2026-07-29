@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added a deliberately narrow, source-only Node BullMQ lifecycle bridge. An
+  application continues to enqueue and own BullMQ/Redis, then calls `track()`
+  for a job; the bridge durably creates/binds its Task Execution and projects
+  waiting, active, progress, completed and explicitly confirmed terminal
+  failure events through the version-fenced Task API. Runtime/external-ID
+  lookup survives a bridge restart. It intentionally does not dispatch jobs,
+  rewrite handlers, own Redis, cancel, orchestrate retries or claim
+  outage-wide reconciliation. Go, HTTP and Node contract tests cover the new
+  lookup and Execution-state fence.
+
 - Completed the documentation narrative migration to Task Platform first.
   README, documentation index and Getting Started now begin with the
   user-facing Task contract; the native queue/runtime and Verified Tasks are

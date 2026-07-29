@@ -99,6 +99,34 @@ func TestAgentTaskPollingContractRejectsStaleWrites(t *testing.T) {
 	}
 }
 
+func TestAgentLetsRuntimeAdaptersLookupAndFenceExecutionState(t *testing.T) {
+	server := newAgentServer(t)
+	call(t, server, http.MethodPost, "/v1/tasks", map[string]any{
+		"id": "task-bridge", "type": "report.export", "definitionVersion": 1,
+	}, http.StatusCreated, nil)
+	call(t, server, http.MethodPost, "/v1/tasks/task-bridge/executions", map[string]any{
+		"id": "exec-bridge", "runtime": "bullmq",
+	}, http.StatusCreated, nil)
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-bridge/bind", map[string]any{
+		"runtime": "bullmq", "externalId": "bull-job-bridge",
+	}, http.StatusOK, nil)
+
+	var execution rhinoq.TaskExecution
+	call(t, server, http.MethodGet,
+		"/v1/task-executions/lookup?runtime=bullmq&externalId=bull-job-bridge",
+		nil, http.StatusOK, &execution)
+	if execution.ID != "exec-bridge" || execution.TaskID != "task-bridge" || execution.State != "dispatched" {
+		t.Fatalf("unexpected external execution lookup: %+v", execution)
+	}
+	var updated rhinoq.TaskSnapshot
+	call(t, server, http.MethodPost, "/v1/task-executions/exec-bridge/state", map[string]any{
+		"expectedVersion": execution.Version, "state": "running",
+	}, http.StatusOK, &updated)
+	if updated.EntityVersion != 4 || updated.Executions[0].State != "running" {
+		t.Fatalf("execution update must atomically advance task snapshot: %+v", updated)
+	}
+}
+
 // A worker written in any language should be able to do the whole cycle over
 // HTTP without knowing anything about leases, retries or SQL.
 func TestAgentRunsAJobEndToEnd(t *testing.T) {

@@ -77,6 +77,15 @@ export interface TaskExecutionBinding {
   externalId?: string;
 }
 
+/** Adapter-facing attempt lookup; it is not the end-user Task snapshot. */
+export interface TaskExecution {
+  id: string;
+  taskId: string;
+  runtime: string;
+  state: string;
+  version: number;
+}
+
 export interface TaskSnapshot {
   schemaVersion: 1;
   /** Monotonic for one Task; ignore responses older than the latest seen value. */

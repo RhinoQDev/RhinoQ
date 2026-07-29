@@ -2,8 +2,9 @@
 
 This is an implementation inventory for RhinoQ's native runtime and optional
 Verified Tasks foundation. It uses BullMQ as a queue-ergonomics reference; it
-is not the product's buyer narrative and does not describe an implemented
-BullMQ adapter. Start with [Product positioning](./product-positioning.md) and
+is not the product's buyer narrative. A narrow, implemented BullMQ lifecycle
+bridge observes explicitly tracked jobs; it is not queue replacement or a full
+adapter. Start with [Product positioning](./product-positioning.md) and
 [Task Platform](./task-platform.md). See the [competitive
 landscape](./competitive-landscape.md) for PostgreSQL queues and durable
 execution platforms.
@@ -47,8 +48,8 @@ execution platforms.
 
 BullMQ is a mature Redis-based queue with worker, events, delayed jobs,
 concurrency and operational features. RhinoQ uses it as one runtime reference;
-the planned adapter must not claim queue replacement or feature parity. The
-current externally correlated/observe-only path belongs to optional Verified
-Tasks, not to the unfinished user-facing Task adapter. See the
+the lifecycle bridge must not claim queue replacement or feature parity. The
+current bridge observes explicitly tracked jobs only; dispatch, retry, cancel
+and outage-wide reconciliation remain unfinished. See the
 [BullMQ repository](https://github.com/taskforcesh/bullmq) for the queue
 reference model.

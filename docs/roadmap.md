@@ -22,7 +22,8 @@ without migrating their queue.
 - [x] public Go Task facade
 - [x] Node Task client
 - [x] version-fenced result-reference read/write through Go, HTTP and Node
-- [ ] one BullMQ reference adapter
+- [x] BullMQ lifecycle bridge for explicitly tracked existing jobs
+- [ ] dispatch/retry/cancel/reconciliation contract for BullMQ adoption
 - [ ] ProviderOperation domain foundation
 
 Realtime transports, React hooks, streams and Redis fan-out are not part of the

@@ -5,7 +5,7 @@ existing runtime/Verified Tasks foundation from the incremental Task facade.
 
 | Area | Status | Evidence and remaining work |
 |---|---:|---|
-| TASK | 5/6 | Domains, PostgreSQL contract, public Go facade, aggregate-versioned HTTP polling, public Execution binding, result-reference API and typed Node client are tested; runtime dispatch adapters, result payload/realtime delivery and ProviderOperation remain |
+| TASK | 5/6 | Domains, PostgreSQL contract, public Go facade, aggregate-versioned HTTP polling, public Execution binding, result-reference API, typed Node client and a narrow BullMQ lifecycle bridge are tested; runtime dispatch, retry/cancel/reconciliation, result payload/realtime delivery and ProviderOperation remain |
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
 | RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
 | VERIFY | 4/5 | fenced Effect Ledger, versioned Rules, Explain gate, bounded evaluation and crash-safe periodic scheduling exist; external execution correlation and signal-first verification remain |
@@ -50,8 +50,10 @@ its code, tests, documentation and evidence agree.
 - Needs Attention is unified, but business Findings still have no explicit
   source-system/job/queue correlation and therefore cannot be safely included
   in a queue-filtered view.
-- No execution adapter yet correlates an existing BullMQ, pg-boss, DBOS or
-  custom job with a RhinoQ business subject.
+- The BullMQ lifecycle bridge correlates explicitly tracked BullMQ jobs through
+  a durable runtime/external-ID lookup. It does not dispatch, cancel, model a
+  retry as a new Execution, or discover queue work after an outage; pg-boss,
+  DBOS and custom runtime adapters do not exist.
 - Public Execution create/bind exists, but composed retry with command identity
   and crash recovery across “new Execution → queued Task” is not implemented;
   `QueueTask` is only a lifecycle primitive.
@@ -67,7 +69,8 @@ its code, tests, documentation and evidence agree.
 ## Next priorities
 
 1. Measure code/endpoints removed in one real two-task application.
-2. One BullMQ reference adapter without moving correctness into the SDK.
+2. Measure the BullMQ lifecycle bridge in a two-Task application before adding
+   dispatch, retry, cancellation or reconciliation contracts.
 3. ProviderOperation domain with idempotency, confirmation and `uncertain`.
 4. Add generated/golden contract parity before a second SDK.
 5. Reconnect/stale-version property and browser tests before realtime.

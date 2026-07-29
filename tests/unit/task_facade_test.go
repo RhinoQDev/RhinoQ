@@ -137,3 +137,42 @@ func TestPublicTaskFacadeBindsExternalExecutionAndAdvancesSnapshotVersion(t *tes
 		t.Fatalf("latest aggregate version must remain writable: %v", err)
 	}
 }
+
+func TestPublicTaskFacadeLetsAnAdapterResumeAndFenceAnExternalExecution(t *testing.T) {
+	ctx := context.Background()
+	client := rhinoq.NewInMemory()
+	created, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{
+		ID: "task-1", Type: "report.export", DefinitionVersion: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateTaskExecution(ctx, created.ID, rhinoq.TaskExecutionCreateRequest{
+		ID: "exec-1", Runtime: "bullmq",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.BindTaskExecution(ctx, "exec-1", rhinoq.TaskExecutionBinding{
+		Runtime: "bullmq", ExternalID: "bull-job-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	execution, err := client.LookupTaskExecution(ctx, "bullmq", "bull-job-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.ID != "exec-1" || execution.TaskID != created.ID || execution.State != "dispatched" {
+		t.Fatalf("unexpected restart-safe execution lookup: %+v", execution)
+	}
+	if _, err := client.TransitionTaskExecution(ctx, execution.ID, execution.Version-1, "running"); !errors.Is(err, rhinoq.ErrTaskVersionConflict) {
+		t.Fatalf("expected stale execution update to be rejected, got %v", err)
+	}
+	updated, err := client.TransitionTaskExecution(ctx, execution.ID, execution.Version, "running")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.EntityVersion != 4 || updated.Executions[0].State != "running" {
+		t.Fatalf("execution transition must advance the aggregate snapshot: %+v", updated)
+	}
+}

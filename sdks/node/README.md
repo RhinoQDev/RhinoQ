@@ -42,6 +42,7 @@ Do not use `npm install @rhinoq/node` until a tagged npm release exists.
 | run JavaScript/TypeScript handlers | `RhinoQWorker` | Yes |
 | inspect, pause, cancel, replay or triage | `RhinoQClient` | Yes |
 | create, update or poll a Task snapshot | `RhinoQClient` | Yes |
+| mirror an existing BullMQ job into a Task | `BullMQTaskBridge` | Yes |
 
 ## Task polling
 
@@ -77,6 +78,35 @@ Use `entityVersion` as the optimistic write precondition and ignore a polling
 response older than the highest version already rendered.
 Result methods exchange a reference only; downloading or authorizing the
 payload remains the application's responsibility.
+
+## BullMQ lifecycle bridge (V1)
+
+Use this only after the application has added its own BullMQ job. The bridge
+does not import BullMQ, enqueue work, own the Redis connection or rewrite a
+worker; pass the application's `QueueEvents` instance and call `track()` beside
+the application's `queue.add()` call.
+
+```ts
+import { BullMQTaskBridge, RhinoQClient } from '@rhinoq/node';
+import { Queue, QueueEvents } from 'bullmq';
+
+const queue = new Queue('reports', { connection });
+const events = new QueueEvents('reports', { connection });
+const bridge = new BullMQTaskBridge({ client, events });
+
+const job = await queue.add('generate-report', { reportId: 'report_01' });
+await bridge.track({
+  task: { id: 'report_01', type: 'report.export', definitionVersion: 1 },
+  executionId: 'report_01:attempt:1',
+  jobId: job.id!,
+});
+```
+
+The bridge projects `waiting`, `active`, `progress`, `completed` and a failure
+that the application explicitly classifies as terminal. It is restart-safe for
+a repeated `track()` call because it looks up the durable runtime/external-ID
+binding. It does not yet auto-dispatch, cancel a BullMQ job, create a RhinoQ
+Execution for a BullMQ retry, or scan/reconcile a whole queue after downtime.
 
 ## Producer-only
 

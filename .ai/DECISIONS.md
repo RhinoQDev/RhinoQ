@@ -264,6 +264,35 @@
   nếu chưa có security review thay thế.
 - **Owner:** engine + security
 
+## ADR-0018 — BullMQ lifecycle bridge is observation, not a second queue
+
+- **Status:** accepted
+- **Context:** Task Platform needs evidence that an existing BullMQ application
+  can gain a user-facing lifecycle without moving its worker. The current Task
+  contract has no input/dispatch command identity and no composed retry
+  transaction. Adding a generic Redis queue or Task-to-BullMQ outbox now would
+  either duplicate BullMQ or make a crash-prone promise it cannot keep.
+- **Decision:** Node exposes `BullMQTaskBridge`, structurally compatible with
+  an application-owned BullMQ `QueueEvents`. The application adds the job and
+  calls `track()`. The bridge creates/binds a durable `bullmq` Execution and
+  projects observed lifecycle through Go's version-fenced Application/Gateway
+  APIs. PostgreSQL Task/Execution state is the source of truth; the bridge does
+  not own Redis or import BullMQ. A `failed` event changes Task state only when
+  the application supplies a terminal-failure classifier.
+- **Alternatives:** implement BullMQ persistence/worker semantics in Go
+  (rejected: second queue); add Redis as a core Task dependency (rejected:
+  polling snapshot already has a durable source of truth); retain manual
+  Execution binding only (rejected: does not test event projection).
+- **Consequences:** V1 has no auto-dispatch, cancellation, retry-to-new-
+  Execution orchestration or outage-wide reconciliation. Repeating `track()`
+  after a bridge restart is safe through `(runtime, external_id)` lookup.
+  Redis may later be an optional delivery invalidation capability, never the
+  correctness source for a Task snapshot.
+- **Rollback:** stop instantiating the bridge. Existing Task/Execution records
+  remain auditable; no Redis-owned RhinoQ state or queue schema has to be
+  removed.
+- **Owner:** engine + Node SDK
+
 ## Template cho ADR mới
 
 ```text

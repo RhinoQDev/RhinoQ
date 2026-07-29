@@ -33,22 +33,24 @@ identity, user/tenant ownership, UI-safe state, result delivery and how to
 converge after reload or out-of-order responses.
 
 Trigger.dev and Inngest already offer rich frontend/realtime task experience.
-RhinoQ's future wedge is keeping an existing execution runtime—not feature
-parity. The first intended proof is a BullMQ adapter that does not require a
-business-handler rewrite. That adapter is not implemented today.
+RhinoQ's wedge is keeping an existing execution runtime—not feature parity.
+The first implementation is a tested BullMQ lifecycle bridge for jobs the
+application explicitly tracks. It does not yet prove no-cutover adoption:
+automatic dispatch, cancellation, retry orchestration and outage-wide
+reconciliation are intentionally absent.
 
 ## RhinoQ product boundary
 
 | Layer | Boundary | Status |
 |---|---|---|
 | Task Platform | Task identity, versioned snapshot, progress, result reference, lifecycle and execution history | first polling slice implemented |
-| Existing-runtime adoption | adapter dispatches and observes an existing worker | external runtime reference exists; adapter is planned |
+| Existing-runtime adoption | lifecycle bridge observes an existing worker | BullMQ V1 observes explicitly tracked jobs; dispatch/retry/cancel remain planned |
 | Delivery | polling now; frontend/realtime later | HTTP polling and typed Node client implemented; no React/realtime |
 | Verified Tasks | effect evidence, outcome observation, Rules and Findings | optional foundation implemented |
 
-The external Execution reference is deliberately not called an adapter. It
-records a stable runtime ID but does not enqueue to BullMQ, listen to its events
-or provide its liveness/cancellation semantics.
+The external Execution reference alone is not an adapter. The BullMQ bridge
+adds event observation for explicitly tracked jobs, but it still does not
+enqueue to BullMQ or provide cancellation/retry/liveness reconciliation.
 
 ## Verification boundary
 

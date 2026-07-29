@@ -25,6 +25,11 @@ type ExecutionStore interface {
 	// Execution. taskVersion is the new Snapshot/entity version.
 	CreateNextExecution(ctx context.Context, input ExecutionCreateInput) (record execution.Record, taskVersion int64, err error)
 	GetExecution(ctx context.Context, id execution.ID) (execution.Record, bool, error)
+	// FindExecutionByExternalReference is the restart-safe lookup path for a
+	// runtime adapter. The unique (runtime, external_id) constraint means an
+	// adapter can recover a Task execution from its own job ID after a process
+	// restart without keeping an in-memory map as the source of truth.
+	FindExecutionByExternalReference(ctx context.Context, runtime, externalID string) (execution.Record, bool, error)
 	// UpdateExecution also advances the parent Task version atomically so two
 	// snapshots with the same entityVersion cannot contain different execution
 	// state.

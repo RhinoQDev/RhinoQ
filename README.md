@@ -78,15 +78,20 @@ that an external provider completed work or that a business invariant holds.
 | Result-reference read/write API | implemented; payload proxy/download is not |
 | Native Go/PostgreSQL job runtime | implemented and tested |
 | Effect Ledger, Rules, Findings and read-only investigation | implemented as optional Verified Tasks foundation |
-| BullMQ/pg-boss/custom runtime adapter | **not implemented** |
+| BullMQ lifecycle bridge V1 | implemented and Node SDK-tested; observes tracked existing jobs only |
+| pg-boss/custom runtime adapter | **not implemented** |
 | React hook, Task Center, SSE/WebSocket/streams | **not implemented** |
 | Tenant-scoped user authorization | **not implemented** |
 | Generic ProviderOperation | **not implemented** |
 
-The current Task API can create an external Execution and bind a stable external
-ID. That is an integration boundary, not an adapter: it does not enqueue to or
-observe BullMQ automatically yet. Do not describe RhinoQ as “drop-in for
-BullMQ” until the reference adapter and an application integration exist.
+The BullMQ bridge creates/binds a durable external Execution for an existing
+BullMQ job and projects its `waiting`, `active`, `progress`, `completed` and
+confirmed-terminal `failed` events into the Task lifecycle. It deliberately
+does **not** enqueue jobs, own Redis connections, change a worker handler,
+cancel a job, create a new Execution for a BullMQ retry, or discover every job
+after an outage. The application calls `track()` when it adds the job; the
+durable runtime/external-ID lookup makes repeating that call safe after a
+bridge restart. This is a narrow lifecycle bridge, not drop-in BullMQ support.
 
 ## First Task contract
 

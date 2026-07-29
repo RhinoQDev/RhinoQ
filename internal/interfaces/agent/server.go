@@ -124,7 +124,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /v1/tasks/{id}/result", s.guard(s.handleGetTaskResult))
 	mux.HandleFunc("POST /v1/tasks/{id}/result", s.guard(s.handleAttachTaskResult))
 	mux.HandleFunc("POST /v1/tasks/{id}/executions", s.guard(s.handleCreateTaskExecution))
+	mux.HandleFunc("GET /v1/task-executions/lookup", s.guard(s.handleLookupTaskExecution))
+	mux.HandleFunc("GET /v1/task-executions/{id}", s.guard(s.handleGetTaskExecution))
 	mux.HandleFunc("POST /v1/task-executions/{id}/bind", s.guard(s.handleBindTaskExecution))
+	mux.HandleFunc("POST /v1/task-executions/{id}/state", s.guard(s.handleTransitionTaskExecution))
 
 	// Worker surface: the four things an SDK does.
 	mux.HandleFunc("POST /v1/claim", s.guard(s.handleClaim))
@@ -306,6 +309,46 @@ func (s *Server) handleBindTaskExecution(w http.ResponseWriter, r *http.Request)
 		r.Context(),
 		r.PathValue("id"),
 		request,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) handleLookupTaskExecution(w http.ResponseWriter, r *http.Request) {
+	record, err := s.client.LookupTaskExecution(
+		r.Context(), r.URL.Query().Get("runtime"), r.URL.Query().Get("externalId"),
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleGetTaskExecution(w http.ResponseWriter, r *http.Request) {
+	record, err := s.client.GetTaskExecution(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+type transitionTaskExecutionRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	State           string `json:"state"`
+}
+
+func (s *Server) handleTransitionTaskExecution(w http.ResponseWriter, r *http.Request) {
+	var request transitionTaskExecutionRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	snapshot, err := s.client.TransitionTaskExecution(
+		r.Context(), r.PathValue("id"), request.ExpectedVersion, request.State,
 	)
 	if err != nil {
 		s.fail(w, err)

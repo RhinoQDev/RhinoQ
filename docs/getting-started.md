@@ -1,7 +1,7 @@
 # Getting started with the Task Platform
 
 > Status: evaluation only. This guide demonstrates the implemented Task
-> contract; it does not claim an automatic BullMQ, React, realtime or
+> contract; it does not claim automatic BullMQ dispatch, React, realtime or
 > tenant-authorized integration.
 
 RhinoQ's first product path is a user-facing Task: a durable record that a
@@ -69,10 +69,11 @@ never retry an old mutation blindly.
 
 ## 2. Bind one execution attempt
 
-An Execution identifies one attempt and which runtime owns it. The current
-contract can bind a stable external ID, but it does **not** enqueue to BullMQ or
-subscribe to its events. This code is the explicit integration boundary that a
-future adapter will automate.
+An Execution identifies one attempt and which runtime owns it. The contract can
+bind a stable external ID. The Node SDK's BullMQ lifecycle bridge can then
+observe a job the application has already enqueued, but it does **not** enqueue
+the job itself, take over Redis, cancel/retry it or discover all queue work
+after downtime.
 
 ```go
 task, err = client.CreateTaskExecution(ctx, task.ID,
@@ -137,7 +138,8 @@ control.
 This path proves a versioned Task contract across Go, PostgreSQL, HTTP and Node.
 It does not yet prove the product's intended adoption promise:
 
-- no BullMQ adapter exists;
+- BullMQ lifecycle observation requires explicit `track()` when the application
+  adds the job; it is not auto-dispatch or full reconciliation;
 - no automatic Task-to-native-job dispatch exists;
 - no composed retry command creates a new Execution atomically;
 - no React hook, Task Center, SSE/WebSocket or stream transport exists;

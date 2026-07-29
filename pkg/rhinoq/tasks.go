@@ -54,6 +54,18 @@ type TaskExecutionSummary struct {
 	Version int64  `json:"version"`
 }
 
+// TaskExecution is the adapter-facing view of one attempt. It intentionally
+// exposes no owner or runtime reference: an adapter already holds the external
+// ID it used for the lookup and only needs the Task relationship plus a version
+// fence for the next observation.
+type TaskExecution struct {
+	ID      string `json:"id"`
+	TaskID  string `json:"taskId"`
+	Runtime string `json:"runtime"`
+	State   string `json:"state"`
+	Version int64  `json:"version"`
+}
+
 type TaskExecutionCreateRequest struct {
 	ID      string `json:"id"`
 	Runtime string `json:"runtime"`
@@ -151,6 +163,43 @@ func (c *Client) BindTaskExecution(
 			JobID:      binding.JobID,
 			ExternalID: binding.ExternalID,
 		},
+	)
+	return publicTaskSnapshot(snapshot), err
+}
+
+func (c *Client) LookupTaskExecution(
+	ctx context.Context,
+	runtime, externalID string,
+) (TaskExecution, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskExecution{}, err
+	}
+	record, err := service.LookupExternalExecution(ctx, runtime, externalID)
+	return publicTaskExecution(record), err
+}
+
+func (c *Client) GetTaskExecution(ctx context.Context, id string) (TaskExecution, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskExecution{}, err
+	}
+	record, err := service.GetExecution(ctx, execution.ID(id))
+	return publicTaskExecution(record), err
+}
+
+func (c *Client) TransitionTaskExecution(
+	ctx context.Context,
+	id string,
+	expectedVersion int64,
+	state string,
+) (TaskSnapshot, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	snapshot, err := service.TransitionExecutionSnapshot(
+		ctx, execution.ID(id), expectedVersion, execution.State(state),
 	)
 	return publicTaskSnapshot(snapshot), err
 }
@@ -281,6 +330,13 @@ func publicTaskSnapshot(snapshot taskcontract.Snapshot) TaskSnapshot {
 		Executions: executions,
 		CreatedAt:  snapshot.CreatedAt,
 		UpdatedAt:  snapshot.UpdatedAt,
+	}
+}
+
+func publicTaskExecution(record execution.Record) TaskExecution {
+	return TaskExecution{
+		ID: record.ID.String(), TaskID: record.TaskID, Runtime: record.Runtime,
+		State: record.State.String(), Version: record.Version,
 	}
 }
 

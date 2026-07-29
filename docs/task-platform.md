@@ -41,7 +41,7 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | Public Task facade | implemented, unit-tested | create/read/progress/result, create/bind Execution và explicit lifecycle commands |
 | Polling delivery | implemented, integration-tested | HTTP `POST/GET /v1/tasks`; typed Node client; stale write trả typed `409` |
 | Result-reference delivery | implemented, integration-tested | separate Go/HTTP/Node read-write API; Snapshot chỉ trả `hasResult` |
-| BullMQ adapter | planned | external reference contract đã có, adapter chưa có |
+| BullMQ lifecycle bridge V1 | implemented, Node SDK-tested | tracked existing job events → Task/Execution; no dispatch, retry, cancel or outage-wide reconciliation |
 | ProviderOperation | planned | boundary đã chốt, model chưa có |
 | Verified Task composition | planned | primitives Effect/Outcome/Rule/Finding đã có |
 

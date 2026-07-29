@@ -17,9 +17,10 @@ The future adapter promise is intentionally narrower:
 
 > Your queue stays. Your workers stay. RhinoQ adds the user-facing task layer.
 
-It becomes an implementation claim only when the relevant runtime adapter is
-implemented and tested. The first intended adapter is BullMQ; it does not exist
-in this repository yet.
+The first implementation is a deliberately narrow BullMQ lifecycle bridge: it
+observes application-owned, explicitly tracked jobs and persists their Task /
+Execution lifecycle. It is not queue migration, auto-dispatch, cancellation,
+retry orchestration or a full outage reconciler.
 
 ## The user and the problem
 
@@ -43,7 +44,7 @@ convergence and authorization. RhinoQ's Task is that product boundary.
 | Layer | Job | Current status |
 |---|---|---|
 | Task Platform | Task ownership, lifecycle, progress, result reference, history and versioned snapshot | first polling slice implemented |
-| Execution backends | Native runtime or adapter to a current worker | native runtime implemented; external adapter boundary only |
+| Execution backends | Native runtime or adapter to a current worker | native runtime plus a narrow BullMQ lifecycle bridge; broader adapters planned |
 | Delivery | Polling first; later realtime, frontend hooks and Task Center | versioned HTTP polling implemented; realtime/UI not implemented |
 | Verified Tasks | Effect evidence, outcome observation, Rules and Findings for high-risk work | optional foundation implemented |
 
@@ -78,10 +79,13 @@ migration cost for existing-worker teams, not claim feature parity. See
 - Result references are read separately from a polling snapshot.
 - Native Go/PostgreSQL runtime and the optional verification foundation have
   tests and real-PostgreSQL coverage.
+- The source-only Node SDK has a tested BullMQ lifecycle bridge for explicitly
+  tracked, application-owned jobs.
 
 ## Claims we must not make yet
 
-- “Drop-in BullMQ integration” or “keep your BullMQ worker unchanged.”
+- “Drop-in BullMQ integration”, automatic dispatch, cancellation or retry
+  orchestration for BullMQ jobs.
 - “React Task Center”, realtime streaming or browser reconnect safety.
 - Tenant-scoped end-user authorization.
 - Code-reduction, reliability, latency or throughput figures.

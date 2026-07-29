@@ -33,8 +33,10 @@ Lease/fencing, retry classification, DB clock, Effect Ledger và Task state
 transition nằm trong Go engine/Application. Node SDK gửi intent và observation,
 không tự quyết định authoritative state.
 
-Giới hạn: adapter runtime ngoài chưa tồn tại, vì vậy lợi ích “giữ BullMQ
-worker” vẫn là architectural direction chứ chưa phải adoption evidence.
+Giới hạn: BullMQ lifecycle bridge chỉ quan sát job được application `track()`;
+nó chưa dispatch, cancel, orchestration retry hay reconcile toàn queue. Vì vậy
+lợi ích “giữ BullMQ worker” vẫn là architectural direction chứ chưa phải
+adoption evidence.
 
 ### Fail-closed cho stale và unknown
 
@@ -70,7 +72,7 @@ không được suy ra throughput/reliability production từ architecture.
 
 | Potential advantage | Vì sao hợp lý | Bằng chứng còn thiếu |
 |---|---|---|
-| giữ queue/worker hiện tại | Execution có external runtime reference, correctness không nằm trong SDK | BullMQ adapter và một app tích hợp thật |
+| giữ queue/worker hiện tại | BullMQ lifecycle bridge quan sát job application-owned, correctness không nằm trong SDK | app tích hợp thật và contract dispatch/retry/cancel/reconciliation |
 | giảm status/progress/result plumbing | public Snapshot/result contract dùng lại được cho nhiều Task type | before/after app có ít nhất hai Task |
 | FE không tụt state khi reconnect | entity version cho phép bỏ response cũ | property test và browser reload/reorder test |
 | provider async dùng chung một model | effect semantics đã có accepted/confirmed/uncertain | ProviderOperation áp dụng cho hai provider khác nhau |
