@@ -27,6 +27,23 @@ aggregate Snapshot; they do not dispatch work themselves.
 Callers must pass that version on writes and ignore an older polling response.
 Realtime subscriptions and result-payload proxying are not implemented.
 
+The `beta.2` source also exports `watchTask()`, a framework-neutral async
+iterator for one Task. It performs non-overlapping polls, ignores snapshots at
+or below the highest rendered `entityVersion`, stops on terminal state by
+default and accepts an `AbortSignal`. Network and authorization failures are
+reported to the caller; the helper does not invent an outage retry policy.
+
+```ts
+import { watchTask } from '@rhinoq/node';
+
+for await (const snapshot of watchTask(client, 'report_01', {
+  pollIntervalMs: 1_000,
+  signal: controller.signal,
+})) {
+  renderTask(snapshot);
+}
+```
+
 The Gateway is deterministic Go infrastructure, not an AI agent. It does not
 run a model or require an LLM.
 
@@ -89,8 +106,9 @@ npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-dev.tgz pg
 Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
 not own or configure the application's connection pool.
 
-This source-install path is for evaluation. A versioned npm package and
-prebuilt `rhinoq` CLI binaries remain release blockers.
+This source-install path is for contributing to the next prerelease. A stable
+npm package, tagged GitHub release and prebuilt `rhinoq` CLI binaries remain
+release blockers.
 
 ### Verify the installed package
 

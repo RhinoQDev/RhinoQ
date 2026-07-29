@@ -7,6 +7,9 @@
   version conflict, so a concurrent Task mutation does not silently drop an
   observed queue lifecycle/progress/result update. It still does not override
   a terminal Task state or add BullMQ dispatch, cancellation or retry support.
+  The SDK also adds `watchTask()`, a framework-neutral async iterator with
+  non-overlapping polls, monotonic Snapshot delivery, terminal stop and
+  `AbortSignal` cancellation.
 
 - Added a fail-closed per-job BullMQ reconciliation path. After a bridge
   restart, an application can read a **known** BullMQ Job and pass its current

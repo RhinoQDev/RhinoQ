@@ -40,6 +40,7 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | PostgreSQL store và migration 015 | implemented, real-DB contract passed | optimistic updates; concurrent per-Task attempt allocation has no gaps/duplicates |
 | Public Task facade | implemented, unit-tested | create/read/progress/result, create/bind Execution và explicit lifecycle commands |
 | Polling delivery | implemented, integration-tested | HTTP `POST/GET /v1/tasks`; typed Node client; stale write trả typed `409` |
+| Framework-neutral Node Task watcher | implemented, SDK-tested | non-overlapping polling; only newer aggregate versions are yielded; terminal/abort stop |
 | Result-reference delivery | implemented, integration-tested | separate Go/HTTP/Node read-write API; Snapshot chỉ trả `hasResult` |
 | BullMQ lifecycle bridge V1 | implemented, Node SDK-tested | tracked existing job events/known-job reconciliation → Task/Execution; no dispatch, retry, cancel or outage-wide reconciliation |
 | ProviderOperation | planned | boundary đã chốt, model chưa có |
@@ -68,6 +69,10 @@ làm việc này trong cùng lock; PostgreSQL adapter làm trong cùng transacti
 insert/update Execution. Vì vậy hai Snapshot có cùng `entityVersion` không được
 chứa Execution state khác nhau. Delivery tương lai dùng version để bỏ update cũ
 sau reconnect/retry, thay vì tin thứ tự arrival của transport.
+
+Node `watchTask()` hiện thực hóa phần polling này mà không thêm framework hoặc
+transport mới. Nó không thay thế tenant authorization, React state management
+hay realtime reconnect protocol.
 
 Progress hỗ trợ hai dạng:
 

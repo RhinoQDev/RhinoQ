@@ -94,7 +94,7 @@ claims. Their current limits are documented below and in
 | Go Task facade; Task and Execution domains | implemented and tested |
 | PostgreSQL Task store and migration 015 | implemented; real-PostgreSQL contract tested |
 | Versioned HTTP polling snapshots | implemented and integration tested |
-| Typed Node Task client | evaluation prerelease published as [`@rhinoq/node@0.1.0-beta.1`](https://www.npmjs.com/package/@rhinoq/node/v/0.1.0-beta.1) on npm; install the explicit version, not `latest` |
+| Typed Node Task client | `beta.1` published on npm; `beta.2` source adds a version-safe framework-neutral Task watcher |
 | Result-reference read/write API | implemented; payload proxy/download is not |
 | Native Go/PostgreSQL job runtime | implemented and tested |
 | Effect Ledger, Rules, Findings and read-only investigation | implemented as optional Verified Tasks foundation |
@@ -114,6 +114,11 @@ durable runtime/external-ID lookup makes repeating that call safe after a
 bridge restart. It can also reconcile one already-known Job state read by the
 application after an offline gap. This is a narrow lifecycle bridge, not
 drop-in BullMQ support.
+
+The Node `watchTask()` async iterator provides non-overlapping polling, yields
+only strictly newer aggregate versions, stops on terminal state by default and
+supports `AbortSignal`. It is delivery glue, not React state management or a
+realtime transport.
 
 ## First Task contract
 
@@ -209,7 +214,7 @@ and browser/reconnect tests before realtime transport is added.
 | [Product strengths](./docs/product-strengths.md) | evidence-backed implementation strengths |
 | [Native runtime](./docs/getting-started.md#native-runtime-is-a-separate-optional-path) | PostgreSQL queue/worker path |
 | [Workbench](./docs/workbench.md) | local, read-only Evidence Ledger for operational investigation |
-| [Node.js integration](./docs/nodejs.md) | source-only Node preview |
+| [Node.js integration](./docs/nodejs.md) | published Node preview and source build path |
 | [Releasing](./docs/releasing.md) | npm trusted publishing and first prerelease checklist |
 | [Architecture](./ARCHITECTURE.md) | module, dependency and runtime boundaries |
 | [Roadmap](./docs/roadmap.md) | next implementation and release gates |

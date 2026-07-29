@@ -89,6 +89,29 @@ response older than the highest version already rendered.
 Result methods exchange a reference only; downloading or authorizing the
 payload remains the application's responsibility.
 
+### Watch a Task without framework lock-in
+
+`watchTask()` is available in the `beta.2` source. It polls immediately,
+serializes requests and yields only a strictly newer `entityVersion`. Terminal
+Tasks stop the iterator by default.
+
+```ts
+import { watchTask } from '@rhinoq/node';
+
+const stopping = new AbortController();
+
+for await (const snapshot of watchTask(client, 'report_01', {
+  pollIntervalMs: 1_000,
+  signal: stopping.signal,
+})) {
+  renderTask(snapshot);
+}
+```
+
+An HTTP/authentication error is thrown to the caller instead of being hidden.
+Set `stopOnTerminal: false` only for a mounted history view. This helper does
+not add React state, SSE, WebSocket or Redis.
+
 ## BullMQ lifecycle bridge (V1)
 
 Use this only after the application has added its own BullMQ job. The bridge

@@ -5,7 +5,7 @@ existing runtime/Verified Tasks foundation from the incremental Task facade.
 
 | Area | Status | Evidence and remaining work |
 |---|---:|---|
-| TASK | 5/6 | Domains, PostgreSQL contract, public Go facade, aggregate-versioned HTTP polling, public Execution binding, result-reference API, typed Node client and a narrow BullMQ lifecycle bridge are tested; runtime dispatch, retry/cancel/reconciliation, result payload/realtime delivery and ProviderOperation remain |
+| TASK | 5/6 | Domains, PostgreSQL contract, public Go facade, aggregate-versioned HTTP polling, a version-safe Node polling watcher, public Execution binding, result-reference API, typed Node client and a narrow BullMQ lifecycle bridge are tested; runtime dispatch, retry/cancel/full reconciliation, result payload/realtime delivery and ProviderOperation remain |
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
 | RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
 | VERIFY | 4/5 | fenced Effect Ledger, versioned Rules, Explain gate, bounded evaluation and crash-safe periodic scheduling exist; external execution correlation and signal-first verification remain |
@@ -42,8 +42,8 @@ its code, tests, documentation and evidence agree.
   native Windows and a Linux volume. This is tool failure, not zero findings.
   `docs/security-audit-2026-07-29.md` records the fallback audit and remaining
   coverage.
-- The Node SDK is tested from source but has no tagged npm release; non-Go
-  adopters still need a separately distributed `rhinoq` CLI binary.
+- The Node SDK has an npm evaluation prerelease, but no tagged GitHub release;
+  non-Go adopters still need a separately distributed `rhinoq` CLI binary.
 - The Go module path now matches the hosting repository, so `go get` resolves
   without a local `replace`, but no semver tag exists yet. Consumers resolve a
   branch pseudo-version and have no stability guarantee.

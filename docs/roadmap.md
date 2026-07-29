@@ -21,6 +21,8 @@ without migrating their queue.
 - [x] add the Task store contract to CI's PostgreSQL job
 - [x] public Go Task facade
 - [x] Node Task client
+- [x] framework-neutral Node Task watcher with stale-version rejection,
+  terminal stop and abort semantics
 - [x] version-fenced result-reference read/write through Go, HTTP and Node
 - [x] BullMQ lifecycle bridge for explicitly tracked existing jobs
 - [ ] dispatch/retry/cancel/reconciliation contract for BullMQ adoption
