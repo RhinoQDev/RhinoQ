@@ -153,6 +153,24 @@ func truncate(t *testing.T) {
 	}
 }
 
+// databaseNow keeps time-sensitive storage contracts aligned with the same
+// clock authority used by PostgreSQL comparisons. Fixed calendar fixtures
+// eventually expire and make otherwise correct tests depend on the day they
+// happen to run.
+func databaseNow(t *testing.T) time.Time {
+	t.Helper()
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var now time.Time
+	if err := testDB.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatalf("read PostgreSQL clock: %v", err)
+	}
+	return now.UTC()
+}
+
 func enqueue(t *testing.T, client *rhinoq.Client, request rhinoq.JobRequest) string {
 	t.Helper()
 	id, err := client.Enqueue(context.Background(), request)

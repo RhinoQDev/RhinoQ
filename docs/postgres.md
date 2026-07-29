@@ -84,4 +84,16 @@ Function kiểm `session_user`—login gọi hàm—thay vì `current_user`, vì
 
 Aging trong `ORDER BY` không index được, nên index claim phủ phần filter (`state`, `not_before`, `priority`, `created_at`) và phần xếp hạng chạy trên tập candidate đã hẹp.
 
-`tests/postgres` áp dụng migrations từ đầu và chạy contract/integrity tests trên PostgreSQL thật. Việc suite xanh là storage evidence, chưa thay thế benchmark, fault injection, restore test hoặc production capacity planning.
+`tests/postgres` áp dụng migrations từ đầu và chạy contract/integrity tests trên
+PostgreSQL thật. CI luôn vô hiệu test cache và shuffle thứ tự:
+
+```bash
+cd tests/postgres
+RHINOQ_TEST_DATABASE_URL=postgres://rhinoq:rhinoq@localhost:55432/rhinoq?sslmode=disable \
+  go test ./... -count=1 -shuffle=on
+```
+
+Fixture kiểm tra expiry phải lấy mốc từ PostgreSQL (`clock_timestamp()`), không
+dùng ngày cố định sẽ tự hết hạn theo thời gian. Việc suite xanh là storage
+evidence, chưa thay thế benchmark, fault injection, restore test hoặc
+production capacity planning.

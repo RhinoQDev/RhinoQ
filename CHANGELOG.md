@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed the PostgreSQL Finding suppression contract fixture to use the database
+  clock instead of a calendar date that eventually expired. Added regression
+  coverage proving active suppression stays hidden and expired suppression
+  returns to the default inbox. GitHub CI now runs Go and PostgreSQL tests
+  uncached and shuffled to expose order/time coupling, with a weekly scheduled
+  run to catch calendar-sensitive regressions while the repository is idle.
+
 - Prepared `@rhinoq/node@0.1.0-beta.2`. The BullMQ lifecycle bridge now
   re-reads and retries a bounded number of times after a Gateway optimistic
   version conflict, so a concurrent Task mutation does not silently drop an

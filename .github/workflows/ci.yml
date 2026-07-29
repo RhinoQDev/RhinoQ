@@ -5,6 +5,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Re-run time-sensitive storage contracts even when the repository is idle.
+    - cron: "23 3 * * 1"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -26,7 +30,7 @@ jobs:
           go-version-file: go.mod
       - run: gofmt -d cmd internal tests pkg examples
       - run: go vet ./...
-      - run: go test -race ./...
+      - run: go test -race -count=1 -shuffle=on ./...
 
   postgres:
     name: PostgreSQL integration harness
@@ -56,7 +60,8 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
         working-directory: tests/postgres
-      - run: go test ./... -count=1
+      - name: PostgreSQL contracts (fresh and shuffled)
+        run: go test ./... -count=1 -shuffle=on
         working-directory: tests/postgres
         env:
           RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable

@@ -62,10 +62,6 @@ its code, tests, documentation and evidence agree.
   migration runner intentionally refuses to infer one.
 - The race detector cannot run in the current environment because the cgo
   toolchain is unavailable.
-- The full PostgreSQL suite currently fails an existing Finding suppression
-  test whose fixed `suppressed_until` fixture is already in the past relative
-  to the database clock. Migration 015 and `TestTaskStoreContract` pass against
-  PostgreSQL 16; the unrelated fixture was not changed in this Task slice.
 
 ## Next priorities
 
@@ -75,4 +71,3 @@ its code, tests, documentation and evidence agree.
 3. ProviderOperation domain with idempotency, confirmation and `uncertain`.
 4. Add generated/golden contract parity before a second SDK.
 5. Reconnect/stale-version property and browser tests before realtime.
-6. Repair the independent time-sensitive Finding suppression test fixture.

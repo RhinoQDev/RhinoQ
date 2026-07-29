@@ -133,8 +133,10 @@ Node SDK npm audit:      0 total vulnerabilities.
 - DAST/fuzz/pentest với deployment thật;
 - test TLS/reverse proxy và credential rotation;
 - test tenant/owner authorization vì model đó chưa được implement;
-- full PostgreSQL suite trong audit này; suite còn một fixture suppression dùng
-  thời gian cố định đã quá hạn, được theo dõi độc lập.
+- full PostgreSQL suite tại thời điểm audit; fixture suppression dùng thời gian
+  cố định đã quá hạn. Fixture sau đó đã chuyển sang PostgreSQL clock, có
+  regression coverage cho cả suppression đang hiệu lực và đã hết hạn, và CI
+  chạy suite fresh/shuffled. Việc sửa này không mở rộng hồi tố phạm vi audit.
 
 ## Lệnh tái lập
 
