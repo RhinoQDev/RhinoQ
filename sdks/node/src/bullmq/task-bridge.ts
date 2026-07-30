@@ -1,5 +1,4 @@
 import {
-  RhinoQClient,
   RhinoQError,
 } from '../gateway/client.js';
 import type {
@@ -9,6 +8,7 @@ import type {
   TaskSnapshot,
   TaskState,
 } from '../gateway/types.js';
+import type { TaskClient } from '../tasks/client.js';
 
 type QueueEvent = 'waiting' | 'active' | 'progress' | 'completed' | 'failed';
 
@@ -25,6 +25,15 @@ export interface BullMQQueueEvents {
   off?(event: QueueEvent, listener: (event: BullMQEvent) => void): unknown;
 }
 
+/** Structural subset of BullMQ Queue; RhinoQ does not own its Redis client. */
+export interface BullMQQueue {
+  add(
+    name: string,
+    data: unknown,
+    options: Record<string, unknown> & { jobId: string },
+  ): Promise<{ id?: string } | undefined>;
+}
+
 export interface BullMQEvent {
   jobId: string;
   data?: unknown;
@@ -35,7 +44,17 @@ export interface BullMQEvent {
 export interface BullMQTaskBinding {
   task: TaskCreateRequest;
   executionId: string;
+  /** Stable logical item; retries of the same item share this key. */
+  itemKey?: string;
   jobId: string;
+}
+
+export interface BullMQTaskDispatch extends BullMQTaskBinding {
+  job: {
+    name: string;
+    data: unknown;
+    options?: Record<string, unknown>;
+  };
 }
 
 export type BullMQObservedState = 'waiting' | 'active' | 'completed' | 'failed';
@@ -52,8 +71,16 @@ export interface BullMQTaskObservation extends BullMQEvent {
 }
 
 export interface BullMQTaskBridgeOptions {
-  client: RhinoQClient;
+  client: TaskClient;
   events: BullMQQueueEvents;
+  /** Supply the application's Queue only when using dispatch()/dispatchMany(). */
+  queue?: BullMQQueue;
+  /**
+   * Queue/tenant scope for runtime identity. BullMQ job IDs are unique only
+   * within a queue, so new Task-only integrations should always set this.
+   * Omitted only for compatibility with the legacy Gateway schema.
+   */
+  runtimeScope?: string;
   /**
    * Controls whether one BullMQ job may terminate its parent Task.
    *
@@ -68,7 +95,25 @@ export interface BullMQTaskBridgeOptions {
    * and irreversibly, because terminal Task states are never reopened.
    */
   terminalProjection: 'single-execution' | 'execution-only';
-  /** Maps BullMQ progress into the portable Task progress contract. */
+  /**
+   * Optional fan-out aggregation after all item Executions are reserved.
+   * There is no terminal default: partial-success semantics are business
+   * semantics and must be selected explicitly.
+   */
+  aggregate?: {
+    progress?: 'terminal-items';
+    terminal?: 'manual' | 'all-succeeded' | 'at-least-one-succeeded';
+  };
+  /**
+   * Maps BullMQ progress into the portable Task progress contract.
+   *
+   * BullMQ accepts both a number and an object. A number has no portable unit:
+   * applications commonly use it as a percentage, while older RhinoQ code
+   * treated it as an item count. The default therefore accepts only the
+   * structured `{ completed, total?, message? }` shape. Choose
+   * `bullMQCountProgress` or `bullMQPercentageProgress` explicitly when the
+   * application emits numbers.
+   */
   progress?: (event: BullMQEvent) => TaskProgress | undefined;
   /**
    * BullMQ can emit a failed event before retrying. Return true only after the
@@ -92,15 +137,21 @@ export interface BullMQTaskBridgeOptions {
 }
 
 /**
- * BullMQTaskBridge observes jobs that already belong to an application and
- * projects their lifecycle into RhinoQ Tasks. It does not enqueue BullMQ jobs,
- * change worker handlers, implement cancellation, or pretend a BullMQ retry is
- * a new RhinoQ Execution; those require the later dispatch/retry contract.
+ * BullMQTaskBridge projects application-owned jobs into RhinoQ Tasks. New
+ * integrations should use dispatch()/dispatchMany() so the durable identity is
+ * reserved before Queue.add(); track() remains the compatibility path for a
+ * job the application already added. The bridge does not change worker
+ * handlers or guess whether an active side effect can be cancelled safely.
  */
 export class BullMQTaskBridge {
-  private readonly client: RhinoQClient;
+  private readonly client: TaskClient;
   private readonly events: BullMQQueueEvents;
+  private readonly bullQueue?: BullMQQueue;
+  private readonly runtimeScope: string;
   private readonly terminalProjection: 'single-execution' | 'execution-only';
+  private readonly aggregateProgress: boolean;
+  private readonly aggregateTerminal:
+    'manual' | 'all-succeeded' | 'at-least-one-succeeded';
   private readonly progress: (event: BullMQEvent) => TaskProgress | undefined;
   private readonly isTerminalFailure?: (event: BullMQEvent) => Promise<boolean>;
   private readonly resultReference?: (event: BullMQEvent) => Promise<string | undefined>;
@@ -111,6 +162,8 @@ export class BullMQTaskBridge {
   constructor(options: BullMQTaskBridgeOptions) {
     this.client = options.client;
     this.events = options.events;
+    this.bullQueue = options.queue;
+    this.runtimeScope = options.runtimeScope?.trim() ?? '';
     // JavaScript callers get no compile-time check, so refuse at construction
     // rather than at the first completed job.
     if (
@@ -124,17 +177,19 @@ export class BullMQTaskBridge {
       );
     }
     this.terminalProjection = options.terminalProjection;
+    this.aggregateProgress = options.aggregate?.progress === 'terminal-items';
+    this.aggregateTerminal = options.aggregate?.terminal ?? 'manual';
     this.progress = options.progress ?? defaultProgress;
     this.isTerminalFailure = options.isTerminalFailure;
     this.resultReference = options.resultReference;
     this.failureReason = options.failureReason ?? defaultFailureReason;
     this.onError = options.onError;
     this.listeners = [
-      ['waiting', (event) => this.run(event, () => this.queue(event.jobId))],
-      ['active', (event) => this.run(event, () => this.start(event.jobId))],
-      ['progress', (event) => this.run(event, () => this.reportProgress(event))],
-      ['completed', (event) => this.run(event, () => this.complete(event))],
-      ['failed', (event) => this.run(event, () => this.failIfTerminal(event))],
+      ['waiting', (event) => this.run(event, () => this.project('waiting', event))],
+      ['active', (event) => this.run(event, () => this.project('active', event))],
+      ['progress', (event) => this.run(event, () => this.project('progress', event))],
+      ['completed', (event) => this.run(event, () => this.project('completed', event))],
+      ['failed', (event) => this.run(event, () => this.project('failed', event))],
     ];
     for (const [name, listener] of this.listeners) {
       this.events.on(name, listener);
@@ -169,9 +224,12 @@ export class BullMQTaskBridge {
       snapshot = await this.client.createTaskExecution(snapshot.id, {
         id: binding.executionId,
         runtime: 'bullmq',
+        ...(binding.itemKey ? { itemKey: binding.itemKey } : {}),
+        ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {}),
       });
       snapshot = await this.client.bindTaskExecution(binding.executionId, {
         runtime: 'bullmq',
+        ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {}),
         externalId: binding.jobId,
       });
     } catch (error) {
@@ -183,6 +241,95 @@ export class BullMQTaskBridge {
       }
     }
     return this.ensureTask(snapshot.id, 'queued');
+  }
+
+  /**
+   * Reserves the durable Task/Execution before adding the BullMQ job, then
+   * binds and queues it. Repeating with the same IDs is safe after a crash.
+   */
+  async dispatch(input: BullMQTaskDispatch): Promise<TaskSnapshot> {
+    if (!this.bullQueue) {
+      throw new TypeError('BullMQTaskBridge dispatch requires a queue');
+    }
+    if (!this.runtimeScope) {
+      throw new TypeError('BullMQTaskBridge dispatch requires runtimeScope');
+    }
+    const snapshot = await this.reserve(input);
+    await this.bullQueue.add(input.job.name, input.job.data, {
+      ...(input.job.options ?? {}),
+      jobId: input.jobId,
+    });
+    const execution = await this.client.getTaskExecution(input.executionId);
+    if (execution.state === 'pending_dispatch') {
+      await this.client.bindTaskExecution(input.executionId, {
+        runtime: 'bullmq',
+        runtimeScope: this.runtimeScope,
+        externalId: input.jobId,
+      });
+    }
+    return this.ensureTask(snapshot.id, 'queued');
+  }
+
+  /**
+   * Reserves every fan-out item before dispatching any job. This makes the
+   * expected item set durable and lets a repeated call recover a partial
+   * dispatch without inventing another Task or attempt.
+   */
+  async dispatchMany(inputs: BullMQTaskDispatch[]): Promise<TaskSnapshot> {
+    if (inputs.length === 0) {
+      throw new RangeError('dispatchMany requires at least one item');
+    }
+    const taskId = inputs[0]?.task.id;
+    if (!taskId || inputs.some((input) => input.task.id !== taskId)) {
+      throw new TypeError('dispatchMany items must belong to one Task');
+    }
+    for (const input of inputs) {
+      await this.reserve(input);
+    }
+    let snapshot: TaskSnapshot | undefined;
+    for (const input of inputs) {
+      snapshot = await this.dispatch(input);
+    }
+    if (!snapshot) {
+      throw new Error('dispatchMany produced no Task snapshot');
+    }
+    return snapshot;
+  }
+
+  private async reserve(binding: BullMQTaskBinding): Promise<TaskSnapshot> {
+    let snapshot: TaskSnapshot;
+    try {
+      snapshot = await this.client.getTask(binding.task.id);
+    } catch (error) {
+      if (!isCode(error, 'RHINOQ_TASK_NOT_FOUND')) {
+        throw error;
+      }
+      snapshot = await this.client.createTask(binding.task);
+    }
+    const existing = await this.find(binding.jobId);
+    if (existing) {
+      if (existing.taskId !== snapshot.id) {
+        throw new Error(
+          `BullMQ job ${binding.jobId} is already bound to Task ${existing.taskId}`,
+        );
+      }
+      return snapshot;
+    }
+    try {
+      return await this.client.createTaskExecution(snapshot.id, {
+        id: binding.executionId,
+        runtime: 'bullmq',
+        ...(binding.itemKey ? { itemKey: binding.itemKey } : {}),
+        ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {}),
+        externalId: binding.jobId,
+      });
+    } catch (error) {
+      const raced = await this.find(binding.jobId);
+      if (!raced || raced.taskId !== snapshot.id) {
+        throw error;
+      }
+      return this.client.getTask(snapshot.id);
+    }
   }
 
   /**
@@ -209,6 +356,26 @@ export class BullMQTaskBridge {
         if (observation.terminal) {
           await this.fail(observation);
         }
+    }
+  }
+
+  /**
+   * Awaitable event projection. QueueEvents listeners use the same path, but
+   * applications and tests can await this method when they need proof that an
+   * observation is durable before continuing.
+   */
+  async project(event: QueueEvent, observation: BullMQEvent): Promise<void> {
+    switch (event) {
+      case 'waiting':
+        return this.queue(observation.jobId);
+      case 'active':
+        return this.start(observation.jobId);
+      case 'progress':
+        return this.reportProgress(observation);
+      case 'completed':
+        return this.complete(observation);
+      case 'failed':
+        return this.failIfTerminal(observation);
     }
   }
 
@@ -286,6 +453,7 @@ export class BullMQTaskBridge {
     }
 
     if (this.terminalProjection === 'execution-only') {
+      await this.updateAggregate(execution.taskId);
       return;
     }
     // One job is the whole Task here, so its output is also the Task's.
@@ -316,12 +484,56 @@ export class BullMQTaskBridge {
     await this.ensureExecution(execution.id, 'failed', this.failureReason(event));
     if (this.terminalProjection === 'single-execution') {
       await this.ensureTask(execution.taskId, 'failed');
+    } else {
+      await this.updateAggregate(execution.taskId);
     }
+  }
+
+  private async updateAggregate(taskId: string): Promise<void> {
+    if (!this.aggregateProgress && this.aggregateTerminal === 'manual') {
+      return;
+    }
+    await this.converge(async () => {
+      let task = await this.client.getTask(taskId);
+      const latest = latestExecutions(task.executions);
+      const total = latest.length;
+      if (total === 0) {
+        return;
+      }
+      const terminal = latest.filter((execution) =>
+        execution.state === 'succeeded' ||
+        execution.state === 'failed' ||
+        execution.state === 'cancelled');
+      if (
+        this.aggregateProgress &&
+        (task.state === 'running' || task.state === 'cancel_requested') &&
+        !sameProgress(task.progress, { completed: terminal.length, total })
+      ) {
+        task = await this.client.reportTaskProgress(
+          task.id,
+          task.entityVersion,
+          { completed: terminal.length, total },
+        );
+      }
+      if (terminal.length !== total || this.aggregateTerminal === 'manual') {
+        return;
+      }
+      const succeeded = terminal.filter((execution) =>
+        execution.state === 'succeeded').length;
+      const target = this.aggregateTerminal === 'all-succeeded'
+        ? (succeeded === total ? 'succeeded' : 'failed')
+        : (succeeded > 0 ? 'succeeded' : 'failed');
+      await this.ensureTask(task.id, target);
+    });
   }
 
   private async find(jobId: string) {
     try {
-      return await this.client.lookupTaskExecution('bullmq', jobId);
+      return await this.client.lookupTaskExecution(
+        'bullmq',
+        jobId,
+        this.runtimeScope,
+      );
     } catch (error) {
       if (isCode(error, 'RHINOQ_EXECUTION_NOT_FOUND')) {
         return undefined;
@@ -414,20 +626,48 @@ function sameProgress(current: TaskProgress, next: TaskProgress): boolean {
 }
 
 function defaultProgress(event: BullMQEvent): TaskProgress | undefined {
-  if (typeof event.data === 'number' && Number.isInteger(event.data) && event.data >= 0) {
-    return { completed: event.data };
+  if (typeof event.data === 'number') {
+    throw new TypeError(
+      'BullMQ numeric progress is ambiguous. Configure bullMQCountProgress ' +
+        'for completed-item counts or bullMQPercentageProgress for percentages.',
+    );
   }
-  if (!isRecord(event.data) || !isNonNegativeInteger(event.data.completed)) {
+  return structuredProgress(event.data);
+}
+
+/** Maps an explicit non-negative integer to an indeterminate completed count. */
+export function bullMQCountProgress(event: BullMQEvent): TaskProgress | undefined {
+  if (!isNonNegativeInteger(event.data)) {
+    return structuredProgress(event.data);
+  }
+  return { completed: event.data };
+}
+
+/** Maps an explicit integer percentage in the inclusive 0..100 range. */
+export function bullMQPercentageProgress(event: BullMQEvent): TaskProgress | undefined {
+  if (
+    typeof event.data !== 'number' ||
+    !Number.isInteger(event.data) ||
+    event.data < 0 ||
+    event.data > 100
+  ) {
+    return structuredProgress(event.data);
+  }
+  return { completed: event.data, total: 100 };
+}
+
+function structuredProgress(data: unknown): TaskProgress | undefined {
+  if (!isRecord(data) || !isNonNegativeInteger(data.completed)) {
     return undefined;
   }
-  const total = isNonNegativeInteger(event.data.total) ? event.data.total : undefined;
-  if (total !== undefined && total < event.data.completed) {
+  const total = isNonNegativeInteger(data.total) ? data.total : undefined;
+  if (total !== undefined && total < data.completed) {
     return undefined;
   }
   return {
-    completed: event.data.completed,
+    completed: data.completed,
     ...(total === undefined ? {} : { total }),
-    ...(typeof event.data.message === 'string' ? { message: event.data.message } : {}),
+    ...(typeof data.message === 'string' ? { message: data.message } : {}),
   };
 }
 
@@ -437,4 +677,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function latestExecutions(
+  executions: TaskSnapshot['executions'],
+): TaskSnapshot['executions'] {
+  const latest = new Map<string, TaskSnapshot['executions'][number]>();
+  for (const execution of executions) {
+    const key = execution.itemKey ?? execution.id;
+    const current = latest.get(key);
+    if (!current || execution.attempt > current.attempt) {
+      latest.set(key, execution);
+    }
+  }
+  return [...latest.values()];
 }

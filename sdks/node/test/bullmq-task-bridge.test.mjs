@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { BullMQTaskBridge } from '../dist/index.js';
+import {
+  BullMQTaskBridge,
+  bullMQCountProgress,
+  bullMQPercentageProgress,
+} from '../dist/index.js';
 
 // QueueEvents re-delivers `progress` after a reconnect, so a fan-out sees the
 // same payload many times. The bridge must recognise its own last write instead
@@ -100,11 +104,46 @@ test('the bridge refuses to guess whether one job is the whole Task', () => {
   );
 });
 
+test('the bridge refuses to guess the unit of numeric BullMQ progress', async () => {
+  const errors = [];
+  const harness = newHarness({
+    progress: { completed: 0 },
+    onError: (error) => errors.push(error),
+  });
+
+  harness.emit('progress', { jobId: 'bull-job-1', data: 42 });
+  await harness.settleErrors(errors);
+
+  assert.match(errors[0].message, /numeric progress is ambiguous/);
+  assert.deepEqual(harness.task.progress, { completed: 0 });
+  assert.deepEqual(harness.calls, []);
+});
+
+test('numeric BullMQ progress requires an explicit count or percentage mapper', async () => {
+  const count = newHarness({
+    progress: { completed: 0 },
+    progressMapper: bullMQCountProgress,
+  });
+  count.emit('progress', { jobId: 'bull-job-1', data: 7 });
+  await count.settle(4);
+  assert.deepEqual(count.task.progress, { completed: 7 });
+
+  const percentage = newHarness({
+    progress: { completed: 0 },
+    progressMapper: bullMQPercentageProgress,
+  });
+  percentage.emit('progress', { jobId: 'bull-job-1', data: 42 });
+  await percentage.settle(4);
+  assert.deepEqual(percentage.task.progress, { completed: 42, total: 100 });
+});
+
 function newHarness({
   progress,
   terminalProjection = 'single-execution',
   resultReference,
   isTerminalFailure,
+  progressMapper,
+  onError,
 }) {
   const calls = [];
   const task = {
@@ -195,6 +234,8 @@ function newHarness({
     terminalProjection,
     ...(resultReference ? { resultReference } : {}),
     ...(isTerminalFailure ? { isTerminalFailure } : {}),
+    ...(progressMapper ? { progress: progressMapper } : {}),
+    ...(onError ? { onError } : {}),
   });
 
   return {
@@ -215,6 +256,15 @@ function newHarness({
       }
       // Give a stray extra request a chance to appear before asserting.
       await new Promise((resolve) => setTimeout(resolve, 10));
+    },
+    async settleErrors(errors, timeoutMs = 1000) {
+      const deadline = Date.now() + timeoutMs;
+      while (errors.length === 0) {
+        if (Date.now() > deadline) {
+          throw new Error('bridge did not report its progress mapping error');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
     },
   };
 }
