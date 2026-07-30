@@ -31,6 +31,11 @@ jobs:
       - run: gofmt -d cmd internal tests pkg examples
       - run: go vet ./...
       - run: go test -race -count=1 -shuffle=on ./...
+      - name: Validate release archive configuration
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
 
   postgres:
     name: PostgreSQL integration harness
