@@ -1,6 +1,6 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.4",
   "description": "Typed Node.js Task, BullMQ lifecycle and worker client for RhinoQ",
   "license": "Apache-2.0",
   "repository": {
@@ -22,6 +22,9 @@
       "import": "./dist/index.js",
       "require": "./dist/cjs/index.js"
     }
+  },
+  "bin": {
+    "rhinoq-task": "./dist/cli/task-migrate.js"
   },
   "files": [
     "dist",
@@ -45,7 +48,12 @@
     "release:check": "node scripts/verify-release.mjs"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.0",
     "pg": "^8.22.0",
     "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "pg": ">=8.11.0"
   }
 }

@@ -1,9 +1,13 @@
 export * from './gateway/types.js';
 export * from './gateway/client.js';
 export * from './postgres/producer.js';
+export * from './postgres/task-client.js';
+export * from './postgres/task-schema.js';
 export * from './worker/errors.js';
 export * from './worker/worker.js';
 export * from './bullmq/task-bridge.js';
+export * from './tasks/client.js';
+export * from './tasks/http.js';
 export * from './tasks/watch.js';
 
 // Development-preview aliases for the casing used by the original private

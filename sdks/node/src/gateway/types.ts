@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = '1.0';
-export const SDK_VERSION = '0.1.0-dev';
+export const SDK_VERSION = '0.1.0-beta.4';
 export const MAX_CLAIM_BATCH = 1000;
 
 export const CLIENT_CAPABILITIES = [
@@ -60,8 +60,11 @@ export interface TaskProgress {
 
 export interface TaskExecutionSummary {
   id: string;
+  /** Stable logical item within a fan-out; retries share the same item key. */
+  itemKey?: string;
   attempt: number;
   runtime: string;
+  runtimeScope?: string;
   state: string;
   version: number;
   /**
@@ -77,6 +80,7 @@ export interface TaskExecutionSummary {
 /** One item's outcome in a fan-out, read separately from the snapshot. */
 export interface TaskExecutionResult {
   executionId: string;
+  itemKey?: string;
   attempt: number;
   state: string;
   reference?: string;
@@ -95,6 +99,10 @@ export interface TaskExecutionResults {
 export interface TaskExecutionCreateRequest {
   id: string;
   runtime: string;
+  itemKey?: string;
+  runtimeScope?: string;
+  /** Reserve a deterministic runtime identity before dispatch. */
+  externalId?: string;
 }
 
 export type TaskCancellationStatus =
@@ -113,6 +121,7 @@ export interface TaskCancellation {
 
 export interface TaskExecutionBinding {
   runtime: string;
+  runtimeScope?: string;
   jobId?: string;
   externalId?: string;
 }
@@ -121,7 +130,11 @@ export interface TaskExecutionBinding {
 export interface TaskExecution {
   id: string;
   taskId: string;
+  itemKey?: string;
+  attempt?: number;
   runtime: string;
+  runtimeScope?: string;
+  externalId?: string;
   state: string;
   version: number;
 }

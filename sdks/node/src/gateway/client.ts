@@ -159,13 +159,21 @@ export class RhinoQClient {
     );
   }
 
-  async lookupTaskExecution(runtime: string, externalId: string): Promise<TaskExecution> {
+  async lookupTaskExecution(
+    runtime: string,
+    externalId: string,
+    runtimeScope?: string,
+  ): Promise<TaskExecution> {
     if (!runtime?.trim() || !externalId?.trim()) {
       throw new TypeError('execution runtime and external id are required');
     }
     return this.send<TaskExecution>(
       'GET',
-      `/v1/task-executions/lookup?${queryString({ runtime, externalId })}`,
+      `/v1/task-executions/lookup?${queryString({
+        runtime,
+        externalId,
+        runtimeScope,
+      })}`,
     );
   }
 
