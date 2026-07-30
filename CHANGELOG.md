@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- Prepared `@rhinoq/node@0.1.0-beta.4` to remove the measured Node adoption
+  tax. A fresh Task-only install now creates exactly three tables in the
+  dedicated `rhinoq_task` schema and uses the application's existing `pg.Pool`
+  through `PostgresTaskClient`; no Gateway process, Go toolchain, operator
+  token, owner token or duplicate database URL is required. The package ships
+  the `rhinoq-task` migration CLI, owner-scoped application HTTP handler and
+  browser client.
+
+- Added `installPostgresTaskProfile(pool)` for one-call, advisory-lock protected
+  migration plus embedded client creation. The CLI now serves `--help` and
+  `--version` without trying to connect to PostgreSQL.
+
+- Added BullMQ reserve-before-enqueue `dispatch()`/`dispatchMany()`, scoped
+  runtime identity, per-item retry identity (`itemKey`, `attempt`), awaitable
+  event projection and explicit fan-out aggregation policies. A failed Redis
+  add leaves `pending_dispatch`; repeating the same deterministic dispatch
+  resumes it without creating another Task or Execution.
+
+- Numeric BullMQ progress is no longer guessed to be an item count. BullMQ
+  permits number or object progress and applications commonly use a number as
+  a percentage. The default now rejects this ambiguous shape; callers select
+  `bullMQCountProgress` or `bullMQPercentageProgress`, while structured
+  `{completed,total?,message?}` progress remains automatic.
+
+- Prepared `@rhinoq/node@0.1.0-beta.3` as the first candidate containing the
+  real-adopter contract corrections below. Release identity now agrees across
+  `package.json`, the lockfile and the Gateway handshake's `SDK_VERSION`, and
+  the release check fails if they drift. This entry does not claim that
+  `beta.3` has been published.
+
+- Release archives now build both the migration/operations CLI (`rhinoq`) and
+  the optional HTTP Gateway (`rhinoq-agent`) for Linux, macOS and Windows on
+  amd64/arm64. A Node evaluator no longer has to install Go merely to start the
+  Task API after a tagged release. CI validates the GoReleaser configuration
+  before a tag can be cut. No container image is published yet.
+
 - **Breaking (`@rhinoq/node`):** `BullMQTaskBridge` now requires
   `terminalProjection`; there is no default. Only the application knows whether
   one BullMQ job is the whole user-facing Task, and the previous

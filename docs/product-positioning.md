@@ -79,8 +79,9 @@ migration cost for existing-worker teams, not claim feature parity. See
 - Result references are read separately from a polling snapshot.
 - Native Go/PostgreSQL runtime and the optional verification foundation have
   tests and real-PostgreSQL coverage.
-- The source-only Node SDK has a tested BullMQ lifecycle bridge for explicitly
-  tracked, application-owned jobs.
+- The Node evaluation SDK has a tested BullMQ lifecycle bridge for explicitly
+  tracked, application-owned jobs. `beta.2` is published; the embedded
+  Task-only `beta.4` contract remains a release candidate on `main`.
 
 ## Claims we must not make yet
 

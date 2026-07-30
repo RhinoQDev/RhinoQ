@@ -10,7 +10,7 @@ nằm ở ADR-0014 trong [`../.ai/DECISIONS.md`](../.ai/DECISIONS.md).
 ```text
 Task 1:N Execution
 Execution 0:1 native Job
-Execution 0:1 external runtime reference
+Execution 0:1 scoped external runtime reference
 Execution 0:N ProviderOperation        (planned)
 Task 0:1 VerifiedTaskPolicy            (planned)
 ```
@@ -18,6 +18,8 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 - `Task` là thực thể user-facing: type, owner, lifecycle, progress, result và
   version dùng để tạo snapshot.
 - `Execution` là một attempt thực thi Task. Retry tạo Execution mới.
+- Fan-out dùng `itemKey`; `attempt` tăng riêng cho từng item, không tăng theo
+  vị trí item trong batch.
 - `Job` là primitive của native Go/PostgreSQL runtime hiện có.
 - Runtime ngoài như BullMQ dùng stable external execution ID, không giả vờ có
   lease/fencing guarantee của native Job.
@@ -39,6 +41,8 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | Lifecycle/progress commands | implemented, unit-tested | expected-version fencing; completed không giảm và known total không đổi |
 | Idempotent duplicate commands | implemented, contract-tested | progress trùng giá trị và cancellation request lặp không tăng `entityVersion`, không ghi store, không conflict |
 | PostgreSQL store và migrations 015–017 | implemented, real-DB contract passed | optimistic updates; cancellation outcome; per-attempt result/failure reason; concurrent per-Task attempt allocation has no gaps/duplicates |
+| Task-only PostgreSQL profile | implemented, real-DB tested | đúng 3 bảng trong `rhinoq_task`; command functions; item-scoped attempt; runtime scope; không FK tới native Job |
+| Embedded Node Task client | implemented, real-DB tested | dùng `pg.Pool` sẵn có, không Gateway/token/Go toolchain |
 | Public Task facade | implemented, unit-tested | create/read/progress/result, create/bind Execution và explicit lifecycle commands |
 | Polling delivery | implemented, integration-tested | HTTP `POST/GET /v1/tasks`; typed Node client; stale write trả typed `409` |
 | Framework-neutral Node Task watcher | implemented, SDK-tested | non-overlapping polling; only newer aggregate versions are yielded; terminal/abort stop |
@@ -128,7 +132,9 @@ handler — vá bằng read-then-skip ở edge sẽ race với writer đồng th
 Result payload không nằm trong Snapshot. Application ghi một storage reference
 qua version-fenced command; client đọc reference bằng endpoint riêng. Cách này
 giữ polling response nhỏ và tránh gửi lặp storage location ở mỗi poll. RhinoQ
-chưa proxy/download payload và chưa áp tenant-level authorization.
+chưa proxy/download payload. Owner-scoped credential đã giới hạn Task/result
+theo `ownerId`, nhưng organization membership/RBAC và authorization model đa
+tenant hoàn chỉnh chưa có.
 
 ## Kết quả từng item
 
@@ -165,6 +171,11 @@ Runtime binding chỉ được ghi một lần:
 
 - `native` yêu cầu `jobId` và không nhận `externalId`;
 - runtime ngoài yêu cầu `externalId` và không nhận `jobId`.
+
+Task-only profile dùng identity `(runtime, runtimeScope, externalId)`. BullMQ
+job ID chỉ unique trong một queue, vì vậy `runtimeScope` phải là queue name
+hoặc namespace ổn định. Adapter mới reserve identity trước `queue.add()`; crash
+để lại `pending_dispatch` và cùng deterministic IDs có thể tiếp tục.
 
 Public Go/HTTP/Node API đã cho phép tạo Execution rồi bind stable runtime
 reference. API này chưa tự enqueue native Job hoặc gọi BullMQ; adapter phải làm

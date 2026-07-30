@@ -12,10 +12,15 @@ Phần lớn dự án không cần.
 | Producer và worker đều viết bằng Go | embedded `*rhinoq.Client` |
 | Service khác ngôn ngữ chỉ cần tạo job | `rhinoq.enqueue()` trong transaction SQL |
 | CLI, migration, doctor, Rule scheduler | CLI kết nối PostgreSQL trực tiếp |
+| Node app chỉ cần Task layer cho queue sẵn có | `PostgresTaskClient` + Task-only schema |
 | Worker không phải Go cần claim/heartbeat/effect | HTTP Gateway |
 
 Chỉ thêm Gateway ở dòng cuối. Nó tạo thêm một process, token, health probes và
 deployment lifecycle cần vận hành.
+
+Task-only Node path tạo đúng ba bảng trong `rhinoq_task` bằng `npx rhinoq-task`
+và dùng pool sẵn có của application. Nó không áp migrations 001–017, không cần
+Go toolchain và không dùng operator/owner token.
 
 ## Vì sao Gateway vẫn tồn tại?
 
@@ -40,18 +45,26 @@ Node.js SDK tham chiếu nằm ở [`sdks/node`](../sdks/node). SDK gồm
 
 ## Task API polling-first
 
-Gateway hiện có tám endpoint Task đi qua public facade và Application:
+Gateway hiện có các endpoint Task/Execution sau đi qua public facade và
+Application:
 
 | Endpoint | Ý nghĩa |
 |---|---|
 | `POST /v1/tasks` | tạo Task và trả Snapshot v1 |
 | `GET /v1/tasks/{id}` | đọc Snapshot mới nhất để BE/FE polling |
 | `POST /v1/tasks/{id}/state` | lifecycle command với `expectedVersion` |
+| `POST /v1/tasks/{id}/cancel` | owner/operator yêu cầu hủy an toàn |
+| `POST /v1/tasks/{id}/cancellation` | runtime ghi outcome hủy |
 | `POST /v1/tasks/{id}/progress` | progress command với `expectedVersion` |
 | `POST /v1/tasks/{id}/result` | ghi result reference với `expectedVersion` |
 | `GET /v1/tasks/{id}/result` | đọc result reference riêng khỏi Snapshot |
+| `GET /v1/tasks/{id}/execution-results` | đọc result reference theo từng attempt |
 | `POST /v1/tasks/{id}/executions` | tạo attempt cho native/external runtime |
+| `GET /v1/task-executions/lookup` | tìm Execution bằng runtime/external ID |
+| `GET /v1/task-executions/{id}` | đọc Execution cho adapter/operator |
 | `POST /v1/task-executions/{id}/bind` | bind một lần tới `jobId` hoặc `externalId` |
+| `POST /v1/task-executions/{id}/state` | ghi lifecycle/failure reason của attempt |
+| `POST /v1/task-executions/{id}/result` | ghi result reference của attempt |
 
 Snapshot có `schemaVersion` cho wire compatibility và aggregate
 `entityVersion` tăng theo Task mutation lẫn create/bind Execution. Client phải
@@ -61,8 +74,9 @@ command tiếp theo.
 
 Đây chưa phải realtime API. Không có SSE/WebSocket và Gateway không proxy result
 payload. `hasResult` chỉ báo availability; endpoint result trả storage
-reference. Gateway hiện dùng một bearer token cấp deployment và chưa có
-tenant-level authorization, nên không đưa endpoint này ra public Internet.
+reference. Gateway có credential owner-scoped cho Task read/result/cancel,
+nhưng chưa có organization membership/RBAC hay auth model đa tenant hoàn
+chỉnh, nên không đưa endpoint này ra public Internet.
 
 ## Khi chỉ cần transactional enqueue
 
@@ -122,8 +136,9 @@ quyền enqueue mọi job name.
 
 ## Khởi động Gateway
 
-Binary chính thức đã đăng ký sẵn driver `pgx`. Chuẩn bị schema bằng CLI trước,
-rồi đặt token:
+Binary chính thức đã đăng ký sẵn driver `pgx`. Tagged release kế tiếp được cấu
+hình để đặt cả `rhinoq` và `rhinoq-agent` trong archive; trước khi tag đó tồn
+tại, vẫn phải build từ source. Chuẩn bị schema bằng CLI trước, rồi đặt token:
 
 ```bash
 export RHINOQ_DATABASE_URL='postgres://...'
@@ -279,7 +294,8 @@ restart loop.
   audit; xem [security audit](./security-audit-2026-07-29.md).
 - Chưa có gRPC/Unix socket, streaming claim hoặc compression.
 - Node.js là SDK preview duy nhất; chưa cam kết SDK Python/Java/.NET.
-- Package `@rhinoq/node` chưa phát hành lên npm; hiện chỉ build/pack từ source.
+- `@rhinoq/node@0.1.0-beta.2` đã có trên npm `next`; Task-only `beta.4` trên
+  `main` vẫn phải build/pack từ source cho tới khi phát hành.
 - HTTP Gateway không phải control plane và không thay thế database backup,
   restricted roles hay network policy.
 

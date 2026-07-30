@@ -33,17 +33,18 @@ internally; this document is about acting on it.
 
 ## The structural asymmetry
 
-A Node application can enqueue through RhinoQ **without running the Gateway**:
+A Node application could enqueue through RhinoQ **without running the Gateway**:
 `PostgresProducer` executes on the application's own PostgreSQL pool and can
 join its transaction.
 
-A Node application cannot manage **Tasks** without the Gateway. The Go client
-can — `rhinoq.NewPostgres(db)` is an embedded facade over a `*sql.DB`, and it
-is what `tests/postgres` exercises.
+At the time of the probe, a Node application could not manage **Tasks** without
+the Gateway. The Go client could. The `beta.4` candidate now closes that
+asymmetry with `PostgresTaskClient` and the isolated three-table Task profile.
+The paragraph below remains the measured reason for that change, not a claim
+that the new economics have already passed re-evaluation.
 
-So the runtime that is not the target audience gets the embedded path, and the
-runtime that *is* the target audience — BullMQ is a Node ecosystem — is the one
-required to run a second process.
+Previously, the runtime that is the target audience — BullMQ is a Node
+ecosystem — was the one required to run a second process.
 
 Three of the six costs listed under "Complexity RhinoQ adds" in the adopter
 report exist only because of this asymmetry:
@@ -80,11 +81,27 @@ estimates below are estimates.
 
 ### P0 — these change the verdict
 
-1. **Embedded Node Task client.** Peer of `PostgresProducer`: runs on the
+1. **Embedded Node Task client — implemented on `main`, remeasurement pending.**
+   Peer of `PostgresProducer`: runs on the
    application's PostgreSQL pool, tables in the application's own database, no
    Gateway process, no operator token. This is the difference between a
    platform you install and a library you import, and for a Node/BullMQ team it
    is the whole decision. Everything else on this list is smaller.
+
+   This is an architecture decision, not permission to port Task transition
+   rules into TypeScript. A direct-SQL client that reimplements monotonic
+   progress, cancellation outcomes and version fencing would create a second
+   correctness authority and violate the current Go-authoritative boundary.
+   The implementation must first choose and record one reusable authority
+   (for example versioned database commands with cross-language parity, or a
+   distributable embedded/local Go boundary) and prove it against the same
+   adversarial contract suite.
+
+   `PostgresTaskClient` now calls versioned `rhinoq_task.*` commands and the
+   Task-only migration creates three isolated tables. This removes the Gateway
+   from the candidate architecture; it does **not** change the adopter verdict
+   until the same real application deletes the old Gateway/client plumbing and
+   produces a new LOC/process/credential count.
 
 2. **Delete code in a real application and count it.** Wire the module into the
    two call sites in `api-mkt-video-scraper`, then remove what becomes dead.
@@ -105,7 +122,7 @@ estimates below are estimates.
 4. **Publish `rhinoq-agent` as a binary and an image.** Building a Go binary
    from source is a hard stop for a Node team evaluating on a Tuesday
    afternoon.
-5. **Cut `0.1.0-beta.3` and move the `latest` dist-tag.** `terminalProjection`
+5. **Cut `0.1.0-beta.4` and move the `latest` dist-tag.** `terminalProjection`
    is now required and the wire contract gained per-execution fields, so `main`
    and the published `0.1.0-beta.2` share a version number but not an API.
 6. **Cancellation needs hands, not just a state machine.** `cancel_requested`,

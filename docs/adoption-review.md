@@ -1,6 +1,7 @@
 # Adoption and usability review
 
-Reviewed: 2026-07-29.
+Reviewed: 2026-07-30. Superseded for priority ordering by
+[the adoption gap](./adoption-gap.md); retained as the broader readiness review.
 
 This review asks whether a team can evaluate RhinoQ as a user-facing Task layer
 for existing background work. It separates the current implementation from the
@@ -11,8 +12,8 @@ intended existing-worker adoption path.
 | Journey | Current state | Verdict |
 |---|---|---|
 | Go Task contract | public facade, PostgreSQL store and versioned snapshots | usable for controlled evaluation |
-| HTTP/Node Task polling | typed source-only Node client and Gateway endpoints | technically usable; not published or tenant-safe |
-| Existing BullMQ worker | external Execution reference can be written manually | not an adapter; no-cutover promise unproven |
+| Embedded Node Task polling | three-table profile, application `pg.Pool`, owner-scoped handler/browser client | implemented and real-DB tested; adopter remeasurement pending |
+| Existing BullMQ worker | narrow observe/reconcile bridge with explicit fan-out projection | adapter contract exists; code-reduction promise remains unproven |
 | Native Go/PostgreSQL runtime | transactional enqueue, worker and operational tooling | usable for repository evaluation |
 | Verified Tasks | Rules, Findings and read-only investigation | optional evaluation path, not the main onboarding path |
 | Frontend experience | no React hook, Task Center, realtime or reconnect test | not ready |
@@ -33,14 +34,14 @@ prerequisite for someone who only needs import/export progress.
 
 ### P0 — required before recruiting existing-worker design partners
 
-1. Ship one BullMQ reference adapter that creates/binds/observes Executions
-   without moving correctness logic into an SDK or requiring a handler rewrite.
-2. Add a two-task reference application and measure endpoints/files/LOC removed
+1. Re-run the real adopter against the implemented embedded Node Task profile
+   and verify that Gateway/process/credential removal produces net code deletion.
+2. Wire the existing two-task probe into real call sites and measure
+   endpoints/files/LOC removed
    compared with hand-built task plumbing.
-3. Define tenant/user scope and authorization before exposing Task reads,
-   cancellation or result references to end users.
-4. Publish a tagged Node package and prebuilt CLI binaries; the SDK is currently
-   tested from source only.
+3. Run browser reload, delayed-response, duplicate-event and cancellation-race
+   tests against the real application.
+4. Publish the Task-only `beta.4` package after clean-install evidence.
 
 ### P1 — required for a credible frontend task experience
 

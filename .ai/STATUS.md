@@ -11,7 +11,7 @@ existing runtime/Verified Tasks foundation from the incremental Task facade.
 | VERIFY | 4/5 | fenced Effect Ledger, versioned Rules, Explain gate, bounded evaluation and crash-safe periodic scheduling exist; external execution correlation and signal-first verification remain |
 | RECOVER | 5/6 | Rule observations manage persistent Findings, Needs Attention merges execution/effect/outcome attention, and the business-subject timeline exists; reverse search from an external execution remains |
 | ADOPTION | 1/4 | bounded scan and observe-only integrity evaluation exist; existing-queue recipe, business-key verification command and no-cutover Task quickstart remain |
-| DX | 8/10 | embedded Go quickstart, topic-aware terminal help plus a complete CLI reference, direct PostgreSQL migration/doctor/operations CLI, `rhinoq explain`, an explained/tested Node producer/worker/operator preview, bounded scan and a local read-only Workbench exist; npm/CLI releases, business-key timeline, Task SDK and framework integration remain |
+| DX | 9/10 | embedded Go quickstart, direct CLI tooling, `rhinoq explain`, a published Node preview, the three-table embedded Node Task candidate, application HTTP/browser helpers and a local read-only Workbench exist; beta.4 publication, business-key timeline and framework-specific integration remain |
 | Infrastructure | 9/11 | configuration, health, metrics, checksum-tracked migration runner, real PostgreSQL tests, Rule budgets, audit chain, DB clock and SQL enqueue with invoking-login authorization exist; fault injection, retention/partitioning, restricted Rule role and benchmark evidence remain |
 
 ## Estimates
@@ -43,21 +43,20 @@ its code, tests, documentation and evidence agree.
   `docs/security-audit-2026-07-29.md` records the fallback audit and remaining
   coverage.
 - The Node SDK has an npm evaluation prerelease, but no tagged GitHub release;
-  non-Go adopters still need a separately distributed `rhinoq` CLI binary.
+  the next release is configured to archive both `rhinoq` and `rhinoq-agent`,
+  but those prebuilt binaries do not exist publicly until that tag succeeds.
 - The Go module path now matches the hosting repository, so `go get` resolves
   without a local `replace`, but no semver tag exists yet. Consumers resolve a
   branch pseudo-version and have no stability guarantee.
 - Needs Attention is unified, but business Findings still have no explicit
   source-system/job/queue correlation and therefore cannot be safely included
   in a queue-filtered view.
-- The BullMQ lifecycle bridge correlates explicitly tracked BullMQ jobs through
-  a durable runtime/external-ID lookup and can reconcile a state the application
-  reads for one known job after an offline gap. It does not dispatch, cancel,
-  model a retry as a new Execution, or discover queue work after an outage;
-  pg-boss, DBOS and custom runtime adapters do not exist.
-- Public Execution create/bind exists, but composed retry with command identity
-  and crash recovery across “new Execution → queued Task” is not implemented;
-  `QueueTask` is only a lifecycle primitive.
+- The BullMQ lifecycle bridge uses durable scoped runtime/external-ID identity.
+  The Task-only path reserves all Execution identities before `Queue.add()`,
+  resumes partially dispatched fan-out after a crash and models retries by
+  stable `itemKey` plus increasing `attempt`. It does not discover arbitrary
+  queue work after an outage or guess whether an active side effect is safe to
+  cancel; pg-boss, DBOS and custom runtime adapters do not exist.
 - Existing pre-runner RhinoQ schemas require a manual baseline workflow; the
   migration runner intentionally refuses to infer one.
 - The race detector cannot run in the current environment because the cgo

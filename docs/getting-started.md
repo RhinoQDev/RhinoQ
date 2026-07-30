@@ -13,10 +13,22 @@ availability and one or more execution attempts.
 
 - Go 1.25+ for the embedded API.
 - PostgreSQL 16 is the database version covered by the Task store contract.
-- Node.js 22+ only if evaluating the source-only Node Gateway client.
+- Node.js 22+ only if evaluating the Node Gateway client or BullMQ bridge.
 
 `NewInMemory()` is useful for a small contract experiment. Use PostgreSQL for
 durable Task data, after applying the repository migrations.
+
+For a Node application keeping its existing queue, prefer the isolated
+Task-only path instead of the full Go migration chain:
+
+```bash
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.4.tgz pg
+RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
+```
+
+This candidate is not published yet; use the local tarball while evaluating
+`main`. It creates exactly three tables in `rhinoq_task` and reuses the
+application's `pg.Pool` through `PostgresTaskClient`.
 
 ```bash
 go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
@@ -126,7 +138,9 @@ if snapshot.HasResult {
 }
 ```
 
-The HTTP Gateway exposes the same polling-first contract. The typed Node client
+The embedded Node client exposes the Task contract directly through the
+application's PostgreSQL pool. The legacy/full HTTP Gateway exposes the same
+polling-first contract. The typed Node client
 has `createTask`, `getTask`, `transitionTask`, `reportTaskProgress`,
 `attachTaskResult`, `createTaskExecution` and `bindTaskExecution`; see
 [Node.js integration](./nodejs.md). Gateway deployment is not end-user auth:
@@ -149,6 +163,9 @@ It does not yet prove the product's intended adoption promise:
 - result references are not proxied or downloaded by RhinoQ.
 
 Read [Task Platform](./task-platform.md) for the exact implementation status.
+For a second real application, follow the
+[existing-queue evaluation protocol](./evaluation-existing-queue.md) so the
+feedback measures adoption cost instead of only confirming happy-path API calls.
 
 ## Native runtime is a separate optional path
 

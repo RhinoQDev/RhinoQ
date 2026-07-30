@@ -1,9 +1,9 @@
 # Node.js integration
 
-> Status: development preview. The first evaluation package,
-> `@rhinoq/node@0.1.0-beta.1`, is published to npm. Pin that exact version for
-> an evaluation; do not put it in production automation or depend on `latest`.
-> See [releasing.md](./releasing.md) for the release boundary.
+> Status: development preview. `@rhinoq/node@0.1.0-beta.2` is published on the
+> npm `next` tag. The Task-only `0.1.0-beta.4` contract is prepared on `main`
+> but is not published yet. Pin an exact version and see
+> [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
 with two separate integration paths. Choose the smaller path that solves the
@@ -13,9 +13,10 @@ actual problem.
 |---|---|---|---:|
 | Add a job from Node.js | `PostgresProducer` | calls `rhinoq.enqueue()` through the application's existing `pg` connection | No |
 | Commit a business row and job atomically | `PostgresProducer` with the current transaction client | puts both writes in the same PostgreSQL transaction | No |
+| Create/update/poll user-facing Tasks | `PostgresTaskClient` with the application's `pg.Pool` | calls versioned `rhinoq_task.*` commands | No |
 | Run handlers in Node.js | `RhinoQWorker` | claims, heartbeats and reports results through the HTTP Gateway | Yes |
 | Inspect or control work from Node.js | `RhinoQClient` | calls the typed Gateway operator API | Yes |
-| Create, update or poll user-facing Tasks | `RhinoQClient` | calls the versioned Task HTTP API | Yes |
+| Legacy/full-store Task API | `RhinoQClient` | calls the versioned Gateway Task HTTP API | Yes |
 
 The Task API is polling-first. `createTask`, `getTask`, `transitionTask` and
 `reportTaskProgress` return `TaskSnapshot` with monotonic `entityVersion`.
@@ -31,7 +32,7 @@ aggregate Snapshot; they do not dispatch work themselves.
 Callers must pass that version on writes and ignore an older polling response.
 Realtime subscriptions and result-payload proxying are not implemented.
 
-The `beta.2` source also exports `watchTask()`, a framework-neutral async
+`beta.2` and later also export `watchTask()`, a framework-neutral async
 iterator for one Task. It performs non-overlapping polls, ignores snapshots at
 or below the highest rendered `entityVersion`, stops on terminal state by
 default and accepts an `AbortSignal`. Network and authorization failures are
@@ -88,7 +89,7 @@ Each command has a different purpose:
 | `npm run typecheck` | checks public TypeScript types without emitting JavaScript | none |
 | `npm test` | builds `src/` into `dist/`, then runs the Node test suite | `dist/` |
 | `npm run pack:check` | builds and shows which files would enter the package without creating an archive | `dist/` |
-| `npm pack` | creates the installable preview archive | `rhinoq-node-0.1.0-dev.tgz` |
+| `npm pack` | creates the installable preview archive | `rhinoq-node-0.1.0-beta.4.tgz` |
 
 `npm pack` is intentionally run from `sdks/node`. The older command
 `npm --prefix sdks/node pack` does not reliably change the package directory
@@ -98,21 +99,21 @@ Install the generated tarball and the PostgreSQL driver in the target Node
 application. Replace the example path with the absolute path on your machine:
 
 ```bash
-npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-dev.tgz pg
+npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.4.tgz pg
 ```
 
 Windows PowerShell example:
 
 ```powershell
-npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-dev.tgz pg
+npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.4.tgz pg
 ```
 
 Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
 not own or configure the application's connection pool.
 
-This source-install path is for contributing to the next prerelease. A stable
-npm package, tagged GitHub release and prebuilt `rhinoq` CLI binaries remain
-release blockers.
+This source-install path is the authoritative way to evaluate changes not yet
+published in `beta.2`. A stable npm package, tagged GitHub release and prebuilt
+`rhinoq` CLI binaries remain release blockers.
 
 ### Verify the installed package
 
@@ -128,9 +129,38 @@ Expected output:
 true
 ```
 
+## Preferred Task-only PostgreSQL path
+
+For an application that keeps BullMQ or another runtime, install only the
+three-table Task profile:
+
+```bash
+RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
+```
+
+```ts
+import {
+  createTaskRequestHandler,
+  installPostgresTaskProfile,
+} from '@rhinoq/node';
+
+const tasks = await installPostgresTaskProfile(appPool);
+const taskHandler = createTaskRequestHandler({
+  tasks,
+  ownerFromRequest: (request) => authenticateApplicationUser(request),
+});
+```
+
+`PostgresTaskClient` calls versioned PostgreSQL command functions; it does not
+copy transition or progress correctness into TypeScript. It reuses `appPool`,
+creates no process and requires no RhinoQ token. The application still owns
+its user authentication and result signing.
+
 ## Prepare PostgreSQL once
 
-The same checksum-tracked schema is used by Go and Node:
+The following full-schema path is only for native runtime/Verified Tasks or
+legacy Gateway evaluation. Task-only Node adopters should use `rhinoq-task`
+above.
 
 ### Bash, zsh or WSL
 
@@ -765,11 +795,13 @@ reproducible.
 
 ## Current limitations
 
-- The npm package and prebuilt CLI binaries are not released yet.
+- An npm evaluation package exists, but the `beta.4` candidate and prebuilt CLI
+  binaries are not released yet.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems. A NestJS *module* — DI
   wiring, lifecycle hooks — is still not provided; only `require()` works.
-- Node workers require the HTTP Gateway; there is no native Node lease engine.
+- Node workers for the native RhinoQ runtime require the HTTP Gateway; embedded
+  Task management does not.
 - NestJS integration and framework lifecycle hooks are not implemented.
 - Gateway multi-tenant isolation and per-job HTTP RBAC are not complete.
 - Async effect confirmation has no built-in webhook authentication or

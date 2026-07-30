@@ -92,9 +92,10 @@ claims. Their current limits are documented below and in
 | Capability | Status |
 |---|---|
 | Go Task facade; Task and Execution domains | implemented and tested |
-| PostgreSQL Task store and migrations 015–017 | implemented; real-PostgreSQL contract tested |
+| Task-only PostgreSQL profile | implemented and real-DB tested; exactly 3 tables in `rhinoq_task` |
+| Legacy full-store Task migrations 015–017 | retained for compatibility; not required by Task-only Node adopters |
 | Versioned HTTP polling snapshots | implemented and integration tested; includes owner metadata and cancellation outcome |
-| Typed Node Task client | `beta.1` published on npm; `beta.2` source adds a version-safe framework-neutral Task watcher |
+| Embedded Node Task client | `beta.4` candidate on `main`; reuses the application's `pg.Pool`, no Gateway/token |
 | Result-reference read/write API | implemented; payload proxy/download is not |
 | Native Go/PostgreSQL job runtime | implemented and tested |
 | Effect Ledger, Rules, Findings and read-only investigation | implemented as optional Verified Tasks foundation |
@@ -116,17 +117,77 @@ bridge restart. It can also reconcile one already-known Job state read by the
 application after an offline gap. This is a narrow lifecycle bridge, not
 drop-in BullMQ support.
 
-One job may terminate its Task only in the default `single-execution` mode.
+One job may terminate its Task only in the explicit `single-execution` mode.
 Fan-out applications must select `terminalProjection: 'execution-only'`: every
 item still advances its Execution, while the application completes or fails the
 aggregate Task only after the batch outcome is known. This prevents the first
 completed item from falsely completing an N-item Task without turning RhinoQ
-into a workflow engine.
+into a workflow engine. There is no default: omitting the option is an error.
 
 The Node `watchTask()` async iterator provides non-overlapping polling, yields
 only strictly newer aggregate versions, stops on terminal state by default and
 supports `AbortSignal`. It is delivery glue, not React state management or a
 realtime transport.
+
+### Task-only Node path
+
+A Node application with PostgreSQL does not need the Go Gateway or the other
+runtime/verification tables:
+
+```bash
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.4.tgz pg
+RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
+```
+
+The migration command creates only:
+
+```text
+rhinoq_task.migrations
+rhinoq_task.tasks
+rhinoq_task.executions
+```
+
+Then reuse the application's pool:
+
+```ts
+import {
+  BullMQTaskBridge,
+  installPostgresTaskProfile,
+} from '@rhinoq/node';
+
+// Applies the locked, idempotent three-table migration and returns the client.
+const tasks = await installPostgresTaskProfile(appPool);
+const bridge = new BullMQTaskBridge({
+  client: tasks,
+  queue,
+  events: queueEvents,
+  runtimeScope: 'bulk-download',
+  terminalProjection: 'execution-only',
+  aggregate: {
+    progress: 'terminal-items',
+    terminal: 'at-least-one-succeeded',
+  },
+});
+
+await bridge.dispatchMany(items.map((item) => ({
+  task: { id: batchId, type: 'bulk-download', ownerId: user.id, definitionVersion: 1 },
+  executionId: `${batchId}:${item.id}:1`,
+  itemKey: item.id,
+  jobId: `${batchId}-${item.id}`,
+  job: { name: 'download-item', data: item },
+})));
+```
+
+All items are reserved before the first job is added. Repeating the same call
+after a crash resumes pending dispatch with deterministic IDs. Business-specific
+completion can still select `terminal: 'manual'`; RhinoQ does not guess that an
+empty ZIP is success.
+
+Zero application code is neither safe nor honest: RhinoQ cannot infer a Task's
+tenant owner, whether one job or a fan-out is the user-visible unit, or whether
+an active provider side effect is safe to cancel. This integration keeps those
+business decisions explicit while RhinoQ owns schema installation, identity,
+progress/version correctness, dispatch recovery and lifecycle projection.
 
 ## First Task contract
 
@@ -171,7 +232,9 @@ cannot reach queue/operator APIs or set arbitrary lifecycle states. The
 deployment bearer remains the privileged operator/runtime credential.
 
 For a complete, accurate setup and the current external-runtime boundary, see
-[Getting started](./docs/getting-started.md) and the [Task Platform contract](./docs/task-platform.md).
+[Getting started](./docs/getting-started.md), the
+[existing-queue evaluation protocol](./docs/evaluation-existing-queue.md) and
+the [Task Platform contract](./docs/task-platform.md).
 
 ## Choose RhinoQ deliberately
 
@@ -199,10 +262,12 @@ and the [integrity-only example](./examples/integrity-only/).
 
 Go is the authoritative engine/runtime. The Node.js/TypeScript SDK is a tested
 development preview for producers, worker lifecycle and the typed Gateway API.
-Its first npm evaluation prerelease is `@rhinoq/node@0.1.0-beta.1`; it is not a
-stable or production-ready release. PostgreSQL is the durable store for Task state,
-execution history and verification evidence. Redis is not required by the
-current Task slice.
+The npm registry currently has `@rhinoq/node@0.1.0-beta.2` on `next` and
+`0.1.0-beta.1` on `latest`. The Task-only `beta.4` candidate is prepared on
+`main` but is not published yet; evaluate it from a local tarball until the
+release is cut. None of these versions is stable or production-ready.
+PostgreSQL is the durable store for Task state, execution history and
+verification evidence. Redis is not required by the current Task slice.
 
 The optional HTTP Gateway binds to loopback by default and requires a bearer
 token of at least 32 bytes. Optional owner credentials are configured through
@@ -216,9 +281,11 @@ remain release blockers.
 
 RhinoQ has not yet shown that it reduces integration code or wins adoption.
 Those are product hypotheses, with explicit failure conditions, in
-[Product evidence](./docs/product-evidence.md). The next proof points are a
-real two-task application, a BullMQ reference adapter with no handler rewrite,
-and browser/reconnect tests before realtime transport is added.
+[Product evidence](./docs/product-evidence.md). A real two-task probe found
+that handler rewrite was avoidable but code reduction was not yet demonstrated.
+The next proof points are wiring the integration into actual call sites,
+deleting old plumbing, and browser/reconnect tests before realtime transport
+is added.
 
 ## Documentation
 
@@ -226,6 +293,7 @@ and browser/reconnect tests before realtime transport is added.
 |---|---|
 | [Product positioning](./docs/product-positioning.md) | intended user, boundary and allowed claims |
 | [Getting started](./docs/getting-started.md) | current Task-first evaluation path |
+| [Existing-queue evaluation](./docs/evaluation-existing-queue.md) | integrate a second real application and return comparable evidence |
 | [Task Platform](./docs/task-platform.md) | implemented contract and explicit gaps |
 | [Product evidence](./docs/product-evidence.md) | validation hypotheses and kill signals |
 | [Product strengths](./docs/product-strengths.md) | evidence-backed implementation strengths |

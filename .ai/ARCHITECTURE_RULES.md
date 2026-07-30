@@ -7,7 +7,9 @@
 3. Application điều phối use case qua ports.
 4. Adapter implement ports; adapter không chứa business invariant.
 5. Runtime quản lý execution state, không tự kết luận business outcome.
-6. Console/CLI/SDK gọi application facade; không gọi database/store trực tiếp.
+6. Console/CLI/SDK gọi application facade. Embedded Task SDK được gọi
+   versioned `rhinoq_task.*` command functions theo ADR-0020, nhưng không được
+   đọc/ghi private tables hoặc tự cài state machine.
 7. Public contract phải version được và giữ backward compatibility trong thời gian migration.
 8. Task state, Execution/Job state, Effect state và Outcome state là các state machine khác nhau.
 9. External effect phải có idempotency key hoặc policy chuyển `uncertain`.

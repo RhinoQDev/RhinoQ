@@ -4,6 +4,8 @@
 
 - [Product positioning: ai dùng, giải quyết gì, claim nào được phép](./product-positioning.md)
 - [Getting started](./getting-started.md)
+- [Existing-queue evaluation protocol](./evaluation-existing-queue.md) — use a
+  second real application and return comparable adoption evidence
 - [CLI command reference](./cli.md)
 - [Node.js integration](./nodejs.md)
 - [Configuration](./configuration.md)

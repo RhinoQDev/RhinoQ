@@ -320,6 +320,51 @@
   Execution records remain valid.
 - **Owner:** engine + Node SDK
 
+## ADR-0020 — Task-only PostgreSQL profile and embedded Node command client
+
+- **Status:** accepted
+- **Context:** the real BullMQ adopter deleted 535 lifecycle lines but added
+  997, one Gateway process and three credential classes. A Task-only adopter
+  also had to apply migrations 001–017, creating 17 tables although Task state
+  used only Task and Execution. This cost made the measured verdict NO-GO even
+  though 23/23 correctness scenarios passed.
+- **Decision:** Task Platform gains an isolated `rhinoq_task` PostgreSQL
+  profile with exactly three tables: migration history, Tasks and Executions.
+  Native runtime and Verified Tasks become separate opt-in schema profiles.
+  Task Executions store a runtime scope and external ID without a foreign key
+  to the optional native Job table.
+- **Command authority:** production mutations in the Task-only profile go
+  through versioned `rhinoq_task.*` database functions. The embedded Node
+  `PostgresTaskClient` and future Go Task-only facade call the same commands;
+  SDKs do not reimplement transition, monotonic-progress, duplicate,
+  cancellation or aggregate-version rules. PostgreSQL is already mandatory,
+  so this removes a process without adding a technology.
+- **Execution identity:** `itemKey` identifies one logical fan-out item and
+  `attempt` increments per item. Runtime identity is
+  `(runtime, runtimeScope, externalId)` because IDs such as BullMQ job IDs are
+  scoped by queue. Reserving that identity before enqueue leaves a recoverable
+  `pending_dispatch` record across a crash.
+- **Delivery boundary:** applications continue to own user authentication.
+  A small application HTTP handler filters every read/cancel by owner and a
+  browser client consumes that endpoint; operator credentials never enter the
+  browser or the embedded path.
+- **Compatibility:** the legacy full schema and Gateway remain available
+  during the beta transition. Existing migration checksums are not rewritten
+  and old tables are never dropped automatically. A later adopt/copy command
+  must precede removal.
+- **Alternatives:** keep optimizing the Gateway (does not remove the extra
+  process); copy the Go state machine into TypeScript (two correctness
+  authorities); ship a native Node addon (cross-platform build and ABI cost);
+  require all 17 tables (failed measured adoption).
+- **Consequences:** PostgreSQL command functions are now a versioned public
+  boundary for Task-only persistence and need real-database parity tests.
+  Fresh Task-only installs create three tables; full runtime/verification
+  installs can still be larger by explicit choice.
+- **Rollback:** stop using `PostgresTaskClient` and use the Gateway client.
+  The isolated schema can remain unused or be removed deliberately after data
+  export; no runtime/verification tables depend on it.
+- **Owner:** product + engine + Node SDK
+
 ## Template cho ADR mới
 
 ```text

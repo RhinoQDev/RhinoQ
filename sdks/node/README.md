@@ -8,9 +8,10 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. `@rhinoq/node@0.1.0-beta.1` is publicly
-available as the first evaluation prerelease; pin that explicit version rather
-than depending on a floating dist-tag. It is not a production stability
+This package is a development preview. `@rhinoq/node@0.1.0-beta.2` is publicly
+available on the npm `next` tag. The Task-only `0.1.0-beta.4` candidate is
+prepared in this source tree but is not published yet; use the local tarball
+path below when validating `main`. Neither version is a production stability
 promise. The preview targets Node.js 22+.
 
 The package ships both an ESM and a CommonJS build, so a NestJS application —
@@ -28,22 +29,46 @@ npm ci                 # install exactly what package-lock.json records
 npm run typecheck      # check TypeScript without producing dist/
 npm test               # build dist/ and run the SDK tests
 npm run pack:check     # show the files that would enter the package
-npm pack               # create rhinoq-node-0.1.0-dev.tgz
+npm pack               # create rhinoq-node-0.1.0-beta.4.tgz
 ```
 
 Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-dev.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.4.tgz pg
 ```
 
 For an application evaluation, pin the explicit prerelease rather than using
-`latest`:
+`next`:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.1 pg
+npm install @rhinoq/node@0.1.0-beta.2 pg
 ```
+
+Do not use that package to evaluate the embedded Task profile or corrected
+BullMQ contracts: those changes are in the `beta.4` candidate.
+Build and install the local tarball when testing them.
+
+## Fastest Task-only setup
+
+```bash
+RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
+```
+
+This creates three tables in `rhinoq_task`, not the native runtime or Verified
+Tasks tables. The application reuses its pool:
+
+```ts
+import { installPostgresTaskProfile } from '@rhinoq/node';
+
+const tasks = await installPostgresTaskProfile(pool);
+```
+
+No Gateway, Go toolchain or RhinoQ credential is involved. Use
+`createTaskRequestHandler()` behind the application's existing authentication
+and `ApplicationTaskClient` in the browser; the operator token never enters
+this path.
 
 Check the [release guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/releasing.md)
 for the authoritative publication state and the trusted-publishing setup.
@@ -56,8 +81,9 @@ for the authoritative publication state and the trusted-publishing setup.
 | enqueue in the current business transaction | `PostgresProducer` with `PoolClient` | No |
 | run JavaScript/TypeScript handlers | `RhinoQWorker` | Yes |
 | inspect, pause, cancel, replay or triage | `RhinoQClient` | Yes |
-| create, update or poll a Task snapshot | `RhinoQClient` | Yes |
-| mirror an existing BullMQ job into a Task | `BullMQTaskBridge` | Yes |
+| create, update or poll a Task snapshot | `PostgresTaskClient` | No |
+| reserve and dispatch a BullMQ job as a Task | `BullMQTaskBridge.dispatch()` | No |
+| mirror a job through the legacy full platform | `BullMQTaskBridge` + `RhinoQClient` | Yes |
 
 ## Task polling
 
@@ -96,7 +122,7 @@ payload remains the application's responsibility.
 
 ### Watch a Task without framework lock-in
 
-`watchTask()` is available in the `beta.2` source. It polls immediately,
+`watchTask()` is available in `beta.2` and later. It polls immediately,
 serializes requests and yields only a strictly newer `entityVersion`. Terminal
 Tasks stop the iterator by default.
 
