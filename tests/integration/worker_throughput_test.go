@@ -69,14 +69,24 @@ func TestSlowJobDoesNotBlockTheRestOfTheBatch(t *testing.T) {
 	}
 	close(release)
 
+	// A handler returning and the worker durably recording success are separate
+	// steps. Under -race the observation above can win that small window, so
+	// wait for the store boundary instead of cancelling the worker immediately.
+	recordDeadline := time.Now().Add(3 * time.Second)
+	for {
+		counts, countErr := store.JobCounts(ctx, "mixed")
+		if countErr != nil {
+			t.Fatal(countErr)
+		}
+		if counts[job.Succeeded] >= 20 {
+			break
+		}
+		if time.Now().After(recordDeadline) {
+			t.Fatalf("expected the fast jobs to be recorded as succeeded: %+v", counts)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	stop()
-	counts, err := store.JobCounts(ctx, "mixed")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts[job.Succeeded] < 20 {
-		t.Fatalf("expected the fast jobs to be recorded as succeeded: %+v", counts)
-	}
 }
 
 // A rate-limited queue should not be polled in a tight loop, and it should not

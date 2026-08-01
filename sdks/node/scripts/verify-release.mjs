@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 
 const tag = process.argv[2] || process.env.GITHUB_REF_NAME;
 if (!tag) {
@@ -25,4 +25,18 @@ if (sdkVersion !== manifest.version) {
 }
 if (manifest.version.endsWith('-dev')) {
   throw new Error('A -dev package cannot be published. Use an explicit prerelease or stable semver version.');
+}
+
+const expectedBins = {
+  rhinoq: 'dist/cli/rhinoq.js',
+  'rhinoq-task': 'dist/cli/task-migrate.js',
+  'rhinoq-task-check': 'dist/cli/task-check.js',
+};
+for (const [name, relativePath] of Object.entries(expectedBins)) {
+  if (manifest.bin?.[name] !== relativePath) {
+    throw new Error(
+      `bin[${name}] must be ${relativePath}; npm 12 rejects non-canonical paths`,
+    );
+  }
+  await access(new URL(`../${relativePath}`, import.meta.url));
 }

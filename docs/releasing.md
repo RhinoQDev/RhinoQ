@@ -1,23 +1,26 @@
 # Releasing RhinoQ
 
-RhinoQ has published Node evaluation prereleases through
-`@rhinoq/node@0.1.0-beta.2`. The repository prepares `0.1.0-beta.5`, which is
-not published until a matching reviewed tag runs the release workflow. RhinoQ
-still has no stable package or tagged GitHub release. The next tag is prepared
-to publish both `rhinoq` and `rhinoq-agent` binaries in its archives.
+RhinoQ has published npm evaluation prereleases through
+`@rhinoq/node@0.1.0-beta.2`. GitHub prerelease `v0.1.0-beta.5` successfully
+published `rhinoq`/`rhinoq-agent` archives, checksums, keyless signature bundle,
+per-archive SBOMs and an attested GHCR image. Its npm job failed closed because
+the package does not yet grant this workflow trusted-publisher permission.
+`0.1.0-beta.6` fixes npm 12 CLI-bin normalization and also attaches the
+installable Node tarball to the GitHub release.
 
 ## Published evaluation release
 
 - `@rhinoq/node@0.1.0-beta.1` is the current npm `latest`.
 - `@rhinoq/node@0.1.0-beta.2` is the current npm `next`.
-- `0.1.0-beta.5` is a release candidate in the repository, not a registry
-  version. It adds the three-table Task profile and embedded Node client on top
-  of the corrected `terminalProjection`, duplicate and per-Execution contract.
-- It does not imply a Go CLI archive, a GitHub release or production readiness.
+- `v0.1.0-beta.5` is a public GitHub prerelease with Go archives and image, but
+  it is not an npm registry version.
+- `0.1.0-beta.6` is the corrected Node candidate. Until npm publishing is
+  authorized, install its exact GitHub release tarball.
+- Neither prerelease implies production readiness.
 
 Registry tags are not stability claims. Consumers must pin an explicit
 prerelease. Because npm requires a `latest` tag and it currently points at the
-oldest preview, move both `next` and `latest` to `beta.5` only after the clean
+oldest preview, move both `next` and `latest` to `beta.6` only after the clean
 install check passes. The first stable release must replace them deliberately
 after the public contract and production evidence are ready.
 
@@ -34,7 +37,7 @@ These are external account actions; the repository cannot safely perform them.
 ## Cut a prerelease
 
 1. Set `sdks/node/package.json` and its lockfile to the exact release version,
-   for example `0.1.0-beta.5`.
+   for example `0.1.0-beta.6`.
 2. Run from a clean checkout:
 
    ```bash
@@ -43,25 +46,25 @@ These are external account actions; the repository cannot safely perform them.
    npm ci
    npm test
    npm run pack:check
-   npm run release:check -- v0.1.0-beta.5
+   npm run release:check -- v0.1.0-beta.6
    ```
 
 3. Commit the version/docs/changelog change, then create and push the matching
-   annotated tag: `v0.1.0-beta.5`.
+   annotated tag: `v0.1.0-beta.6`.
 4. The Release workflow checks the archive and matching version, then publishes
    the Node SDK to `next` and builds archives containing the `rhinoq` CLI and
    optional `rhinoq-agent` HTTP Gateway.
 5. Independently verify the published artifact in a clean sample application:
 
    ```bash
-   npm install @rhinoq/node@0.1.0-beta.5 pg
+   npm install @rhinoq/node@0.1.0-beta.6 pg
    node --input-type=module -e "import('@rhinoq/node').then(() => console.log('ok'))"
    ```
 
 6. After that verification succeeds, move the default tag explicitly:
 
    ```bash
-   npm dist-tag add @rhinoq/node@0.1.0-beta.5 latest
+   npm dist-tag add @rhinoq/node@0.1.0-beta.6 latest
    npm dist-tag ls @rhinoq/node
    ```
 

@@ -1,8 +1,8 @@
 # Node.js integration
 
-> Status: development preview. `@rhinoq/node@0.1.0-beta.2` is published on the
-> npm `next` tag. The Task-only `0.1.0-beta.5` contract is prepared on `main`
-> but is not published yet. Pin an exact version and see
+> Status: development preview. npm `next` still points to `0.1.0-beta.2`.
+> Use the installable beta.6 GitHub release archive for the current contract
+> until npm trusted publishing is enabled. Pin an exact version and see
 > [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
@@ -38,7 +38,7 @@ or below the highest rendered `entityVersion`, stops on terminal state by
 default and accepts an `AbortSignal`. Network and authorization failures are
 reported to the caller; the helper does not invent an outage retry policy.
 
-The `beta.5` source candidate also exports `TaskStore`, a browser external
+The current beta.6 candidate also exports `TaskStore`, a browser external
 store suitable for React `useSyncExternalStore` and equivalent adapters. It
 exposes loading, connected, reconnecting and stopped states, retries transport
 failures with bounded backoff, and never accepts an older `entityVersion`.
@@ -101,7 +101,7 @@ Each command has a different purpose:
 | `npm run typecheck` | checks public TypeScript types without emitting JavaScript | none |
 | `npm test` | builds `src/` into `dist/`, then runs the Node test suite | `dist/` |
 | `npm run pack:check` | builds and shows which files would enter the package without creating an archive | `dist/` |
-| `npm pack` | creates the installable preview archive | `rhinoq-node-0.1.0-beta.5.tgz` |
+| `npm pack` | creates the installable preview archive | `rhinoq-node-0.1.0-beta.6.tgz` |
 
 `npm pack` is intentionally run from `sdks/node`. The older command
 `npm --prefix sdks/node pack` does not reliably change the package directory
@@ -111,13 +111,13 @@ Install the generated tarball and the PostgreSQL driver in the target Node
 application. Replace the example path with the absolute path on your machine:
 
 ```bash
-npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.5.tgz pg
+npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.6.tgz pg
 ```
 
 Windows PowerShell example:
 
 ```powershell
-npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.5.tgz pg
+npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.6.tgz pg
 ```
 
 Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
@@ -807,8 +807,8 @@ reproducible.
 
 ## Current limitations
 
-- An npm evaluation package exists, but the `beta.5` candidate and prebuilt CLI
-  binaries are not released yet.
+- npm `next` is stale until trusted publishing is authorized; use the exact
+  beta.6 GitHub release tarball, which includes all three CLI commands.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems. A NestJS *module* — DI
   wiring, lifecycle hooks — is still not provided; only `require()` works.

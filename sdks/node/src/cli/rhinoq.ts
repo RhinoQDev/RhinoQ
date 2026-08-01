@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { Pool } from 'pg';
 import { installPostgresTaskProfile } from '../postgres/task-client.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
+import { SDK_VERSION } from '../gateway/types.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -15,6 +16,7 @@ async function main(): Promise<void> {
     case 'doctor': await doctor(); break;
     case 'fixture': await fixture(args); break;
     case 'dev': await dev(args); break;
+    case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h': help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }

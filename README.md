@@ -33,10 +33,11 @@ detect -> investigate -> decide -> repair -> verify
 
 ## Try it in under five minutes
 
-Node.js 22 and PostgreSQL are the only requirements for the shortest path:
+Node.js 22 and PostgreSQL are the only requirements for the shortest path. The
+GitHub release archive is used until npm trusted publishing is enabled:
 
 ```bash
-npm install @rhinoq/node@next pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.6/rhinoq-node-0.1.0-beta.6.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -48,15 +49,6 @@ Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and BullMQ, preview
 what is missing, refuses to overwrite generated Rules, and prints a next action
 for every failure. Open the URL printed by `rhinoq dev` to see a technically
 successful Execution whose real-world Task is `uncertain`.
-
-For the source checkout before the next npm prerelease is published:
-
-```bash
-cd sdks/node
-npm ci
-npm pack
-# install the generated @rhinoq/node tarball in the application
-```
 
 ## The demo that explains the product
 
@@ -153,7 +145,7 @@ exists but is not the default browser polling shape.
 | Summary polling and cursor-paginated Executions | implemented |
 | Signed webhook and Slack notifications with durable dedup | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
-| Release archives, checksums, signatures, SBOM and non-root image | configured; published artifacts require a tagged release |
+| Release archives, checksums, signatures, SBOM and non-root image | beta.5 published; beta.6 Node archive/release pipeline prepared |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Durable multi-node notification scheduler | not implemented |
 | Production-shaped design-partner evidence | not yet collected |

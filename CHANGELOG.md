@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Prepared `0.1.0-beta.6` after the first public release drill: npm 12 now runs
+  in both verification and publish jobs, CLI `bin` paths use npm's canonical
+  package-relative form, and release checks require all three built commands.
+  `v0.1.0-beta.5` successfully produced signed binaries, per-archive SBOMs and
+  an attested GHCR image; npm publication remained blocked by missing trusted-
+  publisher permission on the `@rhinoq/node` package.
+
 - Repositioned RhinoQ around the customer-visible failure it catches: a queue
   can report technical success while the provider or business outcome is still
   unknown or wrong. Added a single five-minute CLI path and an official

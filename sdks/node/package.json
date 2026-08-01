@@ -1,6 +1,6 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-beta.5",
+  "version": "0.1.0-beta.6",
   "description": "Catch background jobs that succeeded technically but failed in the real world",
   "license": "Apache-2.0",
   "repository": {
@@ -24,9 +24,9 @@
     }
   },
   "bin": {
-    "rhinoq": "./dist/cli/rhinoq.js",
-    "rhinoq-task": "./dist/cli/task-migrate.js",
-    "rhinoq-task-check": "./dist/cli/task-check.js"
+    "rhinoq": "dist/cli/rhinoq.js",
+    "rhinoq-task": "dist/cli/task-migrate.js",
+    "rhinoq-task-check": "dist/cli/task-check.js"
   },
   "files": [
     "dist",

@@ -298,8 +298,8 @@ restart loop.
   [security audit](./security-audit-2026-07-29.md).
 - Chưa có gRPC/Unix socket, streaming claim hoặc compression.
 - Node.js là SDK preview duy nhất; chưa cam kết SDK Python/Java/.NET.
-- `@rhinoq/node@0.1.0-beta.2` đã có trên npm `next`; Task-only `beta.5` trên
-  `main` vẫn phải build/pack từ source cho tới khi phát hành.
+- `@rhinoq/node@0.1.0-beta.2` đã có trên npm `next`; contract `beta.6` được
+  đóng gói thành tarball trong GitHub prerelease trong khi chờ quyền npm.
 - HTTP Gateway không phải control plane và không thay thế database backup,
   restricted roles hay network policy.
 

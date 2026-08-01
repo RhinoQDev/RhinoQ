@@ -11,7 +11,7 @@ supporting Task/runtime layers from the detect-investigate-repair loop.
 | VERIFY | 4/5 | fenced Effect Ledger, ProviderOperation with explicit uncertain/read-back, versioned Rules, Explain gate and bounded scheduling exist; provider contract still needs real design-partner evidence |
 | RECOVER | 5/6 | Findings, Needs Attention, durable-dedup signed notifications and preview/four-eyes/precondition/verify repair exist; automatic multi-node notification scheduling remains |
 | ADOPTION | 3/4 | one-command initialization, Rule generator, health checker, failure fixture and an official BullMQ/Stripe demo exist; three real design-partner pilots remain |
-| DX | 9/10 | embedded Go/Node paths, direct CLI tooling, ProviderOperation/repair Node APIs, application HTTP/browser helpers and action-enabled loopback Workbench exist; beta.5 publication remains |
+| DX | 9/10 | embedded Go/Node paths, direct CLI tooling, ProviderOperation/repair Node APIs, application HTTP/browser helpers and action-enabled loopback Workbench exist; beta.5 binaries/image are public, npm trusted-publisher permission remains |
 | Infrastructure | 10/11 | configuration, health, process rate limit, metrics, migrations, real PostgreSQL tests, non-root image, SBOM/provenance config and a passing restore drill exist; deployment-shaped chaos evidence and full tenant RBAC remain |
 
 ## Estimates

@@ -3,7 +3,7 @@
 Catch background jobs that succeeded technically but failed in the real world.
 
 ```bash
-npm install @rhinoq/node@next pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.6/rhinoq-node-0.1.0-beta.6.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -21,11 +21,11 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. `@rhinoq/node@0.1.0-beta.2` is publicly
-available on the npm `next` tag. The Task-only `0.1.0-beta.5` candidate is
-prepared in this source tree but is not published yet; use the local tarball
-path below when validating `main`. Neither version is a production stability
-promise. The preview targets Node.js 22+.
+This package is a development preview. npm `next` still points to the older
+`0.1.0-beta.2`; trusted-publisher permission blocked the beta.5 npm upload.
+Use the beta.6 GitHub release archive or a local beta.6 tarball for the current
+contract. No prerelease is a production stability promise. The preview targets
+Node.js 22+.
 
 The package ships both an ESM and a CommonJS build, so a NestJS application —
 which still compiles to CommonJS by default — can `require('@rhinoq/node')` in
@@ -42,26 +42,25 @@ npm ci                 # install exactly what package-lock.json records
 npm run typecheck      # check TypeScript without producing dist/
 npm test               # build dist/ and run the SDK tests
 npm run pack:check     # show the files that would enter the package
-npm pack               # create rhinoq-node-0.1.0-beta.5.tgz
+npm pack               # create rhinoq-node-0.1.0-beta.6.tgz
 ```
 
 Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.5.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.6.tgz pg
 ```
 
-For an application evaluation, pin the explicit prerelease rather than using
-`next`:
+For an application evaluation without a source checkout, pin the release
+archive rather than the stale npm `next` tag:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.2 pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.6/rhinoq-node-0.1.0-beta.6.tgz pg
 ```
 
-Do not use that package to evaluate the embedded Task profile or corrected
-BullMQ contracts: those changes are in the `beta.5` candidate.
-Build and install the local tarball when testing them.
+That archive contains the embedded Task profile, current BullMQ contracts and
+the `rhinoq` onboarding CLI.
 
 ## Fastest Task-only setup
 
