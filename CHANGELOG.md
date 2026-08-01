@@ -2,10 +2,15 @@
 
 ## Unreleased
 
+- Prepared `0.1.0-beta.7` after validating beta.6's public assets. Replaced the
+  legacy 96-byte raw Cosign signature output with a Sigstore JSON bundle that
+  contains signature, certificate and transparency-log proof, and added an
+  identity/issuer verification step to the release job itself.
+
 - Prepared `0.1.0-beta.6` after the first public release drill: npm 12 now runs
   in both verification and publish jobs, CLI `bin` paths use npm's canonical
   package-relative form, and release checks require all three built commands.
-  `v0.1.0-beta.5` successfully produced signed binaries, per-archive SBOMs and
+  `v0.1.0-beta.5` successfully produced binaries, per-archive SBOMs and
   an attested GHCR image; npm publication remained blocked by missing trusted-
   publisher permission on the `@rhinoq/node` package.
 

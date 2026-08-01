@@ -5,7 +5,7 @@
 With Node.js 22 and PostgreSQL available:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.6/rhinoq-node-0.1.0-beta.6.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -44,11 +44,11 @@ For a Node application keeping its existing queue, prefer the isolated
 Task-only path instead of the full Go migration chain:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.6.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.7.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
-The beta.6 tarball is attached to its GitHub prerelease while npm trusted
+The beta.7 tarball is attached to its GitHub prerelease while npm trusted
 publishing is pending. It creates exactly three tables in `rhinoq_task` and
 reuses the application's `pg.Pool` through `PostgresTaskClient`.
 

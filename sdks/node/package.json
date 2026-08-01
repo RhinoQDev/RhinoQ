@@ -1,6 +1,6 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-beta.6",
+  "version": "0.1.0-beta.7",
   "description": "Catch background jobs that succeeded technically but failed in the real world",
   "license": "Apache-2.0",
   "repository": {

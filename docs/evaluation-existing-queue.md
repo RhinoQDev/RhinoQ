@@ -14,7 +14,7 @@ The purpose is not to prove that API calls return `200`. It is to answer:
 ## Use the exact candidate
 
 The npm registry currently contains `beta.1` and `beta.2`. The corrected
-Task-only and corrected fan-out contract is the `beta.6` candidate on `main`.
+Task-only and corrected fan-out contract is the `beta.7` candidate on `main`.
 Until it is published, pack it from this checkout:
 
 ```powershell
@@ -27,7 +27,7 @@ npm pack
 Install the resulting tarball by absolute path in the target application:
 
 ```powershell
-npm install C:\path\to\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.6.tgz pg
+npm install C:\path\to\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.7.tgz pg
 ```
 
 Record all four identities in the report:

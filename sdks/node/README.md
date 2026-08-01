@@ -3,7 +3,7 @@
 Catch background jobs that succeeded technically but failed in the real world.
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.6/rhinoq-node-0.1.0-beta.6.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -23,7 +23,7 @@ Node.js support has two deliberately separate paths:
 
 This package is a development preview. npm `next` still points to the older
 `0.1.0-beta.2`; trusted-publisher permission blocked the beta.5 npm upload.
-Use the beta.6 GitHub release archive or a local beta.6 tarball for the current
+Use the beta.7 GitHub release archive or a local beta.7 tarball for the current
 contract. No prerelease is a production stability promise. The preview targets
 Node.js 22+.
 
@@ -42,21 +42,21 @@ npm ci                 # install exactly what package-lock.json records
 npm run typecheck      # check TypeScript without producing dist/
 npm test               # build dist/ and run the SDK tests
 npm run pack:check     # show the files that would enter the package
-npm pack               # create rhinoq-node-0.1.0-beta.6.tgz
+npm pack               # create rhinoq-node-0.1.0-beta.7.tgz
 ```
 
 Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.6.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.7.tgz pg
 ```
 
 For an application evaluation without a source checkout, pin the release
 archive rather than the stale npm `next` tag:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.6/rhinoq-node-0.1.0-beta.6.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
 ```
 
 That archive contains the embedded Task profile, current BullMQ contracts and

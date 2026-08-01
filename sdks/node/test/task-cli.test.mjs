@@ -27,7 +27,7 @@ test('Task migration CLI reports the package version without a database', () => 
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), '0.1.0-beta.6');
+  assert.equal(result.stdout.trim(), '0.1.0-beta.7');
   assert.equal(result.stderr, '');
 });
 
@@ -37,7 +37,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   assert.match(help.stdout, /npx rhinoq init/);
   const version = spawnSync(process.execPath, [developerCLI, '--version'], { encoding: 'utf8', env: {} });
   assert.equal(version.status, 0, version.stderr);
-  assert.equal(version.stdout.trim(), '0.1.0-beta.6');
+  assert.equal(version.stdout.trim(), '0.1.0-beta.7');
   const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-cli-'));
   try {
     const first = spawnSync(process.execPath, [developerCLI, 'verify', 'add', 'completed-report-has-output'], { cwd, encoding:'utf8', env:{} });

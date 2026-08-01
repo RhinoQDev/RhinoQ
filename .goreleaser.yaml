@@ -52,11 +52,11 @@ sboms:
 # the checksum file without a long-lived key.
 signs:
   - cmd: cosign
-    signature: ${artifact}.bundle
+    signature: ${artifact}.sigstore.json
     args:
       - sign-blob
       - --yes
-      - --output-signature=${signature}
+      - --bundle=${signature}
       - ${artifact}
     artifacts: checksum
     output: true
@@ -75,4 +75,5 @@ release:
   header: |
     RhinoQ is in active development. Public APIs, migrations and protocols are
     not stable. Archives contain the `rhinoq` CLI and optional `rhinoq-agent`
-    HTTP Gateway. Verify `checksums.txt` before running either binary.
+    HTTP Gateway. Verify `checksums.txt` with its `.sigstore.json` bundle before
+    running either binary.

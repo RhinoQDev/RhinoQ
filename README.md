@@ -37,7 +37,7 @@ Node.js 22 and PostgreSQL are the only requirements for the shortest path. The
 GitHub release archive is used until npm trusted publishing is enabled:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.6/rhinoq-node-0.1.0-beta.6.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -145,7 +145,7 @@ exists but is not the default browser polling shape.
 | Summary polling and cursor-paginated Executions | implemented |
 | Signed webhook and Slack notifications with durable dedup | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
-| Release archives, checksums, signatures, SBOM and non-root image | beta.5 published; beta.6 Node archive/release pipeline prepared |
+| Release archives, verifiable checksum bundle, SBOM and non-root image | beta.7 release pipeline verified in CI |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Durable multi-node notification scheduler | not implemented |
 | Production-shaped design-partner evidence | not yet collected |

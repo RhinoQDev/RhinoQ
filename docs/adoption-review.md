@@ -41,7 +41,7 @@ prerequisite for someone who only needs import/export progress.
    compared with hand-built task plumbing.
 3. Run browser reload, delayed-response, duplicate-event and cancellation-race
    tests against the real application.
-4. Grant npm trusted-publisher access and publish the verified `beta.6` package.
+4. Grant npm trusted-publisher access and publish the verified `beta.7` package.
 
 ### P1 — required for a credible frontend task experience
 

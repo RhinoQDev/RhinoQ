@@ -99,6 +99,14 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the published keyless checksum bundle
+        shell: bash
+        run: >-
+          cosign verify-blob dist/checksums.txt
+          --bundle dist/checksums.txt.sigstore.json
+          --certificate-identity
+          "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}"
+          --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
   container:
     name: Publish signed container image
