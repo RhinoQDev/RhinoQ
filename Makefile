@@ -1,4 +1,4 @@
-.PHONY: fmt test vet test-node check clean db-up db-down test-postgres
+.PHONY: fmt test vet test-node benchmark benchmark-node benchmark-go check clean db-up db-down test-postgres
 
 fmt:
 	gofmt -w cmd internal tests pkg examples
@@ -11,6 +11,14 @@ vet:
 
 test-node:
 	npm --prefix sdks/node test
+
+benchmark: benchmark-node benchmark-go
+
+benchmark-node:
+	npm --prefix sdks/node run benchmark
+
+benchmark-go:
+	go test ./tests/benchmarks -run '^$$' -bench . -benchmem -count=5
 
 check: fmt test vet test-node
 

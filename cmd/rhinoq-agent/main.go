@@ -76,12 +76,19 @@ Verify
 	if err != nil {
 		return err
 	}
+	repairRegistry, err := repairRegistryFromEnv()
+	if err != nil {
+		return err
+	}
 
 	server, err := agent.New(agent.Config{
 		Client: client, Token: token, AllowUnauthenticated: open,
 		TaskCredentials:   taskCredentials,
 		HeartbeatInterval: durationOr("RHINOQ_AGENT_HEARTBEAT", 10*time.Second),
 		MaxPayloadBytes:   intOr("RHINOQ_MAX_PAYLOAD_BYTES", 1<<20),
+		RequestsPerSecond: floatOr("RHINOQ_AGENT_REQUESTS_PER_SECOND", 200),
+		RequestBurst:      intOr("RHINOQ_AGENT_REQUEST_BURST", 400),
+		RepairRegistry:    repairRegistry,
 	})
 	if err != nil {
 		return err
@@ -120,6 +127,56 @@ Verify
 	defer cancel()
 	log.Println("rhinoq-agent draining")
 	return httpServer.Shutdown(graceCtx)
+}
+
+func repairRegistryFromEnv() (*rhinoq.RepairRegistry, error) {
+	raw := strings.TrimSpace(os.Getenv("RHINOQ_REPAIR_CALLBACKS_JSON"))
+	if raw == "" {
+		return nil, nil
+	}
+	var callbacks map[string]struct {
+		URL               string `json:"url"`
+		Secret            string `json:"secret"`
+		Timeout           string `json:"timeout"`
+		AllowInsecureHTTP bool   `json:"allowInsecureHTTP"`
+	}
+	if err := json.Unmarshal([]byte(raw), &callbacks); err != nil {
+		return nil, errors.New("RHINOQ_REPAIR_CALLBACKS_JSON must be an object keyed by repair handler name")
+	}
+	registry := rhinoq.NewRepairRegistry()
+	for name, config := range callbacks {
+		timeout := 10 * time.Second
+		if config.Timeout != "" {
+			parsed, err := time.ParseDuration(config.Timeout)
+			if err != nil || parsed <= 0 {
+				return nil, fmt.Errorf("repair callback %q has an invalid timeout", name)
+			}
+			timeout = parsed
+		}
+		handler, err := rhinoq.NewHTTPRepairHandler(rhinoq.HTTPRepairHandlerOptions{
+			URL: config.URL, Secret: config.Secret, Timeout: timeout,
+			AllowInsecureHTTP: config.AllowInsecureHTTP,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("repair callback %q: %w", name, err)
+		}
+		if err := registry.Register(name, handler); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
+}
+
+func floatOr(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func taskCredentialsFromEnv() ([]agent.TaskCredential, error) {

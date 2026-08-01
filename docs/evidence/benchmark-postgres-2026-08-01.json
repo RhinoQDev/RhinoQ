@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-01T04:31:20.759Z",
+  "runtime": {
+    "node": "v24.14.0",
+    "postgres": "16.14",
+    "platform": "Windows x64 Docker Desktop"
+  },
+  "configuration": {
+    "iterationsPerCase": 2000,
+    "concurrencyMatrix": [1, 8, 16, 32]
+  },
+  "results": [
+    {
+      "concurrency": 1,
+      "create": { "operationsPerSecond": 325, "p50Ms": 2.906, "p95Ms": 4.182, "p99Ms": 5.146 },
+      "read": { "operationsPerSecond": 549, "p50Ms": 1.703, "p95Ms": 2.568, "p99Ms": 3.109 }
+    },
+    {
+      "concurrency": 8,
+      "create": { "operationsPerSecond": 1552, "p50Ms": 4.164, "p95Ms": 5.687, "p99Ms": 8.676 },
+      "read": { "operationsPerSecond": 2982, "p50Ms": 2.439, "p95Ms": 3.009, "p99Ms": 3.376 }
+    },
+    {
+      "concurrency": 16,
+      "create": { "operationsPerSecond": 2063, "p50Ms": 5.817, "p95Ms": 9.129, "p99Ms": 28.932 },
+      "read": { "operationsPerSecond": 3991, "p50Ms": 3.054, "p95Ms": 4.332, "p99Ms": 5.036 }
+    },
+    {
+      "concurrency": 32,
+      "create": { "operationsPerSecond": 1601, "p50Ms": 13.466, "p95Ms": 22.22, "p99Ms": 102.303 },
+      "read": { "operationsPerSecond": 3442, "p50Ms": 6.217, "p95Ms": 10.403, "p99Ms": 13.973 }
+    }
+  ],
+  "fanoutProbe": {
+    "runtime": { "node": "v22.22.1", "postgres": "16.14" },
+    "readConcurrency": 16,
+    "readOperationsPerCase": 100,
+    "results": [
+      { "executions": 10, "snapshotBytes": 2362, "reserveOpsPerSecond": 345, "readOpsPerSecond": 2429, "readP95Ms": 6.63 },
+      { "executions": 100, "snapshotBytes": 20914, "reserveOpsPerSecond": 577, "readOpsPerSecond": 1453, "readP95Ms": 11.78 },
+      { "executions": 500, "snapshotBytes": 104114, "reserveOpsPerSecond": 395, "readOpsPerSecond": 401, "readP95Ms": 40.969 },
+      { "executions": 1000, "snapshotBytes": 211118, "reserveOpsPerSecond": 283, "readOpsPerSecond": 180, "readP95Ms": 95.787 }
+    ]
+  },
+  "fanoutConcurrencyProbe": {
+    "executionsPerCase": 500,
+    "results": [
+      { "concurrency": 1, "reserveOpsPerSecond": 102, "reserveP95Ms": 15.45, "reserveP99Ms": 17.755 },
+      { "concurrency": 2, "reserveOpsPerSecond": 200, "reserveP95Ms": 14.74, "reserveP99Ms": 16.673 },
+      { "concurrency": 4, "reserveOpsPerSecond": 318, "reserveP95Ms": 16.966, "reserveP99Ms": 19.059 },
+      { "concurrency": 8, "reserveOpsPerSecond": 455, "reserveP95Ms": 21.979, "reserveP99Ms": 34.062 },
+      { "concurrency": 16, "reserveOpsPerSecond": 599, "reserveP95Ms": 31.779, "reserveP99Ms": 35.511 },
+      { "concurrency": 32, "reserveOpsPerSecond": 645, "reserveP95Ms": 55.832, "reserveP99Ms": 89.787 }
+    ]
+  },
+  "interpretation": "Local evidence only. The general create/read matrix saturated by concurrency 32 in the longer Node 24 run. Fan-out reserve throughput kept rising through 32 but tail latency rose sharply; 8 is a balanced bounded default, not a production capacity claim. Snapshot size and read cost grew roughly linearly because v1 includes every Execution summary."
+}

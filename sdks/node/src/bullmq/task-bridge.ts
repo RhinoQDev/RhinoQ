@@ -16,6 +16,8 @@ type QueueEvent = 'waiting' | 'active' | 'progress' | 'completed' | 'failed';
 // rejects stale aggregate/execution versions, so the bridge must re-read and
 // converge instead of treating one optimistic conflict as a dropped event.
 const MAX_VERSION_CONVERGENCE_ATTEMPTS = 3;
+const DEFAULT_DISPATCH_CONCURRENCY = 8;
+const MAX_DISPATCH_CONCURRENCY = 64;
 
 // This intentionally uses the small QueueEvents shape instead of importing
 // BullMQ. Applications already using BullMQ pass their QueueEvents instance;
@@ -82,6 +84,11 @@ export interface BullMQTaskBridgeOptions {
    */
   runtimeScope?: string;
   /**
+   * Maximum concurrent Gateway/Queue operations used by dispatchMany().
+   * Defaults to 8 and is capped at 64 to avoid an accidental connection storm.
+   */
+  dispatchConcurrency?: number;
+  /**
    * Controls whether one BullMQ job may terminate its parent Task.
    *
    * Use `single-execution` only when one job represents the whole user-facing
@@ -133,6 +140,18 @@ export interface BullMQTaskBridgeOptions {
    * whatever is returned, because it is polled with the snapshot.
    */
   failureReason?: (event: BullMQEvent) => string | undefined;
+  /**
+   * Application-owned cancellation. Return `acknowledged` only when BullMQ or
+   * the worker has durably stopped this job. Unknown active side effects must
+   * return `cannot_cancel_safely`; the bridge never calls Queue.remove blindly.
+   */
+  cancelJob?: (
+    jobId: string,
+    execution: TaskExecution,
+  ) => Promise<
+    | { status: 'acknowledged' }
+    | { status: 'cannot_cancel_safely' | 'failed'; reason: string }
+  >;
   onError?: (error: unknown, event: BullMQEvent) => void;
 }
 
@@ -148,6 +167,7 @@ export class BullMQTaskBridge {
   private readonly events: BullMQQueueEvents;
   private readonly bullQueue?: BullMQQueue;
   private readonly runtimeScope: string;
+  private readonly dispatchConcurrency: number;
   private readonly terminalProjection: 'single-execution' | 'execution-only';
   private readonly aggregateProgress: boolean;
   private readonly aggregateTerminal:
@@ -156,6 +176,7 @@ export class BullMQTaskBridge {
   private readonly isTerminalFailure?: (event: BullMQEvent) => Promise<boolean>;
   private readonly resultReference?: (event: BullMQEvent) => Promise<string | undefined>;
   private readonly failureReason: (event: BullMQEvent) => string | undefined;
+  private readonly cancelJob?: BullMQTaskBridgeOptions['cancelJob'];
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
   private readonly listeners: Array<[QueueEvent, (event: BullMQEvent) => void]>;
 
@@ -164,6 +185,12 @@ export class BullMQTaskBridge {
     this.events = options.events;
     this.bullQueue = options.queue;
     this.runtimeScope = options.runtimeScope?.trim() ?? '';
+    this.dispatchConcurrency = boundedInteger(
+      options.dispatchConcurrency ?? DEFAULT_DISPATCH_CONCURRENCY,
+      'dispatchConcurrency',
+      1,
+      MAX_DISPATCH_CONCURRENCY,
+    );
     // JavaScript callers get no compile-time check, so refuse at construction
     // rather than at the first completed job.
     if (
@@ -183,6 +210,7 @@ export class BullMQTaskBridge {
     this.isTerminalFailure = options.isTerminalFailure;
     this.resultReference = options.resultReference;
     this.failureReason = options.failureReason ?? defaultFailureReason;
+    this.cancelJob = options.cancelJob;
     this.onError = options.onError;
     this.listeners = [
       ['waiting', (event) => this.run(event, () => this.project('waiting', event))],
@@ -214,9 +242,7 @@ export class BullMQTaskBridge {
 
     const existing = await this.find(binding.jobId);
     if (existing) {
-      if (existing.taskId !== snapshot.id) {
-        throw new Error(`BullMQ job ${binding.jobId} is already bound to Task ${existing.taskId}`);
-      }
+      this.assertExistingBinding(existing, binding, snapshot.id);
       return this.ensureTask(snapshot.id, 'queued');
     }
 
@@ -236,9 +262,10 @@ export class BullMQTaskBridge {
       // A concurrent bridge may have bound the same external ID. The durable
       // lookup is authoritative; do not rely on a local process map.
       const raced = await this.find(binding.jobId);
-      if (!raced || raced.taskId !== snapshot.id) {
+      if (!raced) {
         throw error;
       }
+      this.assertExistingBinding(raced, binding, snapshot.id);
     }
     return this.ensureTask(snapshot.id, 'queued');
   }
@@ -248,26 +275,47 @@ export class BullMQTaskBridge {
    * binds and queues it. Repeating with the same IDs is safe after a crash.
    */
   async dispatch(input: BullMQTaskDispatch): Promise<TaskSnapshot> {
-    if (!this.bullQueue) {
-      throw new TypeError('BullMQTaskBridge dispatch requires a queue');
-    }
-    if (!this.runtimeScope) {
-      throw new TypeError('BullMQTaskBridge dispatch requires runtimeScope');
-    }
+    this.assertDispatchReady();
     const snapshot = await this.reserve(input);
-    await this.bullQueue.add(input.job.name, input.job.data, {
+    await this.dispatchReserved(input);
+    return this.ensureTask(snapshot.id, 'queued');
+  }
+
+  private async dispatchReserved(input: BullMQTaskDispatch): Promise<void> {
+    // assertDispatchReady() has already established both fields. Keeping the
+    // structural Queue optional lets tracking-only integrations avoid it.
+    const queue = this.bullQueue as BullMQQueue;
+    const execution = await this.client.getTaskExecution(input.executionId);
+    // A deterministic retry must not re-add work that already crossed the
+    // durable dispatch boundary. BullMQ only deduplicates a jobId while that
+    // job still exists; auto-removal could otherwise turn recovery into a
+    // second execution of an already-dispatched item.
+    if (execution.state !== 'pending_dispatch') return;
+    await queue.add(input.job.name, input.job.data, {
       ...(input.job.options ?? {}),
       jobId: input.jobId,
     });
-    const execution = await this.client.getTaskExecution(input.executionId);
-    if (execution.state === 'pending_dispatch') {
+    try {
       await this.client.bindTaskExecution(input.executionId, {
         runtime: 'bullmq',
         runtimeScope: this.runtimeScope,
         externalId: input.jobId,
       });
+    } catch (error) {
+      // Queue.add may have succeeded while a concurrent deterministic retry
+      // won the bind. Re-read the durable identity before classifying the
+      // result as failure; accepting anything else would hide a real mismatch.
+      const latest = await this.client.getTaskExecution(input.executionId);
+      if (
+        latest.state !== 'pending_dispatch' &&
+        latest.runtime === 'bullmq' &&
+        (latest.runtimeScope ?? '') === this.runtimeScope &&
+        latest.externalId === input.jobId
+      ) {
+        return;
+      }
+      throw error;
     }
-    return this.ensureTask(snapshot.id, 'queued');
   }
 
   /**
@@ -276,6 +324,7 @@ export class BullMQTaskBridge {
    * dispatch without inventing another Task or attempt.
    */
   async dispatchMany(inputs: BullMQTaskDispatch[]): Promise<TaskSnapshot> {
+    this.assertDispatchReady();
     if (inputs.length === 0) {
       throw new RangeError('dispatchMany requires at least one item');
     }
@@ -283,17 +332,32 @@ export class BullMQTaskBridge {
     if (!taskId || inputs.some((input) => input.task.id !== taskId)) {
       throw new TypeError('dispatchMany items must belong to one Task');
     }
-    for (const input of inputs) {
-      await this.reserve(input);
+    assertConsistentBatch(inputs);
+    // Establish the parent before parallel fan-out. Concurrent createTask
+    // races are recoverable, but avoiding them removes noise from the hot path.
+    await this.reserve(inputs[0]!);
+    await mapBounded(
+      inputs.slice(1),
+      this.dispatchConcurrency,
+      (input) => this.reserve(input),
+    );
+    // No Queue job is visible until the complete expected item set is durable.
+    // A partial Queue outage remains recoverable by repeating the same IDs.
+    await mapBounded(
+      inputs,
+      this.dispatchConcurrency,
+      (input) => this.dispatchReserved(input),
+    );
+    return this.ensureTask(taskId, 'queued');
+  }
+
+  private assertDispatchReady(): void {
+    if (!this.bullQueue) {
+      throw new TypeError('BullMQTaskBridge dispatch requires a queue');
     }
-    let snapshot: TaskSnapshot | undefined;
-    for (const input of inputs) {
-      snapshot = await this.dispatch(input);
+    if (!this.runtimeScope) {
+      throw new TypeError('BullMQTaskBridge dispatch requires runtimeScope');
     }
-    if (!snapshot) {
-      throw new Error('dispatchMany produced no Task snapshot');
-    }
-    return snapshot;
   }
 
   private async reserve(binding: BullMQTaskBinding): Promise<TaskSnapshot> {
@@ -308,11 +372,7 @@ export class BullMQTaskBridge {
     }
     const existing = await this.find(binding.jobId);
     if (existing) {
-      if (existing.taskId !== snapshot.id) {
-        throw new Error(
-          `BullMQ job ${binding.jobId} is already bound to Task ${existing.taskId}`,
-        );
-      }
+      this.assertExistingBinding(existing, binding, snapshot.id);
       return snapshot;
     }
     try {
@@ -325,10 +385,28 @@ export class BullMQTaskBridge {
       });
     } catch (error) {
       const raced = await this.find(binding.jobId);
-      if (!raced || raced.taskId !== snapshot.id) {
+      if (!raced) {
         throw error;
       }
+      this.assertExistingBinding(raced, binding, snapshot.id);
       return this.client.getTask(snapshot.id);
+    }
+  }
+
+  private assertExistingBinding(
+    existing: TaskExecution,
+    binding: BullMQTaskBinding,
+    taskId: string,
+  ): void {
+    if (existing.taskId !== taskId) {
+      throw new Error(
+        `BullMQ job ${binding.jobId} is already bound to Task ${existing.taskId}`,
+      );
+    }
+    if (existing.id !== binding.executionId) {
+      throw new Error(
+        `BullMQ job ${binding.jobId} is already bound to Execution ${existing.id}`,
+      );
     }
   }
 
@@ -357,6 +435,69 @@ export class BullMQTaskBridge {
           await this.fail(observation);
         }
     }
+  }
+
+  /** Reconciles a bounded application-supplied set after an offline gap. */
+  async reconcileMany(observations: BullMQTaskObservation[]): Promise<void> {
+    for (const observation of observations) {
+      await this.reconcile(observation);
+    }
+  }
+
+  /**
+   * Requests Task cancellation and coordinates the explicitly known BullMQ
+   * jobs. The job list is required because the bridge intentionally does not
+   * scan Redis or infer queue ownership.
+   */
+  async cancel(taskId: string, jobIds: string[]): Promise<TaskSnapshot> {
+    if (!this.cancelJob) {
+      throw new TypeError('BullMQTaskBridge cancel requires cancelJob');
+    }
+    if (jobIds.length === 0) {
+      throw new RangeError('BullMQTaskBridge cancel requires at least one known job id');
+    }
+    const task = await this.converge(async () => {
+      const current = await this.client.getTask(taskId);
+      return current.state === 'cancel_requested'
+        ? current
+        : this.client.requestTaskCancellation(current.id, current.entityVersion);
+    });
+    // A terminal Task answers a late request with `too_late`. Do not touch the
+    // runtime after the authoritative Task command has already refused it.
+    if (task.state !== 'cancel_requested') {
+      return task;
+    }
+    for (const jobId of new Set(jobIds)) {
+      const execution = await this.find(jobId);
+      if (!execution || execution.taskId !== taskId) {
+        return this.resolveCancellation(
+          taskId,
+          'failed',
+          `BullMQ job ${jobId} is not bound to Task ${taskId}`,
+        );
+      }
+      let result: Awaited<ReturnType<NonNullable<BullMQTaskBridgeOptions['cancelJob']>>>;
+      try {
+        result = await this.cancelJob(jobId, execution);
+      } catch {
+        return this.resolveCancellation(taskId, 'failed', `BullMQ cancellation failed for job ${jobId}`);
+      }
+      if (
+        result.status !== 'acknowledged' &&
+        result.status !== 'cannot_cancel_safely' &&
+        result.status !== 'failed'
+      ) {
+        return this.resolveCancellation(
+          taskId,
+          'failed',
+          `BullMQ cancellation returned an invalid status for job ${jobId}`,
+        );
+      }
+      if (result.status !== 'acknowledged') {
+        return this.resolveCancellation(taskId, result.status, result.reason);
+      }
+    }
+    return this.resolveCancellation(taskId, 'acknowledged');
   }
 
   /**
@@ -542,6 +683,17 @@ export class BullMQTaskBridge {
     }
   }
 
+  private resolveCancellation(
+    taskId: string,
+    status: 'acknowledged' | 'cannot_cancel_safely' | 'failed',
+    reason?: string,
+  ): Promise<TaskSnapshot> {
+    return this.converge(async () => {
+      const task = await this.client.getTask(taskId);
+      return this.client.resolveTaskCancellation(task.id, task.entityVersion, status, reason);
+    });
+  }
+
   private async ensureExecution(
     executionId: string,
     target: 'running' | 'succeeded' | 'failed',
@@ -677,6 +829,60 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+function boundedInteger(value: number, name: string, minimum: number, maximum: number): number {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new RangeError(`${name} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
+function assertConsistentBatch(inputs: readonly BullMQTaskDispatch[]): void {
+  const first = inputs[0]!;
+  const executionIds = new Set<string>();
+  const jobIds = new Set<string>();
+  for (const input of inputs) {
+    if (
+      input.task.type !== first.task.type ||
+      input.task.ownerId !== first.task.ownerId ||
+      input.task.definitionVersion !== first.task.definitionVersion
+    ) {
+      throw new TypeError('dispatchMany items must use one consistent Task definition');
+    }
+    if (executionIds.has(input.executionId)) {
+      throw new TypeError(`dispatchMany contains duplicate Execution id ${input.executionId}`);
+    }
+    if (jobIds.has(input.jobId)) {
+      throw new TypeError(`dispatchMany contains duplicate BullMQ job id ${input.jobId}`);
+    }
+    executionIds.add(input.executionId);
+    jobIds.add(input.jobId);
+  }
+}
+
+async function mapBounded<T>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T) => Promise<unknown>,
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < values.length) {
+      const index = next++;
+      await operation(values[index]!);
+    }
+  };
+  // Promise.all rejects before sibling workers finish, which can leak an old
+  // batch into an immediate retry. Drain every worker, then surface the first
+  // error so the caller gets a clean recovery boundary.
+  const results = await Promise.allSettled(
+    Array.from({ length: Math.min(concurrency, values.length) }, () => worker()),
+  );
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  );
+  if (failed) throw failed.reason;
 }
 
 function latestExecutions(

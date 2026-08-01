@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   BullMQTaskBridge,
+  RhinoQError,
   bullMQCountProgress,
   bullMQPercentageProgress,
 } from '../dist/index.js';
@@ -104,6 +105,225 @@ test('the bridge refuses to guess whether one job is the whole Task', () => {
   );
 });
 
+test('dispatchMany bounds fan-out pressure and never reserves an item twice', async () => {
+  const itemCount = 23;
+  const concurrency = 3;
+  const task = {
+    schemaVersion: 1,
+    entityVersion: 1,
+    id: 'bounded-fanout',
+    type: 'bulk-download',
+    state: 'pending',
+    progress: { completed: 0 },
+    hasResult: false,
+    executions: [],
+    createdAt: '2026-08-01T00:00:00Z',
+    updatedAt: '2026-08-01T00:00:00Z',
+  };
+  const executions = new Map();
+  let createCalls = 0;
+  let lookupCalls = 0;
+  let activeReserves = 0;
+  let maxActiveReserves = 0;
+  let activeAdds = 0;
+  let maxActiveAdds = 0;
+  let addCalls = 0;
+  const client = {
+    async getTask() { return task; },
+    async lookupTaskExecution(_runtime, externalId) {
+      lookupCalls++;
+      const found = [...executions.values()].find((value) => value.externalId === externalId);
+      if (!found) throw new RhinoQError('RHINOQ_EXECUTION_NOT_FOUND', 'missing', false);
+      return found;
+    },
+    async createTaskExecution(taskId, input) {
+      createCalls++;
+      activeReserves++;
+      maxActiveReserves = Math.max(maxActiveReserves, activeReserves);
+      await delay(2);
+      const execution = {
+        id: input.id,
+        taskId,
+        runtime: input.runtime,
+        runtimeScope: input.runtimeScope,
+        externalId: input.externalId,
+        state: 'pending_dispatch',
+        version: 1,
+      };
+      executions.set(execution.id, execution);
+      activeReserves--;
+      return task;
+    },
+    async getTaskExecution(id) { return executions.get(id); },
+    async bindTaskExecution(id, input) {
+      const execution = executions.get(id);
+      execution.externalId = input.externalId;
+      execution.state = 'dispatched';
+      execution.version++;
+      return task;
+    },
+    async transitionTask(_id, _version, state) {
+      task.state = state;
+      task.entityVersion++;
+      return task;
+    },
+  };
+  const added = new Set();
+  let failOnce = true;
+  const bridge = new BullMQTaskBridge({
+    client,
+    events: { on() {}, off() {} },
+    queue: {
+      async add(_name, _data, options) {
+        addCalls++;
+        activeAdds++;
+        maxActiveAdds = Math.max(maxActiveAdds, activeAdds);
+        await delay(2);
+        if (options.jobId === 'job-7' && failOnce) {
+          failOnce = false;
+          activeAdds--;
+          throw new Error('simulated partial Redis outage');
+        }
+        added.add(options.jobId);
+        activeAdds--;
+        return { id: options.jobId };
+      },
+    },
+    runtimeScope: 'bounded-queue',
+    dispatchConcurrency: concurrency,
+    terminalProjection: 'execution-only',
+  });
+  const inputs = Array.from({ length: itemCount }, (_, index) => ({
+    task: { id: task.id, type: task.type, definitionVersion: 1 },
+    executionId: `exec-${index}`,
+    itemKey: `item-${index}`,
+    jobId: `job-${index}`,
+    job: { name: 'download', data: { index } },
+  }));
+
+  await assert.rejects(bridge.dispatchMany(inputs), /partial Redis outage/);
+  const result = await bridge.dispatchMany(inputs);
+
+  assert.equal(result.state, 'queued');
+  assert.equal(executions.size, itemCount);
+  assert.equal(createCalls, itemCount);
+  assert.equal(lookupCalls, itemCount * 2);
+  assert.equal(added.size, itemCount);
+  assert.ok(addCalls < itemCount * 2, `retry re-added ${addCalls} jobs`);
+  assert.ok(maxActiveReserves <= concurrency, `reserve concurrency was ${maxActiveReserves}`);
+  assert.ok(maxActiveAdds <= concurrency, `Queue.add concurrency was ${maxActiveAdds}`);
+  assert.ok(maxActiveReserves > 1);
+  assert.ok(maxActiveAdds > 1);
+});
+
+test('dispatchMany validates its pressure limit before doing work', () => {
+  const base = {
+    client: {}, events: { on() {}, off() {} }, queue: {}, runtimeScope: 'queue',
+    terminalProjection: 'execution-only',
+  };
+  assert.throws(() => new BullMQTaskBridge({ ...base, dispatchConcurrency: 0 }), /1 to 64/);
+  assert.throws(() => new BullMQTaskBridge({ ...base, dispatchConcurrency: 65 }), /1 to 64/);
+  assert.throws(() => new BullMQTaskBridge({ ...base, dispatchConcurrency: 1.5 }), /1 to 64/);
+});
+
+test('dispatchMany rejects ambiguous batch identities before any durable or Queue work', async () => {
+  let calls = 0;
+  const bridge = new BullMQTaskBridge({
+    client: new Proxy({}, { get() { return async () => { calls++; }; } }),
+    events: { on() {}, off() {} },
+    queue: { async add() { calls++; } },
+    runtimeScope: 'queue',
+    terminalProjection: 'execution-only',
+  });
+  const task = { id: 'task', type: 'batch', ownerId: 'owner', definitionVersion: 1 };
+  const input = (index, overrides = {}) => ({
+    task,
+    executionId: `exec-${index}`,
+    jobId: `job-${index}`,
+    job: { name: 'work', data: index },
+    ...overrides,
+  });
+
+  await assert.rejects(
+    bridge.dispatchMany([input(1), input(2, { jobId: 'job-1' })]),
+    /duplicate BullMQ job id/,
+  );
+  await assert.rejects(
+    bridge.dispatchMany([input(1), input(2, { executionId: 'exec-1' })]),
+    /duplicate Execution id/,
+  );
+  await assert.rejects(
+    bridge.dispatchMany([
+      input(1),
+      input(2, { task: { ...task, definitionVersion: 2 } }),
+    ]),
+    /consistent Task definition/,
+  );
+  assert.equal(calls, 0);
+});
+
+test('track refuses to reuse a BullMQ job identity for another Execution', async () => {
+  const harness = newHarness({ progress: { completed: 0 } });
+  await assert.rejects(harness.bridge.track({
+    task: { id: 'task-1', type: 'bulk-download', definitionVersion: 1 },
+    executionId: 'different-execution',
+    jobId: 'bull-job-1',
+  }), /already bound to Execution exec-1/);
+});
+
+test('concurrent deterministic dispatch converges when another caller wins the bind', async () => {
+  const task = {
+    schemaVersion: 1, entityVersion: 1, id: 'race-task', type: 'work',
+    state: 'pending', progress: { completed: 0 }, hasResult: false, executions: [],
+    createdAt: '2026-08-01T00:00:00Z', updatedAt: '2026-08-01T00:00:00Z',
+  };
+  const execution = {
+    id: 'race-exec', taskId: task.id, runtime: 'bullmq',
+    runtimeScope: 'race-queue', externalId: 'race-job',
+    state: 'pending_dispatch', version: 1,
+  };
+  let bindCalls = 0;
+  const client = {
+    async getTask() { return task; },
+    async lookupTaskExecution() { return { ...execution }; },
+    async getTaskExecution() { return { ...execution }; },
+    async bindTaskExecution() {
+      bindCalls++;
+      await delay(2);
+      if (execution.state !== 'pending_dispatch') {
+        throw new RhinoQError('RHINOQ_VERSION_CONFLICT', 'lost bind race', false);
+      }
+      execution.state = 'dispatched';
+      execution.version++;
+      return task;
+    },
+    async transitionTask(_id, _version, state) {
+      task.state = state;
+      task.entityVersion++;
+      return task;
+    },
+  };
+  const bridge = new BullMQTaskBridge({
+    client,
+    events: { on() {}, off() {} },
+    queue: { async add(_name, _data, options) { return { id: options.jobId }; } },
+    runtimeScope: execution.runtimeScope,
+    terminalProjection: 'single-execution',
+  });
+  const input = {
+    task: { id: task.id, type: task.type, definitionVersion: 1 },
+    executionId: execution.id,
+    jobId: execution.externalId,
+    job: { name: 'work', data: {} },
+  };
+
+  const results = await Promise.all([bridge.dispatch(input), bridge.dispatch(input)]);
+
+  assert.equal(bindCalls, 2);
+  assert.equal(execution.state, 'dispatched');
+  assert.deepEqual(results.map((result) => result.state), ['queued', 'queued']);
+});
+
 test('the bridge refuses to guess the unit of numeric BullMQ progress', async () => {
   const errors = [];
   const harness = newHarness({
@@ -137,6 +357,33 @@ test('numeric BullMQ progress requires an explicit count or percentage mapper', 
   assert.deepEqual(percentage.task.progress, { completed: 42, total: 100 });
 });
 
+test('cancellation is acknowledged only after every known job confirms stop', async () => {
+  const harness = newHarness({
+    progress: { completed: 0 },
+    cancelJob: async () => ({ status: 'acknowledged' }),
+  });
+  const result = await harness.bridge.cancel('task-1', ['bull-job-1']);
+
+  assert.equal(result.cancellation.status, 'acknowledged');
+  assert.deepEqual(harness.calls.slice(-4), [
+    'getTask', 'requestTaskCancellation', 'lookupTaskExecution', 'getTask',
+  ]);
+});
+
+test('cancellation fails closed when an active effect cannot be stopped safely', async () => {
+  const harness = newHarness({
+    progress: { completed: 0 },
+    cancelJob: async () => ({
+      status: 'cannot_cancel_safely',
+      reason: 'provider request may already have completed',
+    }),
+  });
+  const result = await harness.bridge.cancel('task-1', ['bull-job-1']);
+
+  assert.equal(result.cancellation.status, 'cannot_cancel_safely');
+  assert.equal(result.cancellation.reason, 'provider request may already have completed');
+});
+
 function newHarness({
   progress,
   terminalProjection = 'single-execution',
@@ -144,6 +391,7 @@ function newHarness({
   isTerminalFailure,
   progressMapper,
   onError,
+  cancelJob,
 }) {
   const calls = [];
   const task = {
@@ -217,6 +465,18 @@ function newHarness({
       task.entityVersion += 1;
       return task;
     },
+    async requestTaskCancellation() {
+      calls.push('requestTaskCancellation');
+      task.state = 'cancel_requested';
+      task.cancellation = { status: 'requested' };
+      task.entityVersion += 1;
+      return task;
+    },
+    async resolveTaskCancellation(id, expectedVersion, status, reason) {
+      task.cancellation = { status, ...(reason ? { reason } : {}) };
+      task.entityVersion += 1;
+      return task;
+    },
   };
 
   const listeners = new Map();
@@ -236,6 +496,7 @@ function newHarness({
     ...(isTerminalFailure ? { isTerminalFailure } : {}),
     ...(progressMapper ? { progress: progressMapper } : {}),
     ...(onError ? { onError } : {}),
+    ...(cancelJob ? { cancelJob } : {}),
   });
 
   return {
@@ -267,4 +528,8 @@ function newHarness({
       }
     },
   };
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

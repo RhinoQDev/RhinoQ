@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -96,6 +97,8 @@ func (s *TaskStore) CreateNextExecution(_ context.Context, input ports.Execution
 	}
 	s.executions[record.ID] = record
 	byAttempt[record.Attempt] = record.ID
+	parent.ExecutionCounts.Total++
+	parent.ExecutionCounts.PendingDispatch++
 	parent.Version++
 	if input.Now.After(parent.UpdatedAt) {
 		parent.UpdatedAt = input.Now
@@ -141,12 +144,35 @@ func (s *TaskStore) UpdateExecution(_ context.Context, record execution.Record, 
 		return execution.Record{}, 0, ports.ErrTaskNotFound
 	}
 	s.executions[record.ID] = record
+	if current.State != record.State {
+		adjustExecutionCount(&parent.ExecutionCounts, current.State, -1)
+		adjustExecutionCount(&parent.ExecutionCounts, record.State, 1)
+	}
 	parent.Version++
 	if record.UpdatedAt.After(parent.UpdatedAt) {
 		parent.UpdatedAt = record.UpdatedAt
 	}
 	s.tasks[taskID] = parent
 	return record, parent.Version, nil
+}
+
+func adjustExecutionCount(counts *task.ExecutionCounts, state execution.State, delta int64) {
+	switch state {
+	case execution.PendingDispatch:
+		counts.PendingDispatch += delta
+	case execution.Dispatched:
+		counts.Dispatched += delta
+	case execution.Running:
+		counts.Running += delta
+	case execution.Succeeded:
+		counts.Succeeded += delta
+	case execution.Failed:
+		counts.Failed += delta
+	case execution.Stalled:
+		counts.Stalled += delta
+	case execution.Cancelled:
+		counts.Cancelled += delta
+	}
 }
 
 func (s *TaskStore) ListTaskExecutions(_ context.Context, taskID string) ([]execution.Record, error) {
@@ -163,4 +189,40 @@ func (s *TaskStore) ListTaskExecutions(_ context.Context, taskID string) ([]exec
 		return records[i].Attempt < records[j].Attempt
 	})
 	return records, nil
+}
+
+func (s *TaskStore) ListTaskExecutionsPage(_ context.Context, query ports.ExecutionPageQuery) ([]execution.Record, bool, error) {
+	if query.TaskID == "" || query.Limit <= 0 {
+		return nil, false, errors.New("task id and positive page limit are required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	all := make([]execution.Record, 0, len(s.attempts[query.TaskID]))
+	var after execution.Record
+	if query.AfterID != "" {
+		var found bool
+		after, found = s.executions[execution.ID(query.AfterID)]
+		if !found || after.TaskID != query.TaskID {
+			return nil, false, errors.New("invalid execution cursor")
+		}
+	}
+	for _, id := range s.attempts[query.TaskID] {
+		record := s.executions[id]
+		if query.AfterID != "" && (record.CreatedAt.Before(after.CreatedAt) ||
+			(record.CreatedAt.Equal(after.CreatedAt) && record.ID.String() <= query.AfterID)) {
+			continue
+		}
+		all = append(all, record)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].ID < all[j].ID
+		}
+		return all[i].CreatedAt.Before(all[j].CreatedAt)
+	})
+	more := len(all) > query.Limit
+	if more {
+		all = all[:query.Limit]
+	}
+	return all, more, nil
 }

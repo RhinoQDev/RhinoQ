@@ -32,7 +32,7 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 -shuffle=on ./...
       - name: Validate release archive configuration
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: check
@@ -82,6 +82,17 @@ jobs:
         working-directory: sdks/node
         env:
           RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable
+      - name: PostgreSQL concurrency and fan-out smoke
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: node bench/postgres-benchmark.mjs
+        working-directory: sdks/node
+        env:
+          RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable
+          RHINOQ_BENCH_ITERATIONS: 200
+          RHINOQ_BENCH_CONCURRENCIES: 1,8,16,32
+          RHINOQ_BENCH_FANOUT_SIZES: 10,100,500
+          RHINOQ_BENCH_FANOUT_CONCURRENCIES: 1,8,32
+          RHINOQ_BENCH_FANOUT_READS: 50
 
   node-sdk:
     name: Node SDK checks (Node ${{ matrix.node-version }})
@@ -103,3 +114,28 @@ jobs:
         working-directory: sdks/node
       - run: npm run pack:check
         working-directory: sdks/node
+
+  benchmark-smoke:
+    name: Benchmark smoke (non-gating evidence)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+        working-directory: sdks/node
+      - run: npm run build
+        working-directory: sdks/node
+      - name: Node SDK microbenchmark JSON
+        run: node bench/task-benchmark.mjs
+        working-directory: sdks/node
+        env:
+          RHINOQ_BENCH_ITERATIONS: 20000
+          RHINOQ_BENCH_SAMPLES: 5
+      - name: Go domain/memory benchmark
+        run: go test ./tests/benchmarks -run '^$' -bench . -benchmem -count=3

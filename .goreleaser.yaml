@@ -43,6 +43,11 @@ archives:
 checksum:
   name_template: checksums.txt
 
+sboms:
+  - artifacts: archive
+    documents:
+      - "${artifact}.spdx.sbom"
+
 # Release provenance. The workflow requests an OIDC token so cosign can sign
 # the checksum file without a long-lived key.
 signs:

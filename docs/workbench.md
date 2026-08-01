@@ -83,9 +83,12 @@ permissions or evidence semantics.
 
 ## Safety and privacy
 
-Workbench v0 is deliberately read-only:
+Workbench is read-only by default. `--actions` explicitly enables only subject
+recheck and the registered safe-repair workflow:
 
-- it exposes no replay, repair, pause or destructive action;
+- it exposes no replay, pause, arbitrary SQL or unregistered mutation;
+- repair requires proposal, dry-run, different approver, reason, fresh
+  precondition, application callback and automatic verification;
 - list and evidence reads are bounded;
 - job payloads are not part of the Workbench DTOs;
 - database credentials are never sent to the browser or printed in the source
@@ -96,9 +99,9 @@ Workbench v0 is deliberately read-only:
 - CSP, frame denial, content-type protection and a restrictive permissions
   policy are set on every response.
 
-Mutating operations remain explicit CLI/application commands with the existing
-actor, reason and audit requirements. A future write workflow must go through
-an application use case; it may not call a store directly from HTTP.
+Every action goes through an application use case; Workbench never calls a
+store directly. Without `RHINOQ_REPAIR_CALLBACKS_JSON`, no business repair
+handler is registered and preview/execute fail closed.
 
 ## Architecture
 

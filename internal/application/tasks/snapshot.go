@@ -1,12 +1,21 @@
 package tasks
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"sort"
 
 	taskcontract "github.com/madebyduy/RhinoQ/internal/contracts/task"
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
 )
+
+const maxExecutionPageSize = 500
+
+type executionCursor struct {
+	ID string `json:"id"`
+}
 
 // newSnapshot is the anti-corruption mapping between authoritative domain
 // records and the stable read contract. Keeping it here prevents contracts
@@ -64,4 +73,60 @@ func newSnapshot(record task.Record, attempts []execution.Record) (taskcontract.
 		return taskcontract.Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func newSummary(record task.Record) (taskcontract.Summary, error) {
+	snapshot, err := newSnapshot(record, nil)
+	if err != nil {
+		return taskcontract.Summary{}, err
+	}
+	return taskcontract.Summary{
+		SchemaVersion: snapshot.SchemaVersion, EntityVersion: snapshot.EntityVersion,
+		ID: snapshot.ID, Type: snapshot.Type, OwnerID: snapshot.OwnerID,
+		State: snapshot.State, Cancellation: snapshot.Cancellation,
+		Progress: snapshot.Progress, HasResult: snapshot.HasResult,
+		ExecutionCounts: taskcontract.ExecutionCounts{
+			Total:           record.ExecutionCounts.Total,
+			PendingDispatch: record.ExecutionCounts.PendingDispatch,
+			Dispatched:      record.ExecutionCounts.Dispatched,
+			Running:         record.ExecutionCounts.Running,
+			Succeeded:       record.ExecutionCounts.Succeeded,
+			Failed:          record.ExecutionCounts.Failed,
+			Stalled:         record.ExecutionCounts.Stalled,
+			Cancelled:       record.ExecutionCounts.Cancelled,
+		},
+		CreatedAt: snapshot.CreatedAt, UpdatedAt: snapshot.UpdatedAt,
+	}, nil
+}
+
+func executionContract(record execution.Record) (taskcontract.Execution, error) {
+	if record.ID == "" || record.Attempt <= 0 || record.Runtime == "" ||
+		!record.State.Valid() || record.Version <= 0 {
+		return taskcontract.Execution{}, taskcontract.ErrInvalidSnapshot
+	}
+	return taskcontract.Execution{
+		ID: record.ID.String(), Attempt: record.Attempt, Runtime: record.Runtime,
+		State: record.State.String(), Version: record.Version,
+		HasResult: record.ResultRef != "", FailureReason: record.FailureReason,
+	}, nil
+}
+
+func decodeExecutionCursor(value string) (executionCursor, error) {
+	if value == "" {
+		return executionCursor{}, nil
+	}
+	body, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return executionCursor{}, errors.New("invalid execution cursor")
+	}
+	var cursor executionCursor
+	if err := json.Unmarshal(body, &cursor); err != nil || cursor.ID == "" {
+		return executionCursor{}, errors.New("invalid execution cursor")
+	}
+	return cursor, nil
+}
+
+func encodeExecutionCursor(record execution.Record) string {
+	body, _ := json.Marshal(executionCursor{ID: record.ID.String()})
+	return base64.RawURLEncoding.EncodeToString(body)
 }

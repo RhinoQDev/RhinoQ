@@ -2,6 +2,96 @@
 
 ## Unreleased
 
+- Repositioned RhinoQ around the customer-visible failure it catches: a queue
+  can report technical success while the provider or business outcome is still
+  unknown or wrong. Added a single five-minute CLI path and an official
+  Next.js/BullMQ/PostgreSQL/Stripe response-loss demo covering controlled
+  recheck and repair end to end.
+
+- Completed the ProviderOperation contract across Go, PostgreSQL, Agent and
+  Node: Task linkage, `failed`/`uncertain`, explicit confirmation/retry policy,
+  append-only evidence, Stripe and provisioning/storage adapters, and a fence
+  that prevents repeating an unknown external mutation.
+
+- Added guarded remote repair callbacks. Go still owns plan state, four-eyes
+  approval, precondition recheck, idempotency and verification; application
+  callbacks are deployment-allowlisted, HMAC-signed and response-bounded.
+
+- Added stored Task Execution aggregates and cursor pages, durable per-
+  destination notification deduplication, severity/grace/regression links,
+  process rate limits, a non-root container, SBOM/provenance release config and
+  a tested PostgreSQL restore drill.
+
+- Prepared `@rhinoq/node@0.1.0-beta.5` with lightweight Task Summary polling
+  and stable keyset Execution pagination. The compatibility full Snapshot is
+  unchanged, while browser `TaskStore` uses summaries when available and loads
+  fan-out detail in bounded pages.
+
+- Added the authoritative Go `ProviderOperation` contract and migration 018.
+  Provider/operation/idempotency identity is durable, unknown network results
+  fail closed as `uncertain`, and read-back can confirm without reissuing the
+  provider call. The credential-free Stripe-shaped response-loss demo verifies
+  that repeating one refund still makes exactly one provider call.
+
+- Added explicit signed Finding webhook and Slack delivery. Evidence is
+  redacted by default, event IDs are deterministic for receiver deduplication,
+  non-loopback delivery requires HTTPS and timeouts are bounded. Automatic
+  durable fan-out remains deliberately out of scope for this candidate.
+
+- Added migration 019 and a safe repair workflow: registered handlers, preview,
+  four-eyes approval, precondition recheck, plan ID as apply idempotency token,
+  and independent verification before resolving the Finding. Stale plans call
+  no mutation; unknown apply/verify outcomes are not retried blindly.
+
+- Added a concrete three-seat design-partner playbook for BullMQ fan-out,
+  Stripe/billing and provisioning/fulfilment workloads. A lead is not counted
+  as a partner until a real workload and evidence-sharing pilot are agreed.
+
+- Added reproducible Node JSON microbenchmarks, Go domain/memory benchmarks and
+  a PostgreSQL concurrency/fan-out matrix. Browser fault tests now cover a
+  fixed 10,000-event disorder stream plus 32 deterministic concurrent seeds
+  mixing duplicates, reordering and transport loss. Scheduled CI exercises
+  multiple PostgreSQL concurrency and snapshot sizes without promoting local
+  results into production throughput claims.
+
+- Hardened BullMQ `dispatchMany()` with bounded reserve/enqueue workers
+  (`dispatchConcurrency`, default 8, range 1..64), removal of the duplicate
+  reserve pass, preflight rejection of ambiguous IDs/Task definitions and a
+  drained failure boundary. A partial Redis outage can now be retried without
+  the prior call continuing in the background; already-dispatched items are
+  not added to BullMQ again. Concurrent callers converge when one wins the
+  durable bind. Existing runtime job identities must resolve to the same
+  Execution, not merely the same Task.
+
+- Hardened browser cancellation against poll/version races with three bounded
+  convergence attempts. Subscriber exceptions are isolated and optionally
+  reported through `onListenerError`, so one broken component cannot starve
+  other views or stop polling.
+
+- Real PostgreSQL repeat testing exposed a time-sensitive assertion that
+  compared a 50 ms retry with the application clock after several round trips.
+  It now compares `not_before` with PostgreSQL `clock_timestamp()` immediately
+  before the failure command. The real-DB suite then passed five shuffled
+  repetitions.
+
+- Added a framework-neutral browser `TaskStore` with serialized polling, stale
+  revision rejection, reconnect state, bounded backoff and owner-scoped
+  cancel/result actions. Browser polling pauses while its tab is hidden and
+  resumes immediately on visibility, avoiding background request churn. Tests
+  cover reconnect, stale responses, cancellation fencing and stopping with an
+  in-flight request.
+
+- Added `createUseRhinoTask()` as a zero-added-dependency React adapter and the
+  read-only `rhinoq-task-check` CLI. The hook uses the application's existing
+  React runtime; backend-only installs do not pull React. The checker validates
+  the owner endpoint, Snapshot v1 shape and non-regressing versions.
+
+- Added fail-closed BullMQ cancellation composition and bounded
+  `reconcileMany()` for application-known jobs. `cancel()` persists
+  `cancel_requested`, then requires an application callback to prove each job
+  stopped. Ambiguous effects become `cannot_cancel_safely`; callback errors
+  become `failed` instead of being reported as cancelled.
+
 - Prepared `@rhinoq/node@0.1.0-beta.4` to remove the measured Node adoption
   tax. A fresh Task-only install now creates exactly three tables in the
   dedicated `rhinoq_task` schema and uses the application's existing `pg.Pool`

@@ -93,3 +93,23 @@ func TestInvalidJSONDoesNotEchoParserDetails(t *testing.T) {
 		t.Fatalf("request data leaked into the error response: %s", response.Body.String())
 	}
 }
+
+func TestAuthenticatedRoutesFailFastAtTheProcessRateLimit(t *testing.T) {
+	server, err := New(Config{Client: rhinoq.NewInMemory(), Token: securityTestToken,
+		RequestsPerSecond: 0.01, RequestBurst: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		request.Header.Set("Authorization", "Bearer "+securityTestToken)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if attempt == 0 && response.Code != http.StatusOK {
+			t.Fatalf("first=%d", response.Code)
+		}
+		if attempt == 1 && (response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "") {
+			t.Fatalf("second=%d retry=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+		}
+	}
+}

@@ -10,6 +10,7 @@ const (
 	Pending         State = "pending"
 	Queued          State = "queued"
 	Running         State = "running"
+	Uncertain       State = "uncertain"
 	Succeeded       State = "succeeded"
 	Failed          State = "failed"
 	CancelRequested State = "cancel_requested"
@@ -20,7 +21,7 @@ func (s State) String() string { return string(s) }
 
 func (s State) Valid() bool {
 	switch s {
-	case Pending, Queued, Running, Succeeded, Failed, CancelRequested, Cancelled:
+	case Pending, Queued, Running, Uncertain, Succeeded, Failed, CancelRequested, Cancelled:
 		return true
 	default:
 		return false
@@ -34,8 +35,9 @@ func CanTransition(from, to State) bool {
 	transitions := map[State]map[State]bool{
 		Pending:         {Queued: true, Cancelled: true},
 		Queued:          {Running: true, CancelRequested: true, Cancelled: true},
-		Running:         {Succeeded: true, Failed: true, CancelRequested: true},
-		CancelRequested: {Succeeded: true, Failed: true, Cancelled: true},
+		Running:         {Uncertain: true, Succeeded: true, Failed: true, CancelRequested: true},
+		Uncertain:       {Succeeded: true, Failed: true},
+		CancelRequested: {Uncertain: true, Succeeded: true, Failed: true, Cancelled: true},
 		Failed:          {Queued: true},
 		Succeeded:       {},
 		Cancelled:       {Queued: true},

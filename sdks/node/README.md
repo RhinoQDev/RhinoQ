@@ -1,5 +1,18 @@
 # RhinoQ for Node.js
 
+Catch background jobs that succeeded technically but failed in the real world.
+
+```bash
+npm install @rhinoq/node@next pg
+npx rhinoq init
+npx rhinoq verify add completed-report-has-output
+npx rhinoq doctor
+```
+
+The embedded PostgreSQL Task client and BullMQ bridge reduce onboarding cost;
+the Go Gateway remains authoritative for ProviderOperation uncertainty,
+evidence and guarded repair.
+
 Node.js support has two deliberately separate paths:
 
 - `PostgresProducer` enqueues through the application's existing PostgreSQL
@@ -9,7 +22,7 @@ Node.js support has two deliberately separate paths:
   Effect Ledger transitions.
 
 This package is a development preview. `@rhinoq/node@0.1.0-beta.2` is publicly
-available on the npm `next` tag. The Task-only `0.1.0-beta.4` candidate is
+available on the npm `next` tag. The Task-only `0.1.0-beta.5` candidate is
 prepared in this source tree but is not published yet; use the local tarball
 path below when validating `main`. Neither version is a production stability
 promise. The preview targets Node.js 22+.
@@ -29,14 +42,14 @@ npm ci                 # install exactly what package-lock.json records
 npm run typecheck      # check TypeScript without producing dist/
 npm test               # build dist/ and run the SDK tests
 npm run pack:check     # show the files that would enter the package
-npm pack               # create rhinoq-node-0.1.0-beta.4.tgz
+npm pack               # create rhinoq-node-0.1.0-beta.5.tgz
 ```
 
 Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.4.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.5.tgz pg
 ```
 
 For an application evaluation, pin the explicit prerelease rather than using
@@ -47,7 +60,7 @@ npm install @rhinoq/node@0.1.0-beta.2 pg
 ```
 
 Do not use that package to evaluate the embedded Task profile or corrected
-BullMQ contracts: those changes are in the `beta.4` candidate.
+BullMQ contracts: those changes are in the `beta.5` candidate.
 Build and install the local tarball when testing them.
 
 ## Fastest Task-only setup
@@ -70,6 +83,11 @@ No Gateway, Go toolchain or RhinoQ credential is involved. Use
 and `ApplicationTaskClient` in the browser; the operator token never enters
 this path.
 
+For large fan-outs, poll `getTaskSummary()` and load attempts with
+`listTaskExecutions(taskId, cursor, limit)`. `TaskStore` selects the summary
+automatically when the supplied browser client supports it. `getTask()` remains
+compatible but includes every Execution and therefore grows with the batch.
+
 Check the [release guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/releasing.md)
 for the authoritative publication state and the trusted-publishing setup.
 
@@ -83,6 +101,7 @@ for the authoritative publication state and the trusted-publishing setup.
 | inspect, pause, cancel, replay or triage | `RhinoQClient` | Yes |
 | create, update or poll a Task snapshot | `PostgresTaskClient` | No |
 | reserve and dispatch a BullMQ job as a Task | `BullMQTaskBridge.dispatch()` | No |
+| reserve a bounded BullMQ fan-out | `BullMQTaskBridge.dispatchMany()` | No |
 | mirror a job through the legacy full platform | `BullMQTaskBridge` + `RhinoQClient` | Yes |
 
 ## Task polling
@@ -143,6 +162,41 @@ An HTTP/authentication error is thrown to the caller instead of being hidden.
 Set `stopOnTerminal: false` only for a mounted history view. This helper does
 not add React state, SSE, WebSocket or Redis.
 
+For a mounted browser view use the framework-neutral `TaskStore`. Its
+`subscribe()` and `getSnapshot()` methods fit React `useSyncExternalStore`; it
+also exposes reconnect state, bounded backoff, `cancel()` and `getResult()`:
+
+```ts
+const store = new TaskStore(applicationTaskClient, taskId);
+const unsubscribe = store.subscribe(render);
+store.start();
+// On unmount: unsubscribe(); store.stop();
+```
+
+React applications can create the hook once without adding another RhinoQ
+package or duplicating React in the dependency graph:
+
+```ts
+import * as React from 'react';
+import { createUseRhinoTask } from '@rhinoq/node';
+
+export const useRhinoTask = createUseRhinoTask(React);
+
+function TaskProgress({ client, taskId }) {
+  const { snapshot, status, cancel } = useRhinoTask(client, taskId);
+  return <button onClick={() => void cancel()}>
+    {snapshot?.progress.completed ?? 0} · {status}
+  </button>;
+}
+```
+
+After wiring the application-owned endpoint, check it without mutating state:
+
+```bash
+RHINOQ_TASK_HEADERS_JSON='{"authorization":"Bearer app-session"}' \
+  npx rhinoq-task-check http://localhost:3000/tasks report_01
+```
+
 ## BullMQ lifecycle bridge (V1)
 
 Use this only after the application has added its own BullMQ job. The bridge
@@ -187,9 +241,32 @@ if (state === 'waiting' || state === 'active' || state === 'completed') {
 ```
 
 For a terminal failure, pass `terminal: true` only after the application has
-checked BullMQ's retry policy/attempts. The bridge does not auto-dispatch,
-cancel a BullMQ job, create a RhinoQ Execution for a BullMQ retry, or
-discover/scan a whole queue after downtime.
+checked BullMQ's retry policy/attempts. The bridge dispatches only through an
+application-supplied Queue and reconciles only application-supplied jobs. It
+does not discover/scan a whole queue after downtime or invent retry identity.
+
+Cancellation is application-owned and fail-closed. Configure `cancelJob` to
+remove a waiting job or cooperate with a running worker, then pass the known
+job IDs. Return `acknowledged` only after stop is durable; return
+`cannot_cancel_safely` when an external effect may already have happened:
+
+```ts
+const bridge = new BullMQTaskBridge({
+  client, queue, events, runtimeScope: 'reports',
+  terminalProjection: 'single-execution',
+  cancelJob: async (jobId) => {
+    const job = await queue.getJob(jobId);
+    if (!job) return { status: 'acknowledged' };
+    if (await job.isActive()) return {
+      status: 'cannot_cancel_safely',
+      reason: 'worker has already started the external effect',
+    };
+    await job.remove();
+    return { status: 'acknowledged' };
+  },
+});
+await bridge.cancel(taskId, [jobId]);
+```
 
 `terminalProjection` is required and has no default: only the application knows
 whether one BullMQ job is the whole user-facing Task. For a fan-out queue,
@@ -210,6 +287,19 @@ application completes/fails the parent Task only when its aggregate business
 outcome is known — including after a crash between the last item and that call.
 The bridge refuses to guess: constructing it without `terminalProjection`
 throws.
+
+When the application owns enqueueing through the bridge, `dispatchMany()`
+reserves the complete item set before the first `Queue.add`. Reservation and
+enqueue pressure are bounded by `dispatchConcurrency` (default `8`, valid
+`1..64`). Duplicate job/Execution IDs or inconsistent Task definitions fail
+before any side effect. On a partial Queue outage the bridge drains its bounded
+workers before returning; repeat the same deterministic IDs to recover.
+Executions already past `pending_dispatch` are not sent to `Queue.add` again,
+and concurrent callers converge if one wins the durable bind.
+
+The current Task Snapshot includes every Execution summary. For large batches,
+run `npm run benchmark:postgres` with `RHINOQ_BENCH_FANOUT_SIZES` before choosing
+a batch size; bounded dispatch does not make an unbounded snapshot free.
 
 Each item also carries its own outcome, so a batch view does not need a
 parallel per-item store:

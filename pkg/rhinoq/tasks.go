@@ -27,6 +27,7 @@ const (
 	TaskPending         TaskState = "pending"
 	TaskQueued          TaskState = "queued"
 	TaskRunning         TaskState = "running"
+	TaskUncertain       TaskState = "uncertain"
 	TaskSucceeded       TaskState = "succeeded"
 	TaskFailed          TaskState = "failed"
 	TaskCancelRequested TaskState = "cancel_requested"
@@ -129,6 +130,42 @@ type TaskSnapshot struct {
 	UpdatedAt     time.Time              `json:"updatedAt"`
 }
 
+// TaskSummary is the lightweight polling contract. It advances with the same
+// EntityVersion as TaskSnapshot but never embeds the growing execution list.
+type TaskSummary struct {
+	SchemaVersion   int                 `json:"schemaVersion"`
+	EntityVersion   int64               `json:"entityVersion"`
+	ID              string              `json:"id"`
+	Type            string              `json:"type"`
+	OwnerID         string              `json:"ownerId,omitempty"`
+	State           TaskState           `json:"state"`
+	Cancellation    TaskCancellation    `json:"cancellation"`
+	Progress        TaskProgress        `json:"progress"`
+	HasResult       bool                `json:"hasResult"`
+	ExecutionCounts TaskExecutionCounts `json:"executionCounts"`
+	CreatedAt       time.Time           `json:"createdAt"`
+	UpdatedAt       time.Time           `json:"updatedAt"`
+}
+
+type TaskExecutionCounts struct {
+	Total           int64 `json:"total"`
+	PendingDispatch int64 `json:"pendingDispatch"`
+	Dispatched      int64 `json:"dispatched"`
+	Running         int64 `json:"running"`
+	Succeeded       int64 `json:"succeeded"`
+	Failed          int64 `json:"failed"`
+	Stalled         int64 `json:"stalled"`
+	Cancelled       int64 `json:"cancelled"`
+}
+
+type TaskExecutionPage struct {
+	SchemaVersion int                    `json:"schemaVersion"`
+	EntityVersion int64                  `json:"entityVersion"`
+	TaskID        string                 `json:"taskId"`
+	Executions    []TaskExecutionSummary `json:"executions"`
+	NextCursor    string                 `json:"nextCursor,omitempty"`
+}
+
 func (c *Client) CreateTask(ctx context.Context, request TaskCreateRequest) (TaskSnapshot, error) {
 	service, err := c.taskService()
 	if err != nil {
@@ -150,6 +187,26 @@ func (c *Client) GetTask(ctx context.Context, id string) (TaskSnapshot, error) {
 	}
 	snapshot, err := service.Get(ctx, domaintask.ID(id))
 	return publicTaskSnapshot(snapshot), err
+}
+
+func (c *Client) GetTaskSummary(ctx context.Context, id string) (TaskSummary, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskSummary{}, err
+	}
+	summary, err := service.GetSummary(ctx, domaintask.ID(id))
+	return publicTaskSummary(summary), err
+}
+
+func (c *Client) ListTaskExecutions(
+	ctx context.Context, taskID, cursor string, limit int,
+) (TaskExecutionPage, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskExecutionPage{}, err
+	}
+	page, err := service.ListExecutionsPage(ctx, domaintask.ID(taskID), cursor, limit)
+	return publicTaskExecutionPage(page), err
 }
 
 func (c *Client) CreateTaskExecution(
@@ -343,6 +400,12 @@ func (c *Client) CompleteTask(ctx context.Context, id string, expectedVersion in
 	return c.transitionTask(ctx, id, expectedVersion, domaintask.Succeeded)
 }
 
+// MarkTaskUncertain records that technical execution ended without enough
+// evidence to claim the real-world result. It is deliberately not a failure.
+func (c *Client) MarkTaskUncertain(ctx context.Context, id string, expectedVersion int64) (TaskSnapshot, error) {
+	return c.transitionTask(ctx, id, expectedVersion, domaintask.Uncertain)
+}
+
 func (c *Client) FailTask(ctx context.Context, id string, expectedVersion int64) (TaskSnapshot, error) {
 	return c.transitionTask(ctx, id, expectedVersion, domaintask.Failed)
 }
@@ -437,6 +500,42 @@ func publicTaskSnapshot(snapshot taskcontract.Snapshot) TaskSnapshot {
 		Executions: executions,
 		CreatedAt:  snapshot.CreatedAt,
 		UpdatedAt:  snapshot.UpdatedAt,
+	}
+}
+
+func publicTaskSummary(summary taskcontract.Summary) TaskSummary {
+	return TaskSummary{
+		SchemaVersion: summary.SchemaVersion, EntityVersion: summary.EntityVersion,
+		ID: summary.ID, Type: summary.Type, OwnerID: summary.OwnerID,
+		State:        TaskState(summary.State),
+		Cancellation: TaskCancellation{Status: summary.Cancellation.Status, Reason: summary.Cancellation.Reason},
+		Progress:     TaskProgress{Completed: summary.Progress.Completed, Total: summary.Progress.Total, Message: summary.Progress.Message},
+		HasResult:    summary.HasResult, CreatedAt: summary.CreatedAt, UpdatedAt: summary.UpdatedAt,
+		ExecutionCounts: TaskExecutionCounts{
+			Total:           summary.ExecutionCounts.Total,
+			PendingDispatch: summary.ExecutionCounts.PendingDispatch,
+			Dispatched:      summary.ExecutionCounts.Dispatched,
+			Running:         summary.ExecutionCounts.Running,
+			Succeeded:       summary.ExecutionCounts.Succeeded,
+			Failed:          summary.ExecutionCounts.Failed,
+			Stalled:         summary.ExecutionCounts.Stalled,
+			Cancelled:       summary.ExecutionCounts.Cancelled,
+		},
+	}
+}
+
+func publicTaskExecutionPage(page taskcontract.ExecutionPage) TaskExecutionPage {
+	items := make([]TaskExecutionSummary, len(page.Executions))
+	for i, attempt := range page.Executions {
+		items[i] = TaskExecutionSummary{
+			ID: attempt.ID, Attempt: attempt.Attempt, Runtime: attempt.Runtime,
+			State: attempt.State, Version: attempt.Version, HasResult: attempt.HasResult,
+			FailureReason: attempt.FailureReason,
+		}
+	}
+	return TaskExecutionPage{
+		SchemaVersion: page.SchemaVersion, EntityVersion: page.EntityVersion,
+		TaskID: page.TaskID, Executions: items, NextCursor: page.NextCursor,
 	}
 }
 

@@ -35,6 +35,7 @@ type ExecutionStore interface {
 	// state.
 	UpdateExecution(ctx context.Context, record execution.Record, expectedVersion int64) (updated execution.Record, taskVersion int64, err error)
 	ListTaskExecutions(ctx context.Context, taskID string) ([]execution.Record, error)
+	ListTaskExecutionsPage(ctx context.Context, query ExecutionPageQuery) ([]execution.Record, bool, error)
 }
 
 type ExecutionCreateInput struct {
@@ -42,4 +43,12 @@ type ExecutionCreateInput struct {
 	TaskID  string
 	Runtime string
 	Now     time.Time
+}
+
+// ExecutionPageQuery is a stable keyset page. CreatedAt and ID form a total
+// order, so inserts cannot shift rows between pages as offset pagination does.
+type ExecutionPageQuery struct {
+	TaskID  string
+	AfterID string
+	Limit   int
 }

@@ -12,8 +12,8 @@ The CLI is not a generic job producer and it is not a standalone Go worker:
   `RhinoQWorker` through the optional HTTP Gateway.
 - Any language can call `rhinoq.enqueue()` inside its own PostgreSQL
   transaction.
-- Workbench is read-only. Explicit write operations remain in the CLI or public
-  application API.
+- Workbench is read-only by default. `--actions` enables only recheck and
+  registered safe-repair application use cases.
 
 ## Run the preview CLI
 
@@ -159,7 +159,7 @@ rhinoq workbench
 | `rhinoq rules enable` | Explain and enable one Rule | DB | DB |
 | `rhinoq rules disable` | stop future claims for one Rule | DB | DB |
 | `rhinoq rules run` | run the long-lived Rule scheduler | DB | DB |
-| `rhinoq workbench` | open the local read-only developer UI | DB | No |
+| `rhinoq workbench` | open the local developer UI; actions require `--actions` | DB | No by default |
 | `rhinoq workbench --demo` | open sample data without PostgreSQL | No | No |
 
 `rhinoq explain` persists immutable Explain evidence when it runs against the
@@ -635,7 +635,8 @@ rhinoq workbench --no-open --port 8787
 ```
 
 Live mode requires `RHINOQ_DATABASE_URL` and an up-to-date schema. The server
-binds only to `127.0.0.1`. Workbench v0 is read-only and omits payloads.
+binds only to `127.0.0.1`, omits payloads and is read-only unless `--actions`
+is supplied. Action mode still accepts only recheck and registered safe repair.
 
 See [workbench.md](./workbench.md) for the Evidence Rail, keyboard controls and
 security boundary.

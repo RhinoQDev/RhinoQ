@@ -12,6 +12,7 @@ import {
   type EnqueueRequest,
   type FailureOptions,
   type FindingKey,
+  type FindingObservation,
   type FindingQuery,
   type FindingRecord,
   type FindingTransition,
@@ -26,10 +27,19 @@ import {
   type TaskExecutionCreateRequest,
   type TaskExecution,
   type TaskExecutionResults,
+	type TaskExecutionPage,
   type TaskProgress,
   type TaskResult,
   type TaskSnapshot,
+	type TaskSummary,
   type TaskState,
+  type ProviderConfirmation,
+  type ProviderOperationEvidence,
+  type ProviderOperationOptions,
+  type ProviderOperationRecord,
+  type ProviderOperationRequest,
+	type RepairProposalRequest,
+	type RepairRecord,
 } from './types.js';
 
 export class RhinoQError extends Error {
@@ -130,6 +140,18 @@ export class RhinoQClient {
       `/v1/tasks/${requiredPath(taskId, 'task id')}`,
     );
   }
+
+	async getTaskSummary(taskId: string): Promise<TaskSummary> {
+		return this.send<TaskSummary>('GET', `/v1/tasks/${requiredPath(taskId, 'task id')}/summary`);
+	}
+
+	async listTaskExecutions(taskId: string, cursor = '', limit = 100): Promise<TaskExecutionPage> {
+		if (!Number.isInteger(limit) || limit <= 0 || limit > 500) {
+			throw new RangeError('execution page limit must be between 1 and 500');
+		}
+		return this.send<TaskExecutionPage>('GET',
+			`/v1/tasks/${requiredPath(taskId, 'task id')}/executions/page?${queryString({ cursor, limit })}`);
+	}
 
   async createTaskExecution(
     taskId: string,
@@ -313,6 +335,91 @@ export class RhinoQClient {
     );
   }
 
+  async beginProviderOperation(request: ProviderOperationRequest): Promise<ProviderOperationRecord> {
+    if (!request?.provider?.trim() || !request.operation?.trim() || !request.idempotencyKey?.trim()) {
+      throw new TypeError('provider, operation and idempotencyKey are required');
+    }
+    return this.send<ProviderOperationRecord>('POST', '/v1/provider-operations', request);
+  }
+
+  getProviderOperation(id: string): Promise<ProviderOperationRecord> {
+    return this.send<ProviderOperationRecord>('GET', `/v1/provider-operations/${requiredPath(id, 'provider operation id')}`);
+  }
+
+  async listProviderOperationEvidence(id: string): Promise<ProviderOperationEvidence[]> {
+    const result = await this.send<{ evidence: ProviderOperationEvidence[] }>(
+      'GET', `/v1/provider-operations/${requiredPath(id, 'provider operation id')}/evidence`,
+    );
+    return result.evidence ?? [];
+  }
+
+  private acceptProviderOperation(id: string, providerId: string, evidence?: string): Promise<ProviderOperationRecord> {
+    return this.send('POST', `/v1/provider-operations/${requiredPath(id, 'provider operation id')}/accept`,
+      { providerId, ...(evidence ? { evidence } : {}) });
+  }
+
+  private resolveProviderOperation(id: string, decision: ProviderConfirmation): Promise<ProviderOperationRecord> {
+    return this.send('POST', `/v1/provider-operations/${requiredPath(id, 'provider operation id')}/resolve`, decision);
+  }
+
+  private retryProviderOperation(id: string): Promise<ProviderOperationRecord> {
+    return this.send('POST', `/v1/provider-operations/${requiredPath(id, 'provider operation id')}/retry`, {});
+  }
+
+  /**
+   * Executes an external mutation only after Go has reserved its durable
+   * identity. A timeout becomes `uncertain`; it never means `failed` and never
+   * causes a second mutation until confirmation proves `not_happened`.
+   */
+  async providerOperation<T>(options: ProviderOperationOptions<T>): Promise<ProviderOperationRecord> {
+    const separator = options.name?.indexOf('.') ?? -1;
+    if (separator <= 0 || separator === options.name.length - 1) {
+      throw new TypeError('provider operation name must be provider.operation');
+    }
+    let record = await this.beginProviderOperation({
+      taskId: options.taskId,
+      provider: options.name.slice(0, separator),
+      operation: options.name.slice(separator + 1),
+      idempotencyKey: options.idempotencyKey,
+      confirmation: options.confirmation ?? (options.confirm ? 'readback' : 'on-return'),
+      retryPolicy: options.retryPolicy ?? 'when-not-happened',
+    });
+    if (record.state === 'confirmed' || record.state === 'failed') return record;
+    if (record.state === 'not_happened') record = await this.retryProviderOperation(record.id);
+    if (record.state === 'accepted' || record.state === 'uncertain') {
+      return options.confirm ? this.recheckProviderOperation(record, options.confirm) : record;
+    }
+
+    try {
+      const result = await options.execute(options.idempotencyKey);
+      const providerId = options.providerId?.(result) ?? inferProviderId(result);
+      const evidence = options.evidence?.(result);
+      record = await this.acceptProviderOperation(record.id, providerId, evidence);
+      if (record.confirmation === 'on-return') {
+        return this.resolveProviderOperation(record.id, {
+          decision: 'confirmed', evidence: evidence ?? providerId,
+        });
+      }
+      return options.confirm ? this.recheckProviderOperation(record, options.confirm) : record;
+    } catch (error) {
+      record = await this.resolveProviderOperation(record.id, {
+        decision: 'unknown', reason: safeErrorMessage(error),
+      });
+      if (!options.confirm) return record;
+      try { return await this.recheckProviderOperation(record, options.confirm); }
+      catch { return record; }
+    }
+  }
+
+  async recheckProviderOperation(
+    operation: ProviderOperationRecord,
+    confirm: (operation: ProviderOperationRecord) => Promise<ProviderConfirmation>,
+  ): Promise<ProviderOperationRecord> {
+    const decision = await confirm(operation);
+    if (decision.decision === 'pending') return operation;
+    return this.resolveProviderOperation(operation.id, decision);
+  }
+
   async listJobs(query: JobQuery = {}): Promise<JobSummary[]> {
     const response = await this.send<{ jobs: JobSummary[] }>(
       'GET',
@@ -404,6 +511,32 @@ export class RhinoQClient {
       })}`,
     );
     return response.findings ?? [];
+  }
+
+  async observeFinding(observation: FindingObservation): Promise<FindingRecord> {
+    const response = await this.send<{ finding: FindingRecord }>('POST', '/v1/findings/observe', observation);
+    return response.finding;
+  }
+
+  async proposeRepair(request: RepairProposalRequest): Promise<RepairRecord> {
+	if (!request?.finding || !request.handler?.trim() || !request.actor?.trim()) {
+	  throw new TypeError('repair finding, handler and actor are required');
+	}
+	const id = request.id ?? `repair_${globalThis.crypto.randomUUID().replaceAll('-', '')}`;
+	return this.send<RepairRecord>('POST', '/v1/repairs', { ...request, id });
+  }
+
+  previewRepair(id: string): Promise<RepairRecord> {
+	return this.send<RepairRecord>('POST', `/v1/repairs/${requiredPath(id, 'repair id')}/preview`, {});
+  }
+
+  approveRepair(id: string, actor: string, reason: string): Promise<RepairRecord> {
+	if (!actor?.trim() || !reason?.trim()) throw new TypeError('repair approval requires actor and reason');
+	return this.send<RepairRecord>('POST', `/v1/repairs/${requiredPath(id, 'repair id')}/approve`, { actor, reason });
+  }
+
+  executeRepair(id: string): Promise<RepairRecord> {
+	return this.send<RepairRecord>('POST', `/v1/repairs/${requiredPath(id, 'repair id')}/execute`, {});
   }
 
   async transitionFinding(
@@ -608,6 +741,18 @@ export class RhinoQClient {
       clearTimeout(timeout);
     }
   }
+}
+
+function inferProviderId(value: unknown): string {
+  if (value && typeof value === 'object' && 'id' in value && typeof value.id === 'string' && value.id.trim()) {
+    return value.id;
+  }
+  throw new TypeError('provider result needs a non-empty id or a providerId mapper');
+}
+
+function safeErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message.slice(0, 4096);
+  return 'provider call ended without a classifiable result';
 }
 
 const NEVER_HAPPENED = Symbol.for('rhinoq.neverHappened');

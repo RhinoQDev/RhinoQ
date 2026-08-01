@@ -101,6 +101,70 @@ func (s *Service) Get(ctx context.Context, id task.ID) (taskcontract.Snapshot, e
 	return s.snapshot(ctx, record)
 }
 
+func (s *Service) GetSummary(ctx context.Context, id task.ID) (taskcontract.Summary, error) {
+	record, found, err := s.tasks.GetTask(ctx, id)
+	if err != nil {
+		return taskcontract.Summary{}, err
+	}
+	if !found {
+		return taskcontract.Summary{}, ports.ErrTaskNotFound
+	}
+	return newSummary(record)
+}
+
+func (s *Service) ListExecutionsPage(
+	ctx context.Context, id task.ID, cursor string, limit int,
+) (taskcontract.ExecutionPage, error) {
+	if limit <= 0 || limit > maxExecutionPageSize {
+		return taskcontract.ExecutionPage{}, errors.New("execution page limit must be between 1 and 500")
+	}
+	record, found, err := s.tasks.GetTask(ctx, id)
+	if err != nil {
+		return taskcontract.ExecutionPage{}, err
+	}
+	if !found {
+		return taskcontract.ExecutionPage{}, ports.ErrTaskNotFound
+	}
+	after, err := decodeExecutionCursor(cursor)
+	if err != nil {
+		return taskcontract.ExecutionPage{}, err
+	}
+	if after.ID != "" {
+		cursorRecord, found, getErr := s.executions.GetExecution(ctx, execution.ID(after.ID))
+		if getErr != nil {
+			return taskcontract.ExecutionPage{}, getErr
+		}
+		if !found || cursorRecord.TaskID != id.String() {
+			return taskcontract.ExecutionPage{}, errors.New("invalid execution cursor")
+		}
+	}
+	attempts, more, err := s.executions.ListTaskExecutionsPage(ctx, ports.ExecutionPageQuery{
+		TaskID: id.String(), AfterID: after.ID, Limit: limit,
+	})
+	if err != nil {
+		return taskcontract.ExecutionPage{}, err
+	}
+	items := make([]taskcontract.Execution, 0, len(attempts))
+	for _, attempt := range attempts {
+		item, err := executionContract(attempt)
+		if err != nil || attempt.TaskID != id.String() {
+			if err == nil {
+				err = taskcontract.ErrInvalidSnapshot
+			}
+			return taskcontract.ExecutionPage{}, err
+		}
+		items = append(items, item)
+	}
+	page := taskcontract.ExecutionPage{
+		SchemaVersion: taskcontract.ExecutionPageSchemaVersion,
+		EntityVersion: record.Version, TaskID: id.String(), Executions: items,
+	}
+	if more && len(attempts) > 0 {
+		page.NextCursor = encodeExecutionCursor(attempts[len(attempts)-1])
+	}
+	return page, page.Validate()
+}
+
 // snapshot renders a record the caller already holds. Commands use it instead
 // of re-reading the Task: the store returns the row it just fenced, so another
 // read only costs a round trip and risks answering a command with a version

@@ -7,6 +7,7 @@ package workbench
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -25,6 +26,49 @@ type Reader interface {
 	Snapshot(context.Context, Query) (Snapshot, error)
 	JobDetail(context.Context, string) (JobDetail, error)
 	SubjectDetail(context.Context, SubjectRef) (SubjectDetail, error)
+}
+
+// Operator exposes only application use cases that are safe to call from the
+// loopback Workbench. Implementations must never execute arbitrary SQL.
+type Operator interface {
+	Recheck(context.Context, SubjectRef, string) (ActionResult, error)
+	ProposeRepair(context.Context, RepairProposal) (RepairPlan, error)
+	PreviewRepair(context.Context, string) (RepairPlan, error)
+	ApproveRepair(context.Context, string, string, string) (RepairPlan, error)
+	ExecuteRepair(context.Context, string) (RepairPlan, error)
+}
+
+type ActionResult struct {
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+type RepairProposal struct {
+	Finding    FindingRef      `json:"finding"`
+	Handler    string          `json:"handler"`
+	Parameters json.RawMessage `json:"parameters"`
+	Actor      string          `json:"actor"`
+}
+
+type FindingRef struct {
+	RuleID           string `json:"ruleId"`
+	SubjectType      string `json:"subjectType"`
+	SubjectID        string `json:"subjectId"`
+	InvariantVersion int    `json:"invariantVersion"`
+}
+
+type RepairPlan struct {
+	ID             string `json:"id"`
+	State          string `json:"state"`
+	Handler        string `json:"handler"`
+	Preview        string `json:"preview,omitempty"`
+	Precondition   string `json:"precondition,omitempty"`
+	ProposedBy     string `json:"proposedBy"`
+	ApprovedBy     string `json:"approvedBy,omitempty"`
+	ApprovalReason string `json:"approvalReason,omitempty"`
+	Outcome        string `json:"outcome,omitempty"`
+	DryRun         bool   `json:"dryRun"`
+	Version        int64  `json:"version"`
 }
 
 // SubjectRef names the business thing an investigation is about.

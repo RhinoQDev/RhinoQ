@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-01T04:10:25.151Z",
+  "runtime": {
+    "node": "v24.14.0",
+    "platform": "win32",
+    "arch": "x64"
+  },
+  "configuration": {
+    "iterations": 100000,
+    "samples": 7
+  },
+  "checksum": 3749111832,
+  "results": [
+    {
+      "name": "task-store-newer-snapshot",
+      "iterations": 100000,
+      "samples": 7,
+      "medianMs": 26.506,
+      "p95Ms": 33.354,
+      "medianOpsPerSecond": 3772745,
+      "p95NanosecondsPerOperation": 334
+    },
+    {
+      "name": "task-store-stale-rejection",
+      "iterations": 100000,
+      "samples": 7,
+      "medianMs": 23.862,
+      "p95Ms": 27.862,
+      "medianOpsPerSecond": 4190764,
+      "p95NanosecondsPerOperation": 279
+    },
+    {
+      "name": "bullmq-count-progress-map",
+      "iterations": 1000000,
+      "samples": 7,
+      "medianMs": 16.623,
+      "p95Ms": 27.257,
+      "medianOpsPerSecond": 60159422,
+      "p95NanosecondsPerOperation": 27
+    },
+    {
+      "name": "bullmq-percentage-progress-map",
+      "iterations": 1000000,
+      "samples": 7,
+      "medianMs": 25.316,
+      "p95Ms": 26.63,
+      "medianOpsPerSecond": 39501023,
+      "p95NanosecondsPerOperation": 27
+    }
+  ]
+}

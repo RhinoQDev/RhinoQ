@@ -1,6 +1,7 @@
 # Dependencies and builds
 node_modules/
 dist/
+.next/
 bin/
 coverage/
 .gocache/
@@ -28,6 +29,8 @@ Thumbs.db
 *.sqlite3
 tmp/
 storage/
+.tools/
+evaluations/
 
 # Unpublished product research. These are strategy inputs, not implementation
 # truth, and they are deliberately excluded from the public repository. The

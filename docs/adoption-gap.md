@@ -38,7 +38,7 @@ A Node application could enqueue through RhinoQ **without running the Gateway**:
 join its transaction.
 
 At the time of the probe, a Node application could not manage **Tasks** without
-the Gateway. The Go client could. The `beta.4` candidate now closes that
+the Gateway. The Go client could. The `beta.5` candidate now closes that
 asymmetry with `PostgresTaskClient` and the isolated three-table Task profile.
 The paragraph below remains the measured reason for that change, not a claim
 that the new economics have already passed re-evaluation.
@@ -122,7 +122,7 @@ estimates below are estimates.
 4. **Publish `rhinoq-agent` as a binary and an image.** Building a Go binary
    from source is a hard stop for a Node team evaluating on a Tuesday
    afternoon.
-5. **Cut `0.1.0-beta.4` and move the `latest` dist-tag.** `terminalProjection`
+5. **Cut `0.1.0-beta.5` and move the `latest` dist-tag.** `terminalProjection`
    is now required and the wire contract gained per-execution fields, so `main`
    and the published `0.1.0-beta.2` share a version number but not an API.
 6. **Cancellation needs hands, not just a state machine.** `cancel_requested`,

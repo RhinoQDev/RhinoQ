@@ -1,7 +1,7 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 1;
-export const TASK_SCHEMA_NAME = '001_task_core';
+export const TASK_SCHEMA_VERSION = 2;
+export const TASK_SCHEMA_NAME = '002_task_summary_aggregates';
 
 /**
  * Task-only PostgreSQL profile.
@@ -539,6 +539,122 @@ END;
 $$;
 `;
 
+export const TASK_SCHEMA_V2_SQL = String.raw`
+ALTER TABLE rhinoq_task.tasks
+  DROP CONSTRAINT IF EXISTS tasks_state_check;
+ALTER TABLE rhinoq_task.tasks
+  ADD CONSTRAINT tasks_state_check CHECK (state IN (
+    'pending', 'queued', 'running', 'uncertain', 'succeeded', 'failed',
+    'cancel_requested', 'cancelled'
+  ));
+
+ALTER TABLE rhinoq_task.tasks
+  ADD COLUMN IF NOT EXISTS execution_total bigint NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS execution_pending_dispatch bigint NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS execution_dispatched bigint NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS execution_running bigint NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS execution_succeeded bigint NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS execution_failed bigint NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS execution_stalled bigint NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS execution_cancelled bigint NOT NULL DEFAULT 0;
+
+WITH counts AS (
+  SELECT task_id, count(*) AS total,
+    count(*) FILTER (WHERE state='pending_dispatch') AS pending_dispatch,
+    count(*) FILTER (WHERE state='dispatched') AS dispatched,
+    count(*) FILTER (WHERE state='running') AS running,
+    count(*) FILTER (WHERE state='succeeded') AS succeeded,
+    count(*) FILTER (WHERE state='failed') AS failed,
+    count(*) FILTER (WHERE state='stalled') AS stalled,
+    count(*) FILTER (WHERE state='cancelled') AS cancelled
+  FROM rhinoq_task.executions GROUP BY task_id
+)
+UPDATE rhinoq_task.tasks AS task SET
+  execution_total=counts.total,
+  execution_pending_dispatch=counts.pending_dispatch,
+  execution_dispatched=counts.dispatched,
+  execution_running=counts.running,
+  execution_succeeded=counts.succeeded,
+  execution_failed=counts.failed,
+  execution_stalled=counts.stalled,
+  execution_cancelled=counts.cancelled
+FROM counts WHERE counts.task_id=task.id;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.update_execution_counts()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_task_id text := COALESCE(NEW.task_id, OLD.task_id);
+  v_old text := CASE WHEN TG_OP IN ('UPDATE','DELETE') THEN OLD.state ELSE NULL END;
+  v_new text := CASE WHEN TG_OP IN ('INSERT','UPDATE') THEN NEW.state ELSE NULL END;
+  v_total_delta bigint := CASE TG_OP WHEN 'INSERT' THEN 1 WHEN 'DELETE' THEN -1 ELSE 0 END;
+BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.state = NEW.state THEN
+    RETURN NEW;
+  END IF;
+  UPDATE rhinoq_task.tasks SET
+    execution_total=execution_total+v_total_delta,
+    execution_pending_dispatch=execution_pending_dispatch+(CASE WHEN v_old='pending_dispatch' THEN -1 ELSE 0 END)+(CASE WHEN v_new='pending_dispatch' THEN 1 ELSE 0 END),
+    execution_dispatched=execution_dispatched+(CASE WHEN v_old='dispatched' THEN -1 ELSE 0 END)+(CASE WHEN v_new='dispatched' THEN 1 ELSE 0 END),
+    execution_running=execution_running+(CASE WHEN v_old='running' THEN -1 ELSE 0 END)+(CASE WHEN v_new='running' THEN 1 ELSE 0 END),
+    execution_succeeded=execution_succeeded+(CASE WHEN v_old='succeeded' THEN -1 ELSE 0 END)+(CASE WHEN v_new='succeeded' THEN 1 ELSE 0 END),
+    execution_failed=execution_failed+(CASE WHEN v_old='failed' THEN -1 ELSE 0 END)+(CASE WHEN v_new='failed' THEN 1 ELSE 0 END),
+    execution_stalled=execution_stalled+(CASE WHEN v_old='stalled' THEN -1 ELSE 0 END)+(CASE WHEN v_new='stalled' THEN 1 ELSE 0 END),
+    execution_cancelled=execution_cancelled+(CASE WHEN v_old='cancelled' THEN -1 ELSE 0 END)+(CASE WHEN v_new='cancelled' THEN 1 ELSE 0 END)
+  WHERE id=v_task_id;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS executions_update_counts ON rhinoq_task.executions;
+CREATE TRIGGER executions_update_counts
+AFTER INSERT OR UPDATE OF state OR DELETE ON rhinoq_task.executions
+FOR EACH ROW EXECUTE FUNCTION rhinoq_task.update_execution_counts();
+
+CREATE OR REPLACE FUNCTION rhinoq_task.transition_task(
+  p_id text, p_expected_version bigint, p_target text
+)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE v_task rhinoq_task.tasks%ROWTYPE;
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id); END IF;
+  IF v_task.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail('RHINOQ_VERSION_CONFLICT', p_id);
+  END IF;
+  IF NOT (
+    (v_task.state='pending' AND p_target='queued') OR
+    (v_task.state='queued' AND p_target IN ('running','cancel_requested')) OR
+    (v_task.state='running' AND p_target IN ('uncertain','succeeded','failed','cancel_requested')) OR
+    (v_task.state='uncertain' AND p_target IN ('succeeded','failed')) OR
+    (v_task.state='cancel_requested' AND p_target IN ('uncertain','succeeded','failed','cancelled')) OR
+    (v_task.state IN ('failed','cancelled') AND p_target='queued')
+  ) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_TASK_TRANSITION', v_task.state || ' -> ' || COALESCE(p_target,''));
+  END IF;
+  UPDATE rhinoq_task.tasks SET state=p_target,
+    cancellation_status=CASE
+      WHEN p_target='queued' AND v_task.state IN ('failed','cancelled') THEN 'none'
+      WHEN p_target='cancel_requested' AND cancellation_status='none' THEN 'requested'
+      WHEN v_task.state='cancel_requested' AND p_target='cancelled' THEN 'cancelled'
+      WHEN v_task.state='cancel_requested' AND p_target='succeeded' THEN 'too_late'
+      WHEN v_task.state='cancel_requested' AND p_target='failed' THEN 'failed'
+      ELSE cancellation_status END,
+    cancellation_reason=CASE
+      WHEN p_target='queued' AND v_task.state IN ('failed','cancelled') THEN NULL
+      ELSE cancellation_reason END,
+    version=version+1, updated_at=clock_timestamp()
+  WHERE id=p_id RETURNING version INTO v_task.version;
+  RETURN v_task.version;
+END;
+$$;
+`;
+
+const TASK_SCHEMA_MIGRATIONS = [
+  { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
+  { version: 2, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V2_SQL },
+] as const;
+
 export interface SqlConnection extends SqlExecutor {
   release(): void;
 }
@@ -554,37 +670,35 @@ export async function migrateTaskSchema(pool: SqlPool): Promise<void> {
   }
   const connection = await pool.connect();
   try {
-    const checksum = await taskSchemaChecksum();
     await connection.query('BEGIN', []);
     await connection.query(
       `SELECT pg_advisory_xact_lock($1::bigint)`,
       [7_246_466_201],
     );
-    await connection.query(TASK_SCHEMA_SQL, []);
-    const existing = await connection.query<{
-      name: string;
-      checksum: string;
-    }>(
-      `SELECT name, checksum
-       FROM rhinoq_task.migrations
-       WHERE version = $1`,
-      [TASK_SCHEMA_VERSION],
-    );
-    const applied = existing.rows[0];
-    if (applied && (
-      applied.name !== TASK_SCHEMA_NAME ||
-      applied.checksum !== checksum
-    )) {
-      throw new Error(
-        `RhinoQ Task migration ${TASK_SCHEMA_VERSION} checksum drift`,
+    await connection.query(`CREATE SCHEMA IF NOT EXISTS rhinoq_task`, []);
+    await connection.query(`CREATE TABLE IF NOT EXISTS rhinoq_task.migrations (
+      version integer PRIMARY KEY CHECK (version > 0),
+      name text NOT NULL UNIQUE,
+      checksum text NOT NULL CHECK (length(checksum) = 64),
+      applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+    )`, []);
+    for (const migration of TASK_SCHEMA_MIGRATIONS) {
+      const checksum = await taskSchemaChecksum(migration.sql);
+      const existing = await connection.query<{ name: string; checksum: string }>(
+        `SELECT name, checksum FROM rhinoq_task.migrations WHERE version=$1`,
+        [migration.version],
       );
-    }
-    if (!applied) {
-      await connection.query(
-        `INSERT INTO rhinoq_task.migrations (version, name, checksum)
-         VALUES ($1, $2, $3)`,
-        [TASK_SCHEMA_VERSION, TASK_SCHEMA_NAME, checksum],
-      );
+      const applied = existing.rows[0];
+      if (applied && (applied.name !== migration.name || applied.checksum !== checksum)) {
+        throw new Error(`RhinoQ Task migration ${migration.version} checksum drift`);
+      }
+      if (!applied) {
+        await connection.query(migration.sql, []);
+        await connection.query(
+          `INSERT INTO rhinoq_task.migrations (version, name, checksum) VALUES ($1,$2,$3)`,
+          [migration.version, migration.name, checksum],
+        );
+      }
     }
     await connection.query('COMMIT', []);
   } catch (error) {
@@ -595,10 +709,10 @@ export async function migrateTaskSchema(pool: SqlPool): Promise<void> {
   }
 }
 
-async function taskSchemaChecksum(): Promise<string> {
+async function taskSchemaChecksum(sql: string): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest(
     'SHA-256',
-    new TextEncoder().encode(TASK_SCHEMA_SQL),
+    new TextEncoder().encode(sql),
   );
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, '0')).join('');

@@ -1,6 +1,7 @@
 package workbench
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -31,6 +32,54 @@ func TestEmbeddedWorkbenchStaysInsideItsFrontendBudget(t *testing.T) {
 	const budget = 160 << 10
 	if total > budget {
 		t.Fatalf("embedded Workbench grew beyond %d KiB: %d bytes", budget>>10, total)
+	}
+}
+
+type testOperator struct{ rechecks int }
+
+func (o *testOperator) Recheck(_ context.Context, subject SubjectRef, ruleID string) (ActionResult, error) {
+	o.rechecks++
+	return ActionResult{Status: "drift", Detail: ruleID + ":" + subject.ID}, nil
+}
+func (*testOperator) ProposeRepair(context.Context, RepairProposal) (RepairPlan, error) {
+	return RepairPlan{ID: "repair_1", State: "proposed", Version: 1}, nil
+}
+func (*testOperator) PreviewRepair(context.Context, string) (RepairPlan, error) {
+	return RepairPlan{ID: "repair_1", State: "previewed", DryRun: true, Version: 2}, nil
+}
+func (*testOperator) ApproveRepair(context.Context, string, string, string) (RepairPlan, error) {
+	return RepairPlan{ID: "repair_1", State: "approved", Version: 3}, nil
+}
+func (*testOperator) ExecuteRepair(context.Context, string) (RepairPlan, error) {
+	return RepairPlan{ID: "repair_1", State: "succeeded", Version: 5}, nil
+}
+
+func TestWorkbenchActionsRequireExplicitOperatorAndSameOrigin(t *testing.T) {
+	readOnly, err := NewHandler(NewDemoReader(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.NewReader(`{"ruleId":"rule-report-output"}`)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/subjects/report/report_3Q1N/recheck", body)
+	request.Host = "127.0.0.1:7070"
+	recorder := httptest.NewRecorder()
+	readOnly.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("read-only action got %d", recorder.Code)
+	}
+
+	operator := &testOperator{}
+	handler, err := NewHandler(NewDemoReader(), Options{Operator: operator})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/subjects/report/report_3Q1N/recheck", strings.NewReader(`{"ruleId":"rule-report-output"}`))
+	request.Host = "127.0.0.1:7070"
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || operator.rechecks != 1 {
+		t.Fatalf("action=%d rechecks=%d body=%s", recorder.Code, operator.rechecks, recorder.Body.String())
 	}
 }
 

@@ -7,10 +7,12 @@ import type {
   TaskExecutionCreateRequest,
   TaskExecutionResult,
   TaskExecutionResults,
+	TaskExecutionPage,
   TaskExecutionSummary,
   TaskProgress,
   TaskResult,
   TaskSnapshot,
+	TaskSummary,
   TaskState,
 } from '../gateway/types.js';
 import type { TaskClient } from '../tasks/client.js';
@@ -34,6 +36,14 @@ interface TaskRow {
   created_at: Date | string;
   updated_at: Date | string;
   executions: unknown;
+  execution_total: string | number;
+  execution_pending_dispatch: string | number;
+  execution_dispatched: string | number;
+  execution_running: string | number;
+  execution_succeeded: string | number;
+  execution_failed: string | number;
+  execution_stalled: string | number;
+  execution_cancelled: string | number;
 }
 
 interface ExecutionRow {
@@ -49,7 +59,15 @@ interface ExecutionRow {
   failure_reason: string | null;
   version: string | number;
   updated_at: Date | string;
+	created_at: Date | string;
 }
+
+interface ExecutionCursor { id: string }
+
+const SUMMARY_SQL = `
+SELECT t.*, '[]'::jsonb AS executions
+FROM rhinoq_task.tasks AS t
+WHERE t.id = $1 AND ($2::text IS NULL OR t.owner_id = $2)`;
 
 const SNAPSHOT_SQL = `
 SELECT t.*,
@@ -146,6 +164,50 @@ export class PostgresTaskClient implements TaskClient {
   getTaskForOwner(taskId: string, ownerId: string): Promise<TaskSnapshot> {
     return this.readTask(taskId, ownerId);
   }
+
+	getTaskSummary(taskId: string): Promise<TaskSummary> {
+		return this.readTaskSummary(taskId);
+	}
+
+	getTaskSummaryForOwner(taskId: string, ownerId: string): Promise<TaskSummary> {
+		return this.readTaskSummary(taskId, ownerId);
+	}
+
+	async listTaskExecutions(taskId: string, cursor = '', limit = 100): Promise<TaskExecutionPage> {
+		if (!Number.isInteger(limit) || limit <= 0 || limit > 500) {
+			throw new RangeError('execution page limit must be between 1 and 500');
+		}
+		const task = await this.getTaskSummary(taskId);
+		const after = decodeExecutionCursor(cursor);
+		if (after) {
+			const cursorRow = await this.execute<{ id: string }>(
+				`SELECT id FROM rhinoq_task.executions WHERE task_id = $1 AND id = $2`,
+				[taskId, after.id],
+			);
+			if (!cursorRow.rows[0]) throw new TypeError('invalid execution cursor');
+		}
+		const result = await this.execute<ExecutionRow>(
+			`SELECT * FROM rhinoq_task.executions
+			 WHERE task_id = $1
+			   AND ($2::text = '' OR (created_at, id) > (
+			     SELECT created_at, id FROM rhinoq_task.executions WHERE task_id = $1 AND id = $2
+			   ))
+			 ORDER BY created_at, id LIMIT $3`,
+			[taskId, after?.id ?? '', limit + 1],
+		);
+		const more = result.rows.length > limit;
+		const rows = more ? result.rows.slice(0, limit) : result.rows;
+		return {
+			schemaVersion: 1, entityVersion: task.entityVersion, taskId,
+			executions: rows.map(mapExecutionSummaryRow),
+			...(more && rows.length > 0 ? { nextCursor: encodeExecutionCursor(rows[rows.length - 1]!) } : {}),
+		};
+	}
+
+	async listTaskExecutionsForOwner(taskId: string, ownerId: string, cursor = '', limit = 100): Promise<TaskExecutionPage> {
+		await this.getTaskSummaryForOwner(taskId, ownerId);
+		return this.listTaskExecutions(taskId, cursor, limit);
+	}
 
   async listTasks(ownerId: string, limit = 50, offset = 0): Promise<TaskSnapshot[]> {
     if (!ownerId?.trim()) {
@@ -423,6 +485,27 @@ export class PostgresTaskClient implements TaskClient {
     return mapSnapshot(row);
   }
 
+	private async readTaskSummary(taskId: string, ownerId?: string): Promise<TaskSummary> {
+		if (!taskId?.trim()) throw new TypeError('task id is required');
+		const result = await this.execute<TaskRow>(SUMMARY_SQL, [taskId, ownerId ?? null]);
+		const row = result.rows[0];
+		if (!row) throw taskError('RHINOQ_TASK_NOT_FOUND', taskId);
+		const { executions: _executions, ...summary } = mapSnapshot(row);
+		return {
+			...summary,
+			executionCounts: {
+				total: Number(row.execution_total),
+				pendingDispatch: Number(row.execution_pending_dispatch),
+				dispatched: Number(row.execution_dispatched),
+				running: Number(row.execution_running),
+				succeeded: Number(row.execution_succeeded),
+				failed: Number(row.execution_failed),
+				stalled: Number(row.execution_stalled),
+				cancelled: Number(row.execution_cancelled),
+			},
+		};
+	}
+
   private async execute<Row>(
     text: string,
     values: unknown[],
@@ -491,6 +574,30 @@ function mapExecutionSummary(value: unknown): TaskExecutionSummary {
     hasResult: value.hasResult === true,
     ...(value.failureReason ? { failureReason: String(value.failureReason) } : {}),
   };
+}
+
+function mapExecutionSummaryRow(row: ExecutionRow): TaskExecutionSummary {
+	return {
+		id: row.id, itemKey: row.item_key, attempt: row.attempt,
+		runtime: row.runtime, ...(row.runtime_scope ? { runtimeScope: row.runtime_scope } : {}),
+		state: row.state, version: Number(row.version), hasResult: row.result_ref !== null,
+		...(row.failure_reason ? { failureReason: row.failure_reason } : {}),
+	};
+}
+
+function encodeExecutionCursor(row: ExecutionRow): string {
+	return Buffer.from(JSON.stringify({ id: row.id }), 'utf8').toString('base64url');
+}
+
+function decodeExecutionCursor(value: string): ExecutionCursor | undefined {
+	if (!value) return undefined;
+	try {
+		const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<ExecutionCursor>;
+		if (!parsed.id) throw new Error();
+		return { id: parsed.id };
+	} catch {
+		throw new TypeError('invalid execution cursor');
+	}
 }
 
 function mapExecution(row: ExecutionRow): TaskExecution {

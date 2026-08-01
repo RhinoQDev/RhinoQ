@@ -2252,5 +2252,6 @@ body {
 .evidence-card, .detail-grid > div { border-radius: 5px; background: var(--surface-1); }
 .connection-dot, .workspace-dot { background: #66c6a4; box-shadow: 0 0 0 3px rgba(102,198,164,.12); }
 .environment-pill { border-color: rgba(199,150,82,.42); border-radius: 2px; color: #d9bb85; font-family: var(--font-mono); }
+.safe-action-row { display: flex; flex-wrap: wrap; gap: .55rem; margin: .8rem 0; }
 
 @media (max-width: 840px) { .page-heading { padding-top: 17px; } .flow-lens::before { right: 12%; left: 12%; } }

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-01",
+  "runtime": {
+    "go": "go1.26.5",
+    "os": "windows",
+    "arch": "amd64",
+    "cpu": "AMD Ryzen 7 8840HS"
+  },
+  "configuration": { "count": 5, "benchtime": "1s" },
+  "ranges": [
+    { "name": "TaskApplyProgress", "nanosecondsPerOperation": [84.97, 90.04], "bytesPerOperation": 0, "allocationsPerOperation": 0 },
+    { "name": "TaskDuplicateProgress", "nanosecondsPerOperation": [21.93, 23.61], "bytesPerOperation": 0, "allocationsPerOperation": 0 },
+    { "name": "MemoryTaskStoreReadParallel", "nanosecondsPerOperation": [42.61, 44.49], "bytesPerOperation": 0, "allocationsPerOperation": 0 },
+    { "name": "MemoryTaskStoreCreate", "nanosecondsPerOperation": [677.7, 809.3], "bytesPerOperation": 647, "allocationsPerOperation": 7 }
+  ],
+  "interpretation": "Domain progress and duplicate hot paths allocate no heap memory in this local run. The memory adapter is not the production PostgreSQL path."
+}

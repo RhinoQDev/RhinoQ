@@ -112,7 +112,7 @@
 
 ## ADR-0012 — Workbench local, read-only và embed trong Go binary
 
-- **Status:** accepted
+- **Status:** superseded in part by ADR-0021; loopback/privacy boundary remains
 - **Context:** developer cần xem job/effect/outcome nhanh nhưng một hosted
   Console tạo thêm process, auth, deployment và frontend dependency trước khi có
   design-partner evidence.
@@ -363,6 +363,41 @@
 - **Rollback:** stop using `PostgresTaskClient` and use the Gateway client.
   The isolated schema can remain unused or be removed deliberately after data
   export; no runtime/verification tables depend on it.
+- **Owner:** product + engine + Node SDK
+
+## ADR-0021 — Bounded Task reads, ProviderOperation and guarded repair
+
+- **Status:** accepted
+- **Context:** fan-out benchmarks showed the compatibility Snapshot grows with
+  every Execution, while payment/provisioning calls and business repairs need
+  explicit unknown-result semantics rather than another queue retry.
+- **Decision:** Task polling uses an execution-free Summary and stable keyset
+  Execution pages; the full Snapshot remains for compatibility. Go owns a
+  durable ProviderOperation state machine keyed by provider/operation/idempotency
+  key. Unknown network results fail closed as `uncertain` and are resolved by
+  read-back or webhook proof. Repairs are registered application handlers and
+  require preview, a different approver, a fresh precondition, an idempotent
+  apply token and post-apply verification.
+- **Notification boundary:** generic signed webhook and Slack delivery are
+  explicit, evidence-redacted by default and deduplicated durably per event and
+  destination. Automatic multi-node scheduling is deferred until subscription,
+  retention and retry policy are specified.
+- **Workbench boundary:** ADR-0012's arbitrary-mutation prohibition remains,
+  but read-only operation is no longer mandatory. An explicitly action-enabled
+  loopback Workbench may call recheck and guarded repair Application use cases.
+  Business mutation runs only through an in-process registered handler or an
+  allowlisted, HMAC-signed application callback; browser-supplied SQL is never
+  accepted.
+- **Alternatives:** offset pages (unstable under append); retry timeouts as
+  failures (can double-charge); arbitrary repair SQL (unreviewable and unsafe);
+  copying state machines into TypeScript (two correctness authorities).
+- **Consequences:** full-profile databases require migrations 018–022. The
+  Task-only Node profile stays at exactly three tables. Node ProviderOperation
+  and repair HTTP helpers reserve/transition state through Go; SDK callbacks do
+  not implement the state machine. Task polling reads stored aggregate counts
+  and fetches Execution pages only on demand.
+- **Rollback:** callers can keep using full Task Snapshots and avoid the new
+  APIs; migrations are additive and do not rewrite existing rows.
 - **Owner:** product + engine + Node SDK
 
 ## Template cho ADR mới

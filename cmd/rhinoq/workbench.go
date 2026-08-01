@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -36,6 +39,7 @@ func runWorkbench(
 	port := flags.Int("port", 8787, "loopback port; use 0 to select an available port")
 	queue := flags.String("queue", "", "optional initial queue filter")
 	noOpen := flags.Bool("no-open", false, "print the URL without opening a browser")
+	actions := flags.Bool("actions", false, "enable recheck and registered safe-repair callbacks")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -49,8 +53,9 @@ func runWorkbench(
 	}
 
 	var (
-		reader workbench.Reader
-		closer io.Closer
+		reader   workbench.Reader
+		operator workbench.Operator
+		closer   io.Closer
 	)
 	if *demo {
 		reader = workbench.NewDemoReader()
@@ -68,12 +73,20 @@ func runWorkbench(
 			client: client,
 			source: databaseSourceLabel(getenv("RHINOQ_DATABASE_URL")),
 		}
+		if *actions {
+			repairs, registryErr := workbenchRepairRegistry(getenv("RHINOQ_REPAIR_CALLBACKS_JSON"))
+			if registryErr != nil {
+				fmt.Fprintf(output, "FAIL configure repair callbacks: %v\n", registryErr)
+				return 1
+			}
+			operator = &liveWorkbenchOperator{client: client, repairs: repairs}
+		}
 	}
 	if closer != nil {
 		defer closer.Close()
 	}
 
-	handler, err := workbench.NewHandler(reader, workbench.Options{Version: workbenchVersion})
+	handler, err := workbench.NewHandler(reader, workbench.Options{Version: workbenchVersion, Operator: operator})
 	if err != nil {
 		fmt.Fprintf(output, "FAIL build Workbench: %v\n", err)
 		return 1
@@ -109,7 +122,11 @@ func runWorkbench(
 	fmt.Fprintln(output, "RhinoQ Workbench")
 	fmt.Fprintf(output, "  URL      %s\n", browserURL)
 	fmt.Fprintf(output, "  Source   %s\n", mode)
-	fmt.Fprintln(output, "  Access   loopback only · read-only · payloads omitted")
+	access := "loopback only · read-only · payloads omitted"
+	if operator != nil {
+		access = "loopback only · recheck/safe callbacks enabled · arbitrary SQL forbidden"
+	}
+	fmt.Fprintln(output, "  Access   "+access)
 	fmt.Fprintln(output, "  Stop     Ctrl+C")
 
 	shouldOpen := !*noOpen && !truthy(getenv("RHINOQ_WORKBENCH_NO_OPEN"))
@@ -137,6 +154,110 @@ func runWorkbench(
 		return 1
 	}
 	return 0
+}
+
+func workbenchRepairRegistry(raw string) (*rhinoq.RepairRegistry, error) {
+	registry := rhinoq.NewRepairRegistry()
+	if strings.TrimSpace(raw) == "" {
+		return registry, nil
+	}
+	var callbacks map[string]struct {
+		URL               string `json:"url"`
+		Secret            string `json:"secret"`
+		Timeout           string `json:"timeout"`
+		AllowInsecureHTTP bool   `json:"allowInsecureHTTP"`
+	}
+	if err := json.Unmarshal([]byte(raw), &callbacks); err != nil {
+		return nil, errors.New("RHINOQ_REPAIR_CALLBACKS_JSON must be an object keyed by repair handler name")
+	}
+	for name, config := range callbacks {
+		timeout := 10 * time.Second
+		if config.Timeout != "" {
+			parsed, err := time.ParseDuration(config.Timeout)
+			if err != nil || parsed <= 0 {
+				return nil, fmt.Errorf("repair callback %q has an invalid timeout", name)
+			}
+			timeout = parsed
+		}
+		handler, err := rhinoq.NewHTTPRepairHandler(rhinoq.HTTPRepairHandlerOptions{
+			URL: config.URL, Secret: config.Secret, Timeout: timeout,
+			AllowInsecureHTTP: config.AllowInsecureHTTP,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("repair callback %q: %w", name, err)
+		}
+		if err := registry.Register(name, handler); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
+}
+
+type liveWorkbenchOperator struct {
+	client  *rhinoq.Client
+	repairs *rhinoq.RepairRegistry
+}
+
+func (o *liveWorkbenchOperator) Recheck(ctx context.Context, subject workbench.SubjectRef, ruleID string) (workbench.ActionResult, error) {
+	evaluation, err := o.client.EvaluateRule(ctx, ruleID, subject.ID, "")
+	if err != nil {
+		return workbench.ActionResult{}, err
+	}
+	result := workbench.ActionResult{Status: "clean", Detail: "Rule passed for this subject."}
+	for _, observation := range evaluation.Observations {
+		if observation.SubjectID == subject.ID && observation.Status != "pass" {
+			result.Status, result.Detail = "drift", observation.Reason
+			break
+		}
+	}
+	return result, nil
+}
+
+func (o *liveWorkbenchOperator) ProposeRepair(ctx context.Context, request workbench.RepairProposal) (workbench.RepairPlan, error) {
+	id, err := newWorkbenchRepairID()
+	if err != nil {
+		return workbench.RepairPlan{}, err
+	}
+	record, err := o.client.ProposeRepair(ctx, rhinoq.RepairProposal{
+		ID: id,
+		Finding: rhinoq.FindingKey{
+			RuleID: request.Finding.RuleID, SubjectType: request.Finding.SubjectType,
+			SubjectID: request.Finding.SubjectID, InvariantVersion: request.Finding.InvariantVersion,
+		},
+		Handler: request.Handler, Parameters: request.Parameters, Actor: request.Actor,
+	})
+	return workbenchRepair(record), err
+}
+
+func (o *liveWorkbenchOperator) PreviewRepair(ctx context.Context, id string) (workbench.RepairPlan, error) {
+	record, err := o.client.PreviewRepair(ctx, id, o.repairs)
+	return workbenchRepair(record), err
+}
+func (o *liveWorkbenchOperator) ApproveRepair(ctx context.Context, id, actor, reason string) (workbench.RepairPlan, error) {
+	record, err := o.client.ApproveRepair(ctx, id, actor, reason)
+	return workbenchRepair(record), err
+}
+func (o *liveWorkbenchOperator) ExecuteRepair(ctx context.Context, id string) (workbench.RepairPlan, error) {
+	record, err := o.client.ExecuteRepair(ctx, id, o.repairs)
+	return workbenchRepair(record), err
+}
+
+func newWorkbenchRepairID() (string, error) {
+	var body [12]byte
+	if _, err := rand.Read(body[:]); err != nil {
+		return "", err
+	}
+	return "repair_" + hex.EncodeToString(body[:]), nil
+}
+
+func workbenchRepair(record rhinoq.RepairRecord) workbench.RepairPlan {
+	return workbench.RepairPlan{
+		ID: record.ID, State: record.State, Handler: record.Handler,
+		Preview: record.Preview, Precondition: record.Precondition,
+		ProposedBy: record.ProposedBy, ApprovedBy: record.ApprovedBy,
+		ApprovalReason: record.ApprovalReason, Outcome: record.Outcome,
+		DryRun: record.State == "previewed", Version: record.Version,
+	}
 }
 
 type liveWorkbenchReader struct {

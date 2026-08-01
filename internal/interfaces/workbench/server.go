@@ -18,13 +18,15 @@ import (
 var assets embed.FS
 
 type Options struct {
-	Version string
+	Version  string
+	Operator Operator
 }
 
 type server struct {
-	reader  Reader
-	static  http.Handler
-	version string
+	reader   Reader
+	static   http.Handler
+	version  string
+	operator Operator
 }
 
 func NewHandler(reader Reader, options Options) (http.Handler, error) {
@@ -36,20 +38,25 @@ func NewHandler(reader Reader, options Options) (http.Handler, error) {
 		return nil, err
 	}
 	s := &server{
-		reader:  reader,
-		static:  http.FileServer(http.FS(public)),
-		version: options.Version,
+		reader:   reader,
+		static:   http.FileServer(http.FS(public)),
+		version:  options.Version,
+		operator: options.Operator,
 	}
 	return securityHeaders(http.HandlerFunc(s.serveHTTP)), nil
 }
 
 func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Workbench v0 is read-only")
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported Workbench method")
 		return
 	}
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "cross_origin_request", "Workbench only accepts same-origin browser requests")
+		return
+	}
+	if r.Method == http.MethodPost {
+		s.action(w, r)
 		return
 	}
 	switch {
@@ -91,12 +98,132 @@ func (s *server) snapshot(w http.ResponseWriter, r *http.Request) {
 	if snapshot.GeneratedAt.IsZero() {
 		snapshot.GeneratedAt = time.Now().UTC()
 	}
+	snapshot.Source.ReadOnly = s.operator == nil
 	if snapshot.Limits == nil {
 		snapshot.Limits = map[string]int{"jobs": query.Limit}
 	}
 	normalizeSnapshot(&snapshot)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *server) action(w http.ResponseWriter, r *http.Request) {
+	if s.operator == nil {
+		writeError(w, http.StatusMethodNotAllowed, "actions_disabled", "This Workbench has no application action callbacks registered")
+		return
+	}
+	path := strings.Trim(r.URL.Path, "/")
+	switch {
+	case strings.HasPrefix(path, "api/v1/subjects/") && strings.HasSuffix(path, "/recheck"):
+		s.recheck(w, r)
+	case path == "api/v1/repairs":
+		s.proposeRepair(w, r)
+	case strings.HasPrefix(path, "api/v1/repairs/"):
+		s.repairAction(w, r)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "Workbench action endpoint not found")
+	}
+}
+
+func (s *server) recheck(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimSuffix(strings.TrimPrefix(strings.Trim(r.URL.Path, "/"), "api/v1/subjects/"), "/recheck")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 {
+		writeError(w, http.StatusBadRequest, "invalid_subject", "subject type and id are required")
+		return
+	}
+	subjectType, e1 := url.PathUnescape(parts[0])
+	subjectID, e2 := url.PathUnescape(parts[1])
+	var request struct {
+		RuleID string `json:"ruleId"`
+	}
+	if e1 != nil || e2 != nil || !decodeAction(w, r, &request) || strings.TrimSpace(request.RuleID) == "" {
+		if e1 != nil || e2 != nil {
+			writeError(w, http.StatusBadRequest, "invalid_subject", "subject path is invalid")
+		}
+		return
+	}
+	result, err := s.operator.Recheck(r.Context(), SubjectRef{Type: subjectType, ID: subjectID}, request.RuleID)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "recheck_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) proposeRepair(w http.ResponseWriter, r *http.Request) {
+	var request RepairProposal
+	if !decodeAction(w, r, &request) {
+		return
+	}
+	plan, err := s.operator.ProposeRepair(r.Context(), request)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "repair_proposal_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func (s *server) repairAction(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(strings.Trim(r.URL.Path, "/"), "api/v1/repairs/")
+	id, verb, found := strings.Cut(rest, "/")
+	if !found || strings.TrimSpace(id) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_repair", "repair id and action are required")
+		return
+	}
+	id, err := url.PathUnescape(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_repair", "repair id is invalid")
+		return
+	}
+	var plan RepairPlan
+	switch verb {
+	case "preview":
+		if !decodeOptionalAction(w, r) {
+			return
+		}
+		plan, err = s.operator.PreviewRepair(r.Context(), id)
+	case "approve":
+		var request struct {
+			Actor  string `json:"actor"`
+			Reason string `json:"reason"`
+		}
+		if !decodeAction(w, r, &request) {
+			return
+		}
+		plan, err = s.operator.ApproveRepair(r.Context(), id, request.Actor, request.Reason)
+	case "execute":
+		if !decodeOptionalAction(w, r) {
+			return
+		}
+		plan, err = s.operator.ExecuteRepair(r.Context(), id)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "repair action not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "repair_action_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func decodeAction(w http.ResponseWriter, r *http.Request, target any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json", "action body is invalid or exceeds 64 KiB")
+		return false
+	}
+	return true
+}
+func decodeOptionalAction(w http.ResponseWriter, r *http.Request) bool {
+	if r.ContentLength == 0 {
+		return true
+	}
+	var body struct{}
+	return decodeAction(w, r, &body)
 }
 
 func (s *server) jobDetail(w http.ResponseWriter, r *http.Request) {

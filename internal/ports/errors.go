@@ -11,15 +11,18 @@ var (
 	// ErrLeaseLost matches every fencing rejection through errors.Is. A store
 	// returns it when the presented owner and epoch are no longer the ones the
 	// database recognises, which means another execution owns the job now.
-	ErrLeaseLost          = errors.New("RHINOQ_LEASE_LOST")
-	ErrJobNotFound        = errors.New("RHINOQ_JOB_NOT_FOUND")
-	ErrFindingNotFound    = errors.New("RHINOQ_FINDING_NOT_FOUND")
-	ErrRuleNotFound       = errors.New("RHINOQ_RULE_NOT_FOUND")
-	ErrTaskNotFound       = errors.New("RHINOQ_TASK_NOT_FOUND")
-	ErrTaskResultNotFound = errors.New("RHINOQ_TASK_RESULT_NOT_FOUND")
-	ErrExecutionNotFound  = errors.New("RHINOQ_EXECUTION_NOT_FOUND")
-	ErrVersionConflict    = errors.New("RHINOQ_VERSION_CONFLICT")
-	ErrAlreadyExists      = errors.New("RHINOQ_ALREADY_EXISTS")
+	ErrLeaseLost                 = errors.New("RHINOQ_LEASE_LOST")
+	ErrJobNotFound               = errors.New("RHINOQ_JOB_NOT_FOUND")
+	ErrFindingNotFound           = errors.New("RHINOQ_FINDING_NOT_FOUND")
+	ErrRuleNotFound              = errors.New("RHINOQ_RULE_NOT_FOUND")
+	ErrTaskNotFound              = errors.New("RHINOQ_TASK_NOT_FOUND")
+	ErrTaskResultNotFound        = errors.New("RHINOQ_TASK_RESULT_NOT_FOUND")
+	ErrExecutionNotFound         = errors.New("RHINOQ_EXECUTION_NOT_FOUND")
+	ErrProviderOperationNotFound = errors.New("RHINOQ_PROVIDER_OPERATION_NOT_FOUND")
+	ErrNotificationDeliveryNotFound = errors.New("RHINOQ_NOTIFICATION_DELIVERY_NOT_FOUND")
+	ErrRepairNotFound            = errors.New("RHINOQ_REPAIR_NOT_FOUND")
+	ErrVersionConflict           = errors.New("RHINOQ_VERSION_CONFLICT")
+	ErrAlreadyExists             = errors.New("RHINOQ_ALREADY_EXISTS")
 )
 
 // LeaseLostError explains a fencing rejection to the operator reading the log.

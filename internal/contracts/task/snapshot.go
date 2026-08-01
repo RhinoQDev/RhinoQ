@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	SnapshotSchemaVersion = 1
-	ResultSchemaVersion   = 1
+	SnapshotSchemaVersion      = 1
+	ResultSchemaVersion        = 1
+	ExecutionPageSchemaVersion = 1
 )
 
 var (
@@ -55,6 +56,50 @@ type Snapshot struct {
 	Executions    []Execution  `json:"executions"`
 	CreatedAt     time.Time    `json:"createdAt"`
 	UpdatedAt     time.Time    `json:"updatedAt"`
+}
+
+// Summary is the polling contract for high fan-out Tasks. It deliberately
+// omits child executions; callers page those only when a UI needs the detail.
+type Summary struct {
+	SchemaVersion   int             `json:"schemaVersion"`
+	EntityVersion   int64           `json:"entityVersion"`
+	ID              string          `json:"id"`
+	Type            string          `json:"type"`
+	OwnerID         string          `json:"ownerId,omitempty"`
+	State           string          `json:"state"`
+	Cancellation    Cancellation    `json:"cancellation"`
+	Progress        Progress        `json:"progress"`
+	HasResult       bool            `json:"hasResult"`
+	ExecutionCounts ExecutionCounts `json:"executionCounts"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+type ExecutionCounts struct {
+	Total           int64 `json:"total"`
+	PendingDispatch int64 `json:"pendingDispatch"`
+	Dispatched      int64 `json:"dispatched"`
+	Running         int64 `json:"running"`
+	Succeeded       int64 `json:"succeeded"`
+	Failed          int64 `json:"failed"`
+	Stalled         int64 `json:"stalled"`
+	Cancelled       int64 `json:"cancelled"`
+}
+
+func (c ExecutionCounts) valid() bool {
+	if c.Total < 0 || c.PendingDispatch < 0 || c.Dispatched < 0 || c.Running < 0 ||
+		c.Succeeded < 0 || c.Failed < 0 || c.Stalled < 0 || c.Cancelled < 0 {
+		return false
+	}
+	return c.Total == c.PendingDispatch+c.Dispatched+c.Running+c.Succeeded+c.Failed+c.Stalled+c.Cancelled
+}
+
+type ExecutionPage struct {
+	SchemaVersion int         `json:"schemaVersion"`
+	EntityVersion int64       `json:"entityVersion"`
+	TaskID        string      `json:"taskId"`
+	Executions    []Execution `json:"executions"`
+	NextCursor    string      `json:"nextCursor,omitempty"`
 }
 
 // Result is separate from Snapshot so state polling does not repeatedly send
@@ -124,6 +169,31 @@ func (s Snapshot) Validate() error {
 	for _, attempt := range s.Executions {
 		if attempt.ID == "" || attempt.Attempt <= 0 || attempt.Runtime == "" ||
 			attempt.State == "" || attempt.Version <= 0 {
+			return ErrInvalidSnapshot
+		}
+	}
+	return nil
+}
+
+func (s Summary) Validate() error {
+	if !s.ExecutionCounts.valid() {
+		return ErrInvalidSnapshot
+	}
+	return Snapshot{
+		SchemaVersion: s.SchemaVersion, EntityVersion: s.EntityVersion,
+		ID: s.ID, Type: s.Type, OwnerID: s.OwnerID, State: s.State,
+		Cancellation: s.Cancellation, Progress: s.Progress, HasResult: s.HasResult,
+		Executions: []Execution{}, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt,
+	}.Validate()
+}
+
+func (p ExecutionPage) Validate() error {
+	if p.SchemaVersion != ExecutionPageSchemaVersion || p.EntityVersion <= 0 || p.TaskID == "" {
+		return ErrInvalidSnapshot
+	}
+	for _, item := range p.Executions {
+		if item.ID == "" || item.Attempt <= 0 || item.Runtime == "" ||
+			item.State == "" || item.Version <= 0 {
 			return ErrInvalidSnapshot
 		}
 	}

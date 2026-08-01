@@ -216,15 +216,18 @@ func TestFailureClassDecidesTheOutcome(t *testing.T) {
 
 	transientID := enqueue(t, client, rhinoq.JobRequest{QueueName: "classified", JobName: "classified", Payload: []byte("{}")})
 	transient := claimOne(t, client, "worker-1")
+	beforeFailure := databaseNow(t)
 	summary, err = client.FailJob(context.Background(), transient.Lease, rhinoq.FailureReport{
 		RetryClass: rhinoq.RetryTransient, Message: "connection reset",
 	})
 	if err != nil || summary.State != "retry_wait" {
 		t.Fatalf("a transient error must be retried: %+v err=%v", summary, err)
 	}
-	// The retry delay is computed by the database, so it must be in the future.
+	// The retry delay is computed by the database. Compare it with the same
+	// clock authority immediately before the command: a short retry may already
+	// be eligible by the time the follow-up read and assertion complete.
 	state := jobState(t, client, "classified", transientID)
-	if !state.NotBefore.After(time.Now()) {
+	if !state.NotBefore.After(beforeFailure) {
 		t.Fatalf("a retry must be scheduled forward in time: %s", state.NotBefore)
 	}
 }

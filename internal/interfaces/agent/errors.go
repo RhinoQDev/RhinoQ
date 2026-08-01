@@ -93,6 +93,9 @@ func describe(err error) (int, ErrorBody) {
 	if errors.Is(err, ports.ErrRuleNotFound) {
 		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_RULE_NOT_FOUND", Message: err.Error()}
 	}
+	if errors.Is(err, ports.ErrProviderOperationNotFound) {
+		return http.StatusNotFound, ErrorBody{Code: "RHINOQ_PROVIDER_OPERATION_NOT_FOUND", Message: err.Error()}
+	}
 	switch {
 	case errors.Is(err, rhinoq.ErrEffectUncertain):
 		return http.StatusConflict, ErrorBody{Code: "RHINOQ_EFFECT_UNCERTAIN", Message: err.Error()}

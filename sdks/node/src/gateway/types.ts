@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = '1.0';
-export const SDK_VERSION = '0.1.0-beta.4';
+export const SDK_VERSION = '0.1.0-beta.5';
 export const MAX_CLAIM_BATCH = 1000;
 
 export const CLIENT_CAPABILITIES = [
@@ -40,6 +40,7 @@ export type TaskState =
   | 'pending'
   | 'queued'
   | 'running'
+  | 'uncertain'
   | 'succeeded'
   | 'failed'
   | 'cancel_requested'
@@ -156,12 +157,89 @@ export interface TaskSnapshot {
   updatedAt: string;
 }
 
+export interface TaskExecutionCounts {
+  total: number;
+  pendingDispatch: number;
+  dispatched: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  stalled: number;
+  cancelled: number;
+}
+
+export type TaskSummary = Omit<TaskSnapshot, 'executions'> & {
+  executionCounts: TaskExecutionCounts;
+};
+
+export interface TaskExecutionPage {
+	readonly schemaVersion: 1;
+	readonly entityVersion: number;
+	readonly taskId: string;
+	readonly executions: TaskExecutionSummary[];
+	readonly nextCursor?: string;
+}
+
 export interface TaskResult {
   schemaVersion: 1;
   entityVersion: number;
   taskId: string;
   reference: string;
   updatedAt: string;
+}
+
+export type ProviderConfirmationPolicy = 'on-return' | 'readback' | 'webhook';
+export type ProviderRetryPolicy = 'never' | 'when-not-happened';
+export type ProviderOperationState =
+  | 'pending' | 'accepted' | 'confirmed' | 'failed'
+  | 'not_happened' | 'uncertain';
+
+export interface ProviderOperationRequest {
+  taskId?: string;
+  provider: string;
+  operation: string;
+  idempotencyKey: string;
+  confirmation?: ProviderConfirmationPolicy;
+  retryPolicy?: ProviderRetryPolicy;
+}
+
+export interface ProviderOperationRecord {
+  id: string;
+  taskId?: string;
+  provider: string;
+  operation: string;
+  idempotencyKey: string;
+  confirmation: ProviderConfirmationPolicy;
+  retryPolicy: ProviderRetryPolicy;
+  state: ProviderOperationState;
+  providerId?: string;
+  evidence?: string;
+  reason?: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderConfirmation {
+  decision: 'confirmed' | 'pending' | 'failed' | 'not_happened' | 'unknown';
+  evidence?: string;
+  reason?: string;
+}
+
+export interface ProviderOperationEvidence {
+  sequence: number;
+  kind: string;
+  payload: string;
+  createdAt: string;
+}
+
+export interface ProviderOperationOptions<T> extends Omit<ProviderOperationRequest, 'provider' | 'operation'> {
+  /** `stripe.refund`, `storage.provision`, or another stable provider.operation name. */
+  name: `${string}.${string}`;
+  execute: (idempotencyKey: string) => Promise<T>;
+  confirm?: (operation: ProviderOperationRecord) => Promise<ProviderConfirmation>;
+  providerId?: (result: T) => string;
+  evidence?: (result: T) => string | undefined;
 }
 
 export interface LeaseToken {
@@ -325,6 +403,36 @@ export interface FindingRecord extends FindingKey {
   reason?: string;
   suppressedUntil?: string;
   resolvedAt?: string;
+  updatedAt: string;
+}
+
+export interface FindingObservation extends FindingKey {
+  evidence?: string;
+  observedAt: string;
+}
+
+export interface RepairProposalRequest {
+  id?: string;
+  finding: FindingKey;
+  handler: string;
+  parameters?: unknown;
+  actor: string;
+}
+
+export interface RepairRecord {
+  id: string;
+  finding: FindingKey;
+  handler: string;
+  parameters?: unknown;
+  state: 'proposed' | 'previewed' | 'approved' | 'running' | 'succeeded' | 'failed' | 'stale' | 'uncertain' | 'aborted';
+  proposedBy: string;
+  approvedBy?: string;
+  approvalReason?: string;
+  preview?: string;
+  precondition?: string;
+  outcome?: string;
+  version: number;
+  createdAt: string;
   updatedAt: string;
 }
 

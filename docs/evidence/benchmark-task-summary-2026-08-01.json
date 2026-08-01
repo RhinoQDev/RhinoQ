@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-01T05:58:58.211Z",
+  "runtime": { "node": "v22.22.1", "postgres": "16.14" },
+  "configuration": { "iterations": 10, "concurrencies": [8], "fanoutSizes": [1000], "fanoutConcurrencies": [8], "fanoutReads": 30 },
+  "fanout": [{
+    "executions": 1000,
+    "concurrency": 8,
+    "snapshotBytes": 212119,
+    "summaryBytes": 324,
+    "executionPages": { "pageSize": 100, "pages": 10, "executions": 1000, "durationMs": 64.547 },
+    "reserve": { "operations": 1000, "durationMs": 3190.325, "operationsPerSecond": 313, "latencyMs": { "p50": 20.428, "p95": 35.591, "p99": 40.052 } },
+    "snapshotRead": { "operations": 30, "concurrency": 16, "durationMs": 119.68, "operationsPerSecond": 251, "latencyMs": { "p50": 37.398, "p95": 61.641, "p99": 65.379 } },
+    "summaryRead": { "operations": 30, "concurrency": 16, "durationMs": 7.575, "operationsPerSecond": 3961, "latencyMs": { "p50": 2.925, "p95": 4.243, "p99": 4.285 } }
+  }]
+}

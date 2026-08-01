@@ -30,6 +30,34 @@ type Progress struct {
 	Message   string
 }
 
+// ExecutionCounts is maintained in the same transaction as Execution writes.
+// It keeps TaskSummary bounded without rescanning a high fan-out history.
+type ExecutionCounts struct {
+	Total           int64
+	PendingDispatch int64
+	Dispatched      int64
+	Running         int64
+	Succeeded       int64
+	Failed          int64
+	Stalled         int64
+	Cancelled       int64
+}
+
+func (c ExecutionCounts) Valid() bool {
+	values := []int64{c.Total, c.PendingDispatch, c.Dispatched, c.Running,
+		c.Succeeded, c.Failed, c.Stalled, c.Cancelled}
+	var states int64
+	for index, value := range values {
+		if value < 0 {
+			return false
+		}
+		if index > 0 {
+			states += value
+		}
+	}
+	return states == c.Total
+}
+
 func (p Progress) Valid() bool {
 	if p.Completed < 0 || p.Total < 0 {
 		return false
@@ -44,6 +72,7 @@ type Record struct {
 	DefinitionVersion  int
 	State              State
 	Progress           Progress
+	ExecutionCounts    ExecutionCounts
 	ResultRef          string
 	CancellationStatus CancellationStatus
 	CancellationReason string
@@ -171,6 +200,9 @@ func (r Record) valid(now time.Time) error {
 	}
 	if !r.Progress.Valid() {
 		return fmt.Errorf("%w: malformed progress", ErrInvalidRecord)
+	}
+	if !r.ExecutionCounts.Valid() {
+		return fmt.Errorf("%w: malformed execution counts", ErrInvalidRecord)
 	}
 	return nil
 }

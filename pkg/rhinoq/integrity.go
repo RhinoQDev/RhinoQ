@@ -43,7 +43,11 @@ type IntegrityClient struct {
 	// externalEffects records and reads Effect Ledger entries for executions
 	// RhinoQ did not run. It is nil for the in-memory facade, which has no
 	// ledger.
-	externalEffects ports.ExternalEffectStore
+	externalEffects        ports.ExternalEffectStore
+	providerOperations     ports.ProviderOperationStore
+	repairs                ports.RepairStore
+	notificationDeliveries ports.NotificationDeliveryStore
+	markTaskUncertain      func(context.Context, string) error
 }
 
 // NewIntegrity opens the integrity plane against an existing PostgreSQL
@@ -73,6 +77,18 @@ func NewIntegrity(db *sql.DB) (*IntegrityClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	providerStore, err := postgres.NewProviderOperationStore(db)
+	if err != nil {
+		return nil, err
+	}
+	repairStore, err := postgres.NewRepairStore(db)
+	if err != nil {
+		return nil, err
+	}
+	notificationDeliveries, err := postgres.NewNotificationDeliveryStore(db)
+	if err != nil {
+		return nil, err
+	}
 	ruleEvaluator, err := postgres.NewRuleEvaluator(db, nil)
 	if err != nil {
 		return nil, err
@@ -88,10 +104,13 @@ func NewIntegrity(db *sql.DB) (*IntegrityClient, error) {
 	return &IntegrityClient{
 		findings: findingStore, rules: ruleStore,
 		ruleExplainer: ruleExplainer, ruleEvaluator: ruleEvaluator,
-		externalEffects: effectStore,
-		ruleSchedules:   ruleStore,
-		subjectOutcomes: subjectOutcomes,
-		changes:         changeStore,
+		externalEffects:        effectStore,
+		providerOperations:     providerStore,
+		repairs:                repairStore,
+		notificationDeliveries: notificationDeliveries,
+		ruleSchedules:          ruleStore,
+		subjectOutcomes:        subjectOutcomes,
+		changes:                changeStore,
 	}, nil
 }
 
@@ -102,7 +121,8 @@ func NewInMemoryIntegrity() *IntegrityClient {
 	return &IntegrityClient{
 		findings: memory.NewFindingStore(), rules: ruleStore,
 		ruleSchedules: ruleStore, subjectOutcomes: memory.NewSubjectOutcomeStore(),
-		changes: memory.NewChangeStore(),
+		changes: memory.NewChangeStore(), providerOperations: memory.NewProviderOperationStore(),
+		repairs: memory.NewRepairStore(), notificationDeliveries: memory.NewNotificationDeliveryStore(),
 	}
 }
 

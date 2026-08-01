@@ -5,9 +5,11 @@ import type {
   TaskExecutionBinding,
   TaskExecutionCreateRequest,
   TaskExecutionResults,
+	TaskExecutionPage,
   TaskProgress,
   TaskResult,
   TaskSnapshot,
+	TaskSummary,
   TaskState,
 } from '../gateway/types.js';
 
@@ -20,6 +22,8 @@ import type {
 export interface TaskClient {
   createTask(request: TaskCreateRequest): Promise<TaskSnapshot>;
   getTask(taskId: string): Promise<TaskSnapshot>;
+	getTaskSummary(taskId: string): Promise<TaskSummary>;
+	listTaskExecutions(taskId: string, cursor?: string, limit?: number): Promise<TaskExecutionPage>;
   createTaskExecution(
     taskId: string,
     request: TaskExecutionCreateRequest,

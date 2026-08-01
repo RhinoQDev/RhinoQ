@@ -1,8 +1,10 @@
 import { RhinoQError } from '../gateway/client.js';
 import type {
   TaskExecutionResults,
+	TaskExecutionPage,
   TaskResult,
   TaskSnapshot,
+	TaskSummary,
 } from '../gateway/types.js';
 import type { PostgresTaskClient } from '../postgres/task-client.js';
 
@@ -61,6 +63,16 @@ export function createTaskRequestHandler(
       if (request.method === 'GET' && relative.length === 1) {
         return json(await options.tasks.getTaskForOwner(taskId, ownerId));
       }
+	  if (request.method === 'GET' && relative.length === 2 && relative[1] === 'summary') {
+		const summary: TaskSummary = await options.tasks.getTaskSummaryForOwner(taskId, ownerId);
+		return json(summary);
+	  }
+	  if (request.method === 'GET' && relative.length === 3 && relative[1] === 'executions' && relative[2] === 'page') {
+		const page: TaskExecutionPage = await options.tasks.listTaskExecutionsForOwner(
+			taskId, ownerId, url.searchParams.get('cursor') ?? '', integerQuery(url, 'limit', 100),
+		);
+		return json(page);
+	  }
       if (
         request.method === 'GET' &&
         relative.length === 2 &&
@@ -145,6 +157,14 @@ export class ApplicationTaskClient {
   getTask(taskId: string): Promise<TaskSnapshot> {
     return this.send<TaskSnapshot>('GET', `/${path(taskId)}`);
   }
+
+	getTaskSummary(taskId: string): Promise<TaskSummary> {
+		return this.send('GET', `/${path(taskId)}/summary`);
+	}
+
+	listTaskExecutions(taskId: string, cursor = '', limit = 100): Promise<TaskExecutionPage> {
+		return this.send('GET', `/${path(taskId)}/executions/page?limit=${limit}&cursor=${encodeURIComponent(cursor)}`);
+	}
 
   async listTasks(limit = 50, offset = 0): Promise<TaskSnapshot[]> {
     const result = await this.send<{ tasks: TaskSnapshot[] }>(

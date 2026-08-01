@@ -1,7 +1,7 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-beta.4",
-  "description": "Typed Node.js Task, BullMQ lifecycle and worker client for RhinoQ",
+  "version": "0.1.0-beta.5",
+  "description": "Catch background jobs that succeeded technically but failed in the real world",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -24,7 +24,9 @@
     }
   },
   "bin": {
-    "rhinoq-task": "./dist/cli/task-migrate.js"
+    "rhinoq": "./dist/cli/rhinoq.js",
+    "rhinoq-task": "./dist/cli/task-migrate.js",
+    "rhinoq-task-check": "./dist/cli/task-check.js"
   },
   "files": [
     "dist",
@@ -43,6 +45,8 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/mark-cjs.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs test/*.test.cjs",
+    "benchmark": "npm run build && node bench/task-benchmark.mjs",
+    "benchmark:postgres": "npm run build && node bench/postgres-benchmark.mjs",
     "prepack": "npm run build",
     "pack:check": "npm pack --dry-run",
     "release:check": "node scripts/verify-release.mjs"

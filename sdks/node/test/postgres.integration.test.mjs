@@ -163,6 +163,14 @@ test('Task-only profile uses three tables and serves the embedded Node client', 
         ['item-b', 1, 'queue-b'],
       ],
     );
+	const summary = await tasks.getTaskSummary(taskId);
+	assert.equal(summary.entityVersion, task.entityVersion);
+	assert.equal(summary.executions, undefined);
+	const page1 = await tasks.listTaskExecutions(taskId, '', 2);
+	const page2 = await tasks.listTaskExecutions(taskId, page1.nextCursor, 2);
+	assert.equal(page1.executions.length, 2);
+	assert.equal(page2.executions.length, 1);
+	assert.equal(new Set([...page1.executions, ...page2.executions].map((item) => item.id)).size, 3);
 
     const first = await tasks.getTaskExecution('node-task-item-a-attempt-1');
     await tasks.bindTaskExecution(first.id, {

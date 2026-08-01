@@ -1,4 +1,26 @@
-# Getting started with the Task Platform
+# Getting started
+
+## Five-minute Node path
+
+With Node.js 22 and PostgreSQL available:
+
+```bash
+npm install @rhinoq/node@next pg
+npx rhinoq init
+npx rhinoq verify add completed-report-has-output
+npx rhinoq doctor
+npx rhinoq fixture failure
+npx rhinoq dev
+```
+
+Set `DATABASE_URL` before `init`. The generated Rule is intentionally a
+template: edit its indexed business table and output column before using it
+outside the fixture. `init` does not overwrite existing config or Rules.
+
+To see queue completion diverge from reality and recover safely, run the
+[official Stripe failure demo](../examples/nextjs-bullmq-stripe/).
+
+## Task support layer
 
 > Status: evaluation only. This guide demonstrates the implemented Task
 > contract; it does not claim automatic BullMQ dispatch, React, realtime or
@@ -22,7 +44,7 @@ For a Node application keeping its existing queue, prefer the isolated
 Task-only path instead of the full Go migration chain:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.4.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.5.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 

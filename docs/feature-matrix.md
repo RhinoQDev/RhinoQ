@@ -44,7 +44,7 @@ execution platforms.
 | Polyglot workers | Node only | Node worker preview adds protocol negotiation, handler-filtered claim, heartbeat, cancellation and graceful shutdown through the optional HTTP gateway |
 | Transactional enqueue from any language | not applicable | `rhinoq.enqueue()` SQL function with job allowlist implemented and executed by the PostgreSQL suite |
 | Migration/diagnostics CLI | application-specific | read-only plan/status/SQL, explicit checksum-locked apply and database-aware doctor implemented |
-| Developer UI | separate product | embedded loopback-only Workbench preview implemented: payload-free jobs, Needs Attention, Findings, Rules, per-job evidence and business-subject investigation; read-only, no remote hosting |
+| Developer UI | separate product | embedded loopback-only Workbench preview implemented: payload-free jobs, Needs Attention, Findings, Rules, evidence, subject recheck and opt-in guarded repair; no remote hosting |
 
 BullMQ is a mature Redis-based queue with worker, events, delayed jobs,
 concurrency and operational features. RhinoQ uses it as one runtime reference;

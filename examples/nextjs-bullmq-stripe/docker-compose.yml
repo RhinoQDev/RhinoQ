@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rhinoq
+    ports: ["55433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rhinoq"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  redis:
+    image: redis:7.4-alpine
+    ports: ["56380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  migrate:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    entrypoint: ["/usr/local/bin/rhinoq"]
+    command: ["migrate", "apply"]
+    environment:
+      RHINOQ_DATABASE_URL: postgres://postgres:postgres@postgres:5432/rhinoq?sslmode=disable
+    depends_on:
+      postgres: { condition: service_healthy }
+  app:
+    build:
+      context: ../..
+      dockerfile: examples/nextjs-bullmq-stripe/Dockerfile
+    environment: &demo-env
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/rhinoq?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      RHINOQ_URL: http://agent:8080
+      RHINOQ_TOKEN: demo-token-change-me-32-bytes-minimum
+      APP_URL: http://app:3000
+      REPAIR_CALLBACK_SECRET: demo-repair-secret-change-me-32-bytes
+    ports: ["53000:3000"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+  agent:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      RHINOQ_DATABASE_URL: postgres://postgres:postgres@postgres:5432/rhinoq?sslmode=disable
+      RHINOQ_AGENT_ADDRESS: 0.0.0.0:8080
+      RHINOQ_AGENT_TOKEN: demo-token-change-me-32-bytes-minimum
+      RHINOQ_REPAIR_CALLBACKS_JSON: '{"order.mark-refunded":{"url":"http://app:3000/api/repair-callback","secret":"demo-repair-secret-change-me-32-bytes","allowInsecureHTTP":true}}'
+    ports: ["58080:8080"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      app: { condition: service_started }
+  worker:
+    build:
+      context: ../..
+      dockerfile: examples/nextjs-bullmq-stripe/Dockerfile
+    command: ["npm", "run", "worker"]
+    environment: *demo-env
+    depends_on:
+      agent: { condition: service_started }
+      app: { condition: service_started }
+      redis: { condition: service_healthy }

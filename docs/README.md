@@ -19,6 +19,8 @@
 ## Vận hành
 
 - [Runtime operations](./operations.md)
+- [Reproducible benchmarks and fault evidence](./benchmarks.md)
+- [Finding webhook and Slack notifications](./notifications.md)
 - [Failure semantics](./failure-semantics.md)
 - [Recovery](./recovery.md)
 - [Release checklist](../.ai/RELEASE_CHECKLIST.md)
@@ -30,6 +32,9 @@
 - [Implemented product strengths and proof boundaries](./product-strengths.md)
 - [Runtime foundation and implementation matrix](./feature-matrix.md)
 - [Integrity Rules](./rules.md)
+- [ProviderOperation](./provider-operations.md)
+- [Safe repair workflow](./safe-repair.md)
+- [First three design partners](./design-partners.md)
 - [Competitive landscape](./competitive-landscape.md)
 - [Adoption and usability review](./adoption-review.md)
 - [The adoption gap](./adoption-gap.md) — what limits adoption now that the

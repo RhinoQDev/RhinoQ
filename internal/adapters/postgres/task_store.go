@@ -125,7 +125,9 @@ func (s *TaskStore) CreateNextExecution(ctx context.Context, input ports.Executi
 	var taskVersion int64
 	if err := tx.QueryRowContext(ctx, `
 		UPDATE rhinoq_tasks
-		SET version=version+1, updated_at=GREATEST(updated_at, $2)
+		SET execution_total=execution_total+1,
+			execution_pending_dispatch=execution_pending_dispatch+1,
+			version=version+1, updated_at=GREATEST(updated_at, $2)
 		WHERE id=$1
 		RETURNING version`, input.TaskID, input.Now).Scan(&taskVersion); err != nil {
 		return execution.Record{}, 0, err
@@ -165,6 +167,19 @@ func (s *TaskStore) UpdateExecution(ctx context.Context, record execution.Record
 		return execution.Record{}, 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var currentState execution.State
+	var currentVersion int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT state, version FROM rhinoq_task_executions
+		WHERE id=$1 FOR UPDATE`, record.ID).Scan(&currentState, &currentVersion); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return execution.Record{}, 0, ports.ErrExecutionNotFound
+		}
+		return execution.Record{}, 0, err
+	}
+	if currentVersion != expectedVersion {
+		return execution.Record{}, 0, ports.ErrVersionConflict
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE rhinoq_task_executions SET
 			runtime=$2, job_id=$3, external_id=$4, state=$5,
@@ -194,9 +209,30 @@ func (s *TaskStore) UpdateExecution(ctx context.Context, record execution.Record
 	var taskVersion int64
 	if err := tx.QueryRowContext(ctx, `
 		UPDATE rhinoq_tasks
-		SET version=version+1, updated_at=GREATEST(updated_at, $2)
+		SET execution_pending_dispatch=execution_pending_dispatch+
+			(CASE WHEN $3='pending_dispatch' THEN -1 ELSE 0 END)+
+			(CASE WHEN $4='pending_dispatch' THEN 1 ELSE 0 END),
+			execution_dispatched=execution_dispatched+
+			(CASE WHEN $3='dispatched' THEN -1 ELSE 0 END)+
+			(CASE WHEN $4='dispatched' THEN 1 ELSE 0 END),
+			execution_running=execution_running+
+			(CASE WHEN $3='running' THEN -1 ELSE 0 END)+
+			(CASE WHEN $4='running' THEN 1 ELSE 0 END),
+			execution_succeeded=execution_succeeded+
+			(CASE WHEN $3='succeeded' THEN -1 ELSE 0 END)+
+			(CASE WHEN $4='succeeded' THEN 1 ELSE 0 END),
+			execution_failed=execution_failed+
+			(CASE WHEN $3='failed' THEN -1 ELSE 0 END)+
+			(CASE WHEN $4='failed' THEN 1 ELSE 0 END),
+			execution_stalled=execution_stalled+
+			(CASE WHEN $3='stalled' THEN -1 ELSE 0 END)+
+			(CASE WHEN $4='stalled' THEN 1 ELSE 0 END),
+			execution_cancelled=execution_cancelled+
+			(CASE WHEN $3='cancelled' THEN -1 ELSE 0 END)+
+			(CASE WHEN $4='cancelled' THEN 1 ELSE 0 END),
+			version=version+1, updated_at=GREATEST(updated_at, $2)
 		WHERE id=$1
-		RETURNING version`, record.TaskID, record.UpdatedAt).Scan(&taskVersion); err != nil {
+		RETURNING version`, record.TaskID, record.UpdatedAt, currentState, record.State).Scan(&taskVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return execution.Record{}, 0, ports.ErrTaskNotFound
 		}
@@ -226,10 +262,46 @@ func (s *TaskStore) ListTaskExecutions(ctx context.Context, taskID string) ([]ex
 	return records, rows.Err()
 }
 
+func (s *TaskStore) ListTaskExecutionsPage(ctx context.Context, query ports.ExecutionPageQuery) ([]execution.Record, bool, error) {
+	if query.TaskID == "" || query.Limit <= 0 {
+		return nil, false, errors.New("task id and positive page limit are required")
+	}
+	rows, err := s.db.QueryContext(ctx, executionSelect+`
+		WHERE task_id=$1
+		  AND ($2::text = '' OR (created_at, id) > (
+		      SELECT created_at, id FROM rhinoq_task_executions
+		      WHERE task_id=$1 AND id=$2
+		  ))
+		ORDER BY created_at, id LIMIT $3`, query.TaskID, query.AfterID, query.Limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	records := make([]execution.Record, 0, query.Limit+1)
+	for rows.Next() {
+		record, err := scanExecution(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	more := len(records) > query.Limit
+	if more {
+		records = records[:query.Limit]
+	}
+	return records, more, nil
+}
+
 const taskSelect = `SELECT id, type, COALESCE(owner_id,''), definition_version,
 	state, progress_completed, progress_total, COALESCE(progress_message,''),
 	COALESCE(result_ref,''), cancellation_status,
-	COALESCE(cancellation_reason,''), version, created_at, updated_at
+	COALESCE(cancellation_reason,''), execution_total,
+	execution_pending_dispatch, execution_dispatched, execution_running,
+	execution_succeeded, execution_failed, execution_stalled, execution_cancelled,
+	version, created_at, updated_at
 	FROM rhinoq_tasks`
 
 type rowScanner interface{ Scan(...any) error }
@@ -240,6 +312,10 @@ func scanTask(row rowScanner) (task.Record, error) {
 	err := row.Scan(&record.ID, &record.Type, &record.OwnerID, &record.DefinitionVersion,
 		&record.State, &record.Progress.Completed, &total, &record.Progress.Message,
 		&record.ResultRef, &record.CancellationStatus, &record.CancellationReason,
+		&record.ExecutionCounts.Total, &record.ExecutionCounts.PendingDispatch,
+		&record.ExecutionCounts.Dispatched, &record.ExecutionCounts.Running,
+		&record.ExecutionCounts.Succeeded, &record.ExecutionCounts.Failed,
+		&record.ExecutionCounts.Stalled, &record.ExecutionCounts.Cancelled,
 		&record.Version, &record.CreatedAt, &record.UpdatedAt)
 	if err != nil {
 		return task.Record{}, err

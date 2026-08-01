@@ -188,6 +188,9 @@ Các biến cấu hình Gateway:
 | `RHINOQ_AGENT_HEARTBEAT` | `10s` | heartbeat interval trả cho SDK khi handshake |
 | `RHINOQ_AGENT_SHUTDOWN_GRACE` | `20s` | thời gian drain HTTP khi dừng |
 | `RHINOQ_MAX_PAYLOAD_BYTES` | `1048576` | hard limit request body/payload |
+| `RHINOQ_AGENT_REQUESTS_PER_SECOND` | `200` | per-process protected-route token-bucket rate |
+| `RHINOQ_AGENT_REQUEST_BURST` | `400` | per-process burst allowance |
+| `RHINOQ_REPAIR_CALLBACKS_JSON` | empty | deployment-allowlisted signed business repair callbacks |
 
 Gateway không tự terminate TLS. Nếu bind ra non-loopback, đặt nó sau HTTPS
 reverse proxy/service mesh và network policy; không expose cổng HTTP trực tiếp.
@@ -290,11 +293,12 @@ restart loop.
 ## Giới hạn hiện tại
 
 - Chưa có tenant isolation và HTTP-layer per-job-name RBAC.
-- Chưa có TLS termination, HTTP rate limit, token rotation hoặc failed-auth
-  audit; xem [security audit](./security-audit-2026-07-29.md).
+- Chưa có TLS termination, distributed edge rate limit, token rotation hoặc
+  failed-auth audit. Gateway chỉ có limiter theo từng process; xem
+  [security audit](./security-audit-2026-07-29.md).
 - Chưa có gRPC/Unix socket, streaming claim hoặc compression.
 - Node.js là SDK preview duy nhất; chưa cam kết SDK Python/Java/.NET.
-- `@rhinoq/node@0.1.0-beta.2` đã có trên npm `next`; Task-only `beta.4` trên
+- `@rhinoq/node@0.1.0-beta.2` đã có trên npm `next`; Task-only `beta.5` trên
   `main` vẫn phải build/pack từ source cho tới khi phát hành.
 - HTTP Gateway không phải control plane và không thay thế database backup,
   restricted roles hay network policy.

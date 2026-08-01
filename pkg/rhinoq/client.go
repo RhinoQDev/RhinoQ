@@ -19,6 +19,7 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/domain/outcome"
 	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 	"github.com/madebyduy/RhinoQ/internal/domain/retry"
+	domaintask "github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
 	"github.com/madebyduy/RhinoQ/internal/runtime/supervisor"
@@ -361,21 +362,29 @@ func NewInMemory() *Client {
 	ruleStore := memory.NewRuleStore()
 	subjectOutcomes := memory.NewSubjectOutcomeStore()
 	changeStore := memory.NewChangeStore()
+	providerStore := memory.NewProviderOperationStore()
+	repairStore := memory.NewRepairStore()
+	notificationDeliveries := memory.NewNotificationDeliveryStore()
 	recoveryStore, err := memory.NewRecoveryStore(jobs, effects, outcomes)
 	if err != nil {
 		panic(err)
 	}
-	return &Client{
+	client := &Client{
 		store: jobs, effects: effects, outcomes: outcomes, recovery: recoveryStore,
 		tasks: taskService,
 		IntegrityClient: &IntegrityClient{
 			findings: findingStore, rules: ruleStore, ruleSchedules: ruleStore,
-			subjectOutcomes: subjectOutcomes,
-			changes:         changeStore,
+			subjectOutcomes:        subjectOutcomes,
+			changes:                changeStore,
+			providerOperations:     providerStore,
+			repairs:                repairStore,
+			notificationDeliveries: notificationDeliveries,
 		},
 
 		handlers: worker.NewHandlerRegistry(),
 	}
+	client.markTaskUncertain = taskUncertainMarker(taskService)
+	return client
 }
 
 func NewPostgres(db *sql.DB) (*Client, error) {
@@ -427,18 +436,35 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{
+	providerStore, err := postgres.NewProviderOperationStore(db)
+	if err != nil {
+		return nil, err
+	}
+	repairStore, err := postgres.NewRepairStore(db)
+	if err != nil {
+		return nil, err
+	}
+	notificationDeliveries, err := postgres.NewNotificationDeliveryStore(db)
+	if err != nil {
+		return nil, err
+	}
+	client := &Client{
 		store: store, effects: effects, outcomes: outcomes, recovery: recoveryStore,
 		tasks: taskService,
 		IntegrityClient: &IntegrityClient{
 			findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
 			ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
-			subjectOutcomes: subjectOutcomes,
-			changes:         changeStore,
+			subjectOutcomes:        subjectOutcomes,
+			changes:                changeStore,
+			providerOperations:     providerStore,
+			repairs:                repairStore,
+			notificationDeliveries: notificationDeliveries,
 		},
 
 		handlers: worker.NewHandlerRegistry(),
-	}, nil
+	}
+	client.markTaskUncertain = taskUncertainMarker(taskService)
+	return client, nil
 }
 
 func NewWithStore(store ports.JobStore) *Client {
@@ -476,12 +502,40 @@ func NewWithStore(store ports.JobStore) *Client {
 	if changes, ok := store.(ports.ChangeStore); ok {
 		client.changes = changes
 	}
+	if operations, ok := store.(ports.ProviderOperationStore); ok {
+		client.providerOperations = operations
+	}
+	if repairs, ok := store.(ports.RepairStore); ok {
+		client.repairs = repairs
+	}
+	if deliveries, ok := store.(ports.NotificationDeliveryStore); ok {
+		client.notificationDeliveries = deliveries
+	}
 	taskStore, hasTasks := store.(ports.TaskStore)
 	executionStore, hasExecutions := store.(ports.ExecutionStore)
 	if hasTasks && hasExecutions {
 		client.tasks, _ = taskapp.New(taskStore, executionStore, nil)
+		client.markTaskUncertain = taskUncertainMarker(client.tasks)
 	}
 	return client
+}
+
+func taskUncertainMarker(service *taskapp.Service) func(context.Context, string) error {
+	return func(ctx context.Context, id string) error {
+		summary, err := service.GetSummary(ctx, domaintask.ID(id))
+		if err != nil {
+			return err
+		}
+		switch domaintask.State(summary.State) {
+		case domaintask.Uncertain, domaintask.Succeeded, domaintask.Failed, domaintask.Cancelled:
+			return nil
+		case domaintask.Running, domaintask.CancelRequested:
+			_, err = service.Transition(ctx, domaintask.ID(id), summary.EntityVersion, domaintask.Uncertain)
+			return err
+		default:
+			return fmt.Errorf("task %s must be running before a provider result can become uncertain", id)
+		}
+	}
 }
 
 type RuleSchedulerConfig struct {

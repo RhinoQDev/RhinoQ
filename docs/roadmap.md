@@ -27,8 +27,11 @@ without migrating their queue.
 - [x] shared Go/Node golden wire fixture for Task Snapshot and Result v1
 - [x] version-fenced result-reference read/write through Go, HTTP and Node
 - [x] BullMQ lifecycle bridge for explicitly tracked existing jobs
-- [ ] dispatch/retry/cancel/reconciliation contract for BullMQ adoption
-- [ ] ProviderOperation domain foundation
+- [x] reserve-before-dispatch and bounded known-job reconciliation for BullMQ
+- [x] fail-closed BullMQ cancellation composition through an application callback
+- [ ] first-class retry command identity and crash-recovery contract for BullMQ
+- [x] ProviderOperation domain, PostgreSQL store and Stripe response-loss demo
+- [x] lightweight Task Summary and stable Execution keyset pagination
 
 Realtime transports, React hooks, streams and Redis fan-out are not part of the
 first persistence slice. They follow only after snapshot convergence semantics
@@ -50,7 +53,7 @@ are tested.
 - [x] transactional SQL enqueue
 - [x] queue-filtered claims for heterogeneous worker processes
 - [x] Node.js producer/worker/operator SDK preview with automated tests
-- [x] embedded read-only developer Workbench with demo/live PostgreSQL modes
+- [x] embedded loopback developer Workbench with read-only default and opt-in guarded actions
 
 ## Verified Tasks foundation — previously v0.1 Integrity Slice
 
@@ -106,17 +109,20 @@ requiring the application's current queue to be replaced.
 ## Verified Tasks safe recovery
 
 - [ ] resumable execution checkpoints
-- [ ] repair dry-run and precondition checks
-- [ ] approval policy and separation of duties
+- [x] repair preview and precondition checks
+- [x] approval policy and separation of duties
+- [x] apply idempotency token and post-repair verification
 - [ ] signed audit checkpoints or WORM export
 
 ## Later, after design-partner evidence
 
-- [ ] guarded, audited browser actions after read-only investigation is validated
+- [x] guarded, audited recheck and safe-repair browser actions through Application callbacks
 - [ ] gRPC/Unix-socket gateway transport, only after real polyglot demand
 - [ ] NestJS lifecycle integration after the framework-neutral Node SDK is validated
 - [ ] retention and partition sweeper
-- [ ] reproducible fault and benchmark suites
+- [x] Node SDK and Go domain/memory microbenchmarks plus fixed-seed browser disorder test
+- [x] reproducible PostgreSQL concurrency and Task fan-out snapshot benchmarks
+- [ ] runtime fault-campaign and end-to-end benchmarks
 - [ ] public release and license decision
 
 Do not start a second external-runtime adapter, DAG engine, automatic repair or

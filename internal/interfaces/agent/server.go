@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,6 +41,11 @@ type Config struct {
 	MaxRequestBytes int64
 	// Version is reported by the build-info metric.
 	Version string
+	// RequestsPerSecond and RequestBurst bound one process. Deployments with
+	// multiple replicas still need an edge/distributed limiter.
+	RequestsPerSecond float64
+	RequestBurst      int
+	RepairRegistry    *rhinoq.RepairRegistry
 }
 
 type TaskCredential struct {
@@ -69,6 +75,8 @@ type Server struct {
 	maxPayloadBytes   int
 	maxRequestBytes   int64
 	version           string
+	limiter           *requestLimiter
+	repairs           *rhinoq.RepairRegistry
 
 	// draining flips on shutdown so readiness fails before liveness does: an
 	// orchestrator should stop sending traffic, not restart the process.
@@ -122,12 +130,20 @@ func New(config Config) (*Server, error) {
 	if config.Version == "" {
 		config.Version = "0.1.0-dev"
 	}
+	if config.RequestsPerSecond <= 0 {
+		config.RequestsPerSecond = 200
+	}
+	if config.RequestBurst <= 0 {
+		config.RequestBurst = 400
+	}
 	server := &Server{
 		client: config.Client, tokenHash: operatorHash,
 		taskCredentials:   credentials,
 		open:              config.AllowUnauthenticated,
 		heartbeatInterval: config.HeartbeatInterval, maxPayloadBytes: config.MaxPayloadBytes,
 		maxRequestBytes: config.MaxRequestBytes, version: config.Version,
+		limiter: newRequestLimiter(config.RequestsPerSecond, config.RequestBurst),
+		repairs: config.RepairRegistry,
 	}
 	server.routes()
 	return server, nil
@@ -165,6 +181,8 @@ func (s *Server) routes() {
 	// delivery can be added later without changing the versioned snapshot.
 	mux.HandleFunc("POST /v1/tasks", s.guard(s.handleCreateTask))
 	mux.HandleFunc("GET /v1/tasks/{id}", s.taskGuard(s.handleGetTask))
+	mux.HandleFunc("GET /v1/tasks/{id}/summary", s.taskGuard(s.handleGetTaskSummary))
+	mux.HandleFunc("GET /v1/tasks/{id}/executions/page", s.taskGuard(s.handleListTaskExecutions))
 	mux.HandleFunc("POST /v1/tasks/{id}/cancel", s.taskGuard(s.handleRequestTaskCancellation))
 	mux.HandleFunc("POST /v1/tasks/{id}/state", s.guard(s.handleTransitionTask))
 	mux.HandleFunc("POST /v1/tasks/{id}/cancellation", s.guard(s.handleResolveTaskCancellation))
@@ -189,12 +207,25 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /v1/effects/resolve", s.guard(s.handleResolveEffect))
 	mux.HandleFunc("POST /v1/effects/confirm", s.guard(s.handleConfirmEffect))
 
+	// Provider calls execute in the application process; these commands keep
+	// identity, state transitions and retry authority in the Go engine.
+	mux.HandleFunc("POST /v1/provider-operations", s.guard(s.handleBeginProviderOperation))
+	mux.HandleFunc("GET /v1/provider-operations/{id}", s.guard(s.handleGetProviderOperation))
+	mux.HandleFunc("GET /v1/provider-operations/{id}/evidence", s.guard(s.handleProviderOperationEvidence))
+	mux.HandleFunc("POST /v1/provider-operations/{id}/accept", s.guard(s.handleAcceptProviderOperation))
+	mux.HandleFunc("POST /v1/provider-operations/{id}/resolve", s.guard(s.handleResolveProviderOperation))
+	mux.HandleFunc("POST /v1/provider-operations/{id}/retry", s.guard(s.handleRetryProviderOperation))
+
 	// Operator surface.
 	mux.HandleFunc("GET /v1/queues/{name}/counts", s.guard(s.handleCounts))
 	mux.HandleFunc("POST /v1/queues/{name}/pause", s.guard(s.handlePause))
 	mux.HandleFunc("POST /v1/queues/{name}/resume", s.guard(s.handleResume))
 	mux.HandleFunc("GET /v1/attention", s.guard(s.handleAttention))
 	mux.HandleFunc("POST /v1/findings/observe", s.guard(s.handleObserveFinding))
+	mux.HandleFunc("POST /v1/repairs", s.guard(s.handleProposeRepair))
+	mux.HandleFunc("POST /v1/repairs/{id}/preview", s.guard(s.handlePreviewRepair))
+	mux.HandleFunc("POST /v1/repairs/{id}/approve", s.guard(s.handleApproveRepair))
+	mux.HandleFunc("POST /v1/repairs/{id}/execute", s.guard(s.handleExecuteRepair))
 	mux.HandleFunc("GET /v1/findings", s.guard(s.handleListFindings))
 	mux.HandleFunc("POST /v1/findings/transition", s.guard(s.handleTransitionFinding))
 	mux.HandleFunc("GET /v1/findings/history", s.guard(s.handleFindingHistory))
@@ -208,11 +239,83 @@ func (s *Server) routes() {
 	s.mux = mux
 }
 
+func (s *Server) handleBeginProviderOperation(w http.ResponseWriter, r *http.Request) {
+	var request rhinoq.ProviderOperationRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	record, err := s.client.BeginProviderOperation(r.Context(), request)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleGetProviderOperation(w http.ResponseWriter, r *http.Request) {
+	record, err := s.client.GetProviderOperation(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleProviderOperationEvidence(w http.ResponseWriter, r *http.Request) {
+	items, err := s.client.ListProviderOperationEvidence(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"evidence": items})
+}
+
+func (s *Server) handleAcceptProviderOperation(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ProviderID string `json:"providerId"`
+		Evidence   string `json:"evidence"`
+	}
+	if !decode(w, r, &request) {
+		return
+	}
+	record, err := s.client.AcceptProviderOperation(r.Context(), r.PathValue("id"), request.ProviderID, request.Evidence)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleResolveProviderOperation(w http.ResponseWriter, r *http.Request) {
+	var decision rhinoq.ProviderConfirmation
+	if !decode(w, r, &decision) {
+		return
+	}
+	record, err := s.client.ResolveProviderOperation(r.Context(), r.PathValue("id"), decision)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleRetryProviderOperation(w http.ResponseWriter, r *http.Request) {
+	record, err := s.client.RetryProviderOperation(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			status, body := unauthorized()
 			writeJSON(w, status, errorResponse{Error: body})
+			return
+		}
+		if !s.allow(w) {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
@@ -228,10 +331,61 @@ func (s *Server) taskGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, status, errorResponse{Error: body})
 			return
 		}
+		if !s.allow(w) {
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
 		ctx := context.WithValue(r.Context(), taskPrincipalContextKey{}, principal)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+func (s *Server) allow(w http.ResponseWriter) bool {
+	ok, retry := s.limiter.Allow(time.Now())
+	if ok {
+		return true
+	}
+	seconds := int64(retry / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: ErrorBody{
+		Code: "RHINOQ_RATE_LIMITED", Retryable: true, RetryAfterMs: retry.Milliseconds(),
+		Message: "The RhinoQ Gateway request budget is exhausted. Retry after the advertised delay; lower polling/worker pressure or raise RHINOQ_AGENT_REQUESTS_PER_SECOND deliberately.",
+	}})
+	return false
+}
+
+type requestLimiter struct {
+	mu                  sync.Mutex
+	rate, tokens, burst float64
+	last                time.Time
+}
+
+func newRequestLimiter(rate float64, burst int) *requestLimiter {
+	return &requestLimiter{rate: rate, tokens: float64(burst), burst: float64(burst), last: time.Now()}
+}
+func (l *requestLimiter) Allow(now time.Time) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	elapsed := now.Sub(l.last).Seconds()
+	if elapsed > 0 {
+		l.tokens += elapsed * l.rate
+		if l.tokens > l.burst {
+			l.tokens = l.burst
+		}
+		l.last = now
+	}
+	if l.tokens >= 1 {
+		l.tokens--
+		return true, 0
+	}
+	retry := time.Duration((1 - l.tokens) / l.rate * float64(time.Second))
+	if retry < time.Millisecond {
+		retry = time.Millisecond
+	}
+	return false, retry
 }
 
 func (s *Server) authorized(r *http.Request) bool {
@@ -352,6 +506,48 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (s *Server) handleGetTaskSummary(w http.ResponseWriter, r *http.Request) {
+	summary, err := s.client.GetTaskSummary(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !taskVisibleTo(taskPrincipalFrom(r.Context()), summary.OwnerID) {
+		s.fail(w, rhinoq.ErrTaskNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleListTaskExecutions(w http.ResponseWriter, r *http.Request) {
+	summary, err := s.client.GetTaskSummary(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !taskVisibleTo(taskPrincipalFrom(r.Context()), summary.OwnerID) {
+		s.fail(w, rhinoq.ErrTaskNotFound)
+		return
+	}
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil {
+			s.fail(w, errors.New("execution page limit must be an integer"))
+			return
+		}
+		limit = value
+	}
+	page, err := s.client.ListTaskExecutions(
+		r.Context(), summary.ID, r.URL.Query().Get("cursor"), limit,
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
 func (s *Server) handleGetTaskResult(w http.ResponseWriter, r *http.Request) {
@@ -734,6 +930,76 @@ func (s *Server) handleObserveFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"finding": record})
+}
+
+func (s *Server) handleProposeRepair(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepairRegistry(w) {
+		return
+	}
+	var proposal rhinoq.RepairProposal
+	if !decode(w, r, &proposal) {
+		return
+	}
+	record, err := s.client.ProposeRepair(r.Context(), proposal)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, record)
+}
+
+func (s *Server) handlePreviewRepair(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepairRegistry(w) {
+		return
+	}
+	record, err := s.client.PreviewRepair(r.Context(), r.PathValue("id"), s.repairs)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleApproveRepair(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepairRegistry(w) {
+		return
+	}
+	var decision struct {
+		Actor  string `json:"actor"`
+		Reason string `json:"reason"`
+	}
+	if !decode(w, r, &decision) {
+		return
+	}
+	record, err := s.client.ApproveRepair(r.Context(), r.PathValue("id"), decision.Actor, decision.Reason)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) handleExecuteRepair(w http.ResponseWriter, r *http.Request) {
+	if !s.requireRepairRegistry(w) {
+		return
+	}
+	record, err := s.client.ExecuteRepair(r.Context(), r.PathValue("id"), s.repairs)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) requireRepairRegistry(w http.ResponseWriter) bool {
+	if s.repairs != nil {
+		return true
+	}
+	writeJSON(w, http.StatusNotImplemented, errorResponse{Error: ErrorBody{
+		Code: "REPAIR_CALLBACK_NOT_CONFIGURED", Retryable: false,
+		Message: "no allowlisted application repair callback is configured; configure RHINOQ_REPAIR_CALLBACKS_JSON on the Gateway",
+	}})
+	return false
 }
 
 func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,8 @@ const app = {
   stageFilter: "",
   selectedJobId: "",
   selectedSubject: null,
+  selectedSubjectDetail: null,
+  repairPlan: null,
   selectedIndex: -1,
   visibleRows: [],
   columns: {
@@ -141,6 +143,7 @@ function bindEvents() {
   elements["empty-clear"].addEventListener("click", clearFilters);
   elements["table-body"].addEventListener("click", onTableClick);
   elements["rail-close"].addEventListener("click", closeRail);
+  elements["rail-subject"].addEventListener("click", onSubjectAction);
   elements["copy-job-id"].addEventListener("click", copySelectedJobID);
 
   bindMenu(elements["density-button"], elements["density-menu"]);
@@ -216,9 +219,11 @@ async function loadSnapshot(options = {}) {
   }
 }
 
-async function fetchJSON(path) {
+async function fetchJSON(path, options = {}) {
   const response = await fetch(path, {
-    headers: { Accept: "application/json" },
+    method: options.method || "GET",
+    headers: { Accept: "application/json", ...(options.body ? { "Content-Type": "application/json" } : {}) },
+    ...(options.body ? { body: JSON.stringify(options.body) } : {}),
     credentials: "same-origin",
   });
   let body;
@@ -1051,6 +1056,7 @@ async function selectSubject(subject) {
 }
 
 function renderSubjectDetail(detail) {
+  app.selectedSubjectDetail = detail;
   const summary = detail.summary || {};
   elements["rail-queue"].textContent = detail.subject.type.toLocaleUpperCase();
   elements["rail-title"].textContent = detail.subject.id;
@@ -1111,6 +1117,7 @@ function renderSubjectDetail(detail) {
     .join("");
 
   elements["rail-subject"].innerHTML = `
+    ${renderSubjectActions(detail)}
     <section class="rail-section">
       <h3>What ran</h3>
       ${executions || `<p class="muted">No execution has recorded an effect for this subject.</p>`}
@@ -1121,6 +1128,70 @@ function renderSubjectDetail(detail) {
     </section>`;
 
   elements["rail-notice"].textContent = (detail.notices || []).join(" ");
+}
+
+function renderSubjectActions(detail) {
+  if (app.snapshot?.source?.readOnly) return "";
+  const finding = detail.findings?.[0];
+  const plan = app.repairPlan;
+  return `<section class="rail-section">
+    <div class="rail-section-heading"><h3>Safe recovery</h3><span>${plan ? escapeHTML(humanize(plan.state)) : "application callbacks"}</span></div>
+    <p class="muted">Recheck first. Repair is previewed as a dry-run, approved by another actor, then re-verified automatically.</p>
+    <div class="safe-action-row">
+      <button class="secondary-button" type="button" data-subject-action="recheck" ${finding ? "" : "disabled"}>Recheck</button>
+      <button class="secondary-button" type="button" data-subject-action="propose" ${finding ? "" : "disabled"}>Preview repair</button>
+      <button class="secondary-button" type="button" data-subject-action="approve" ${plan?.state === "previewed" ? "" : "disabled"}>Approve</button>
+      <button class="secondary-button" type="button" data-subject-action="execute" ${plan?.state === "approved" ? "" : "disabled"}>Execute + verify</button>
+    </div>
+    ${plan ? `<dl class="detail-grid"><div><dt>Plan</dt><dd class="mono">${escapeHTML(plan.id)}</dd></div><div><dt>Dry-run</dt><dd>${plan.dryRun ? "yes" : "complete"}</dd></div><div><dt>Preview</dt><dd>${escapeHTML(plan.preview || "â€”")}</dd></div><div><dt>Precondition</dt><dd class="mono">${escapeHTML(plan.precondition || "â€”")}</dd></div><div><dt>Outcome</dt><dd>${escapeHTML(plan.outcome || "â€”")}</dd></div></dl>` : ""}
+  </section>`;
+}
+
+async function onSubjectAction(event) {
+  const button = event.target.closest("[data-subject-action]");
+  if (!button || button.disabled || !app.selectedSubjectDetail) return;
+  const detail = app.selectedSubjectDetail;
+  const finding = detail.findings?.[0];
+  if (!finding) return;
+  button.disabled = true;
+  try {
+    switch (button.dataset.subjectAction) {
+      case "recheck": {
+        const result = await fetchJSON(`/api/v1/subjects/${encodeURIComponent(detail.subject.type)}/${encodeURIComponent(detail.subject.id)}/recheck`, { method: "POST", body: { ruleId: finding.ruleId } });
+        showToast(`Recheck: ${result.status}. ${result.detail}`);
+        break;
+      }
+      case "propose": {
+        const handler = window.prompt("Registered repair handler", "repair-order-mapping");
+        const actor = handler && window.prompt("Proposer identity", "developer@example.com");
+        if (!handler || !actor) return;
+        let plan = await fetchJSON("/api/v1/repairs", { method: "POST", body: { finding: { ruleId: finding.ruleId, subjectType: finding.subjectType, subjectId: finding.subjectId, invariantVersion: finding.invariantVersion }, handler, parameters: {}, actor } });
+        plan = await fetchJSON(`/api/v1/repairs/${encodeURIComponent(plan.id)}/preview`, { method: "POST" });
+        app.repairPlan = plan;
+        showToast("Dry-run preview ready. A different actor must approve it.");
+        break;
+      }
+      case "approve": {
+        const actor = window.prompt("Approver identity (must differ from proposer)", "reviewer@example.com");
+        const reason = actor && window.prompt("Approval reason", "Reviewed precondition and dry-run output");
+        if (!actor || !reason) return;
+        app.repairPlan = await fetchJSON(`/api/v1/repairs/${encodeURIComponent(app.repairPlan.id)}/approve`, { method: "POST", body: { actor, reason } });
+        showToast("Repair approved. Execution still requires an explicit click.");
+        break;
+      }
+      case "execute": {
+        if (!window.confirm("Execute this registered callback, then automatically re-verify?")) return;
+        app.repairPlan = await fetchJSON(`/api/v1/repairs/${encodeURIComponent(app.repairPlan.id)}/execute`, { method: "POST" });
+        showToast(`Repair ${app.repairPlan.state}: ${app.repairPlan.outcome || "verification recorded"}`);
+        break;
+      }
+    }
+    renderSubjectDetail(detail);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 /*

@@ -41,7 +41,7 @@ prerequisite for someone who only needs import/export progress.
    compared with hand-built task plumbing.
 3. Run browser reload, delayed-response, duplicate-event and cancellation-race
    tests against the real application.
-4. Publish the Task-only `beta.4` package after clean-install evidence.
+4. Publish the Task-only `beta.5` package after clean-install evidence.
 
 ### P1 — required for a credible frontend task experience
 

@@ -9,6 +9,10 @@ export * from './bullmq/task-bridge.js';
 export * from './tasks/client.js';
 export * from './tasks/http.js';
 export * from './tasks/watch.js';
+export * from './tasks/store.js';
+export * from './tasks/react.js';
+export * from './providers/stripe.js';
+export * from './providers/storage.js';
 
 // Development-preview aliases for the casing used by the original private
 // prototype. New code should use the RhinoQ-prefixed names.

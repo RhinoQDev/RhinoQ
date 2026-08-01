@@ -35,6 +35,15 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
       }
       return snapshot;
     },
+	async getTaskSummaryForOwner(taskId, ownerId) {
+		const { executions, ...summary } = await this.getTaskForOwner(taskId, ownerId);
+		return summary;
+	},
+	async listTaskExecutionsForOwner(taskId, ownerId, cursor, limit) {
+		await this.getTaskForOwner(taskId, ownerId);
+		assert.equal(cursor, 'next'); assert.equal(limit, 2);
+		return { schemaVersion: 1, entityVersion: 3, taskId, executions: [], nextCursor: 'done' };
+	},
     async requestTaskCancellationForOwner(taskId, ownerId, expectedVersion) {
       assert.equal(taskId, snapshot.id);
       assert.equal(ownerId, snapshot.ownerId);
@@ -58,6 +67,8 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
   });
 
   assert.equal((await client.getTask('task-1')).entityVersion, 3);
+	assert.equal((await client.getTaskSummary('task-1')).executions, undefined);
+	assert.equal((await client.listTaskExecutions('task-1', 'next', 2)).nextCursor, 'done');
   assert.equal((await client.listTasks()).length, 1);
   const cancelled = await client.cancelTask('task-1', 3);
   assert.equal(cancelled.state, 'cancel_requested');
