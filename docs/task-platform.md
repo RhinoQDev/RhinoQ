@@ -1,5 +1,12 @@
 # Task Platform
 
+> Current status (2026-08-01): this document contains the staged architectural
+> history of the Task layer. For the current public integration contract and
+> runnable paths, use [Start here](./start-here.md), the
+> [Node.js guide](./nodejs.md) and [ProviderOperation](./provider-operations.md).
+> The status table below is current; older “next slice” narrative is retained
+> only as decision history and must not override implemented code.
+
 Tài liệu này là contract triển khai tăng dần cho Task Platform. Nó phân biệt
 rõ phần đã có code với phần mới là kế hoạch. Product baseline đầy đủ nằm ở
 [`../.ai/PRODUCT_BASELINE.md`](../.ai/PRODUCT_BASELINE.md), quyết định kiến trúc
@@ -11,7 +18,7 @@ nằm ở ADR-0014 trong [`../.ai/DECISIONS.md`](../.ai/DECISIONS.md).
 Task 1:N Execution
 Execution 0:1 native Job
 Execution 0:1 scoped external runtime reference
-Execution 0:N ProviderOperation        (planned)
+Execution 0:N ProviderOperation        (implemented)
 Task 0:1 VerifiedTaskPolicy            (planned)
 ```
 
@@ -23,8 +30,8 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 - `Job` là primitive của native Go/PostgreSQL runtime hiện có.
 - Runtime ngoài như BullMQ dùng stable external execution ID, không giả vờ có
   lease/fencing guarantee của native Job.
-- `ProviderOperation` sẽ theo dõi request bất đồng bộ tới provider, nhưng không
-  sở hữu business logic của application.
+- `ProviderOperation` theo dõi request bất đồng bộ tới provider nhưng không sở
+  hữu business logic, credential hay provider SDK của application.
 
 ## Trạng thái triển khai
 
@@ -47,8 +54,12 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | Polling delivery | implemented, integration-tested | HTTP `POST/GET /v1/tasks`; typed Node client; stale write trả typed `409` |
 | Framework-neutral Node Task watcher | implemented, SDK-tested | non-overlapping polling; only newer aggregate versions are yielded; terminal/abort stop |
 | Result-reference delivery | implemented, integration-tested | separate Go/HTTP/Node read-write API; Snapshot chỉ trả `hasResult` |
-| BullMQ lifecycle bridge V1 | implemented, Node SDK-tested | single-execution hoặc fan-out `execution-only`; no dispatch, retry, cancel or outage-wide reconciliation |
-| ProviderOperation | planned | boundary đã chốt, model chưa có |
+| BullMQ lifecycle bridge | implemented, Node SDK-tested | reserve-before-enqueue dispatch, bounded fan-out, lifecycle projection, application-owned cancellation; no outage-wide discovery |
+| Task Summary and Execution pages | implemented, Go/Node/PostgreSQL tested | stored aggregate counts, default summary polling and stable cursor pages |
+| TaskStore and React adapter | implemented, Node SDK-tested | serialized polling, stale-version rejection, bounded reconnect and zero-added-dependency React binding |
+| ProviderOperation | implemented, Go/Node/PostgreSQL tested | durable identity, explicit confirmation/retry policy, append-only evidence and `uncertain` fail-closed result |
+| Safe repair | implemented, Go/Gateway/Workbench tested | preview, precondition, four-eyes approval, allowlisted callback and post-apply verification |
+| Finding notifications | implemented, Go/PostgreSQL tested | signed webhook/Slack delivery with durable destination/event deduplication |
 | Verified Task composition | planned | primitives Effect/Outcome/Rule/Finding đã có |
 
 Không được dùng bảng này để quảng bá capability `planned` như behavior hiện có.
@@ -197,7 +208,7 @@ terminal không bao giờ mở lại. Bridge từ chối construct nếu thiếu
 
 ## Provider support
 
-ProviderOperation dự kiến chỉ chuẩn hóa hạ tầng dùng lại:
+ProviderOperation hiện chuẩn hóa hạ tầng dùng lại:
 
 ```text
 request ID · idempotency key · poll/webhook · timeout
@@ -208,11 +219,14 @@ RhinoQ không coi `202 Accepted` là completion và không retry mù khi kết q
 provider chưa biết. Business payload, quyết định fallback và invariant cuối
 cùng vẫn thuộc application hoặc Verified Task policy đã khai báo.
 
+Go/PostgreSQL sở hữu state machine và append-only evidence. Node chỉ gọi
+application-owned provider code qua Gateway; Stripe và provisioning/storage là
+hai reference adapter đã test. Webhook authentication vẫn thuộc application.
+
 ## Slice tiếp theo
 
-1. Tạo một example app có hai Task để đo code/endpoints bị xóa.
-2. Nối một runtime adapter thật vào Task → Execution mà không đưa correctness
-   sang SDK.
-3. Thiết kế ProviderOperation từ hai provider semantics khác nhau.
-4. Thêm golden contract/parity gate trước khi mở thêm SDK.
-5. Chỉ sau đó mới thêm transport realtime.
+1. Đo adoption cost và outcome evidence trên ba design partner thật.
+2. Hoàn thiện tenant-wide RBAC/isolation trước production claim.
+3. Thêm durable multi-node notification scheduling.
+4. Chạy deployment-shaped PostgreSQL/Redis/provider chaos campaign.
+5. Chỉ thêm realtime transport nếu polling evidence cho thấy nó cần thiết.

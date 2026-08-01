@@ -1,6 +1,6 @@
 # Competitive landscape
 
-> Last reviewed: 2026-07-29. This document compares product boundaries, not
+> Last reviewed: 2026-08-01. This document compares product boundaries, not
 > benchmark performance. Recheck primary sources before publication.
 
 RhinoQ does not enter an empty category. Queue libraries, durable execution
@@ -20,7 +20,7 @@ the behavior in application code.
 
 | Category | Established strengths | RhinoQ boundary |
 |---|---|---|
-| [BullMQ](https://github.com/taskforcesh/bullmq) | Redis queue, workers, progress, results, retry, cancellation, events and operations ecosystem | RhinoQ must not claim queue replacement, higher throughput or an existing adapter it does not have |
+| [BullMQ](https://github.com/taskforcesh/bullmq) | Redis queue, workers, progress, results, retry, cancellation, events and operations ecosystem | RhinoQ's bridge adds Task/evidence projection; it must not claim queue replacement or higher throughput |
 | [Bull Board](https://github.com/felixmosh/bull-board) | queue/job inspection and operator actions | operator UI, not a user-facing Task ownership/snapshot layer |
 | [pg-boss](https://github.com/timgit/pg-boss), [Graphile Worker](https://worker.graphile.org/docs) and [PGMQ](https://github.com/pgmq/pgmq) | PostgreSQL queue primitives, transactional enqueue and workers | PostgreSQL and ACID enqueue are table stakes, not differentiation |
 | [Trigger.dev](https://trigger.dev/docs/introduction) and [Inngest](https://www.inngest.com/docs) | managed task/runtime models, retries, observability and frontend/realtime tooling | RhinoQ cannot win on generic task features; it must show lower migration cost for current-worker teams |
@@ -34,23 +34,25 @@ converge after reload or out-of-order responses.
 
 Trigger.dev and Inngest already offer rich frontend/realtime task experience.
 RhinoQ's wedge is keeping an existing execution runtime—not feature parity.
-The first implementation is a tested BullMQ lifecycle bridge for jobs the
-application explicitly tracks. It does not yet prove no-cutover adoption:
-automatic dispatch, cancellation, retry orchestration and outage-wide
-reconciliation are intentionally absent.
+The tested BullMQ bridge reserves identity before `Queue.add`, supports bounded
+fan-out dispatch, observes lifecycle events and reconciles application-known
+jobs. It deliberately does not own Redis, rewrite handlers, scan a whole queue
+after downtime or guess whether an active side effect can be cancelled safely.
 
 ## RhinoQ product boundary
 
 | Layer | Boundary | Status |
 |---|---|---|
-| Task Platform | Task identity, versioned snapshot, progress, result reference, lifecycle and execution history | first polling slice implemented |
-| Existing-runtime adoption | lifecycle bridge observes an existing worker | BullMQ V1 observes explicitly tracked jobs; dispatch/retry/cancel remain planned |
-| Delivery | polling now; frontend/realtime later | HTTP polling and typed Node client implemented; no React/realtime |
+| Task Platform | Task identity, versioned summary, progress, result reference, lifecycle and execution history | summary polling, stored aggregates and cursor-paginated Executions implemented |
+| Existing-runtime adoption | lifecycle bridge observes an existing worker | BullMQ bridge dispatches/reserves or tracks known jobs; no outage-wide queue discovery |
+| Delivery | bounded polling now; realtime later | Task Summary, cursor-paginated Executions, TaskStore and zero-added-dependency React adapter implemented |
 | Verified Tasks | effect evidence, outcome observation, Rules and Findings | optional foundation implemented |
 
 The external Execution reference alone is not an adapter. The BullMQ bridge
-adds event observation for explicitly tracked jobs, but it still does not
-enqueue to BullMQ or provide cancellation/retry/liveness reconciliation.
+can reserve before enqueue, track existing jobs, project events and compose
+application-owned cancellation. It still does not own BullMQ retry policy,
+discover unknown jobs after downtime or prove that an active side effect can be
+cancelled safely.
 
 ## Verification boundary
 

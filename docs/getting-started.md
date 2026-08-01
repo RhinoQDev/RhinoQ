@@ -23,8 +23,8 @@ To see queue completion diverge from reality and recover safely, run the
 ## Task support layer
 
 > Status: evaluation only. This guide demonstrates the implemented Task
-> contract; it does not claim automatic BullMQ dispatch, React, realtime or
-> tenant-authorized integration.
+> contract; it does not claim queue-wide discovery, realtime or tenant-wide
+> authorization.
 
 RhinoQ's first product path is a user-facing Task: a durable record that a
 backend and frontend can both understand. A Task is not a queue job. It has an
@@ -104,10 +104,11 @@ never retry an old mutation blindly.
 ## 2. Bind one execution attempt
 
 An Execution identifies one attempt and which runtime owns it. The contract can
-bind a stable external ID. The Node SDK's BullMQ lifecycle bridge can then
-observe a job the application has already enqueued, but it does **not** enqueue
-the job itself, take over Redis, cancel/retry it or discover all queue work
-after downtime.
+bind a stable external ID. The Node SDK's BullMQ lifecycle bridge can reserve a
+Task/Execution before `Queue.add()` through `dispatch()`/`dispatchMany()`, or
+observe a job the application already enqueued through `track()`. It does
+**not** take over Redis, rewrite workers or discover all queue work after
+downtime.
 
 ```go
 task, err = client.CreateTaskExecution(ctx, task.ID,
@@ -172,13 +173,13 @@ control.
 ## What this proves—and what it does not
 
 This path proves a versioned Task contract across Go, PostgreSQL, HTTP and Node.
-It does not yet prove the product's intended adoption promise:
+Its current boundaries are:
 
-- BullMQ lifecycle observation requires explicit `track()` when the application
-  adds the job; it is not auto-dispatch or full reconciliation;
-- no automatic Task-to-native-job dispatch exists;
+- BullMQ integration requires explicit `dispatch()`/`dispatchMany()` or
+  `track()`; it does not scan a queue or reconcile unknown jobs;
 - no composed retry command creates a new Execution atomically;
-- no React hook, Task Center, SSE/WebSocket or stream transport exists;
+- the React adapter uses TaskStore polling; no SSE/WebSocket or stream transport
+  exists;
 - `OwnerID` is returned for application authorization and optional owner-scoped
   polling/cancel credentials are available, but organization membership/RBAC
   is not implemented;

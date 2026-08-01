@@ -2,6 +2,7 @@
 
 ## Bắt đầu
 
+- [Start here: câu chuyện, lệnh chạy, dashboard và hướng tích hợp đầy đủ](./start-here.md)
 - [Product positioning: ai dùng, giải quyết gì, claim nào được phép](./product-positioning.md)
 - [Getting started](./getting-started.md)
 - [Existing-queue evaluation protocol](./evaluation-existing-queue.md) — use a
@@ -27,7 +28,7 @@
 
 ## Thiết kế
 
-- [Task Platform contract và implementation status](./task-platform.md)
+- [Task Platform architecture history and current status table](./task-platform.md)
 - [Product evidence and validation log](./product-evidence.md)
 - [Implemented product strengths and proof boundaries](./product-strengths.md)
 - [Runtime foundation and implementation matrix](./feature-matrix.md)

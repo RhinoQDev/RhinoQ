@@ -31,6 +31,11 @@ detect -> investigate -> decide -> repair -> verify
 > RBAC, multi-node notification dispatch and deployment-shaped chaos evidence
 > still block a production-ready claim.
 
+**New here?** Read the [complete beginner guide](./docs/start-here.md): the
+failure story, every setup command and why it exists, the two dashboards,
+BullMQ/ProviderOperation integration, safe repair, troubleshooting, and an
+honest comparison with established alternatives.
+
 ## Try it in under five minutes
 
 Node.js 22 and PostgreSQL are the only requirements for the shortest path. The
@@ -176,6 +181,7 @@ success/kill metrics are in [Design partners](./docs/design-partners.md).
 
 ## Documentation
 
+- [Start here: complete beginner guide](./docs/start-here.md)
 - [Five-minute setup](./docs/getting-started.md)
 - [Node.js and BullMQ](./docs/nodejs.md)
 - [ProviderOperation](./docs/provider-operations.md)

@@ -24,6 +24,11 @@ services:
       dockerfile: Dockerfile
     entrypoint: ["/usr/local/bin/rhinoq"]
     command: ["migrate", "apply"]
+    # The official PostgreSQL image briefly accepts connections through its
+    # temporary init server, then restarts the final postmaster. A healthcheck
+    # can win that narrow race; bounded restart makes this one-shot migration
+    # converge without hiding a persistent schema/configuration failure.
+    restart: "on-failure:5"
     environment:
       RHINOQ_DATABASE_URL: postgres://postgres:postgres@postgres:5432/rhinoq?sslmode=disable
     depends_on:

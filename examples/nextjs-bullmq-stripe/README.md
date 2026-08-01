@@ -13,6 +13,11 @@ docker compose up --build -d
 docker compose run --rm app npm run test:e2e
 ```
 
+The migration container retries a bounded number of times because the official
+PostgreSQL image can briefly accept connections during its temporary init
+server and then restart the final server. A persistent migration or schema
+error still stops the stack.
+
 Open <http://localhost:53000> to run the six steps manually. Clean up with:
 
 ```bash

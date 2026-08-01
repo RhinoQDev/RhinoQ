@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added one public, beginner-first Start Here guide that explains the real-world
+  failure RhinoQ addresses, every onboarding/demo command and its reason, the
+  light Task view versus the full Workbench, BullMQ and ProviderOperation
+  integration, safe repair, production boundaries, troubleshooting and a
+  primary-source comparison with established queue/workflow products.
+
+- Hardened the official Docker demo against PostgreSQL's temporary-init-server
+  healthcheck race by giving the one-shot migration service a bounded restart
+  policy; persistent migration failures still stop dependent services.
+
 - Prepared `0.1.0-beta.7` after validating beta.6's public assets. Replaced the
   legacy 96-byte raw Cosign signature output with a Sigstore JSON bundle that
   contains signature, certificate and transparency-log proof, and added an

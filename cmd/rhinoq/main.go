@@ -332,7 +332,7 @@ func printRootHelp(output io.Writer) {
 	fmt.Fprintln(output, "  explain     inspect the PostgreSQL safety plan for one Rule")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Developer interface")
-	fmt.Fprintln(output, "  workbench   open the loopback-only, read-only developer Workbench")
+	fmt.Fprintln(output, "  workbench   open the loopback-only developer Workbench (read-only by default)")
 	fmt.Fprintln(output, "  ui          alias for workbench")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Other")
@@ -596,9 +596,11 @@ Flags:
   --port <n>       loopback port, default 8787; 0 selects an available port
   --queue <name>   open with an initial queue filter
   --no-open        print the URL without launching the system browser
+  --actions        enable subject recheck and registered safe-repair callbacks
 
 Live mode requires RHINOQ_DATABASE_URL and applied migrations. The server binds
-only to 127.0.0.1. Workbench v0 is read-only and never exposes job payloads.
+only to 127.0.0.1, is read-only by default and never exposes job payloads.
+Action mode never accepts arbitrary SQL or an unregistered mutation.
 
 Examples:
   rhinoq workbench --demo
@@ -611,8 +613,7 @@ Usage:
   rhinoq version
 
 A build from source reports the development version. A release build stamps its
-tag instead. No tag has been published yet, so a downloaded prebuilt binary is
-not yet available.`)
+tag instead. Tagged prerelease binaries are available from GitHub Releases.`)
 	default:
 		return false
 	}

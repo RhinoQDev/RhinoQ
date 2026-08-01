@@ -617,6 +617,7 @@ rhinoq ui [flags]
 | `--port <n>` | `8787` | loopback port; `0` chooses an available port |
 | `--queue <name>` | all | initial queue filter |
 | `--no-open` | false | print the URL without opening a browser |
+| `--actions` | false | enable subject recheck and registered guarded repair callbacks |
 
 Examples:
 
@@ -679,11 +680,12 @@ shorter than the requested limit. Do not request unbounded exports.
 
 ## Current preview boundary
 
-- No tag has been pushed, so no prebuilt binaries are downloadable yet. The
-  release pipeline exists and is unproven until the first tag runs it.
+- Tagged prerelease binaries, checksums, a Sigstore bundle and SBOMs are
+  downloadable; no prerelease is a production-stability promise.
 - The CLI has no `enqueue` command.
 - Go handlers run through the embedded library, not a dynamic CLI plugin.
 - Job replay/cancel is available through public Go/Node/Gateway APIs, but not
   yet exposed as a direct PostgreSQL CLI command.
-- Workbench has no browser write actions.
+- Workbench is read-only by default; `--actions` enables only subject recheck
+  and registered guarded repair callbacks, never arbitrary SQL.
 - Performance limits are not published until a reproducible benchmark exists.

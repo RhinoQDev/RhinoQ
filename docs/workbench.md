@@ -27,6 +27,9 @@ rhinoq workbench --no-open
 # Select another loopback port or start with one queue
 rhinoq workbench --port 8790
 rhinoq workbench --queue generate-report
+
+# Opt in to recheck and registered safe-repair callbacks
+rhinoq workbench --actions
 ```
 
 During repository evaluation, the same command can run from source:
@@ -35,9 +38,10 @@ During repository evaluation, the same command can run from source:
 go run ./cmd/rhinoq workbench --demo
 ```
 
-Prebuilt CLI binaries have not been released yet. Node.js users will use the
-same Go CLI binary once distribution is available; the Workbench does not
-require a Node.js frontend server.
+Prebuilt CLI binaries are attached to the
+[beta.7 prerelease](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.7).
+Node.js users run the same Go CLI binary; Workbench does not require a Node.js
+frontend server.
 
 See [cli.md](./cli.md) for every Workbench flag, source-install command, exit
 code and the boundary between browser reads and explicit CLI writes.
@@ -198,11 +202,12 @@ more than RhinoQ knows.
 
 Not implemented:
 
-- write actions in the browser;
-- business repair — the page reports what happened; it cannot fix it;
 - tenant-aware remote hosting or authentication;
 - streaming updates and large-history virtualization;
-- packaged CLI distribution.
+- arbitrary SQL, unregistered mutations or automatic repair.
 
-Those omissions are explicit. Workbench v0 makes current evidence easier to use;
-it does not pretend the remaining adoption and correlation work is complete.
+Recheck and guarded business repair are implemented only when `--actions` is
+supplied. Repair still runs through an allowlisted application callback with a
+preview, fresh precondition, different approver, reason, idempotency token and
+post-apply verification. Those boundaries are explicit: Workbench makes
+current evidence actionable without pretending to be a hosted control plane.
