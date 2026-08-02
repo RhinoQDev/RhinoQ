@@ -4,8 +4,9 @@
 -- migration here and holds no role that could write here, so the blast radius
 -- of the evaluation is bounded by this file rather than by trust.
 --
--- Replace the password before running this anywhere real, and narrow the GRANT
--- to the tables your Rules actually name once you know what they are.
+-- Before running this anywhere real: replace the password, replace `app` with
+-- your database name, and narrow the GRANT to the tables your Rules actually
+-- name once you know what they are.
 
 CREATE ROLE rhinoq_readonly WITH LOGIN PASSWORD 'change-me';
 
