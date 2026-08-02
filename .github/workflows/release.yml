@@ -130,7 +130,12 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/madebyduy/rhinoq:${{ github.ref_name }}
+          # The immutable tag is what documentation pins. `next` is a moving
+          # pointer for prereleases; `latest` is deliberately absent until a
+          # release stops being a prerelease.
+          tags: |
+            ghcr.io/madebyduy/rhinoq:${{ github.ref_name }}
+            ghcr.io/madebyduy/rhinoq:next
           build-args: VERSION=${{ github.ref_name }}
           sbom: true
           provenance: mode=max

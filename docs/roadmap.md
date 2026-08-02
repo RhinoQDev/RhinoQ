@@ -33,9 +33,13 @@ without migrating their queue.
 - [x] ProviderOperation domain, PostgreSQL store and Stripe response-loss demo
 - [x] lightweight Task Summary and stable Execution keyset pagination
 
-Realtime transports, React hooks, streams and Redis fan-out are not part of the
-first persistence slice. They follow only after snapshot convergence semantics
-are tested.
+**Realtime is settled, not deferred.** Polling versioned snapshots is the
+delivery model for 0.1; SSE, WebSocket, streams and Redis fan-out are not
+planned, and "realtime later" no longer appears on this roadmap as an unfinished
+item. What makes polling sufficient is the shape of the data, not the interval:
+an Execution-free Summary, keyset-paginated history, and an aggregate version on
+every read so a UI can discard a stale response. The single measurement that
+would reopen the decision is stated in [ADR-0023](../.ai/DECISIONS.md).
 
 ## Foundation — COMMIT and RUN
 
@@ -93,7 +97,19 @@ requiring the application's current queue to be replaced.
 - [x] one non-financial reference workload: a completed report whose
   output object is missing
 - [x] no-cutover quickstart that produces the first Finding
-- [ ] tagged npm release and prebuilt CLI binaries for Node adopters
+- [x] `rhinoq detect`: one command, a read-only role, no migration against the
+  application's database and no write anywhere by default (ADR-0022)
+- [x] prebuilt signed CLI binaries for Linux/macOS/Windows on every tag
+- [x] container image carrying the CLI as its entrypoint
+- [ ] **npm publish is stuck.** `@rhinoq/node` on the registry is
+  `0.1.0-beta.2` (`next`) and `0.1.0-beta.1` (`latest`) while this repository is
+  at `0.1.0-beta.7`. The release workflow is configured for trusted publishing;
+  the package still has to be linked to this repository and workflow in the npm
+  UI, which is a manual account action nobody has taken. Until then the docs
+  point at the release tarball and this stays open.
+- [ ] measured code deletion in a real application
+  ([Measuring plumbing](./measuring-plumbing.md)) — harness specified, subject
+  repository not available here
 
 ## Verified Tasks hardening
 
@@ -129,3 +145,15 @@ Do not start a second external-runtime adapter, DAG engine, automatic repair or
 Outcome Level 2 before the Task slice and one BullMQ integration are validated
 in a real application. Provider connectors remain examples until repeated
 demand proves a reusable contract.
+
+## Explicitly not started until a design partner exists
+
+Tenant-wide RBAC, the multi-node notification scheduler, deployment-shaped chaos
+evidence and further benchmarks. None of them is what stops a team adopting
+RhinoQ today, and each adds surface to a product whose problem is that it
+already asks for too much before first value.
+
+Node ProviderOperation is in the same category for a different reason: it works,
+but only through the Gateway, and an embedded client would require copying a
+state machine whose failure mode is charging a customer twice
+([ADR-0024](../.ai/DECISIONS.md)).

@@ -1,5 +1,17 @@
 # ProviderOperation
 
+> **Phase 2, and Gateway-only from Node.** This is not part of the on-ramp.
+> Reach a first Finding with [the detector](../examples/integrity-only/) — one
+> command, a read-only role — and come back here when you are ready to run a
+> second process.
+>
+> The Go core owns the state machine. A Node application reaches it only through
+> the `rhinoq-agent` Gateway; there is no embedded PostgreSQL
+> ProviderOperation client, and there will not be one until the state machine
+> can be shared rather than reimplemented in TypeScript. Two correctness
+> authorities is the outcome worth avoiding here, because the failure mode is
+> charging a customer twice. See [ADR-0024](../.ai/DECISIONS.md).
+
 `ProviderOperation` is the safe boundary for calls such as Stripe refunds,
 provisioning, fulfilment and email sends. It persists one operation under
 `(provider, operation, idempotencyKey)` before the call runs.

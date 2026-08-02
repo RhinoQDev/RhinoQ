@@ -28,6 +28,17 @@ var (
 	ErrRuleNotFound    = ports.ErrRuleNotFound
 )
 
+// Bounds every Rule must respect. They are exported because ErrRuleInvalid
+// does not say which bound was crossed, and a caller building a Rule from
+// configuration needs to report that itself.
+const (
+	// MaxRuleRows caps one page. A Rule pages; it does not scan a table in one
+	// statement.
+	MaxRuleRows = rule.MaximumMaxRows
+	// MaxRuleStatementTimeout caps how long one page may take.
+	MaxRuleStatementTimeout = rule.MaximumStatementLimit
+)
+
 type RuleDefinition struct {
 	ID          string
 	Name        string

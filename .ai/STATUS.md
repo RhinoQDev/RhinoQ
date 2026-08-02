@@ -5,13 +5,13 @@ supporting Task/runtime layers from the detect-investigate-repair loop.
 
 | Area | Status | Evidence and remaining work |
 |---|---:|---|
-| TASK | 5/6 | Aggregate-versioned Task Summary, keyset Execution pages, owner-scoped polling/cancel, Node browser store, result references and BullMQ projection are tested; organization/RBAC, first-class BullMQ retry and realtime remain |
+| TASK | 5/6 | Aggregate-versioned Task Summary, keyset Execution pages, owner-scoped polling/cancel, Node browser store, result references and BullMQ projection are tested; organization/RBAC and first-class BullMQ retry remain. Realtime is no longer tracked here: polling is the delivery decision (ADR-0023) |
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
 | RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
 | VERIFY | 4/5 | fenced Effect Ledger, ProviderOperation with explicit uncertain/read-back, versioned Rules, Explain gate and bounded scheduling exist; provider contract still needs real design-partner evidence |
 | RECOVER | 5/6 | Findings, Needs Attention, durable-dedup signed notifications and preview/four-eyes/precondition/verify repair exist; automatic multi-node notification scheduling remains |
-| ADOPTION | 3/4 | one-command initialization, Rule generator, health checker, failure fixture and an official BullMQ/Stripe demo exist; three real design-partner pilots remain |
-| DX | 9/10 | embedded Go/Node paths, direct CLI tooling, ProviderOperation/repair Node APIs, application HTTP/browser helpers and action-enabled loopback Workbench exist; beta.5 binaries/image are public, npm trusted-publisher permission remains |
+| ADOPTION | 3/4 | `rhinoq detect` reaches a first Finding with one command and a read-only role, writing nothing (ADR-0022, evidence 2026-08-02); Rule generator, health checker, failure fixture and an official BullMQ/Stripe demo exist. Three real design-partner pilots remain, and no application has yet deleted code because of RhinoQ and counted it |
+| DX | 9/10 | embedded Go/Node paths, direct CLI tooling, ProviderOperation/repair Node APIs, application HTTP/browser helpers and action-enabled loopback Workbench exist; signed binaries and the CLI-entrypoint image are public for every tag. npm remains stuck at `0.1.0-beta.2` pending a manual trusted-publisher link on the `@rhinoq/node` package |
 | Infrastructure | 10/11 | configuration, health, process rate limit, metrics, migrations, real PostgreSQL tests, non-root image, SBOM/provenance config and a passing restore drill exist; deployment-shaped chaos evidence and full tenant RBAC remain |
 
 ## Estimates

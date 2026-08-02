@@ -45,7 +45,7 @@ after downtime or guess whether an active side effect can be cancelled safely.
 |---|---|---|
 | Task Platform | Task identity, versioned summary, progress, result reference, lifecycle and execution history | summary polling, stored aggregates and cursor-paginated Executions implemented |
 | Existing-runtime adoption | lifecycle bridge observes an existing worker | BullMQ bridge dispatches/reserves or tracks known jobs; no outage-wide queue discovery |
-| Delivery | bounded polling now; realtime later | Task Summary, cursor-paginated Executions, TaskStore and zero-added-dependency React adapter implemented |
+| Delivery | bounded polling, by decision (ADR-0023); no realtime transport planned for 0.1 | Task Summary, cursor-paginated Executions, TaskStore and zero-added-dependency React adapter implemented |
 | Verified Tasks | effect evidence, outcome observation, Rules and Findings | optional foundation implemented |
 
 The external Execution reference alone is not an adapter. The BullMQ bridge

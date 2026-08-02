@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="380" viewBox="0 0 880 380" role="img" aria-label="Terminal: rhinoq detect reports one open Finding for report_missing, whose status is completed but whose outputKey is null.">
+  <title>rhinoq detect — one open Finding</title>
+  <defs>
+    <style>
+      .bg { fill: #0d1117; }
+      .chrome { fill: #161b22; }
+      .t { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13px; }
+      .dim { fill: #8b949e; }
+      .fg { fill: #c9d1d9; }
+      .cmd { fill: #e6edf3; }
+      .prompt { fill: #58a6ff; }
+      .head { fill: #8b949e; letter-spacing: 0.06em; }
+      .bad { fill: #f85149; }
+      .ok { fill: #3fb950; }
+      .warn { fill: #d29922; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="880" height="380" rx="10"/>
+  <rect class="chrome" width="880" height="34" rx="10"/>
+  <rect class="chrome" y="24" width="880" height="10"/>
+  <circle cx="20" cy="17" r="5.5" fill="#ff5f57"/>
+  <circle cx="40" cy="17" r="5.5" fill="#febc2e"/>
+  <circle cx="60" cy="17" r="5.5" fill="#28c840"/>
+  <text class="t dim" x="440" y="21" text-anchor="middle">rhinoq detect</text>
+
+  <text class="t" x="24" y="66"><tspan class="prompt">$</tspan><tspan class="cmd" xml:space="preserve"> docker run --rm \</tspan></text>
+  <text class="t cmd" x="24" y="86" xml:space="preserve">    -e RHINOQ_SUBJECT_DATABASE_URL='postgres://rhinoq_readonly:...@host:5432/app' \</text>
+  <text class="t cmd" x="24" y="106" xml:space="preserve">    -v "$PWD/rules.json:/etc/rhinoq/rules.json:ro" \</text>
+  <text class="t cmd" x="24" y="126" xml:space="preserve">    ghcr.io/madebyduy/rhinoq detect --rules /etc/rhinoq/rules.json</text>
+
+  <text class="t head" x="24" y="166" xml:space="preserve">RULE                         OBSERVED  PASSED  VIOLATED  UNKNOWN</text>
+  <text class="t" x="24" y="186" xml:space="preserve"><tspan class="fg">completed-report-has-output  3         </tspan><tspan class="ok">2</tspan><tspan class="fg">       </tspan><tspan class="bad">1</tspan><tspan class="fg">         0</tspan></text>
+
+  <text class="t bad" x="24" y="226" xml:space="preserve">1 open Finding(s)</text>
+  <text class="t" x="24" y="246" xml:space="preserve"><tspan class="bad">  open</tspan><tspan class="fg"> report/report_missing  seen=1  since=2026-08-02T06:47:36Z</tspan></text>
+  <text class="t warn" x="24" y="266" xml:space="preserve">    evidence {"status": "completed", "outputKey": null}</text>
+
+  <text class="t dim" x="24" y="306" xml:space="preserve">A Finding states that something is wrong. RhinoQ does not repair the row.</text>
+
+  <text class="t dim" x="24" y="346" xml:space="preserve">Nothing was written. The role holds SELECT and nothing else.</text>
+</svg>

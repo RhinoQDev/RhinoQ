@@ -17,9 +17,12 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	databaseURL := os.Getenv("RHINOQ_DATABASE_URL")
+	databaseURL := os.Getenv("RHINOQ_SUBJECT_DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("set RHINOQ_DATABASE_URL before running this example")
+		databaseURL = os.Getenv("RHINOQ_DATABASE_URL")
+	}
+	if databaseURL == "" {
+		log.Fatal("set RHINOQ_SUBJECT_DATABASE_URL before running this example")
 	}
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
@@ -30,7 +33,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	integrity, err := rhinoq.NewIntegrity(db)
+	// A nil store keeps Rules and Findings in memory: this example writes to no
+	// database at all, so a role with SELECT on the reports table is enough.
+	// Pass a second pool - RhinoQ's own database, never the application's - to
+	// make Findings survive the process.
+	integrity, err := rhinoq.NewDetector(db, nil)
 	if err != nil {
 		log.Fatal(err)
 	}

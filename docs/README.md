@@ -2,6 +2,8 @@
 
 ## Bắt đầu
 
+- [The detector](../examples/integrity-only/) — cửa vào: một lệnh, một role
+  read-only, không migration nào chạy trên database của ứng dụng
 - [Start here: câu chuyện, lệnh chạy, dashboard và hướng tích hợp đầy đủ](./start-here.md)
 - [Product positioning: ai dùng, giải quyết gì, claim nào được phép](./product-positioning.md)
 - [Getting started](./getting-started.md)
@@ -40,12 +42,14 @@
 - [Adoption and usability review](./adoption-review.md)
 - [The adoption gap](./adoption-gap.md) — what limits adoption now that the
   contract no longer does
+- [Measuring plumbing](./measuring-plumbing.md) — how the "materially less
+  plumbing" claim will be checked, and why it is still unmeasured
 - [Roadmap](./roadmap.md)
 - [Architecture decision records](../.ai/DECISIONS.md)
 
 ## Optional Verified Tasks
 
-- [Integrity-only example](../examples/integrity-only/)
+- [The detector (integrity-only example)](../examples/integrity-only/)
 - [Integrity Rules](./rules.md)
 - [Recovery boundary](./recovery.md)
 

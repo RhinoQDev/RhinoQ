@@ -1,11 +1,89 @@
 # RhinoQ
 
-## Catch background jobs that succeeded technically but failed in the real world.
+## Your queue says the job succeeded. RhinoQ checks whether it actually did.
 
 BullMQ can report `completed` while a payment response timed out, a provisioned
 resource never became ready, or the database still contains the old business
-state. RhinoQ keeps those truths separate, preserves the evidence, and gives an
-operator a controlled path from detection to repair.
+state. RhinoQ reads your database, tells you which rows contradict a rule you
+declared, and keeps the evidence.
+
+<p align="center">
+  <img src="./docs/assets/first-finding.svg" alt="rhinoq detect reports one open Finding: report_missing is completed but its outputKey is null" width="880">
+</p>
+
+[![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
+[![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
+![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white)
+![Status](https://img.shields.io/badge/status-prerelease-f59e0b)
+
+## One command, one read-only role
+
+```bash
+docker run --rm \
+  -e RHINOQ_SUBJECT_DATABASE_URL='postgres://rhinoq_readonly:...@host:5432/app?sslmode=disable' \
+  -v "$PWD/rules.json:/etc/rhinoq/rules.json:ro" \
+  ghcr.io/madebyduy/rhinoq:next detect --rules /etc/rhinoq/rules.json
+```
+
+That is the whole install. No migration against your schema, no RhinoQ table in
+your database, no second process to keep alive, and by default nothing written
+anywhere — Rules and Findings live in memory for the length of the command.
+The only change your database needs is
+[one role with `SELECT`](./examples/integrity-only/readonly-role.sql).
+
+Try it end to end on a throwaway database first:
+
+```bash
+docker compose -f examples/integrity-only/docker-compose.yml run --rm detect
+```
+
+Start a Rule file from the built-in template, then edit the query:
+
+```bash
+docker run --rm ghcr.io/madebyduy/rhinoq:next detect --example > rules.json
+```
+
+> `detect` is newer than the newest published tag (`v0.1.0-beta.7`, whose image
+> still entrypoints the Gateway). `:next` carries it from the following tag
+> onward; until then, `docker build -t ghcr.io/madebyduy/rhinoq:next .` from this
+> checkout. Signed release binaries for Linux, macOS and Windows are already
+> attached to every tag — nothing here requires a Go toolchain.
+
+A Rule is one SQL query returning `subject_id`, `violated` and `evidence`.
+`violated` may be `NULL`: a check that could not reach a provider is counted as
+`unknown`, never folded into `passed`, because that is exactly how drift hides.
+`EXPLAIN` gates every Rule on plan cost, estimated rows and sequential scans
+before it is allowed to run, so a Rule that would table-scan your largest table
+is rejected with the reason instead of run slowly.
+
+Findings survive the process when you give RhinoQ a database of its own —
+never your application's — and add `--store`. Full walkthrough:
+[the detector](./examples/integrity-only/).
+
+## The demo that explains the whole product
+
+The [Next.js + BullMQ + PostgreSQL + Stripe sandbox demo](./examples/nextjs-bullmq-stripe/)
+reproduces the failure RhinoQ is built for, end to end:
+
+1. BullMQ completes a refund job.
+2. Stripe accepts the idempotent request, but the response is lost.
+3. The order row is deliberately left unchanged.
+4. RhinoQ records the provider result as `uncertain`; it does not retry blindly.
+5. A Rule finds the mismatch and the Evidence Rail shows the operation.
+6. An operator rechecks Stripe, previews a repair, supplies a reason and obtains
+   approval from a second actor.
+7. The application callback performs the repair and RhinoQ verifies the outcome.
+
+The demo uses a deterministic Stripe-shaped sandbox so it runs in CI without
+secrets and never reads a Stripe key. A real integration supplies Stripe's test
+SDK calls through the same reference adapter.
+
+```bash
+docker compose -f examples/nextjs-bullmq-stripe/docker-compose.yml up
+```
+
+## Two truths, kept apart
 
 ```text
 queue/runtime says completed
@@ -20,60 +98,12 @@ business rule: pass | finding
 detect -> investigate -> decide -> repair -> verify
 ```
 
-[![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
-[![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
-![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
-![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white)
-![Status](https://img.shields.io/badge/status-prerelease-f59e0b)
+The detector is the entry point to that pipeline, and it is useful on its own:
+a Finding is a statement that something is wrong, and it needs no queue, no
+worker and no cutover to produce. Everything below is what you can adopt after
+the first Finding convinces someone — none of it is required to get there.
 
-> [!WARNING]
-> RhinoQ is a prerelease for evaluation and controlled pilots. Tenant-wide
-> RBAC, multi-node notification dispatch and deployment-shaped chaos evidence
-> still block a production-ready claim.
-
-**New here?** Read the [complete beginner guide](./docs/start-here.md): the
-failure story, every setup command and why it exists, the two dashboards,
-BullMQ/ProviderOperation integration, safe repair, troubleshooting, and an
-honest comparison with established alternatives.
-
-## Try it in under five minutes
-
-Node.js 22 and PostgreSQL are the only requirements for the shortest path. The
-GitHub release archive is used until npm trusted publishing is enabled:
-
-```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
-npx rhinoq init
-npx rhinoq verify add completed-report-has-output
-npx rhinoq doctor
-npx rhinoq fixture failure
-npx rhinoq dev
-```
-
-Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and BullMQ, previews
-what is missing, refuses to overwrite generated Rules, and prints a next action
-for every failure. Open the URL printed by `rhinoq dev` to see a technically
-successful Execution whose real-world Task is `uncertain`.
-
-## The demo that explains the product
-
-The official [Next.js + BullMQ + PostgreSQL + Stripe sandbox demo](./examples/nextjs-bullmq-stripe/)
-reproduces the failure RhinoQ is built for:
-
-1. BullMQ completes a refund job.
-2. Stripe accepts the idempotent request, but the response is lost.
-3. The order row is deliberately left unchanged.
-4. RhinoQ records the provider result as `uncertain`; it does not retry blindly.
-5. A Rule finds the mismatch and the demo Evidence Rail shows the operation.
-6. An operator rechecks Stripe, previews a repair, supplies a reason and obtains
-   approval from a second actor.
-7. The application callback performs the repair and RhinoQ verifies the outcome.
-
-The demo uses a deterministic Stripe-shaped sandbox so it can run in CI without
-secrets and never reads a Stripe key. A real integration supplies Stripe's test
-SDK calls through the same reference adapter.
-
-## The core contract
+## ProviderOperation — durable identity for an external call
 
 ```ts
 const operation = await rhinoq.providerOperation({
@@ -94,7 +124,13 @@ confirmation proves `not_happened`. Request evidence is append-only and kept
 separate from application-specific business mappings. Reference adapters exist
 for Stripe and provisioning/storage providers.
 
-See [ProviderOperation](./docs/provider-operations.md).
+> **Phase 2.** In Node this API is reachable only through the `rhinoq-agent`
+> Gateway process. There is no embedded PostgreSQL ProviderOperation client, and
+> there will not be one until the state machine can be shared rather than
+> reimplemented in TypeScript — two correctness authorities is the one outcome
+> worth avoiding here. Adopt the detector first; adopt this when you are ready
+> to run a second process. See [ProviderOperation](./docs/provider-operations.md)
+> and [ADR-0024](./.ai/DECISIONS.md).
 
 ## Safe recovery, not arbitrary database editing
 
@@ -134,23 +170,46 @@ RhinoQ is not another queue and does not require rewriting handlers:
 - **Gateway:** typed bridge for Node and other languages while Go remains the
   authoritative correctness engine.
 
-Task summary polling is bounded: aggregate Execution counts are stored with the
-Task, and history uses cursor pagination. The compatibility full Snapshot still
-exists but is not the default browser polling shape.
+Task state is delivered by **polling**, and that is a decision rather than a
+staging post. Aggregate Execution counts are stored with the Task, history uses
+cursor pagination, and every read carries the aggregate version a UI needs to
+discard a stale response. No SSE or WebSocket transport is planned for 0.1.
+Rationale and the conditions that would reverse it: [ADR-0023](./.ai/DECISIONS.md)
+and [Roadmap](./docs/roadmap.md).
+
+## Node.js and BullMQ
+
+```bash
+npm install @rhinoq/node@next pg
+```
+
+The Node package covers the BullMQ lifecycle bridge and the embedded
+PostgreSQL Task client, which needs three tables in the application's own
+database and no Gateway process. The detector above is a container and needs
+none of this. See [Node.js and BullMQ](./docs/nodejs.md).
+
+> [!WARNING]
+> RhinoQ is a prerelease for evaluation and controlled pilots. Tenant-wide
+> RBAC, multi-node notification dispatch and deployment-shaped chaos evidence
+> still block a production-ready claim. The read-only detector is the part
+> designed to be safe to try anyway: it holds no write privilege on your
+> database.
 
 ## What is implemented
 
 | Capability | Status |
 |---|---|
-| ProviderOperation identity, idempotency, evidence and confirmation | implemented; memory/PostgreSQL tested |
-| `uncertain` Task state linked to provider uncertainty | implemented |
-| Stripe and provisioning/storage reference adapters | implemented in Node SDK |
+| Read-only detector: Rules, Explain gate, bounded scans, Findings | implemented; ephemeral and stored modes |
+| `uncertain` observations kept separate from `passed` | implemented |
 | Rules, Findings and Evidence Workbench | implemented |
 | Recheck and guarded repair workflow | implemented; callback registration is application-owned |
+| ProviderOperation identity, idempotency, evidence and confirmation | implemented in Go; **Node access requires the Gateway** |
+| Stripe and provisioning/storage reference adapters | implemented in Node SDK, Gateway-only |
 | Summary polling and cursor-paginated Executions | implemented |
 | Signed webhook and Slack notifications with durable dedup | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Release archives, verifiable checksum bundle, SBOM and non-root image | beta.7 release pipeline verified in CI |
+| Measured code deletion in a third-party application | **not measured** — see [Measuring plumbing](./docs/measuring-plumbing.md) |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Durable multi-node notification scheduler | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
@@ -181,6 +240,7 @@ success/kill metrics are in [Design partners](./docs/design-partners.md).
 
 ## Documentation
 
+- [The detector](./examples/integrity-only/) — start here
 - [Start here: complete beginner guide](./docs/start-here.md)
 - [Five-minute setup](./docs/getting-started.md)
 - [Node.js and BullMQ](./docs/nodejs.md)

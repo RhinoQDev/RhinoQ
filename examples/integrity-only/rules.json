@@ -1,0 +1,14 @@
+{
+  "rules": [
+    {
+      "id": "completed-report-has-output",
+      "name": "Completed reports have an output object",
+      "subjectType": "report",
+      "baselineWithin": "24h",
+      "every": "10m",
+      "maxRows": 100,
+      "statementTimeout": "3s",
+      "query": "SELECT id::text AS subject_id, CASE WHEN status = 'completed' THEN output_key IS NULL ELSE false END AS violated, jsonb_build_object('status', status, 'outputKey', output_key) AS evidence FROM public.rhinoq_example_reports WHERE updated_at >= $1 AND (($4::text = '' AND id::text > $2) OR id::text = $4) ORDER BY id::text LIMIT $3"
+    }
+  ]
+}

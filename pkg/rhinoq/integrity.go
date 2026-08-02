@@ -54,50 +54,89 @@ type IntegrityClient struct {
 // database. The caller keeps ownership of the pool, and RhinoQ issues no
 // statement against it until a method is called.
 //
-// Give this connection a read-only role for the business tables a Rule reads.
-// The Explain gate bounds a Rule's shape, cost and timeout; it is not a SQL
-// sandbox, and the queries it runs are written by developers.
+// This is the single-database shape: RhinoQ reads the business tables and
+// stores its own Rules, observations and Findings in the same place, so the
+// connection needs write access and the RhinoQ migrations must be applied to
+// it. Use NewDetector when the application's database must stay untouched.
 func NewIntegrity(db *sql.DB) (*IntegrityClient, error) {
 	if db == nil {
 		return nil, errors.New("rhinoq requires a PostgreSQL database handle")
 	}
-	findingStore, err := postgres.NewFindingStore(db)
+	return NewDetector(db, db)
+}
+
+// NewDetector opens the read-only detector plane: two connections with two
+// different privilege levels, which is what makes an evaluation cheap to
+// approve.
+//
+// subjects is the application's own database and RhinoQ only ever reads it.
+// Every Rule query runs inside a read-only transaction with a per-Rule
+// statement timeout, no RhinoQ migration is applied to it and no RhinoQ table
+// is created in it, so a role holding CONNECT plus SELECT on the tables a Rule
+// names is enough. The Explain gate bounds a Rule's shape, cost and timeout;
+// it is not a SQL sandbox, and the queries it runs are written by developers.
+//
+// store is where RhinoQ keeps its own Rules, observations and Findings. Pass a
+// separate RhinoQ database to make Findings survive the process. Pass nil to
+// run ephemerally: the detector keeps its own state in memory, writes to no
+// database at all and reports what it found before exiting. That mode is the
+// shortest path to a first Finding, and it is the only one that needs no
+// provisioning decision from whoever owns the application's database.
+//
+// Passing the application's database as store is legal but is the single-
+// database shape of NewIntegrity, not a detector: it requires the RhinoQ
+// migrations there.
+func NewDetector(subjects, store *sql.DB) (*IntegrityClient, error) {
+	if subjects == nil {
+		return nil, errors.New(
+			"rhinoq detector requires a PostgreSQL handle for the subject database",
+		)
+	}
+	// Explain and evaluation run where the business data is; everything else
+	// runs where RhinoQ is allowed to write.
+	ruleExplainer, err := postgres.NewRuleExplainer(subjects, nil)
 	if err != nil {
 		return nil, err
 	}
-	ruleStore, err := postgres.NewRuleStore(db)
+	ruleEvaluator, err := postgres.NewRuleEvaluator(subjects, nil)
 	if err != nil {
 		return nil, err
 	}
-	ruleExplainer, err := postgres.NewRuleExplainer(db, nil)
+	if store == nil {
+		client := NewInMemoryIntegrity()
+		client.ruleExplainer = ruleExplainer
+		client.ruleEvaluator = ruleEvaluator
+		return client, nil
+	}
+	findingStore, err := postgres.NewFindingStore(store)
 	if err != nil {
 		return nil, err
 	}
-	effectStore, err := postgres.NewEffectStore(db)
+	ruleStore, err := postgres.NewRuleStore(store)
 	if err != nil {
 		return nil, err
 	}
-	providerStore, err := postgres.NewProviderOperationStore(db)
+	effectStore, err := postgres.NewEffectStore(store)
 	if err != nil {
 		return nil, err
 	}
-	repairStore, err := postgres.NewRepairStore(db)
+	providerStore, err := postgres.NewProviderOperationStore(store)
 	if err != nil {
 		return nil, err
 	}
-	notificationDeliveries, err := postgres.NewNotificationDeliveryStore(db)
+	repairStore, err := postgres.NewRepairStore(store)
 	if err != nil {
 		return nil, err
 	}
-	ruleEvaluator, err := postgres.NewRuleEvaluator(db, nil)
+	notificationDeliveries, err := postgres.NewNotificationDeliveryStore(store)
 	if err != nil {
 		return nil, err
 	}
-	subjectOutcomes, err := postgres.NewSubjectOutcomeStore(db)
+	subjectOutcomes, err := postgres.NewSubjectOutcomeStore(store)
 	if err != nil {
 		return nil, err
 	}
-	changeStore, err := postgres.NewChangeStore(db)
+	changeStore, err := postgres.NewChangeStore(store)
 	if err != nil {
 		return nil, err
 	}

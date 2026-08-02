@@ -37,6 +37,9 @@ execution platforms.
 | Effect uncertainty | not external-effect aware by default | Effect Ledger implemented |
 | Business outcome | not native | canonical per-Rule/per-subject Outcome implemented; Findings are its operational projection, with stale-observation protection and unknown grace escalation |
 | Integrity Rules | application-specific | integrity-only facade, versioned job/table SQL contract, tri-state read-only evaluator, Explain gate, bounded CLI scan and fenced periodic scheduler implemented |
+| Read-only detector | not native | `rhinoq detect` implemented: two pools at two privilege levels, ephemeral by default, no migration or table in the application's database |
+| ProviderOperation | not native | state machine, evidence and confirmation implemented in Go; **from Node, reachable only through the Gateway process** — no embedded client (ADR-0024) |
+| Task delivery transport | polling and realtime tooling | polling versioned snapshots, by decision; no SSE/WebSocket planned for 0.1 (ADR-0023) |
 | Metrics export | Prometheus exporters | `/metrics` text format implemented, no client library dependency |
 | Health probes | not applicable | `/health/live` and `/health/ready` implemented separately |
 | Embedded operation | application-specific | Go library and direct PostgreSQL CLI are the default; no RhinoQ server, AI agent or LLM is required |

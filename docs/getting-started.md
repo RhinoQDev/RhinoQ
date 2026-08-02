@@ -1,11 +1,32 @@
 # Getting started
 
-## Five-minute Node path
+## Start here: one command, one read-only role
 
-With Node.js 22 and PostgreSQL available:
+Nothing below this section is required to get a first Finding.
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
+docker run --rm \
+  -e RHINOQ_SUBJECT_DATABASE_URL='postgres://rhinoq_readonly:...@host:5432/app?sslmode=disable' \
+  -v "$PWD/rules.json:/etc/rhinoq/rules.json:ro" \
+  ghcr.io/madebyduy/rhinoq:next detect --rules /etc/rhinoq/rules.json
+```
+
+No migration against your schema, no RhinoQ table in your database, no second
+process, and by default nothing written anywhere. The full walkthrough — the
+read-only role, the Rule format, stored mode and CI use — is in
+[the detector](../examples/integrity-only/).
+
+To see queue completion diverge from reality and recover safely, run the
+[official Stripe failure demo](../examples/nextjs-bullmq-stripe/).
+
+## Node path
+
+The Node package is for the BullMQ bridge and the embedded Task client. It is a
+separate decision from the detector, and it is the point at which RhinoQ starts
+writing to your database.
+
+```bash
+npm install @rhinoq/node@next pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -17,14 +38,16 @@ Set `DATABASE_URL` before `init`. The generated Rule is intentionally a
 template: edit its indexed business table and output column before using it
 outside the fixture. `init` does not overwrite existing config or Rules.
 
-To see queue completion diverge from reality and recover safely, run the
-[official Stripe failure demo](../examples/nextjs-bullmq-stripe/).
+> The npm `next` tag currently resolves to `0.1.0-beta.2`, older than this
+> repository. Until the publish job succeeds for the current tag, install the
+> tarball attached to the release instead:
+> `npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg`
 
 ## Task support layer
 
 > Status: evaluation only. This guide demonstrates the implemented Task
-> contract; it does not claim queue-wide discovery, realtime or tenant-wide
-> authorization.
+> contract; it does not claim queue-wide discovery or tenant-wide
+> authorization. Delivery is polling, by decision — see [ADR-0023](../.ai/DECISIONS.md).
 
 RhinoQ's first product path is a user-facing Task: a durable record that a
 backend and frontend can both understand. A Task is not a queue job. It has an
@@ -179,7 +202,8 @@ Its current boundaries are:
   `track()`; it does not scan a queue or reconcile unknown jobs;
 - no composed retry command creates a new Execution atomically;
 - the React adapter uses TaskStore polling; no SSE/WebSocket or stream transport
-  exists;
+  exists, and none is planned for 0.1 (ADR-0023 — this is a decision about the
+  delivery model, not an unfinished item);
 - `OwnerID` is returned for application authorization and optional owner-scoped
   polling/cancel credentials are available, but organization membership/RBAC
   is not implemented;

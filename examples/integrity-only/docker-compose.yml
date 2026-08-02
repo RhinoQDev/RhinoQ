@@ -1,0 +1,36 @@
+# A self-contained detector run: one command, no RhinoQ database, no migration
+# against the application's schema, nothing written anywhere.
+#
+#   docker compose -f examples/integrity-only/docker-compose.yml run --rm detect
+#
+# app-db stands in for *your* application database. In a real evaluation you
+# delete it from this file and point RHINOQ_SUBJECT_DATABASE_URL at your own,
+# using the role in readonly-role.sql.
+services:
+  app-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - ./setup.sql:/docker-entrypoint-initdb.d/10-setup.sql:ro
+      - ./compose-readonly-role.sql:/docker-entrypoint-initdb.d/20-readonly-role.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  detect:
+    image: ghcr.io/madebyduy/rhinoq:next
+    depends_on:
+      app-db:
+        condition: service_healthy
+    environment:
+      # A role with SELECT and nothing else. RhinoQ never opens a writing
+      # transaction against this database.
+      RHINOQ_SUBJECT_DATABASE_URL: postgres://rhinoq_readonly:readonly@app-db:5432/app?sslmode=disable
+    volumes:
+      - ./rules.json:/etc/rhinoq/rules.json:ro
+    command: ["detect", "--rules", "/etc/rhinoq/rules.json"]

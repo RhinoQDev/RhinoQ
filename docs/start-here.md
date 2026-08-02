@@ -99,17 +99,35 @@ recovery.
 - you need a hosted, multi-tenant control plane today. RhinoQ Workbench is
   loopback-only and tenant-wide RBAC is not complete.
 
+## Start with the one that asks for nothing
+
+Every path below this one asks permission to write to a database. This one does
+not, which is why it is first: it is the only one you can run before anybody
+approves anything.
+
+```bash
+docker run --rm \
+  -e RHINOQ_SUBJECT_DATABASE_URL='postgres://rhinoq_readonly:...@host:5432/app?sslmode=disable' \
+  -v "$PWD/rules.json:/etc/rhinoq/rules.json:ro" \
+  ghcr.io/madebyduy/rhinoq:next detect --rules /etc/rhinoq/rules.json
+```
+
+One command, a role with `CONNECT` and `SELECT`, no migration against your
+schema, no RhinoQ table in your database, and nothing written anywhere by
+default. It prints which rows contradict a rule you declared, with the evidence.
+Walkthrough: [the detector](../examples/integrity-only/).
+
 ## Choose the shortest path for your goal
 
-| Your goal | Start here | What it proves |
-|---|---|---|
-| understand the full product story | [official Docker demo](#run-the-full-stripe-shaped-failure) | completed -> uncertain -> Finding -> approved repair -> verified |
-| add user-facing Task status to Node/PostgreSQL | [five-minute Node tour](#take-the-five-minute-node-tour) | Task schema, health check and light dev view |
-| keep an existing BullMQ worker | [BullMQ bridge](#connect-an-existing-bullmq-queue) | durable Task/Execution identity and lifecycle projection |
-| protect an external provider call | [ProviderOperation](#protect-an-external-provider-operation) | idempotency identity, uncertainty and confirmation |
-| inspect evidence and Findings | [Workbench](#open-the-dashboard) | local evidence, integrity and recovery interface |
-| verify business tables without adopting a queue | [Integrity-only example](../examples/integrity-only/) | bounded Rules, Outcomes and Findings |
-| use RhinoQ's optional Go runtime | [runtime operations](./operations.md) | PostgreSQL job execution with fencing and recovery |
+| Your goal | Start here | What it proves | Writes to your database |
+|---|---|---|---|
+| find out whether anything is actually wrong | [the detector](../examples/integrity-only/) | bounded Rules, tri-state observations and Findings | **no** |
+| understand the full product story | [official Docker demo](#run-the-full-stripe-shaped-failure) | completed -> uncertain -> Finding -> approved repair -> verified | no, it brings its own |
+| add user-facing Task status to Node/PostgreSQL | [five-minute Node tour](#take-the-five-minute-node-tour) | Task schema, health check and light dev view | yes, three tables |
+| keep an existing BullMQ worker | [BullMQ bridge](#connect-an-existing-bullmq-queue) | durable Task/Execution identity and lifecycle projection | yes |
+| protect an external provider call | [ProviderOperation](#protect-an-external-provider-operation) | idempotency identity, uncertainty and confirmation | yes, and a Gateway process — phase 2 |
+| inspect evidence and Findings | [Workbench](#open-the-dashboard) | local evidence, integrity and recovery interface | reads only |
+| use RhinoQ's optional Go runtime | [runtime operations](./operations.md) | PostgreSQL job execution with fencing and recovery | yes, the full schema |
 
 ## Take the five-minute Node tour
 
@@ -462,9 +480,15 @@ for cancellation, progress mapping, partial outage recovery and result refs.
 
 ## Protect an external provider operation
 
+> **Phase 2.** This is the one capability that still costs a second process, and
+> it is not on the on-ramp. Nothing above this section requires it.
+
 `ProviderOperation` requires the full RhinoQ Gateway because the Go core owns
-the uncertainty and retry state machine. The application still owns provider
-credentials, SDK version, request parameters and webhook authentication.
+the uncertainty and retry state machine, and that ownership is deliberate: an
+embedded TypeScript client would be a second authority over a state machine
+whose failure mode is charging a customer twice ([ADR-0024](../.ai/DECISIONS.md)).
+The application still owns provider credentials, SDK version, request
+parameters and webhook authentication.
 
 ```ts
 import { RhinoQClient, stripeProviderAdapter } from '@rhinoq/node';
@@ -613,8 +637,21 @@ Read [Production readiness](./production-readiness.md),
 Implemented code and tests cover the contracts described above, but RhinoQ is
 still a prerelease. Tenant-wide RBAC, durable multi-node notification
 scheduling and deployment-shaped design-partner/chaos evidence remain open.
-Workbench has no remote hosting/authentication and no streaming update model.
-No throughput, latency or reliability comparison is claimed here.
+Workbench has no remote hosting or authentication. No throughput, latency or
+reliability comparison is claimed here.
+
+Two things that are often read as gaps are decisions instead:
+
+- **Delivery is polling.** No SSE or WebSocket transport exists or is planned
+  for 0.1 ([ADR-0023](../.ai/DECISIONS.md)). What makes it sufficient is the
+  shape of the data — an Execution-free Summary, keyset-paginated history, and
+  an aggregate version on every read.
+- **Node ProviderOperation is Gateway-only** ([ADR-0024](../.ai/DECISIONS.md)).
+
+And one thing that is a gap and is not yet measured: no application has deleted
+code because of RhinoQ and counted it. The measurement is specified in
+[Measuring plumbing](./measuring-plumbing.md); until it exists, nothing here
+claims your application gets smaller.
 
 ## Research basis
 

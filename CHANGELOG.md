@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- Made the read-only detector the product's only front door (ADR-0022). Added
+  `rhinoq detect`: one command, two connections at two privilege levels, and a
+  role holding `CONNECT` plus `SELECT` on the application's database. No
+  migration runs there and no RhinoQ table is created there. Without `--store`
+  nothing is written anywhere — Rules and Findings live in memory for the length
+  of the command. `--store` points RhinoQ at a database of its own and migrates
+  that one itself. `rhinoq.NewDetector(subjects, store)` is the library form;
+  `NewIntegrity(db)` is unchanged and is now `NewDetector(db, db)`.
+
+- Changed the container entrypoint from `rhinoq-agent` to `rhinoq`, so
+  `docker run … detect` is the first command an evaluator runs. The Gateway is
+  still in the image behind `--entrypoint /usr/local/bin/rhinoq-agent`. Releases
+  now also push a moving `next` image tag.
+
+- Settled two questions that were being read as unfinished work rather than as
+  decisions. Polling versioned snapshots is the delivery model for 0.1, with no
+  SSE or WebSocket planned and one stated measurement that would reopen it
+  (ADR-0023). Node ProviderOperation is phase 2 and reachable only through the
+  Gateway, because an embedded TypeScript client would be a second authority
+  over a state machine whose failure mode is charging a customer twice
+  (ADR-0024).
+
+- Specified how the "materially less plumbing" claim will be checked, before
+  taking the measurement: `docs/measuring-plumbing.md` and
+  `scripts/measure-plumbing.sh`. The claim itself remains **unmeasured** and is
+  now labelled as such wherever it appeared.
+
+- Fixed a Rule-registration defect found while running the detector twice
+  against real PostgreSQL: omitted `cursor`/`onUnknown` values did not match the
+  defaults the store applies, so every pass registered a new immutable Rule
+  version and orphaned the Findings keyed to the previous one. Rule files also
+  now report which bound they crossed instead of surfacing an unqualified
+  "invalid integrity rule", and a UTF-8 BOM no longer makes
+  `detect --example > rules.json` produce a file `detect` refuses to read.
+
 - Added one public, beginner-first Start Here guide that explains the real-world
   failure RhinoQ addresses, every onboarding/demo command and its reason, the
   light Task view versus the full Workbench, BullMQ and ProviderOperation

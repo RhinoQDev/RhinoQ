@@ -400,6 +400,80 @@
   APIs; migrations are additive and do not rewrite existing rows.
 - **Owner:** product + engine + Node SDK
 
+## ADR-0022 — Read-only detector là cửa vào duy nhất của sản phẩm
+
+- **Status:** accepted
+- **Context:** README bán verification, docs ưu tiên Task Platform, và on-ramp
+  ngắn nhất vẫn là `npm install` + 22 migration + một Gateway process. Hai
+  adopter probe kết luận cùng một điều: contract tốt, giá để chạm tới nó mới là
+  vấn đề. Người phê duyệt một evaluation không phải người viết code — họ là
+  người sở hữu database, và thứ họ cân nhắc là quyền ghi, không phải feature.
+- **Decision:** một cửa vào duy nhất là read-only detector: `rhinoq detect`,
+  chạy bằng một lệnh `docker run`, đọc application database qua một role chỉ có
+  `CONNECT` + `SELECT`. Mặc định **ephemeral**: Rule và Finding nằm trong bộ
+  nhớ process, không ghi vào bất kỳ database nào. `NewDetector(subjects, store)`
+  tách hai pool theo hai mức quyền; `store = nil` là chế độ ephemeral.
+- **Migration boundary:** không migration nào chạy trên database của ứng dụng
+  và không bảng RhinoQ nào được tạo ở đó. Khi adopter muốn Finding tồn tại qua
+  process, họ cấp cho RhinoQ **một database riêng** và `--store` tự migrate nó.
+  `rhinoq migrate` vẫn explicit cho hình dạng một-database, nơi một câu DDL bất
+  ngờ sẽ rơi vào schema của người khác.
+- **Alternatives:** subset migration profile cho detector (runner cưỡng chế một
+  applied prefix liên tục, tách ra sẽ phá checksum/gap invariant); bắt adopter
+  cấp sẵn một PostgreSQL cho RhinoQ trước lần chạy đầu (chính là chi phí phê
+  duyệt cần loại bỏ); giữ Gateway trong đường vào (một process nữa để dựng).
+- **Consequences:** ProviderOperation, Task Platform, guarded repair đều tụt
+  xuống sau lần Finding đầu tiên và không được xuất hiện như điều kiện tiên
+  quyết. Container ENTRYPOINT đổi sang `rhinoq`; Gateway chạy bằng
+  `--entrypoint /usr/local/bin/rhinoq-agent`. Detector không chạy được Rule
+  scope `job`, vì Rule đó đọc bảng runtime của chính RhinoQ.
+- **Rollback:** `NewIntegrity(db)` giữ nguyên hình dạng một-database và
+  `NewDetector(db, db)` tương đương nó, nên không adopter nào phải đổi code.
+- **Owner:** product + engine
+
+## ADR-0023 — Polling là quyết định về delivery, không phải bước đệm
+
+- **Status:** accepted; kết thúc phần "realtime sau" của ADR-0014/ADR-0021
+- **Context:** docs nhiều nơi vẫn viết "bounded polling now; realtime later".
+  Adopter đọc câu đó thành "sản phẩm chưa xong" và dừng đánh giá. Câu hỏi thật
+  không phải SSE có tốt hơn không, mà là RhinoQ có nợ ai một transport nào
+  không.
+- **Decision:** với 0.1, polling các versioned snapshot **là** delivery model.
+  Không có SSE, WebSocket, stream hay Redis fan-out nào được lên kế hoạch. Thứ
+  làm polling đủ dùng là hình dạng dữ liệu, không phải tần suất: Task Summary
+  không chứa Execution, lịch sử phân trang bằng keyset cursor, và mọi read mang
+  theo aggregate version để UI loại bỏ response cũ.
+- **Alternatives:** SSE (mỗi node giữ connection riêng, cần fan-out layer trước
+  khi có bằng chứng cần nó); WebSocket (thêm reconnect protocol vào một sản
+  phẩm mà giá trị nằm ở correctness).
+- **Điều kiện đảo ngược — nêu rõ để đây không phải lời hứa mở:** một design
+  partner đo được rằng polling interval họ cần khiến database load vượt ngưỡng
+  chấp nhận được, ở một fan-out shape có thật, với số đo tái lập được. Không có
+  con số đó thì không mở lại.
+- **Consequences:** docs nói "polling" như một câu khẳng định, không kèm "later".
+  Roadmap bỏ realtime khỏi mọi mục chưa-làm.
+- **Rollback:** thêm transport là additive; snapshot contract không đổi.
+- **Owner:** product
+
+## ADR-0024 — ProviderOperation trong Node là phase 2, chỉ qua Gateway
+
+- **Status:** accepted
+- **Context:** `providerOperation()` chỉ tồn tại trên Gateway client
+  (`sdks/node/src/gateway/client.ts`). README lại giới thiệu nó như core
+  contract, nên một team Node đọc xong tưởng mình cài `@rhinoq/node` là dùng
+  được, rồi phát hiện phải dựng thêm một process Go.
+- **Decision:** nói thẳng ProviderOperation là **phase 2** và Gateway-only.
+  Không viết embedded PostgreSQL ProviderOperation client cho Node cho tới khi
+  state machine có thể **dùng chung** thay vì chép lại — ADR-0020 và ADR-0021 đã
+  cấm hai correctness authority, và ở đây hậu quả của việc vi phạm là tính tiền
+  khách hai lần.
+- **Alternatives:** port state machine sang TypeScript (bị cấm); im lặng để
+  Gateway trông như tùy chọn (đã và đang gây hiểu nhầm).
+- **Consequences:** README và feature matrix ghi rõ "Node access requires the
+  Gateway". Detector không phụ thuộc gì vào phần này.
+- **Rollback:** không có gì để rollback; đây là một tuyên bố về phạm vi.
+- **Owner:** product + Node SDK
+
 ## Template cho ADR mới
 
 ```text

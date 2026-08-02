@@ -20,6 +20,17 @@ func openDatabase(
 			"RHINOQ_DATABASE_URL is empty; set it to the PostgreSQL database that stores RhinoQ",
 		)
 	}
+	return openDatabaseURL(ctx, databaseURL, getenv)
+}
+
+// openDatabaseURL opens one specific connection string. The detector needs two
+// pools with different privileges, so the URL cannot come from a fixed
+// environment variable.
+func openDatabaseURL(
+	ctx context.Context,
+	databaseURL string,
+	getenv func(string) string,
+) (*sql.DB, error) {
 	driver := getenv("RHINOQ_DATABASE_DRIVER")
 	if driver == "" {
 		driver = "pgx"

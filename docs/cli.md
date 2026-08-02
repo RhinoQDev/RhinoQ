@@ -15,21 +15,75 @@ The CLI is not a generic job producer and it is not a standalone Go worker:
 - Workbench is read-only by default. `--actions` enables only recheck and
   registered safe-repair application use cases.
 
+## `detect` — the read-only entry point
+
+```bash
+rhinoq detect --rules rules.json
+rhinoq detect --example > rules.json
+rhinoq detect --rules rules.json --store --watch 5m
+rhinoq detect --rules rules.json --json --fail-on-finding
+```
+
+| Flag | Meaning |
+|---|---|
+| `--rules <file>` | JSON Rule file; required |
+| `--example` | print a starter Rule file and exit |
+| `--store` | persist Rules and Findings in `RHINOQ_DATABASE_URL` |
+| `--watch <duration>` | re-scan on this interval instead of exiting |
+| `--max-pages <n>` | page budget per Rule per pass |
+| `--timeout <d>` | wall-clock budget per pass; default `2m` |
+| `--json` | machine-readable output |
+| `--fail-on-finding` | exit 1 when any Rule is violated |
+
+| Environment | Meaning |
+|---|---|
+| `RHINOQ_SUBJECT_DATABASE_URL` | the application database; `SELECT` is enough |
+| `RHINOQ_DATABASE_URL` | RhinoQ's own database; only read with `--store` |
+
+Two connections at two privilege levels. The subject database is only ever
+read: every Rule query runs in a read-only transaction under the Rule's own
+statement timeout, no migration is applied to it and no RhinoQ table is created
+in it. Without `--store`, nothing is written anywhere — the Rule and any Finding
+live in memory for the length of the command. With `--store`, RhinoQ migrates
+its own database itself, which is safe to do implicitly only because of where it
+points.
+
+Exit codes follow the CLI convention: 0 success, 1 a Rule failed to run (or a
+violation with `--fail-on-finding`), 2 invalid usage or an unreadable Rule file.
+
+Full walkthrough: [the detector](../examples/integrity-only/).
+
 ## Run the preview CLI
 
-Install the CLI into Go's binary directory:
+The fastest path needs no toolchain. Every tag publishes signed binaries for
+Linux, macOS and Windows plus a container image:
+
+```bash
+docker run --rm ghcr.io/madebyduy/rhinoq:next version
+```
+
+Release archives, `checksums.txt`, its sigstore bundle and SPDX SBOMs are
+attached to each [GitHub release](https://github.com/madebyduy/RhinoQ/releases).
+Verify before use:
+
+```bash
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/<tag>" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
+sha256sum --check --ignore-missing checksums.txt
+```
+
+To build from source instead:
 
 ```bash
 go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
 rhinoq version
 ```
 
-From a repository checkout, `go install ./cmd/rhinoq` does the same.
-
-No tag has been published yet, so prebuilt binaries are not downloadable. The
-release pipeline that produces them for Linux, macOS and Windows is committed at
-[`.goreleaser.yaml`](../.goreleaser.yaml); it runs on a `v*` tag push and
-publishes a signed `checksums.txt`.
+From a repository checkout, `go install ./cmd/rhinoq` does the same. The release
+pipeline is committed at [`.goreleaser.yaml`](../.goreleaser.yaml); it runs on a
+`v*` tag push.
 
 If the shell cannot find `rhinoq`, inspect the install locations:
 

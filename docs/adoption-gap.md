@@ -2,6 +2,10 @@
 
 > Written 2026-07-29, after the second adopter probe against
 > `api-mkt-video-scraper` and the contract work in `74b5d94`.
+> Updated 2026-08-02: items 4 and 7 are done, item 5 is blocked on a manual npm
+> account action, and the on-ramp argument below produced
+> [ADR-0022](../.ai/DECISIONS.md) and `rhinoq detect`. Items 1–3 remain
+> unmeasured. See [Measuring plumbing](./measuring-plumbing.md).
 >
 > [`adoption-review.md`](adoption-review.md) assesses what exists.
 > [`competitive-landscape.md`](competitive-landscape.md) states the product
@@ -103,13 +107,19 @@ estimates below are estimates.
    until the same real application deletes the old Gateway/client plumbing and
    produces a new LOC/process/credential count.
 
-2. **Delete code in a real application and count it.** Wire the module into the
-   two call sites in `api-mkt-video-scraper`, then remove what becomes dead.
-   Estimated reachable now that per-item outcome exists: the Redis
-   `:results` hash, most of the 223-line status assembly, and the per-item
-   bookkeeping inside the 505 lines of SSE handlers. Until a real number
-   replaces that estimate, "materially less plumbing" is a promise, not a
-   claim.
+2. **Delete code in a real application and count it. — still not measured.**
+   Wire the module into the two call sites in `api-mkt-video-scraper`, then
+   remove what becomes dead. Estimated reachable now that per-item outcome
+   exists: the Redis `:results` hash, most of the 223-line status assembly, and
+   the per-item bookkeeping inside the 505 lines of SSE handlers. Until a real
+   number replaces that estimate, "materially less plumbing" is a promise, not
+   a claim.
+
+   What changed on 2026-08-02 is only that the measurement is now specified
+   instead of intended: [Measuring plumbing](./measuring-plumbing.md) fixes what
+   counts, and `scripts/measure-plumbing.sh` takes the count. The subject
+   application is a separate private repository, so this repository cannot
+   produce the number by itself.
 
 3. **A frontend, however small.** Two tabs, one reload, one Cancel pressed as
    the job finishes. The strongest value — `entityVersion`, monotonic progress,
@@ -117,29 +127,56 @@ estimates below are estimates.
    evaluation had no browser at all. This is the least-tested and most-load-
    bearing claim in the product.
 
+### P0.5 — the on-ramp itself, added 2026-08-02
+
+The three items above all assume the adopter has already decided to integrate.
+The probes suggest the decision happens earlier and is made by someone else: the
+person who owns the database, whose question is not "is the contract good" but
+"what are you asking permission to write". Every previous entry point answered
+that badly — `npm install` plus 22 migrations plus a second process.
+
+**Done: `rhinoq detect`** ([ADR-0022](../.ai/DECISIONS.md)). One `docker run`, a
+role with `CONNECT` and `SELECT`, no migration against the application's schema,
+no RhinoQ table inside it, and by default no write anywhere at all. Captured
+run and the proof that the role cannot write:
+[evidence](./evidence/detector-first-finding-2026-08-02.md).
+
+This does not close items 1–3. It changes who has to say yes before they start.
+
 ### P1 — remove friction, do not change the verdict
 
-4. **Publish `rhinoq-agent` as a binary and an image.** Building a Go binary
-   from source is a hard stop for a Node team evaluating on a Tuesday
-   afternoon.
-5. **Publish `0.1.0-beta.7` and move the `latest` dist-tag.** `terminalProjection`
-   is now required and the wire contract gained per-execution fields, so `main`
-   and the published `0.1.0-beta.2` share a version number but not an API.
+4. **Publish `rhinoq-agent` as a binary and an image. — done.** Every tag now
+   attaches signed Linux/macOS/Windows binaries with checksums, sigstore bundles
+   and SBOMs, and pushes a container image. The image's entrypoint is now the
+   CLI, so `docker run … detect` is the first command an evaluator runs. No Go
+   toolchain is on any documented path.
+5. **Publish `0.1.0-beta.7` and move the `latest` dist-tag. — blocked, not
+   done.** The GitHub release exists; npm does not. The registry still serves
+   `0.1.0-beta.2` on `next` and `0.1.0-beta.1` on `latest` while this repository
+   is at `0.1.0-beta.7`, so `main` and the published package share a version
+   number but not an API. The workflow is already configured for trusted
+   publishing; what is missing is linking the package to this repository and
+   workflow in the npm account UI, which no automation here can do. Until then
+   every install instruction points at the release tarball.
 6. **Cancellation needs hands, not just a state machine.** `cancel_requested`,
    `too_late` and `cannot_cancel_safely` are modelled and tested, but nothing
    stops a BullMQ job. The adopter still writes the removal and the checkpoint
    polling themselves.
-7. **Decide about realtime.** Polling with versioned snapshots is defensible
-   and much simpler to reason about. If it stays, say so as a decision rather
-   than leaving "realtime later" in the docs, because adopters read that as
-   incomplete.
+7. **Decide about realtime. — done.** Polling is the decision, recorded as
+   [ADR-0023](../.ai/DECISIONS.md) with the one measurement that would reopen
+   it. "Realtime later" has been removed from the roadmap and the docs.
 
 ### P2 — do not start these yet
 
-ProviderOperation, organization/RBAC authorization, and further Verified Tasks
-surface. None of them is what stops a team adopting RhinoQ today, and each adds
-surface to a product whose problem is that it already asks for too much before
-first value.
+Organization/RBAC authorization, the multi-node notification scheduler,
+deployment-shaped chaos evidence and further benchmarks. None of them is what
+stops a team adopting RhinoQ today, and each adds surface to a product whose
+problem is that it already asks for too much before first value.
+
+ProviderOperation belongs here too, for a different reason: it is implemented
+and tested, but from Node it needs the Gateway process, and that is exactly the
+cost the on-ramp work was meant to remove. It is documented as phase 2
+([ADR-0024](../.ai/DECISIONS.md)) rather than presented as the core contract.
 
 ## How the test suite has to change
 

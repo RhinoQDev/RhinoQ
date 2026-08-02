@@ -37,6 +37,8 @@ func main() {
 		if runHelp(os.Args[2:], os.Stdout) != 0 {
 			os.Exit(2)
 		}
+	case "detect":
+		os.Exit(runDetect(os.Args[2:], os.Getenv, os.Stdout))
 	case "doctor":
 		os.Exit(runDoctor(ciMode()))
 	case "init":
@@ -317,6 +319,9 @@ func printRootHelp(output io.Writer) {
 	fmt.Fprintln(output, "  rhinoq <command> [options]")
 	fmt.Fprintln(output, "  rhinoq help <command>")
 	fmt.Fprintln(output)
+	fmt.Fprintln(output, "Start here")
+	fmt.Fprintln(output, "  detect      scan an application database read-only and report Findings")
+	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Setup and safety")
 	fmt.Fprintln(output, "  init        preview or write a local environment template")
 	fmt.Fprintln(output, "  migrate     inspect or apply checksum-tracked PostgreSQL migrations")
@@ -358,6 +363,39 @@ Usage:
 
 The first form lists commands. The second and third forms explain one command.
 Help never connects to PostgreSQL and never changes files or data.`)
+	case "detect":
+		fmt.Fprintln(output, `rhinoq detect — read an application database and report what contradicts a Rule
+
+Usage:
+  rhinoq detect --rules rules.json
+  rhinoq detect --example > rules.json
+  rhinoq detect --rules rules.json --store --watch 5m
+
+Flags:
+  --rules <file>       JSON Rule file; required
+  --example            print a starter Rule file and exit
+  --store              persist Rules and Findings in RHINOQ_DATABASE_URL
+  --watch <duration>   re-scan on this interval instead of exiting
+  --max-pages <n>      page budget per Rule per pass
+  --timeout <d>        wall-clock budget per pass; default 2m
+  --json               machine-readable output
+  --fail-on-finding    exit 1 when any Rule is violated
+
+Environment:
+  RHINOQ_SUBJECT_DATABASE_URL  the application database; read-only is enough
+  RHINOQ_DATABASE_URL          RhinoQ's own database; only used with --store
+
+Two connections, two privilege levels. The subject database is only ever read:
+every Rule query runs in a read-only transaction under the Rule's own statement
+timeout, no migration is applied to it and no RhinoQ table is created in it. A
+role with CONNECT and SELECT on the tables a Rule names is enough.
+
+Without --store nothing is written anywhere: Rules and Findings live in memory
+for the length of the command. With --store they go to RhinoQ's own database,
+which this command migrates itself.
+
+This starts no queue, worker, claim loop, heartbeat, retry scheduler or recovery
+executor, and it never repairs a business row.`)
 	case "init":
 		fmt.Fprintln(output, `rhinoq init — prepare an environment template
 

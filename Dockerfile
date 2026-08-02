@@ -13,4 +13,9 @@ COPY --from=build /out/rhinoq /usr/local/bin/rhinoq
 COPY --from=build /out/rhinoq-agent /usr/local/bin/rhinoq-agent
 USER nonroot:nonroot
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/rhinoq-agent"]
+# The CLI is the entrypoint because `detect` is the front door: an evaluator
+# with a read-only role should reach a first Finding with one `docker run` and
+# no flags to look up. The Gateway is still in the image; run it with
+# `--entrypoint /usr/local/bin/rhinoq-agent`.
+ENTRYPOINT ["/usr/local/bin/rhinoq"]
+CMD ["help"]

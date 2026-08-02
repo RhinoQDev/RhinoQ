@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -76,6 +77,40 @@ func runMigrate(
 	if action == "plan" && migrations.PendingCount(statuses) > 0 {
 		fmt.Fprintln(output, "No changes made. Run `rhinoq migrate apply` to apply this plan.")
 	}
+	return 0
+}
+
+// applyStoreMigrations brings RhinoQ's own database up to date without asking
+// the operator to run a second command.
+//
+// This is safe to do implicitly only because of where it points: the detector's
+// store is a database RhinoQ owns, never the application's. `rhinoq migrate`
+// stays explicit for the single-database shape, where a surprise DDL statement
+// would land in someone else's schema.
+func applyStoreMigrations(
+	ctx context.Context,
+	db *sql.DB,
+	output io.Writer,
+) int {
+	runner, err := migrations.NewRunner(db)
+	if err != nil {
+		fmt.Fprintf(output, "FAIL migration catalog\n  %v\n", err)
+		return 1
+	}
+	statuses, err := runner.Status(ctx)
+	if err != nil {
+		printMigrationError(output, err)
+		return 1
+	}
+	if migrations.PendingCount(statuses) == 0 {
+		return 0
+	}
+	statuses, err = runner.Apply(ctx)
+	if err != nil {
+		printMigrationError(output, err)
+		return 1
+	}
+	fmt.Fprintf(output, "RhinoQ store %s\n", migrations.Summary(statuses))
 	return 0
 }
 
