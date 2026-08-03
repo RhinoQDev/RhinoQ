@@ -3,11 +3,17 @@
 fmt:
 	gofmt -w cmd internal tests pkg examples
 
+# go.work makes the nested module reachable from the root, but `./...` still
+# stops at the main module. Naming it here is what keeps `make test` from
+# reporting PASS over fourteen untouched engine contracts. Without
+# RHINOQ_TEST_DATABASE_URL those tests skip and say so; `make db-up test` runs
+# them for real. tests/unit/workspace_test.go fails if a new module is added
+# without being listed here.
 test:
-	go test ./...
+	go test ./... ./tests/postgres/...
 
 vet:
-	go vet ./...
+	go vet ./... ./tests/postgres/...
 
 test-node:
 	npm --prefix sdks/node test

@@ -29,13 +29,18 @@ jobs:
         with:
           go-version-file: go.mod
       - run: gofmt -d cmd internal tests pkg examples
-      - run: go vet ./...
-      - run: go test -race -count=1 -shuffle=on ./...
+      # ./... stops at the main module even under a workspace, so the nested
+      # PostgreSQL harness is named explicitly. It skips without a database and
+      # says so; the postgres job below runs it against a real one.
+      - run: go vet ./... ./tests/postgres/...
+      - run: go test -race -count=1 -shuffle=on ./... ./tests/postgres/...
       - name: Validate release archive configuration
         uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: check
+        env:
+          GOWORK: "off"
 
   postgres:
     name: PostgreSQL integration harness

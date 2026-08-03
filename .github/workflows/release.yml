@@ -128,6 +128,10 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The workspace exists so the PostgreSQL harness compiles from the
+          # root. A published binary must resolve from go.mod alone, or its
+          # dependency set stops matching the one the SBOM describes.
+          GOWORK: "off"
       - name: Verify the published keyless checksum bundle
         shell: bash
         run: >-

@@ -12,9 +12,15 @@ license provides. There is no separate CLA to sign.
 1. Read `AGENTS.md`, `ARCHITECTURE.md` and `.ai/DEFINITION_OF_DONE.md`.
 2. Write a task with acceptance criteria.
 3. Keep the change small and inside one layer.
-4. Run `gofmt`, `go test ./...` and `go vet ./...`.
-5. Run `npm --prefix sdks/node test` if the change touches the Node SDK.
-6. Update the docs and changelog if public behaviour changes.
+4. Run `make check`. Do **not** substitute a bare `go test ./...`: the
+   PostgreSQL engine harness is a separate module under `tests/postgres`, and
+   `./...` stops at the main module even under the workspace. `make test` names
+   both, so a green run means both.
+5. Run `make db-up test-postgres` when the change touches SQL, the store or the
+   lease/fencing path. Without a database those tests skip and say so, which is
+   not the same as passing.
+6. Run `npm --prefix sdks/node test` if the change touches the Node SDK.
+7. Update the docs and changelog if public behaviour changes.
 
 ## Review rules
 
