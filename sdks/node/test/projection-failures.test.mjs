@@ -114,6 +114,35 @@ test('a sink that throws is reported without losing the original error', async (
   }
 });
 
+// Nothing awaits a listener's promise, so a throwing onError becomes an
+// unhandled rejection — which in Node terminates the process by default. A
+// bridge whose error reporting is broken must not be worse than one with none.
+test('an onError that throws does not take the process down', async () => {
+  const warnings = [];
+  const h = newHarness({
+    onError: () => { throw new Error('the logger is misconfigured'); },
+    failWith: new Error('postgres is gone'),
+    warnings,
+  });
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason);
+  process.on('unhandledRejection', onRejection);
+  try {
+    h.emit('active', { jobId: 'bull-job-1' });
+    await h.settle(() => warnings.length === 1);
+    // Give a stray rejection a chance to surface before asserting there is none.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.deepEqual(rejections, []);
+    assert.match(warnings[0], /onError threw while reporting/);
+    assert.match(warnings[0], /the logger is misconfigured/);
+    assert.match(warnings[0], /postgres is gone/, 'the original error must survive the broken handler');
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    h.bridge.close();
+  }
+});
+
 test('the idempotency key is the four fields a durable sink keys on', () => {
   assert.equal(
     projectionFailureKey({ runtime: 'bullmq', runtimeScope: 'reports', externalId: 'job-1', event: 'completed' }),
@@ -144,7 +173,7 @@ test('the in-memory sink can be drained once a failure is handled', async () => 
   assert.equal(sink.size, 0);
 });
 
-function newHarness({ sink, onError, failWith }) {
+function newHarness({ sink, onError, failWith, warnings }) {
   const listeners = new Map();
   const bridge = new BullMQTaskBridge({
     client: { async lookupTaskExecution() { throw failWith; } },
@@ -154,8 +183,9 @@ function newHarness({ sink, onError, failWith }) {
     },
     runtimeScope: 'reports',
     terminalProjection: 'single-execution',
-    projectionFailures: sink,
+    ...(sink ? { projectionFailures: sink } : {}),
     ...(onError ? { onError } : {}),
+    ...(warnings ? { onWarning: (warning) => warnings.push(warning) } : {}),
   });
   return {
     bridge,

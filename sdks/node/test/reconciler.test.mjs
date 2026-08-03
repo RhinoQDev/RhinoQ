@@ -113,6 +113,10 @@ test('the schedule fires sweeps and stop() ends them', async () => {
 
   reconciler.stop();
   assert.equal(fire, undefined);
+
+  // Silently doing nothing is the worst of the three behaviours: the symptom
+  // is a Task that stays stuck and nothing to read about why.
+  assert.throws(() => reconciler.start(), /after stop\(\)/);
 });
 
 test('an interval shorter than a second is refused', () => {

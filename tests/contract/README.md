@@ -23,10 +23,13 @@ not a contract.
 
 ## Rules
 
-- The bytes are what the Gateway actually sends. `writeJSON` uses
-  `json.NewEncoder`, which HTML-escapes, so `>` appears as `>` in the
-  fixtures. Do not "clean that up": the fixture stops being a replay of the
-  wire the moment it is prettier than the wire.
+- The bytes are what the Gateway actually sends, not a tidied version of them.
+  `writeJSON` uses `json.NewEncoder`, which HTML-escapes, so a greater-than
+  sign inside a Rule query reaches the wire as a six-character `\u00XX` escape
+  rather than as itself. Do not "clean that up": the fixture stops being a
+  replay of the wire the moment it is prettier than the wire, and
+  `rule-record-v1.json` was wrong in exactly this way until
+  `rule_wire_test.go` regenerated it from Go.
 - Changing a contract means bumping its schema version and updating both SDKs
   in the same change. Regenerating the golden alone converts a caught break
   into a silent one.

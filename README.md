@@ -306,7 +306,16 @@ See [Workbench](./docs/workbench.md).
 RhinoQ is not another queue and does not require rewriting handlers:
 
 - **BullMQ bridge:** observes explicitly tracked jobs and reconciles known jobs;
-  the application still owns Redis, enqueueing and worker code.
+  the application still owns Redis, enqueueing and worker code. A retry of a
+  job the runtime reuses becomes a new attempt with its own outcome, so a batch
+  view can say "attempt 1 failed with a 502, attempt 2 succeeded" instead of
+  showing one row that changed its mind.
+- **Fan-out signals:** `onItemsSettled` fires exactly once when every item of a
+  batch reaches a terminal state — decided in one SQL statement, so it survives
+  a crash and several bridges rather than being counted in application code.
+- **TaskReconciler:** runs `listTasksByState({ states, idleForMs })` on a
+  schedule and hands each stuck Task to the application. It is a timer in one
+  process, not a distributed scheduler, and the callback must be idempotent.
 - **TaskStore:** browser-friendly summary polling, owner-scoped actions and lazy
   Execution history.
 - **Native Go runtime:** optional PostgreSQL-backed runtime for teams that need

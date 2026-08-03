@@ -786,9 +786,15 @@ AS $$
 DECLARE
   v_settled boolean := false;
 BEGIN
+  -- version is deliberately not advanced. It is the optimistic-concurrency
+  -- token every holder of a Snapshot is carrying, and items_settled_at is not
+  -- in the Snapshot: bumping it would invalidate every caller's token for a
+  -- change none of them can observe. On a fan-out that is a burst of version
+  -- conflicts, at exactly the moment the last item lands, in return for
+  -- nothing. updated_at still moves, which is what the reconciliation query
+  -- reads.
   UPDATE rhinoq_task.tasks
   SET items_settled_at = clock_timestamp(),
-      version = version + 1,
       updated_at = clock_timestamp()
   WHERE id = p_id
     AND items_settled_at IS NULL

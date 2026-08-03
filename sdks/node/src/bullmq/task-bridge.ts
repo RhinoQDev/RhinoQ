@@ -797,6 +797,13 @@ export class BullMQTaskBridge {
       }
       return undefined;
     }
+    // An attempt with no external ID was never bound to a job, so nothing can
+    // have retried it. Looking it up with an empty ID would ask the store a
+    // question with no answer, and a store that happens to have a row with a
+    // NULL external ID would answer the wrong one.
+    if (!previous.externalId) {
+      return undefined;
+    }
     const nextAttempt = (previous.attempt ?? 1) + 1;
     try {
       await this.client.retryTaskExecution(
@@ -818,7 +825,7 @@ export class BullMQTaskBridge {
     this.metrics?.increment('rhinoq_task_execution_retried_total', {
       ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
     });
-    const replacement = await this.find(previous.externalId ?? '');
+    const replacement = await this.find(previous.externalId);
     if (!replacement || replacement.id === previous.id) {
       return undefined;
     }
@@ -1086,10 +1093,34 @@ export class BullMQTaskBridge {
       try {
         await this.recordProjectionFailure(name, event, error);
       } catch (sinkError) {
-        this.onError?.(sinkError, event);
+        this.report(sinkError, event);
       }
-      this.onError?.(error, event);
+      this.report(error, event);
     });
+  }
+
+  /**
+   * Hands an error to `onError` without letting that handler take the process
+   * down with it.
+   *
+   * Nothing awaits a listener's promise, so a throwing `onError` becomes an
+   * unhandled rejection — which in Node terminates the process by default. A
+   * bridge whose error reporting is broken must not be worse than a bridge
+   * with none, so the last resort is a warning that says which failed.
+   */
+  private report(error: unknown, event: BullMQEvent): void {
+    if (!this.onError) {
+      return;
+    }
+    try {
+      this.onError(error, event);
+    } catch (handlerError) {
+      this.warn(
+        `RhinoQ: onError threw while reporting a projection failure for job ${event.jobId}. ` +
+          `Handler error: ${handlerError instanceof Error ? handlerError.message : String(handlerError)}. ` +
+          `Original error: ${error instanceof Error ? error.message : String(error)}.`,
+      );
+    }
   }
 
   private async recordProjectionFailure(

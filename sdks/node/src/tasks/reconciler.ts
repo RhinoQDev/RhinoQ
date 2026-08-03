@@ -94,14 +94,25 @@ export class TaskReconciler {
     this.clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as never));
   }
 
-  /** Schedules the first sweep. It does not run one immediately. */
+  /**
+   * Schedules the first sweep. It does not run one immediately.
+   *
+   * Calling it twice is a no-op. Calling it after `stop()` throws: a
+   * reconciler that silently does nothing is the worst of the three
+   * behaviours, because the symptom is a Task that stays stuck and nothing to
+   * read about why.
+   */
   start(): void {
-    if (this.stopped || this.handle !== undefined) {
+    if (this.stopped) {
+      throw new Error('TaskReconciler.start() after stop(); construct a new one');
+    }
+    if (this.handle !== undefined) {
       return;
     }
     this.schedule();
   }
 
+  /** Ends the schedule permanently. A sweep already running is not aborted. */
   stop(): void {
     this.stopped = true;
     if (this.handle !== undefined) {
