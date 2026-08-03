@@ -529,6 +529,59 @@ confirmation; request acceptance alone is not proof of completion.
 
 The package also exports `provisioningProviderAdapter` for storage buckets,
 accounts and other resources with `ready`, intermediate and failed states.
+
+### Transfers: "fetch from a CDN, put it in S3"
+
+Stripe and provisioning both answer *did it happen?* from a status field the
+provider maintains. A transfer has none. The only evidence is the destination
+object, so `objectTransferProviderAdapter` confirms by reading it back:
+
+```ts
+import { objectTransferProviderAdapter } from '@rhinoq/node';
+
+const transfer = objectTransferProviderAdapter({
+  transfer: async (idempotencyKey) => {
+    const source = await fetch(cdnURL);
+    const body = Buffer.from(await source.arrayBuffer());
+    const put = await s3.putObject({ Bucket, Key: destinationKey, Body: body });
+    return { key: destinationKey, etag: put.ETag, size: body.byteLength, versionId: put.VersionId };
+  },
+  head: async () => {
+    try {
+      const found = await s3.headObject({ Bucket, Key: destinationKey });
+      return { key: destinationKey, etag: found.ETag, size: found.ContentLength, versionId: found.VersionId };
+    } catch (error) {
+      if (error.name === 'NotFound') return undefined;
+      throw error;
+    }
+  },
+  // The source's own identity, read before the transfer runs.
+  expected: async () => {
+    const probe = await fetch(cdnURL, { method: 'HEAD' });
+    return { etag: probe.headers.get('etag') ?? undefined, size: Number(probe.headers.get('content-length')) };
+  },
+});
+```
+
+What each readback concludes, and why:
+
+| Destination | Decision | Reasoning |
+|---|---|---|
+| key is empty | `not_happened` | nothing to overwrite, so a retry is safe |
+| identity matches `expected()` | `confirmed` | this operation's object is there |
+| identity differs | **`failed`** | retrying would overwrite it, and an unversioned bucket cannot undo that |
+| object present, nothing comparable | **`unknown`** | "something is at this key" is not proof this operation put it there |
+
+That last row is the reason to supply `expected()`. Without it, a transfer that
+failed halfway is recorded as a success because last week's file happens to sit
+at the same path. Egress and request cost are real, so `unknown` stays unknown
+rather than being optimistically retried.
+
+Identity is compared strongest first: `versionId`, then `etag`, then `size`.
+S3 quotes etags and appends a part count for multipart uploads; the adapter
+normalises both, because a false mismatch means "do not retry" and would
+strand real work.
+
 Read [ProviderOperation](./provider-operations.md) before changing confirmation
 or retry policy.
 
