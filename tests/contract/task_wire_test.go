@@ -1,10 +1,7 @@
-package unit
+package contract
 
 import (
-	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -100,19 +97,5 @@ func TestPublicTaskContractMatchesGoldenV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actual = append(actual, '\n')
-	goldenPath := filepath.Join(
-		repositoryRoot(t), "testdata", "contracts", "task-contract-v1.json",
-	)
-	expected, err := os.ReadFile(goldenPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(actual, expected) {
-		t.Fatalf(
-			"Task wire contract drifted; update schema/version and both SDKs before changing %s\nactual:\n%s",
-			goldenPath,
-			actual,
-		)
-	}
+	assertGolden(t, "task-contract-v1.json", append(actual, '\n'))
 }

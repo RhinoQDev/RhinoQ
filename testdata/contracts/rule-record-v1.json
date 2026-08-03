@@ -4,7 +4,7 @@
   "scope": "table",
   "status": "draft",
   "subjectType": "report",
-  "query": "SELECT id::text AS subject_id, output_url IS NULL AS violated,\n       jsonb_build_object('status', status, 'hasOutput', output_url IS NOT NULL) AS evidence\nFROM completed_reports\nWHERE created_at >= $1\n  AND id::text > $2\nORDER BY id\nLIMIT $3\n",
+  "query": "SELECT id::text AS subject_id, output_url IS NULL AS violated,\n       jsonb_build_object('status', status, 'hasOutput', output_url IS NOT NULL) AS evidence\nFROM completed_reports\nWHERE created_at \u003e= $1\n  AND id::text \u003e $2\nORDER BY id\nLIMIT $3\n",
   "baselineAt": "2026-08-03T02:54:57.046Z",
   "everyMs": 300000,
   "withinMs": 0,
