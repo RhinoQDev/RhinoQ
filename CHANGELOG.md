@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased
+
+Follow-up to the beta.8 audit. Every item here closes a gap the release left
+open, or a claim it made that the repository could not back.
+
+### Node SDK
+
+- `npx rhinoq notify add|list|remove|test` now exists. `notify` shipped in
+  beta.8 with the stated reason that Node teams could not use notifications —
+  and then shipped only in the Go CLI. Both CLIs read and write the same
+  `.rhinoq/notifications.json`, which is a file rather than an engine table
+  precisely so an SDK can share it without reaching into private state.
+  `notify send` stays Go-only: a real delivery is recorded in the durable
+  delivery ledger, and reimplementing that deduplication in TypeScript would
+  put correctness in two languages.
+- Added `TaskMetrics` and `checkEmbeddedHealth`. The Gateway has `/metrics` and
+  `/healthz`; an application on the embedded PostgreSQL Task client had
+  neither. Counters only — no latency, rate or percentile, because publishing a
+  performance number without its benchmark is a claim this project does not
+  make.
+- Added `createNodeTaskMiddleware`, `registerFastifyTaskRoutes` and
+  `taskRoutePatterns`. Express, Fastify and NestJS all share one trap: their
+  wildcard does not match the bare collection path, so a `/tasks/*` route
+  silently loses `listTasks` and the only symptom is a 404.
+- **Breaking (fan-out):** `dispatchMany` now requires an `itemKey` on every item
+  and refuses duplicates within a batch. `itemKey` is the idempotency key —
+  attempts are numbered per key and the aggregate counts one item per key — so a
+  fan-out dispatched without one stored fifty items as attempts 1..50 of a
+  single item. The aggregate read `total: 1` and an `all-succeeded` batch
+  terminated on its first finish, irreversibly and silently. `track()` and
+  `dispatch()` are unchanged.
+- Added `terminalizeOnCancel`. `cancel()` records the cancellation outcome and
+  never terminalized, so under the default `aggregate.terminal: 'manual'` a
+  fully acknowledged cancellation left the Task at `cancel_requested` until the
+  application noticed. The option cancels the named Executions and then the
+  Task, and refuses when any other Execution is still open.
+- `BullMQTaskBridge` warns when a second instance shares a `runtimeScope` in
+  the same process, and says out loud that the cross-process case is the same
+  hazard and invisible from a client library. Acknowledge with
+  `allowConcurrentBridges` or `RHINOQ_ALLOW_CONCURRENT_BRIDGES=1`.
+- `npx rhinoq` and `npx rhinoq-task` accept discrete PostgreSQL variables
+  (`PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD`/`PGDATABASE`, or `RHINOQ_DB_*`), not
+  only a connection URL. `doctor` used to stop at "DATABASE_URL is not set" for
+  the projects whose platform hands out discrete variables. Half a discrete
+  configuration resolves to nothing rather than falling back to a default host.
+- `require('@rhinoq/node/package.json')` no longer throws
+  `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+
+### Evidence and test infrastructure
+
+- `tests/fault` now holds nine fault-injection scenarios: an acknowledgement
+  lost after the write committed, a lease expiring under a live worker, a
+  partition that heals, a sweep interrupted mid-batch, and a provider
+  confirmation lost after the charge went through. `AGENTS.md` forbids a
+  reliability claim without fault evidence and the directory was empty. Its
+  README lists what the suite does not cover.
+- `tests/contract` now holds the cross-language wire tests, including the Rule
+  record and the notification message. Regenerating `rule-record-v1.json` from
+  Go showed the committed fixture was not a replay of the wire: `writeJSON`
+  HTML-escapes, so the Gateway sends `>` where the mock had a literal `>`.
+- `go.work` plus an explicit `make test`/`make vet` target: `go test ./...` at
+  the repository root compiled none of the fourteen PostgreSQL engine contract
+  files and printed PASS. A guard test fails when a module is added without
+  being wired into both.
+- Coverage on the beta.8 headline features: `application/rules` 28.1% → 81.5%,
+  `notificationdelivery` 34.5% → 100%, `domain/attempt` 22.2% → 100%.
+
 ## 0.1.0-beta.8
 
 The first release whose Node package contains the `verify` onboarding commands.
