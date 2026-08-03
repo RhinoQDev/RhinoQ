@@ -8,13 +8,19 @@ import {
   migrateTaskSchema,
 } from '../postgres/task-schema.js';
 import { SDK_VERSION } from '../gateway/types.js';
+import { resolveDatabaseConfig } from './database-config.js';
 
 const USAGE = `Usage:
   RHINOQ_DATABASE_URL=postgres://... npx rhinoq-task
   npx rhinoq-task postgres://...
+  PGHOST=... PGDATABASE=... npx rhinoq-task
 
 Creates or upgrades the isolated rhinoq_task schema. The Task-only profile uses
 exactly three tables and does not modify application tables.
+
+The connection comes from RHINOQ_DATABASE_URL, DATABASE_URL, the discrete
+PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE variables (RHINOQ_DB_* also works),
+or the first argument.
 `;
 
 async function main(): Promise<void> {
@@ -28,13 +34,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  const databaseUrl = process.env.RHINOQ_DATABASE_URL ?? argument;
-  if (!databaseUrl) {
+  // The explicit argument is only a fallback: an operator who has exported the
+  // variables should not have to repeat the URL, and a URL on the command line
+  // ends up in the shell history with its password.
+  const resolved = resolveDatabaseConfig(process.env)
+    ?? (argument ? { pool: { connectionString: argument } } : undefined);
+  if (!resolved) {
     throw new TypeError(
-      'Set RHINOQ_DATABASE_URL or pass a PostgreSQL URL as the first argument.',
+      'No PostgreSQL connection found. Set RHINOQ_DATABASE_URL or DATABASE_URL, ' +
+        'set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE, or pass a PostgreSQL URL ' +
+        'as the first argument.',
     );
   }
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = new pg.Pool(resolved.pool);
   try {
     await migrateTaskSchema(pool);
     process.stdout.write(

@@ -6,6 +6,7 @@ import { Pool } from 'pg';
 import { installPostgresTaskProfile } from '../postgres/task-client.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
 import { SDK_VERSION } from '../gateway/types.js';
+import { resolveDatabaseConfig, type ResolvedDatabaseConfig } from './database-config.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -29,28 +30,56 @@ main().catch((error: unknown) => {
   }
 });
 
-function databaseURL(): string {
-  return process.env.RHINOQ_DATABASE_URL ?? process.env.DATABASE_URL ?? '';
+function database(): ResolvedDatabaseConfig | undefined {
+  return resolveDatabaseConfig(process.env);
+}
+
+// Every command that needs PostgreSQL fails the same way, and the NEXT action
+// names both shapes. A project whose platform only hands out discrete variables
+// used to read "DATABASE_URL is not set" as "RhinoQ needs a URL I do not have".
+function requireDatabase(command: string): ResolvedDatabaseConfig {
+  const resolved = database();
+  if (!resolved) {
+    fail(
+      'no PostgreSQL connection in the environment',
+      `Set RHINOQ_DATABASE_URL or DATABASE_URL, or set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE (RHINOQ_DB_* also works), then run: npx rhinoq ${command}`,
+    );
+  }
+  return resolved;
 }
 
 async function init(): Promise<void> {
   const root = resolve('.rhinoq');
   await mkdir(resolve(root, 'rules'), { recursive: true });
+  const resolved = database();
   await writeNew(resolve(root, 'config.json'), JSON.stringify({
     schemaVersion: 1,
-    databaseEnv: process.env.RHINOQ_DATABASE_URL ? 'RHINOQ_DATABASE_URL' : 'DATABASE_URL',
+    databaseEnv: resolved?.source ?? 'DATABASE_URL',
     taskProfileVersion: TASK_SCHEMA_VERSION,
   }, null, 2) + '\n');
-  const url = databaseURL();
-  if (url) {
-    const pool = new Pool({ connectionString: url, connectionTimeoutMillis: 5_000 });
+  if (resolved) {
+    const pool = new Pool({ ...resolved.pool, connectionTimeoutMillis: 5_000 });
     try { await installPostgresTaskProfile(pool); }
     finally { await pool.end(); }
-    console.log(`PASS PostgreSQL detected; RhinoQ Task schema v${TASK_SCHEMA_VERSION} is current.`);
+    console.log(`PASS PostgreSQL detected at ${resolved.target} via ${resolved.source}; RhinoQ Task schema v${TASK_SCHEMA_VERSION} is current.`);
   } else {
-    await writeNew(resolve('.env.rhinoq.example'), 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app\nREDIS_URL=redis://localhost:6379\n');
-    console.log('WARN no DATABASE_URL/RHINOQ_DATABASE_URL detected; schema was not applied.');
-    console.log('NEXT set DATABASE_URL, then run: npx rhinoq init');
+    await writeNew(resolve('.env.rhinoq.example'), [
+      '# Either a connection URL...',
+      'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app',
+      '',
+      '# ...or discrete variables, which is what most managed providers hand out.',
+      '# PGHOST=localhost',
+      '# PGPORT=5432',
+      '# PGUSER=postgres',
+      '# PGPASSWORD=postgres',
+      '# PGDATABASE=app',
+      '# PGSSLMODE=require',
+      '',
+      'REDIS_URL=redis://localhost:6379',
+      '',
+    ].join('\n'));
+    console.log('WARN no PostgreSQL connection detected; schema was not applied.');
+    console.log('NEXT set DATABASE_URL, or PGHOST/PGDATABASE and friends, then run: npx rhinoq init');
   }
   const detected = await detectPackages();
   console.log(`PASS created ${root}`);
@@ -433,12 +462,12 @@ async function gatewayRequest(path: string, init: RequestInit, allowMissing = fa
 // name because they answer the same question for different planes, so this one
 // says out loud what it did not look at: a PASS here is not a runtime PASS.
 async function doctor(): Promise<void> {
-  const url = databaseURL();
-  if (!url) fail('DATABASE_URL/RHINOQ_DATABASE_URL is not set', 'Set it to PostgreSQL, then run: npx rhinoq doctor');
+  const resolved = requireDatabase('doctor');
   console.log('INFO scope: Task schema, local Rule files and client packages.');
   console.log('INFO not checked here: worker identity, lease/heartbeat/reaper timing,');
   console.log('     RhinoQ migration state. Those need the Go CLI: rhinoq doctor --ci');
-  const pool = new Pool({ connectionString: url, connectionTimeoutMillis: 5_000 });
+  console.log(`INFO PostgreSQL target ${resolved.target} from ${resolved.source}.`);
+  const pool = new Pool({ ...resolved.pool, connectionTimeoutMillis: 5_000 });
   let invalidRules = false;
   try {
     await pool.query('SELECT 1');
@@ -506,9 +535,7 @@ async function doctorRules(pool: Pool): Promise<boolean> {
 
 async function fixture(args: string[]): Promise<void> {
   if ((args[0] ?? 'failure') !== 'failure') fail('only the `failure` fixture exists', 'Run: npx rhinoq fixture failure');
-  const url = databaseURL();
-  if (!url) fail('DATABASE_URL/RHINOQ_DATABASE_URL is not set', 'Set it, then run: npx rhinoq fixture failure');
-  const pool = new Pool({ connectionString: url });
+  const pool = new Pool(requireDatabase('fixture failure').pool);
   try {
     const tasks = await installPostgresTaskProfile(pool);
     const id = `demo_${Date.now()}`;
@@ -532,9 +559,7 @@ async function fixture(args: string[]): Promise<void> {
 async function dev(args: string[]): Promise<void> {
   const portValue = Number(args.find((item) => item.startsWith('--port='))?.slice(7) ?? 8788);
   if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) fail('port must be 1..65535', 'Example: npx rhinoq dev --port=8788');
-  const url = databaseURL();
-  if (!url) fail('DATABASE_URL/RHINOQ_DATABASE_URL is not set', 'Set it, then run: npx rhinoq dev');
-  const pool = new Pool({ connectionString: url });
+  const pool = new Pool(requireDatabase('dev').pool);
   const server = createServer(async (_request, response) => {
     try {
       const result = await pool.query(`SELECT id,type,state,version,updated_at FROM rhinoq_task.tasks ORDER BY updated_at DESC LIMIT 25`);
@@ -562,6 +587,6 @@ async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean }> {
 async function writeNew(path: string, content: string): Promise<void> { try { await access(path); console.log(`KEEP ${path} already exists.`); } catch { await writeFile(path, content, { flag:'wx' }); } }
 function escapeHTML(value: unknown): string { return String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!)); }
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify DATABASE_URL, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
+function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }
-function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq doctor\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nverify apply on an existing Rule prints what changed and needs --force, because\na new version does not reopen Findings recorded against the old one.\nverify delete previews by default; --apply performs it.\n\nThis CLI checks the isolated Task profile only. For runtime checks - fencing,\nlease/heartbeat timing, the reaper and migration state - build and run the Go\nCLI: rhinoq doctor.\n\nEvery failure includes the next action.`); }
+function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq doctor\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nverify apply on an existing Rule prints what changed and needs --force, because\na new version does not reopen Findings recorded against the old one.\nverify delete previews by default; --apply performs it.\n\nPostgreSQL connection, in order: RHINOQ_DATABASE_URL, DATABASE_URL, then the\ndiscrete PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE variables\n(RHINOQ_DB_HOST/_PORT/_USER/_PASSWORD/_NAME/_SSLMODE win over those). Discrete\nconfiguration needs at least a host and a database name.\n\nThis CLI checks the isolated Task profile only. For runtime checks - fencing,\nlease/heartbeat timing, the reaper and migration state - build and run the Go\nCLI: rhinoq doctor.\n\nEvery failure includes the next action.`); }

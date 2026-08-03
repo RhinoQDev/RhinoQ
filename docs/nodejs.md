@@ -157,6 +157,34 @@ three-table Task profile:
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
+### Cấu hình kết nối cho `npx rhinoq` và `npx rhinoq-task`
+
+Không phải project nào cũng có connection URL. Managed provider, Helm chart và
+docker-compose thường phát ra biến rời. Cả hai CLI đọc theo thứ tự sau và dừng
+ở cái đầu tiên có giá trị:
+
+| Thứ tự | Biến | Ghi chú |
+|---:|---|---|
+| 1 | `RHINOQ_DATABASE_URL` | connection string |
+| 2 | `DATABASE_URL` | connection string |
+| 3 | `RHINOQ_DB_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_NAME` / `_SSLMODE` | biến rời của RhinoQ, thắng tên libpq theo từng field |
+| 4 | `PGHOST` / `PGPORT` / `PGUSER` / `PGPASSWORD` / `PGDATABASE` / `PGSSLMODE` | tên libpq |
+
+Cấu hình rời cần **tối thiểu host và tên database**. Thiếu một trong hai thì
+CLI coi như chưa cấu hình gì và báo lỗi, thay vì rơi về host mặc định — đó là
+cách một lần migrate chạy nhầm vào database đang lắng nghe trên 5432.
+
+`PGSSLMODE` nhận `disable`, `allow`, `prefer`, `require`, `verify-ca`,
+`verify-full`. Giá trị lạ bị từ chối chứ không im lặng hạ xuống plaintext.
+
+`npx rhinoq doctor` in ra target đã phân giải (`host:port/db as user`, không
+kèm mật khẩu) và tên biến nó đã đọc, để bạn thấy ngay khi đang trỏ nhầm nơi.
+
+```bash
+PGHOST=db.internal PGPORT=6432 PGUSER=app PGDATABASE=reports PGSSLMODE=require \
+  npx rhinoq doctor
+```
+
 ```ts
 import {
   createTaskRequestHandler,
