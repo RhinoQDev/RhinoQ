@@ -32,3 +32,13 @@ test('a CommonJS application can require the package entry point', () => {
   assert.equal(typeof client.getTask, 'function');
   assert.equal(typeof client.reportTaskProgress, 'function');
 });
+
+// Bundlers, version reporters and `npm ls`-style tooling read the manifest
+// through the package name rather than a relative path. An exports map that
+// omits it answers ERR_PACKAGE_PATH_NOT_EXPORTED, which reads as "the package
+// is broken" rather than "this subpath is closed".
+test('the package manifest is reachable through the exports map', () => {
+  const manifest = require('@rhinoq/node/package.json');
+  assert.equal(manifest.name, '@rhinoq/node');
+  assert.equal(typeof manifest.version, 'string');
+});
