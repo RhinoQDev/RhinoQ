@@ -56,8 +56,21 @@ for every failure. Open the URL printed by `rhinoq dev` to see a technically
 successful Execution whose real-world Task is `uncertain`.
 
 The five-minute path uses the isolated Task profile. To continue into the
-Verified Tasks loop, use the full Go schema and a local authenticated Gateway,
-then apply and run the Rule you edited:
+Verified Tasks loop, build the Go CLI and Gateway from the same checkout, apply
+the full schema, and start the authenticated Gateway. The Node-only `init`
+command does not install these components:
+
+```bash
+go build -o rhinoq ./cmd/rhinoq
+go build -o rhinoq-agent ./cmd/rhinoq-agent
+export RHINOQ_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/app?sslmode=disable'
+./rhinoq migrate apply
+export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
+RHINOQ_AGENT_TOKEN="$RHINOQ_AGENT_TOKEN" ./rhinoq-agent
+```
+
+In another shell, with the Node CLI installed from this checkout or a release
+that contains the `verify` commands, apply and run the Rule you edited:
 
 ```bash
 export RHINOQ_AGENT_URL=http://127.0.0.1:8080

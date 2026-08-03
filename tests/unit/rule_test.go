@@ -1,13 +1,51 @@
 package unit_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/rule"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
+
+func TestRuleRecordUsesStablePublicJSONContract(t *testing.T) {
+	golden, err := os.ReadFile("../../testdata/contracts/rule-record-v1.json")
+	if err != nil {
+		t.Fatalf("read Rule Record golden fixture: %v", err)
+	}
+	created := time.Date(2026, 8, 3, 2, 54, 57, 46_000_000, time.UTC)
+	record := rhinoq.RuleRecord{
+		RuleDefinition: rhinoq.RuleDefinition{
+			ID: "completed-report-has-output", Name: "Completed Report Has Output",
+			Scope: rhinoq.RuleScopeTable, SubjectType: "report",
+			Query:      "SELECT id::text AS subject_id, output_url IS NULL AS violated,\n       jsonb_build_object('status', status, 'hasOutput', output_url IS NOT NULL) AS evidence\nFROM completed_reports\nWHERE created_at >= $1\n  AND id::text > $2\nORDER BY id\nLIMIT $3\n",
+			BaselineAt: created, Every: 5 * time.Minute, MaxRows: 500,
+			OnUnknown: rhinoq.UnknownRetries, Cursor: rhinoq.CursorSubject,
+			StatementTimeout: 5 * time.Second, MaxPlanCost: 100_000,
+			MaxSeqScanRows: 10_000,
+		},
+		Version: 1, Status: rhinoq.RuleDraft, CreatedAt: created, UpdatedAt: created,
+	}
+	actual, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal Rule Record: %v", err)
+	}
+	var actualValue any
+	var expectedValue any
+	if err := json.Unmarshal(actual, &actualValue); err != nil {
+		t.Fatalf("decode actual Rule Record JSON: %v", err)
+	}
+	if err := json.Unmarshal(golden, &expectedValue); err != nil {
+		t.Fatalf("decode golden Rule Record JSON: %v", err)
+	}
+	if !reflect.DeepEqual(actualValue, expectedValue) {
+		t.Fatalf("Rule Record JSON drifted from the shared wire fixture\nactual:\n%s\nexpected:\n%s", actual, golden)
+	}
+}
 
 func TestTableRuleRequiresBaselineIntervalAndBoundedSelect(t *testing.T) {
 	record := rule.Record{

@@ -2,6 +2,7 @@ package rhinoq
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -29,30 +30,30 @@ var (
 )
 
 type RuleDefinition struct {
-	ID          string
-	Name        string
-	Scope       string
-	SubjectType string
-	JobName     string
-	Query       string
-	BaselineAt  time.Time
-	Every       time.Duration
-	Within      time.Duration
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Scope       string        `json:"scope"`
+	SubjectType string        `json:"subjectType"`
+	JobName     string        `json:"jobName,omitempty"`
+	Query       string        `json:"query"`
+	BaselineAt  time.Time     `json:"baselineAt"`
+	Every       time.Duration `json:"-"`
+	Within      time.Duration `json:"-"`
 	// Cursor is "subject" (default) or "changed": how a table Rule walks its
 	// subjects. A changed-since Rule must accept $5, the cursor timestamp, and
 	// return a changed_at column.
-	Cursor string
+	Cursor string `json:"cursor"`
 	// OnUnknown is "retry" (default) or "finding": what an inconclusive
 	// observation does.
-	OnUnknown string
+	OnUnknown string `json:"onUnknown"`
 	// UnknownGrace waits for a continuous unknown streak before opening a
 	// Finding. Zero opens immediately when OnUnknown is "finding".
-	UnknownGrace time.Duration
-	MaxRows      int
+	UnknownGrace time.Duration `json:"-"`
+	MaxRows      int           `json:"maxRows"`
 
-	StatementTimeout time.Duration
-	MaxPlanCost      float64
-	MaxSeqScanRows   int64
+	StatementTimeout time.Duration `json:"-"`
+	MaxPlanCost      float64       `json:"maxPlanCost"`
+	MaxSeqScanRows   int64         `json:"maxSeqScanRows"`
 }
 
 type RuleRecord struct {
@@ -61,6 +62,45 @@ type RuleRecord struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// MarshalJSON is the wire contract for RuleRecord. Durations are represented
+// in milliseconds because the Agent request contract uses *Ms fields; letting
+// encoding/json marshal time.Duration would leak Go's nanosecond unit and
+// silently make clients schedule rules 1,000,000 times too slowly.
+func (r RuleRecord) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		ID                 string    `json:"id"`
+		Name               string    `json:"name"`
+		Scope              string    `json:"scope"`
+		Status             string    `json:"status"`
+		SubjectType        string    `json:"subjectType"`
+		JobName            string    `json:"jobName,omitempty"`
+		Query              string    `json:"query"`
+		BaselineAt         time.Time `json:"baselineAt"`
+		EveryMs            int64     `json:"everyMs"`
+		WithinMs           int64     `json:"withinMs"`
+		MaxRows            int       `json:"maxRows"`
+		OnUnknown          string    `json:"onUnknown"`
+		UnknownGraceMs     int64     `json:"unknownGraceMs"`
+		Cursor             string    `json:"cursor"`
+		StatementTimeoutMs int64     `json:"statementTimeoutMs"`
+		MaxPlanCost        float64   `json:"maxPlanCost"`
+		MaxSeqScanRows     int64     `json:"maxSeqScanRows"`
+		Version            int       `json:"version"`
+		CreatedAt          time.Time `json:"createdAt"`
+		UpdatedAt          time.Time `json:"updatedAt"`
+	}
+	return json.Marshal(wire{
+		ID: r.ID, Name: r.Name, Scope: r.Scope, Status: r.Status,
+		SubjectType: r.SubjectType, JobName: r.JobName, Query: r.Query,
+		BaselineAt: r.BaselineAt, EveryMs: r.Every.Milliseconds(),
+		WithinMs: r.Within.Milliseconds(), MaxRows: r.MaxRows,
+		OnUnknown: r.OnUnknown, UnknownGraceMs: r.UnknownGrace.Milliseconds(),
+		Cursor: r.Cursor, StatementTimeoutMs: r.StatementTimeout.Milliseconds(),
+		MaxPlanCost: r.MaxPlanCost, MaxSeqScanRows: r.MaxSeqScanRows,
+		Version: r.Version, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+	})
 }
 
 type RuleQuery struct {

@@ -133,6 +133,9 @@ async function runRule(args: string[]): Promise<void> {
   const violated = observations.filter((item) => item.status === 'violated');
   const unknown = observations.filter((item) => item.status === 'unknown');
   console.log(`PASS evaluated ${name}: ${observations.length} subject(s), ${violated.length} violated, ${unknown.length} unknown`);
+  if (observations.length === 0) {
+    console.log('INFO 0 subject matched. The Rule baseline may exclude older rows by design; to inspect existing data once, rerun verify apply with --baseline <ISO date>.');
+  }
   for (const item of [...violated, ...unknown]) {
     const reason = item.reason ? ` · ${item.reason}` : '';
     console.log(`  ${item.status.toUpperCase()} ${item.subjectId}${reason}`);
@@ -316,7 +319,7 @@ async function doctorRules(pool: Pool): Promise<boolean> {
   let invalid = false;
   for (const file of files) {
     const query = await readFile(resolve(directory, file), 'utf8');
-    const problem = validateLocalRuleQuery(query);
+    const problem = validateLocalRuleQuery(query, true);
     if (problem) {
       invalid = true;
       console.log(`FAIL Rule file ${file}: ${problem}`);

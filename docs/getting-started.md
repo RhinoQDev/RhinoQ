@@ -18,8 +18,23 @@ template: edit its indexed business table and output column before using it
 outside the fixture. `init` does not overwrite existing config or Rules.
 
 The Node `init` path creates only the isolated Task profile. Verified Rules use
-the full Go schema and authenticated Gateway. After starting that Gateway and
-applying the full migrations, continue the Rule loop with:
+the full Go schema and authenticated Gateway. From the RhinoQ checkout, start
+both Go processes with the same database configuration before continuing:
+
+The published beta.7 Node archive predates `verify apply`; use the Node package
+built from this checkout (or a later release that contains that command) for
+the Verified Rule steps below.
+
+```bash
+go build -o rhinoq ./cmd/rhinoq
+go build -o rhinoq-agent ./cmd/rhinoq-agent
+export RHINOQ_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/app?sslmode=disable'
+./rhinoq migrate apply
+export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
+RHINOQ_AGENT_TOKEN="$RHINOQ_AGENT_TOKEN" ./rhinoq-agent
+```
+
+In another shell, continue the Rule loop:
 
 ```bash
 export RHINOQ_AGENT_URL='http://127.0.0.1:8080'

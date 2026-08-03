@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed the Go Gateway Rule Record wire contract: responses now use stable
+  camelCase fields and millisecond duration units, with a shared Go/Node golden
+  fixture preventing mock drift. `verify run` now explains an empty baseline
+  result, and `doctor` validates table Rule parameters `$1`, `$2` and `$3`.
+- Documented the full Go CLI/Gateway startup sequence required before the Node
+  Verified Tasks loop.
+
 - Fixed the Node Rule onboarding loop: generated table Rules now use the
   canonical `$1` baseline, `$2` cursor and `$3` limit bindings without comments
   or trailing statements; `verify apply` registers them through the Go Gateway

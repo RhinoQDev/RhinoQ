@@ -70,7 +70,8 @@ test('verify apply sends the Rule through the Go Gateway and keeps it disabled',
     requests.push({ method: request.method, url: request.url, body: Buffer.concat(chunks).toString('utf8') });
     response.setHeader('content-type', 'application/json');
     if (request.method === 'POST' && request.url === '/v1/rules') {
-      response.end(JSON.stringify({ rule: { id: 'completed-report-has-output', version: 1, status: 'draft' } }));
+      const wire = JSON.parse(readFileSync(new URL('../../../testdata/contracts/rule-record-v1.json', import.meta.url), 'utf8'));
+      response.end(JSON.stringify({ rule: wire }));
       return;
     }
     if (request.method === 'POST' && request.url === '/v1/rules/completed-report-has-output/disable') {
@@ -106,6 +107,47 @@ test('verify apply sends the Rule through the Go Gateway and keeps it disabled',
     assert.match(payload.query, /\$1/);
     assert.match(payload.query, /\$2/);
     assert.match(payload.query, /\$3/);
+  } finally {
+    server.close();
+    rmSync(cwd, { recursive:true, force:true });
+  }
+});
+
+test('verify run warns when the baseline matches no subjects', async () => {
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume request */ }
+    response.setHeader('content-type', 'application/json');
+    if (request.url.endsWith('/enable') || request.url.endsWith('/disable')) {
+      response.end(JSON.stringify({ rule: { id: 'completed-report-has-output', status: 'enabled' } }));
+      return;
+    }
+    if (request.url.endsWith('/evaluate')) {
+      response.end(JSON.stringify({ observations: [], hasMore: false }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: 'not found' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-cli-empty-'));
+  try {
+    const add = spawnSync(process.execPath, [developerCLI, 'verify', 'add', 'completed-report-has-output'], { cwd, encoding:'utf8', env:{} });
+    assert.equal(add.status, 0, add.stderr);
+    const child = spawn(process.execPath, [developerCLI, 'verify', 'run', 'completed-report-has-output'], {
+      cwd,
+      env: { ...process.env, RHINOQ_AGENT_URL: `http://127.0.0.1:${address.port}` },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const [status] = await once(child, 'close');
+    assert.equal(status, 0, stderr);
+    assert.match(stdout, /INFO 0 subject matched/);
+    assert.match(stdout, /baseline may exclude older rows/);
   } finally {
     server.close();
     rmSync(cwd, { recursive:true, force:true });

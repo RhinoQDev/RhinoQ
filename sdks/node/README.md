@@ -9,9 +9,11 @@ npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 ```
 
-The Node `init` path creates the isolated Task profile. For Verified Rules,
-start the full Go Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32
-bytes, then run:
+The Node `init` path creates the isolated Task profile. The published beta.7
+archive predates the complete Verified Rule loop. For Verified Rules, build or
+install the package from this checkout (or use a later release that explicitly
+contains `verify apply`), start the full Go Gateway, set `RHINOQ_AGENT_URL` and
+a token of at least 32 bytes, then run:
 
 ```bash
 npx rhinoq verify apply completed-report-has-output --subject-type report
@@ -72,8 +74,10 @@ archive rather than the stale npm `next` tag:
 npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
 ```
 
-That archive contains the embedded Task profile, current BullMQ contracts and
-the `rhinoq` onboarding CLI.
+That beta.7 archive contains the embedded Task profile and BullMQ contracts.
+It must not be used as evidence that the current source's Verified Rule CLI is
+published; verify an archive with `grep -c "verify apply" package/dist/cli/rhinoq.js`
+or build from this checkout.
 
 ## Fastest Task-only setup
 
