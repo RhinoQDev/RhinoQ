@@ -103,6 +103,66 @@ For large fan-outs, poll `getTaskSummary()` and load attempts with
 automatically when the supplied browser client supports it. `getTask()` remains
 compatible but includes every Execution and therefore grows with the batch.
 
+### Mounting the Task routes
+
+`createTaskRequestHandler()` is Fetch-compatible, which is the right shape for
+Next.js route handlers, Hono and Deno. Express, Fastify and NestJS need a
+translation, and all three share one trap: **their wildcard does not match the
+bare collection path**. Registering only `/tasks/*` loses `listTasks` and the
+only symptom is a 404.
+
+`createNodeTaskMiddleware()` and `registerFastifyTaskRoutes()` cover both paths
+so the second route is not something to rediscover.
+
+```ts
+// Express — one mount, both routes.
+import express from 'express';
+import { createNodeTaskMiddleware } from '@rhinoq/node';
+
+const app = express();
+app.use(express.json());
+app.use(createNodeTaskMiddleware({
+  tasks,
+  ownerFromRequest: (request) => authenticate(request),
+}));
+```
+
+The middleware calls `next()` for any path outside `basePath`, so it composes
+with the application's other routes. Mounting it under a prefix
+(`app.use('/api', middleware)`) works too: it reads Express's `originalUrl`, so
+`basePath` stays the full public path.
+
+```ts
+// Fastify — both patterns registered for you.
+import { registerFastifyTaskRoutes } from '@rhinoq/node';
+
+registerFastifyTaskRoutes(fastify, {
+  tasks,
+  ownerFromRequest: (request) => authenticate(request),
+});
+```
+
+```ts
+// NestJS (Express platform) — the same middleware, no controller needed.
+export class TaskModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer
+      .apply(createNodeTaskMiddleware({ tasks, ownerFromRequest }))
+      .forRoutes('*');
+  }
+}
+```
+
+Registering the routes by hand is still fine — `taskRoutePatterns(basePath)`
+returns the two patterns in the order a router must declare them:
+
+```ts
+const [collection, items] = taskRoutePatterns('/tasks'); // ['/tasks', '/tasks/*']
+```
+
+Both adapters accept a body that a JSON parser has already consumed, so
+`express.json()` or Fastify's built-in parser does not hang the cancel route.
+
 Check the [release guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/releasing.md)
 for the authoritative publication state and the trusted-publishing setup.
 

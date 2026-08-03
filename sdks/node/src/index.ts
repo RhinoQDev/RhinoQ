@@ -8,6 +8,7 @@ export * from './worker/worker.js';
 export * from './bullmq/task-bridge.js';
 export * from './tasks/client.js';
 export * from './tasks/http.js';
+export * from './tasks/adapters.js';
 export * from './tasks/watch.js';
 export * from './tasks/store.js';
 export * from './tasks/react.js';
