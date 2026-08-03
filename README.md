@@ -325,6 +325,13 @@ No throughput, latency or reliability promise is made without the matching
 evidence. Reproducible measurements and their limits live in
 [Benchmarks](./docs/benchmarks.md).
 
+Reliability evidence lives in [`tests/fault`](./tests/fault/README.md): a lost
+acknowledgement after the write committed, a lease expiring under a worker that
+is still alive, a partition that heals, a sweep interrupted mid-batch, and a
+provider confirmation lost after the charge went through. Its README also lists
+what those tests do **not** cover, because a green suite that implies more than
+it proves is the failure this project is about.
+
 ## Production trust
 
 Tagged releases build Linux/macOS/Windows binaries, checksums, keyless
