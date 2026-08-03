@@ -174,7 +174,7 @@ source files. Prefer `RHINOQ_DATABASE_URL` when the application already uses
 ### 3. Install the pinned SDK
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install rhinoq pg
 ```
 
 Why: `pg` is a peer dependency and lets RhinoQ reuse the application's pool.

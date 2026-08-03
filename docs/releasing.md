@@ -26,20 +26,20 @@ what makes the fixes exist for other people.
   it is not an npm registry version.
 - `v0.1.0-beta.7` is a public GitHub prerelease whose Node tarball predates the
   `verify` commands; do not point a new reader at it.
-- `0.1.0-beta.8` is the current release candidate. Until npm publishing is
-  authorized, install its exact GitHub release tarball.
+- `0.1.0-beta.8` is the current release candidate. It publishes both the
+  scoped `@rhinoq/node` package and the unscoped `rhinoq` compatibility alias.
 - No prerelease implies production readiness.
 
-Registry tags are not stability claims. Consumers must pin an explicit
-prerelease. Because npm requires a `latest` tag and it currently points at the
-oldest preview, move both `next` and `latest` to `beta.8` only after the clean
-install check passes. The first stable release must replace them deliberately
-after the public contract and production evidence are ready.
+Registry tags are not stability claims. Consumers may pin an explicit
+prerelease, while the beta.8 workflow moves `latest` to the verified preview so
+that `npm install rhinoq` and `npm install @rhinoq/node` resolve to an
+installable package.
 
 ## One-time npm owner setup
 
 1. In npm package settings, configure **trusted publishing** for the GitHub
-   repository `madebyduy/RhinoQ` and workflow `.github/workflows/release.yml`.
+   repository `madebyduy/RhinoQ` and workflow `.github/workflows/release.yml`
+   for both packages: `@rhinoq/node` and `rhinoq`.
 2. Do not add a long-lived `NPM_TOKEN` to repository secrets. The tag workflow
    requests an OIDC identity and publishes with `--provenance`.
 3. Protect the `v*` tag rule in GitHub so a reviewed maintainer creates tags.
@@ -64,8 +64,8 @@ These are external account actions; the repository cannot safely perform them.
 3. Commit the version/docs/changelog change, then create and push the matching
    annotated tag: `v0.1.0-beta.8`.
 4. The Release workflow checks the archive and matching version, then publishes
-   the Node SDK to `next` and builds archives containing the `rhinoq` CLI and
-   optional `rhinoq-agent` HTTP Gateway. It also verifies the checksum bundle;
+   both Node packages to `latest` and builds archives containing the `rhinoq`
+   CLI and optional `rhinoq-agent` HTTP Gateway. It also verifies the checksum bundle;
    users can repeat that verification with:
 
    ```bash
@@ -79,13 +79,15 @@ These are external account actions; the repository cannot safely perform them.
    ```bash
    npm install @rhinoq/node@0.1.0-beta.8 pg
    node --input-type=module -e "import('@rhinoq/node').then(() => console.log('ok'))"
+   npm install rhinoq@0.1.0-beta.8 pg
+   npx rhinoq --version
    ```
 
-6. After that verification succeeds, move the default tag explicitly:
+6. After that verification succeeds, verify the default tags:
 
    ```bash
-   npm dist-tag add @rhinoq/node@0.1.0-beta.8 latest
    npm dist-tag ls @rhinoq/node
+   npm dist-tag ls rhinoq
    ```
 
 If trusted publishing is not configured, the workflow must fail rather than

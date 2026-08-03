@@ -1,0 +1,48 @@
+{
+  "name": "rhinoq",
+  "version": "0.1.0-beta.8",
+  "description": "RhinoQ Node.js CLI and SDK distribution alias",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/madebyduy/RhinoQ.git",
+    "directory": "sdks/rhinoq"
+  },
+  "homepage": "https://github.com/madebyduy/RhinoQ/blob/main/docs/start-here.md",
+  "bugs": {
+    "url": "https://github.com/madebyduy/RhinoQ/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "require": "./index.cjs"
+    }
+  },
+  "bin": {
+    "rhinoq": "./bin/rhinoq.js",
+    "rhinoq-task": "./bin/rhinoq-task.js",
+    "rhinoq-task-check": "./bin/rhinoq-task-check.js"
+  },
+  "files": [
+    "bin",
+    "index.cjs",
+    "index.d.ts",
+    "index.js",
+    "LICENSE",
+    "README.md"
+  ],
+  "dependencies": {
+    "@rhinoq/node": "0.1.0-beta.8"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "latest"
+  }
+}

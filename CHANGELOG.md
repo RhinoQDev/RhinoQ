@@ -7,6 +7,11 @@ Three rounds of fixes existed only inside this repository until this tag: the
 `beta.7` tarball predates `verify apply`, so a reader following the README got
 `FAIL verify requires 'add <rule-name>'`.
 
+The release also publishes `rhinoq` as an unscoped npm alias for
+`@rhinoq/node`, so `npm install rhinoq` is a supported install path. The Go
+repository remains a Go repository; consumers should not install the Git tag as
+an npm package.
+
 ### Rule lifecycle
 
 - Added `rhinoq rules delete` and `DELETE /v1/rules/{id}`. Deletion removes the

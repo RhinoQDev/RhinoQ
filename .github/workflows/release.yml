@@ -28,6 +28,12 @@ jobs:
         working-directory: sdks/node
       - run: npm run release:check -- "${GITHUB_REF_NAME}"
         working-directory: sdks/node
+      - name: Validate unscoped npm alias
+        shell: bash
+        run: |
+          test "$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME#v}"
+          npm pack --dry-run --ignore-scripts
+        working-directory: sdks/rhinoq
 
   node-publish:
     name: Publish Node SDK to npm
@@ -48,13 +54,32 @@ jobs:
         working-directory: sdks/node
       # Configure npm trusted publishing for @rhinoq/node before the first tag.
       # This uses GitHub OIDC instead of storing an npm token in repository secrets.
-      - run: npm publish --provenance --access public --tag next
+      - run: npm publish --provenance --access public --tag latest
         working-directory: sdks/node
+
+  node-publish-alias:
+    name: Publish unscoped Node SDK alias
+    runs-on: ubuntu-latest
+    needs: node-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Use an npm CLI with trusted-publishing support
+        run: npm install --global npm@12
+      - name: Publish rhinoq alias
+        run: npm publish --provenance --access public --tag latest
+        working-directory: sdks/rhinoq
 
   node-release-asset:
     name: Attach installable Node SDK archive
     runs-on: ubuntu-latest
-    needs: [node-verify, goreleaser]
+    needs: node-verify
     permissions:
       contents: write
     steps:
@@ -69,6 +94,10 @@ jobs:
       - name: Pack and attach the exact Node release candidate
         shell: bash
         run: |
+          set -euo pipefail
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes --title "${GITHUB_REF_NAME}"
+          fi
           npm pack --pack-destination "${RUNNER_TEMP}"
           tarball="${RUNNER_TEMP}/rhinoq-node-${GITHUB_REF_NAME#v}.tgz"
           test -f "${tarball}"
