@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Made the security workflow detect whether GitHub Dependency graph is enabled
+  before invoking Dependency Review, so unsupported repository configuration is
+  reported as an actionable warning instead of failing the whole security run.
 - Fixed the Go Gateway Rule Record wire contract: responses now use stable
   camelCase fields and millisecond duration units, with a shared Go/Node golden
   fixture preventing mock drift. `verify run` now explains an empty baseline

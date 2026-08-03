@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
   security-events: write
 
 jobs:
@@ -60,7 +61,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
+      - name: Detect GitHub Dependency graph
+        id: dependency-graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(gh api --include "/repos/${GH_REPOSITORY}/dependency-graph/sbom" 2>/dev/null | sed -n '1p' || true)"
+          case "$status" in
+            *" 200 "*) echo "enabled=true" >> "$GITHUB_OUTPUT" ;;
+            *" 404 "*) echo "enabled=false" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "Unexpected Dependency graph API response: ${status:-empty}" >&2
+              exit 1
+              ;;
+          esac
+      - name: Review dependency changes
+        if: steps.dependency-graph.outputs.enabled == 'true'
+        uses: actions/dependency-review-action@v4
+      - name: Explain skipped dependency review
+        if: steps.dependency-graph.outputs.enabled != 'true'
+        run: >-
+          echo "::warning::GitHub Dependency graph is not enabled for this repository;
+          dependency-review-action was skipped. npm audit, govulncheck, gitleaks
+          and CodeQL remain required security checks. Enable Dependency graph in
+          Settings > Security > Code security to activate PR dependency review."
 
   codeql:
     runs-on: ubuntu-latest
