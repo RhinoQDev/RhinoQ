@@ -208,6 +208,76 @@ the client is real. If a readiness flag is unavoidable, make the unready state
 **throw** rather than read as "disabled" — a startup crash is recoverable, a
 silently disabled bridge is not noticed until someone asks where the Tasks went.
 
+### Notification destinations from Node
+
+`npx rhinoq notify` reads and writes the same `.rhinoq/notifications.json` the
+Go CLI uses, so a Node team can configure and prove a destination without
+building a `NotificationDestination` in Go and embedding it — which was the
+only path before, and not one a Node team has.
+
+```bash
+npx rhinoq notify add ops \
+  --webhook https://example.com/hooks/rhinoq \
+  --secret-env RHINOQ_NOTIFY_SECRET_OPS
+npx rhinoq notify test ops
+npx rhinoq notify list --json
+npx rhinoq notify remove ops
+```
+
+The registry never stores a secret. An entry records the **name** of an
+environment variable and the value is read at send time, so a leaked registry
+is a list of URLs rather than a set of working credentials. `notify list`
+redacts URL paths, because a Slack incoming-webhook URL *is* the credential.
+
+`notify test` sends one synthetic signed event and writes nothing — no Finding,
+no delivery record. It answers "is this reachable and does the receiver verify
+my signature" without inventing a fake Finding somebody then has to triage.
+
+A configured-but-empty `--secret-env` variable refuses the send. Falling back
+to unsigned would silently weaken a destination somebody chose to sign.
+
+`notify send` is **Go-only**. A real Finding delivery is recorded in the
+durable delivery ledger, and reimplementing that deduplication in TypeScript
+would put correctness in two languages. The Node CLI refuses and names the Go
+command.
+
+The payload is pinned to the Go engine's by
+[`tests/contract`](https://github.com/madebyduy/RhinoQ/blob/main/tests/contract/README.md),
+so one receiver implementation works for events sent from either language.
+
+### Metrics and health without a Gateway
+
+The Gateway exposes `/metrics` and `/healthz`. An application on the embedded
+PostgreSQL Task client has no Gateway, so it had no equivalent.
+
+```ts
+import { TaskMetrics, checkEmbeddedHealth, TASK_SCHEMA_VERSION } from '@rhinoq/node';
+
+const metrics = new TaskMetrics();
+const bridge = new BullMQTaskBridge({ client, events, terminalProjection, metrics });
+
+app.get('/metrics', (_req, res) => res.type('text/plain').send(metrics.render()));
+app.get('/healthz', async (_req, res) => {
+  const health = await checkEmbeddedHealth(pool, TASK_SCHEMA_VERSION);
+  res.status(health.status === 'ok' ? 200 : 503).json(health);
+});
+```
+
+The bridge counts projected events, version conflicts and — the one that
+matters — projections that threw. A listener failure is otherwise invisible,
+because nothing awaits that promise; a bridge that has quietly stopped
+projecting looks identical to an idle one.
+
+`checkEmbeddedHealth` reports rather than throws, and separates `down` (the
+database is unreachable) from `degraded` (the Task schema is a version behind).
+Those are different pages: one is an outage, the other is a migration.
+
+**These are counters only.** There is no latency, rate or percentile, and that
+is deliberate rather than unfinished: shipping a p99 gauge would publish a
+performance number without the benchmark behind it, which RhinoQ's Definition
+of Done forbids. Measured figures and their limits live in
+[Benchmarks](https://github.com/madebyduy/RhinoQ/blob/main/docs/benchmarks.md).
+
 Check the [release guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/releasing.md)
 for the authoritative publication state and the trusted-publishing setup.
 

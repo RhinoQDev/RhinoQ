@@ -1,0 +1,15 @@
+{
+  "id": "finding_9f2c1d4b7a6e0358",
+  "type": "rhinoq.finding.updated",
+  "ruleId": "completed-report-has-output",
+  "subjectType": "report",
+  "subjectId": "report-4471",
+  "invariantVersion": 2,
+  "status": "regressed",
+  "severity": "high",
+  "escalation": true,
+  "link": "https://ops.example.com/findings/completed-report-has-output/report/report-4471",
+  "occurrenceCount": 7,
+  "evidence": "{\"status\":\"completed\",\"hasOutput\":false}",
+  "observedAt": "2026-08-03T15:30:00Z"
+}

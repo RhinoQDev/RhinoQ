@@ -263,11 +263,27 @@ check and TLS can be proven before a real incident depends on them. The registry
 never stores a secret: it records the *name* of an environment variable, and the
 value is read at send time.
 
+The same commands work from Node — `npx rhinoq notify add|list|remove|test` —
+reading and writing the same `.rhinoq/notifications.json`. A Node team
+previously had no way to configure a destination at all: the only path was a
+`NotificationDestination` built in Go and embedded in an application.
+
+`notify send` stays Go-only. A real delivery is recorded in the durable
+delivery ledger, and reimplementing that deduplication in a second language
+would put correctness in two places; the Node CLI refuses and names the Go
+command.
+
 Findings are delivered to signed generic webhooks or Slack with severity, grace
 period, regression escalation, stable event IDs and direct Workbench links. A
 durable delivery ledger deduplicates destination/event pairs. Automatic
 multi-node scheduling remains a deployment responsibility in this prerelease:
 call `rhinoq notify send` from your own scheduler.
+
+Applications on the embedded PostgreSQL Task client have no Gateway and
+therefore no `/metrics` or `/healthz`. `TaskMetrics` and `checkEmbeddedHealth`
+in the Node SDK fill that gap with counters and a reachability probe — counters
+only, no latency or rate, because a performance number without its benchmark is
+not a claim this project makes.
 
 See [Notifications](./docs/notifications.md).
 

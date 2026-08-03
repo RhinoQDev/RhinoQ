@@ -7,6 +7,17 @@ import { installPostgresTaskProfile } from '../postgres/task-client.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
 import { SDK_VERSION } from '../gateway/types.js';
 import { resolveDatabaseConfig, type ResolvedDatabaseConfig } from './database-config.js';
+import {
+  NOTIFY_REGISTRY_VERSION,
+  defaultSecretEnv,
+  loadNotifyRegistry,
+  notifyRegistryPath,
+  resolveNotifyDestination,
+  saveNotifyRegistry,
+  type NotifyDestinationEntry,
+  type NotifyKind,
+} from '../notify/registry.js';
+import { sendTestNotification } from '../notify/sender.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -15,6 +26,7 @@ async function main(): Promise<void> {
     case 'init': await init(); break;
     case 'verify': await verify(args); break;
     case 'doctor': await doctor(); break;
+    case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
@@ -533,6 +545,206 @@ async function doctorRules(pool: Pool): Promise<boolean> {
   return invalid;
 }
 
+// notify reads and writes the same .rhinoq/notifications.json the Go CLI uses.
+// A Node team could not configure a destination at all before this: the only
+// path was to build a NotificationDestination in Go and embed it, which is
+// exactly the team the feature was added for.
+//
+// `send` is deliberately absent. A real Finding delivery goes through the
+// durable delivery ledger, and reimplementing that dedup here would put
+// correctness in two languages.
+async function notify(args: string[]): Promise<void> {
+  const action = args[0];
+  switch (action) {
+    case 'add': await notifyAdd(args.slice(1)); return;
+    case 'list': await notifyList(args.slice(1)); return;
+    case 'remove': await notifyRemove(args.slice(1)); return;
+    case 'test': await notifyTest(args.slice(1)); return;
+    case 'send':
+      fail(
+        'npx rhinoq notify send is not available in the Node SDK',
+        'A real Finding delivery is recorded in the durable delivery ledger, which the Go engine owns. Run: rhinoq notify send',
+      );
+      return;
+    default:
+      fail('notify requires `add`, `list`, `remove` or `test`', 'Run: npx rhinoq notify list');
+  }
+}
+
+async function notifyAdd(args: string[]): Promise<void> {
+  const name = destinationName(args[0]);
+  const options = parseNotifyOptions(args.slice(1));
+  if (!options.url && !options.urlEnv) {
+    fail(
+      'a destination needs --webhook <url>, --slack <url> or --url-env <VAR>',
+      `Run: npx rhinoq notify add ${name} --webhook https://example.com/hooks/rhinoq`,
+    );
+  }
+  const path = notifyRegistryPath();
+  const registry = await loadNotifyRegistry(path);
+  const existing = registry.destinations.findIndex((entry) => entry.name === name);
+  if (existing >= 0 && !options.replace) {
+    fail(`destination ${JSON.stringify(name)} already exists in ${path}`, `Run: npx rhinoq notify add ${name} --replace ...`);
+  }
+  const entry: NotifyDestinationEntry = {
+    name,
+    kind: options.kind,
+    ...(options.url ? { url: options.url } : {}),
+    ...(options.urlEnv ? { urlEnv: options.urlEnv } : {}),
+    ...(options.secretEnv ? { secretEnv: options.secretEnv } : {}),
+    ...(options.timeoutMs === 10_000 ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.includeEvidence ? { includeEvidence: true } : {}),
+    ...(options.gracePeriodMs ? { gracePeriodMs: options.gracePeriodMs } : {}),
+    ...(options.findingBaseUrl ? { findingBaseUrl: options.findingBaseUrl } : {}),
+    createdAt: new Date().toISOString(),
+  };
+  if (existing >= 0) registry.destinations[existing] = entry;
+  else registry.destinations.push(entry);
+  registry.schemaVersion = NOTIFY_REGISTRY_VERSION;
+  await saveNotifyRegistry(path, registry);
+  console.log(`PASS destination ${JSON.stringify(name)} ${existing >= 0 ? 'replaced in' : 'added to'} ${path}`);
+  if (!entry.secretEnv) {
+    console.log('WARN no --secret-env, so events are sent unsigned and the receiver cannot tell they came from RhinoQ.');
+    console.log(`NEXT sign them: npx rhinoq notify add ${name} --replace --secret-env ${defaultSecretEnv(name)} ...`);
+  }
+  console.log(`NEXT prove it works without writing anything: npx rhinoq notify test ${name}`);
+}
+
+async function notifyList(args: string[]): Promise<void> {
+  const asJSON = args.includes('--json');
+  for (const raw of args) {
+    if (raw !== '--json') fail(`unknown list option ${JSON.stringify(raw)}`, 'Run: npx rhinoq notify list --json');
+  }
+  const path = notifyRegistryPath();
+  const registry = await loadNotifyRegistry(path);
+  // A Slack incoming-webhook URL is itself the credential, so even the
+  // machine-readable form is redacted.
+  const redacted = registry.destinations.map((entry) => ({
+    ...entry,
+    ...(entry.url ? { url: redactURL(entry.url) } : {}),
+  }));
+  if (asJSON) {
+    console.log(JSON.stringify({ schemaVersion: registry.schemaVersion, destinations: redacted }, null, 2));
+    return;
+  }
+  for (const entry of redacted) {
+    console.log(`${entry.name}\t${entry.kind}\t${entry.url ?? `$${entry.urlEnv ?? ''}`}\t${entry.secretEnv ? 'signed' : 'UNSIGNED'}`);
+  }
+  console.log(`\n${redacted.length} destination(s) in ${path}`);
+  if (redacted.length === 0) {
+    console.log('NEXT add one: npx rhinoq notify add ops --webhook https://example.com/hooks/rhinoq');
+  }
+}
+
+async function notifyRemove(args: string[]): Promise<void> {
+  const name = destinationName(args[0]);
+  const path = notifyRegistryPath();
+  const registry = await loadNotifyRegistry(path);
+  const remaining = registry.destinations.filter((entry) => entry.name !== name);
+  if (remaining.length === registry.destinations.length) {
+    fail(`no destination named ${JSON.stringify(name)} in ${path}`, 'List what is configured: npx rhinoq notify list');
+  }
+  await saveNotifyRegistry(path, { ...registry, destinations: remaining });
+  console.log(`PASS destination ${JSON.stringify(name)} removed from ${path}`);
+}
+
+async function notifyTest(args: string[]): Promise<void> {
+  const name = destinationName(args[0]);
+  const path = notifyRegistryPath();
+  const registry = await loadNotifyRegistry(path);
+  let destination;
+  try {
+    destination = resolveNotifyDestination(registry, name);
+  } catch (error) {
+    fail(safe(error), 'List what is configured: npx rhinoq notify list');
+  }
+  try {
+    const receipt = await sendTestNotification(destination);
+    console.log(`PASS destination ${JSON.stringify(name)} accepted event ${receipt.id}`);
+    console.log(`     type=${receipt.type} severity=${receipt.severity} sent=${receipt.sentAt}`);
+    if (destination.secret) {
+      console.log('     The receiver should have verified X-RhinoQ-Signature: v1=<hmac-sha256>.');
+    } else {
+      console.log('     This destination is unsigned; the receiver cannot tell the event came from RhinoQ.');
+    }
+    console.log('     No business data was sent and nothing was recorded.');
+  } catch (error) {
+    console.error(`FAIL destination ${JSON.stringify(name)} did not accept the test event: ${safe(error)}`);
+    console.error('     Nothing was written; no Finding or delivery record exists.');
+    console.error("     Check the URL, the receiver's signature verification and its TLS.");
+    process.exitCode = 1;
+    throw new Error('__reported__');
+  }
+}
+
+type NotifyOptions = {
+  kind: NotifyKind;
+  url: string;
+  urlEnv: string;
+  secretEnv: string;
+  timeoutMs: number;
+  includeEvidence: boolean;
+  gracePeriodMs: number;
+  findingBaseUrl: string;
+  replace: boolean;
+};
+
+function parseNotifyOptions(args: string[]): NotifyOptions {
+  const options: NotifyOptions = {
+    kind: 'webhook', url: '', urlEnv: '', secretEnv: '', timeoutMs: 10_000,
+    includeEvidence: false, gracePeriodMs: 0, findingBaseUrl: '', replace: false,
+  };
+  let kindWasSet = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === '--replace') { options.replace = true; continue; }
+    if (raw === '--include-evidence') { options.includeEvidence = true; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    switch (key) {
+      case '--webhook': options.kind = 'webhook'; kindWasSet = true; options.url = requiredOption(key, value); break;
+      case '--slack': options.kind = 'slack'; kindWasSet = true; options.url = requiredOption(key, value); break;
+      case '--url': options.url = requiredOption(key, value); break;
+      case '--url-env': options.urlEnv = requiredOption(key, value); break;
+      case '--kind': {
+        const kind = requiredOption(key, value);
+        if (kind !== 'webhook' && kind !== 'slack') fail('--kind must be webhook or slack', 'Run: npx rhinoq notify add ops --kind slack --url-env RHINOQ_NOTIFY_URL_OPS');
+        options.kind = kind; kindWasSet = true; break;
+      }
+      case '--secret-env': options.secretEnv = requiredOption(key, value); break;
+      case '--timeout': options.timeoutMs = durationMs(requiredOption(key, value), key); break;
+      case '--grace': options.gracePeriodMs = durationMs(requiredOption(key, value), key); break;
+      case '--link-base': options.findingBaseUrl = requiredOption(key, value); break;
+      default: fail(`unknown notify option ${JSON.stringify(key)}`, 'Run: npx rhinoq notify add ops --webhook <url> --secret-env <VAR>');
+    }
+  }
+  // A --url-env destination with no --kind would default to webhook, and a
+  // Slack URL posted as a signed webhook fails in a way nobody reads as
+  // "wrong kind". Make the caller say which it is.
+  if (options.urlEnv && !options.url && !kindWasSet) {
+    fail('--url-env needs --kind webhook or --kind slack', 'Run: npx rhinoq notify add ops --kind slack --url-env RHINOQ_NOTIFY_URL_OPS');
+  }
+  return options;
+}
+
+function destinationName(value: string | undefined): string {
+  const name = value?.trim() ?? '';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/.test(name)) {
+    fail('destination name must be 1-63 letters, digits, dots, dashes or underscores', 'Example: ops');
+  }
+  return name;
+}
+
+// A path or query can carry the credential, and for Slack it always does.
+function redactURL(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}${url.pathname === '/' ? '' : '/…'}`;
+  } catch {
+    return '(unparsable URL)';
+  }
+}
+
 async function fixture(args: string[]): Promise<void> {
   if ((args[0] ?? 'failure') !== 'failure') fail('only the `failure` fixture exists', 'Run: npx rhinoq fixture failure');
   const pool = new Pool(requireDatabase('fixture failure').pool);
@@ -589,4 +801,4 @@ function escapeHTML(value: unknown): string { return String(value ?? '').replace
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }
-function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq doctor\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nverify apply on an existing Rule prints what changed and needs --force, because\na new version does not reopen Findings recorded against the old one.\nverify delete previews by default; --apply performs it.\n\nPostgreSQL connection, in order: RHINOQ_DATABASE_URL, DATABASE_URL, then the\ndiscrete PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE variables\n(RHINOQ_DB_HOST/_PORT/_USER/_PASSWORD/_NAME/_SSLMODE win over those). Discrete\nconfiguration needs at least a host and a database name.\n\nThis CLI checks the isolated Task profile only. For runtime checks - fencing,\nlease/heartbeat timing, the reaper and migration state - build and run the Go\nCLI: rhinoq doctor.\n\nEvery failure includes the next action.`); }
+function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq doctor\n  npx rhinoq notify add ops --webhook https://example.com/hooks/rhinoq --secret-env RHINOQ_NOTIFY_SECRET_OPS\n  npx rhinoq notify list [--json]\n  npx rhinoq notify test ops\n  npx rhinoq notify remove ops\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nverify apply on an existing Rule prints what changed and needs --force, because\na new version does not reopen Findings recorded against the old one.\nverify delete previews by default; --apply performs it.\n\nPostgreSQL connection, in order: RHINOQ_DATABASE_URL, DATABASE_URL, then the\ndiscrete PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE variables\n(RHINOQ_DB_HOST/_PORT/_USER/_PASSWORD/_NAME/_SSLMODE win over those). Discrete\nconfiguration needs at least a host and a database name.\n\nnotify reads and writes the same .rhinoq/notifications.json as the Go CLI, and\nnever stores a secret: an entry names an environment variable. "notify test"\nsends one synthetic signed event and writes nothing - no Finding, no delivery\nrecord. "notify send" is Go-only: a real delivery goes through the durable\ndelivery ledger the engine owns.\n\nThis CLI checks the isolated Task profile only. For runtime checks - fencing,\nlease/heartbeat timing, the reaper and migration state - build and run the Go\nCLI: rhinoq doctor.\n\nEvery failure includes the next action.`); }

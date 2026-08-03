@@ -9,6 +9,7 @@ import type {
   TaskState,
 } from '../gateway/types.js';
 import type { TaskClient } from '../tasks/client.js';
+import type { TaskMetrics } from '../observe/metrics.js';
 
 type QueueEvent = 'waiting' | 'active' | 'progress' | 'completed' | 'failed';
 
@@ -177,6 +178,13 @@ export interface BullMQTaskBridgeOptions {
    * close a Task while its remaining items are running.
    */
   terminalizeOnCancel?: boolean;
+  /**
+   * Counts projections and their failures. The embedded path has no Gateway
+   * and therefore no /metrics; this is the replacement. It records counts
+   * only — no latency, no rate — because a performance number without its
+   * benchmark is a claim RhinoQ is not allowed to make.
+   */
+  metrics?: TaskMetrics;
   onError?: (error: unknown, event: BullMQEvent) => void;
   /**
    * Receives configuration warnings that are not tied to one job event.
@@ -215,6 +223,7 @@ export class BullMQTaskBridge {
   private readonly failureReason: (event: BullMQEvent) => string | undefined;
   private readonly cancelJob?: BullMQTaskBridgeOptions['cancelJob'];
   private readonly terminalizeOnCancel: boolean;
+  private readonly metrics?: TaskMetrics;
   private readonly warn: (warning: string) => void;
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
   private readonly listeners: Array<[QueueEvent, (event: BullMQEvent) => void]>;
@@ -252,6 +261,7 @@ export class BullMQTaskBridge {
     this.failureReason = options.failureReason ?? defaultFailureReason;
     this.cancelJob = options.cancelJob;
     this.terminalizeOnCancel = options.terminalizeOnCancel === true;
+    this.metrics = options.metrics;
     this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
     this.onError = options.onError;
     this.warnOnDuplicateScope(options);
@@ -596,6 +606,10 @@ export class BullMQTaskBridge {
    * observation is durable before continuing.
    */
   async project(event: QueueEvent, observation: BullMQEvent): Promise<void> {
+    this.metrics?.increment('rhinoq_bridge_event_projected_total', {
+      event,
+      ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
+    });
     switch (event) {
       case 'waiting':
         return this.queue(observation.jobId);
@@ -875,6 +889,11 @@ export class BullMQTaskBridge {
         if (!isVersionConflict(error)) {
           throw error;
         }
+        // A conflict is expected and recoverable, but a rising count is how an
+        // operator sees contention before it becomes a stalled projection.
+        this.metrics?.increment('rhinoq_bridge_version_conflict_total', {
+          ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
+        });
         lastConflict = error;
       }
     }
@@ -882,7 +901,15 @@ export class BullMQTaskBridge {
   }
 
   private run(event: BullMQEvent, operation: () => Promise<void>): void {
-    void operation().catch((error: unknown) => this.onError?.(error, event));
+    void operation().catch((error: unknown) => {
+      // A listener failure is otherwise invisible unless onError is wired: the
+      // promise is not awaited by anyone. Counting it is what makes a bridge
+      // that has silently stopped projecting show up on a dashboard.
+      this.metrics?.increment('rhinoq_bridge_projection_failed_total', {
+        ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
+      });
+      this.onError?.(error, event);
+    });
   }
 }
 
