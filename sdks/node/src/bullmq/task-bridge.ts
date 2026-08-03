@@ -19,6 +19,14 @@ const MAX_VERSION_CONVERGENCE_ATTEMPTS = 3;
 const DEFAULT_DISPATCH_CONCURRENCY = 8;
 const MAX_DISPATCH_CONCURRENCY = 64;
 
+// Every live bridge in this process, counted by runtime scope. Two bridges on
+// the same scope both subscribe to QueueEvents, so each job event is projected
+// twice and the two projections contend for the same Task version. RhinoQ has
+// no leader election and is not going to grow one here, so the only thing it
+// can honestly do is say so at construction, while the stack that built the
+// second bridge is still on screen.
+const activeScopes = new Map<string, number>();
+
 // This intentionally uses the small QueueEvents shape instead of importing
 // BullMQ. Applications already using BullMQ pass their QueueEvents instance;
 // RhinoQ neither owns their Redis connection nor bundles a second queue.
@@ -153,6 +161,18 @@ export interface BullMQTaskBridgeOptions {
     | { status: 'cannot_cancel_safely' | 'failed'; reason: string }
   >;
   onError?: (error: unknown, event: BullMQEvent) => void;
+  /**
+   * Receives configuration warnings that are not tied to one job event.
+   * Defaults to `console.warn`. Pass a no-op to route them into a logger
+   * instead of silencing them by deleting the check.
+   */
+  onWarning?: (warning: string) => void;
+  /**
+   * Acknowledges that several bridges share one `runtimeScope` on purpose.
+   * Silences the duplicate-scope warning; it changes no behaviour.
+   * `RHINOQ_ALLOW_CONCURRENT_BRIDGES=1` does the same for a whole process.
+   */
+  allowConcurrentBridges?: boolean;
 }
 
 /**
@@ -179,6 +199,7 @@ export class BullMQTaskBridge {
   private readonly cancelJob?: BullMQTaskBridgeOptions['cancelJob'];
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
   private readonly listeners: Array<[QueueEvent, (event: BullMQEvent) => void]>;
+  private closed = false;
 
   constructor(options: BullMQTaskBridgeOptions) {
     this.client = options.client;
@@ -212,6 +233,7 @@ export class BullMQTaskBridge {
     this.failureReason = options.failureReason ?? defaultFailureReason;
     this.cancelJob = options.cancelJob;
     this.onError = options.onError;
+    this.warnOnDuplicateScope(options);
     this.listeners = [
       ['waiting', (event) => this.run(event, () => this.project('waiting', event))],
       ['active', (event) => this.run(event, () => this.project('active', event))],
@@ -521,9 +543,50 @@ export class BullMQTaskBridge {
   }
 
   close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
     for (const [name, listener] of this.listeners) {
       this.events.off?.(name, listener);
     }
+    releaseScope(this.runtimeScope);
+  }
+
+  // Detection stops at the process boundary. Six processes each holding one
+  // bridge on the same scope is the same hazard and cannot be seen from here
+  // without a coordination service, which is a deliberate non-goal — so the
+  // warning describes the deployment rule rather than only this process.
+  private warnOnDuplicateScope(options: BullMQTaskBridgeOptions): void {
+    if (!this.runtimeScope) {
+      // The legacy Gateway schema allows an absent scope, which makes two
+      // bridges indistinguishable. Nothing truthful can be said about them.
+      return;
+    }
+    const existing = activeScopes.get(this.runtimeScope) ?? 0;
+    activeScopes.set(this.runtimeScope, existing + 1);
+    if (existing === 0 || !this.duplicateScopeWarningEnabled(options)) {
+      return;
+    }
+    const warn = options.onWarning ?? ((warning: string) => console.warn(warning));
+    warn(
+      `RhinoQ: ${existing + 1} BullMQTaskBridge instances share runtimeScope ` +
+        `${JSON.stringify(this.runtimeScope)} in this process. Each one subscribes to ` +
+        'QueueEvents, so every job event is projected once per bridge and the ' +
+        'projections contend for the same Task version. RhinoQ does not elect a ' +
+        'leader between them. Give each bridge its own runtimeScope, or keep one ' +
+        'bridge per scope and close() the others — including across processes, ' +
+        'where RhinoQ cannot see the duplicate at all. Set allowConcurrentBridges: ' +
+        'true, or RHINOQ_ALLOW_CONCURRENT_BRIDGES=1, once this is intended.',
+    );
+  }
+
+  private duplicateScopeWarningEnabled(options: BullMQTaskBridgeOptions): boolean {
+    if (options.allowConcurrentBridges) {
+      return false;
+    }
+    const flag = globalThis.process?.env?.RHINOQ_ALLOW_CONCURRENT_BRIDGES;
+    return flag !== '1' && flag !== 'true';
   }
 
   private async queue(jobId: string): Promise<void> {
@@ -754,6 +817,18 @@ export class BullMQTaskBridge {
   private run(event: BullMQEvent, operation: () => Promise<void>): void {
     void operation().catch((error: unknown) => this.onError?.(error, event));
   }
+}
+
+function releaseScope(scope: string): void {
+  if (!scope) {
+    return;
+  }
+  const remaining = (activeScopes.get(scope) ?? 1) - 1;
+  if (remaining <= 0) {
+    activeScopes.delete(scope);
+    return;
+  }
+  activeScopes.set(scope, remaining);
 }
 
 function isCode(error: unknown, code: string): boolean {

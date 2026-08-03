@@ -303,6 +303,41 @@ outcome is known — including after a crash between the last item and that call
 The bridge refuses to guess: constructing it without `terminalProjection`
 throws.
 
+### One bridge per `runtimeScope`
+
+A bridge subscribes to `QueueEvents`. Two bridges on the same `runtimeScope`
+therefore see every job event twice and contend for the same Task version.
+RhinoQ does not elect a leader between them and will not: coordination belongs
+to your deployment, not to a client library.
+
+The rule is one live bridge per scope. Scale by giving each queue its own
+`runtimeScope`, not by running the same scope in six replicas.
+
+Constructing a second bridge with a scope already live **in this process**
+logs a warning naming the scope. Across processes RhinoQ cannot see the
+duplicate at all, so the warning is a floor, not a guarantee — a six-replica
+deployment stays silent and still races.
+
+```ts
+new BullMQTaskBridge({
+  client, events, runtimeScope: 'reports',
+  terminalProjection: 'single-execution',
+  // Route the warning into your logger instead of console.warn.
+  onWarning: (warning) => logger.warn({ warning }),
+  // Acknowledge a deliberate duplicate. Changes no behaviour.
+  // RHINOQ_ALLOW_CONCURRENT_BRIDGES=1 does the same process-wide.
+  allowConcurrentBridges: false,
+});
+```
+
+Duplicate projection is wasteful rather than corrupting: every write carries an
+expected version and the second bridge finds the target state already reached.
+That is why this warns instead of throwing. It still doubles the round trips
+and can spend the bridge's version-convergence budget under load.
+
+`close()` releases the scope, so a rolling replacement — construct the new
+bridge after closing the old one — does not warn.
+
 When the application owns enqueueing through the bridge, `dispatchMany()`
 reserves the complete item set before the first `Queue.add`. Reservation and
 enqueue pressure are bounded by `dispatchConcurrency` (default `8`, valid
