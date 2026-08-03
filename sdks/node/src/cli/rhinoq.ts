@@ -72,7 +72,11 @@ async function verify(args: string[]): Promise<void> {
     await runRule(args.slice(1));
     return;
   }
-  fail('verify requires `add`, `apply` or `run`', 'Run: npx rhinoq verify add completed-report-has-output');
+  if (action === 'delete') {
+    await deleteRule(args.slice(1));
+    return;
+  }
+  fail('verify requires `add`, `apply`, `run` or `delete`', 'Run: npx rhinoq verify add completed-report-has-output');
 }
 
 async function addRule(args: string[]): Promise<void> {
@@ -90,6 +94,27 @@ async function applyRule(args: string[]): Promise<void> {
   const query = await readRule(name);
   const localError = validateLocalRuleQuery(query, true);
   if (localError) fail(`Rule file is invalid: ${localError}`, `Edit .rhinoq/rules/${name}.sql, then run: npx rhinoq doctor`);
+
+  // Applying an existing Rule appends a new immutable version, and Findings
+  // stay attached to the version that observed them. A silent bump therefore
+  // cuts the history an operator was reading without telling anyone, so the
+  // change is shown and a changed definition needs --force.
+  const current = await readRemoteRule(name);
+  if (current) {
+    const changes = describeRuleChanges(current, query, options);
+    if (changes.length === 0) {
+      console.log(`KEEP Rule ${name}@v${current.version ?? '?'} already matches .rhinoq/rules/${name}.sql; nothing was applied.`);
+      console.log(`NEXT run a bounded check: npx rhinoq verify run ${name}`);
+      return;
+    }
+    console.log(`WARN Rule ${name} already exists at v${current.version ?? '?'} and this definition differs:`);
+    for (const change of changes) console.log(`  ${change}`);
+    console.log(`INFO applying registers v${(current.version ?? 0) + 1}. Findings recorded against ${name}@v${current.version ?? '?'} keep that version and will not be reopened.`);
+    if (!options.force) {
+      fail(`Rule ${name} already exists with a different definition`, `Review the diff above, then run: npx rhinoq verify apply ${name} --force`);
+    }
+  }
+
   const response = await gatewayRequest('/v1/rules', {
     method: 'POST',
     body: JSON.stringify({
@@ -144,7 +169,109 @@ async function runRule(args: string[]): Promise<void> {
   if (evaluation.hasMore && evaluation.nextCursor) console.log(`NEXT resume with: npx rhinoq verify run ${name} --cursor ${evaluation.nextCursor}`);
 }
 
+// readRemoteRule returns the current Rule, or undefined when there is none.
+// A Gateway that predates GET /v1/rules/{id} answers 404 the same way an
+// unknown Rule does, so the caller treats both as "nothing to compare" rather
+// than blocking an apply on a missing endpoint.
+async function readRemoteRule(name: string): Promise<RuleWireRecord | undefined> {
+  const response = await gatewayRequest(`/v1/rules/${encodeURIComponent(name)}`, { method: 'GET' }, true);
+  if (!response) return undefined;
+  const record = (response as { rule?: RuleWireRecord }).rule ?? response as RuleWireRecord;
+  return record?.id ? record : undefined;
+}
+
+// describeRuleChanges lists what an apply would alter. The query is reported
+// line by line because "the query changed" is not something a reviewer can act
+// on, and this is the moment the reviewer is present.
+function describeRuleChanges(current: RuleWireRecord, query: string, options: RuleOptions): string[] {
+  const changes: string[] = [];
+  const compare = (label: string, before: unknown, after: unknown): void => {
+    if (before === undefined || before === null) return;
+    if (String(before) !== String(after)) changes.push(`${label}: ${String(before)} -> ${String(after)}`);
+  };
+  compare('subject type', current.subjectType, options.subjectType);
+  compare('every', `${current.everyMs}ms`, `${options.everyMs}ms`);
+  compare('within', `${current.withinMs}ms`, `${options.withinMs}ms`);
+  compare('max rows', current.maxRows, options.maxRows);
+  compare('statement timeout', `${current.statementTimeoutMs}ms`, `${options.statementTimeoutMs}ms`);
+  compare('max plan cost', current.maxPlanCost, options.maxPlanCost);
+  compare('max seq scan rows', current.maxSeqScanRows, options.maxSeqScanRows);
+  changes.push(...queryDiff(current.query ?? '', query));
+  return changes;
+}
+
+function queryDiff(before: string, after: string): string[] {
+  const beforeLines = before.replace(/\n+$/, '').split('\n');
+  const afterLines = after.replace(/\n+$/, '').split('\n');
+  const changes: string[] = [];
+  for (let index = 0; index < Math.max(beforeLines.length, afterLines.length); index += 1) {
+    const oldLine = beforeLines[index] ?? '';
+    const newLine = afterLines[index] ?? '';
+    if (oldLine === newLine) continue;
+    if (oldLine) changes.push(`query line ${index + 1} - ${oldLine}`);
+    if (newLine) changes.push(`query line ${index + 1} + ${newLine}`);
+  }
+  return changes;
+}
+
+// deleteRule previews by default. The Gateway computes the plan inside the
+// transaction that would perform it, so what is printed here is what would
+// actually be removed rather than a second query's opinion of it.
+async function deleteRule(args: string[]): Promise<void> {
+  const name = ruleName(args[0]);
+  let purgeFindings = false;
+  let apply = false;
+  for (const raw of args.slice(1)) {
+    if (raw === '--purge-findings') { purgeFindings = true; continue; }
+    if (raw === '--apply') { apply = true; continue; }
+    fail(`unknown delete option ${JSON.stringify(raw)}`, `Run: npx rhinoq verify delete ${name} --apply`);
+  }
+  const query = new URLSearchParams({
+    purgeFindings: String(purgeFindings),
+    dryRun: String(!apply),
+  });
+  const response = await gatewayRequest(`/v1/rules/${encodeURIComponent(name)}?${query}`, { method: 'DELETE' });
+  const deletion = (response as { deletion?: RuleDeletionResponse }).deletion ?? {};
+  console.log(`RhinoQ deletion plan for Rule ${name}`);
+  console.log(`  definitions      ${deletion.versions?.length ?? 0} (v${(deletion.versions ?? []).join(',') || '—'})`);
+  console.log(`  explain records  ${deletion.explanations ?? 0}`);
+  console.log(`  schedules        ${deletion.schedules ?? 0}`);
+  console.log(`  subject outcomes ${deletion.outcomes ?? 0}`);
+  if (purgeFindings) {
+    console.log(`  findings         ${deletion.findings ?? 0} (discarded)`);
+    console.log(`  finding history  ${deletion.findingEvents ?? 0} (discarded)`);
+  }
+  if (!deletion.applied) {
+    console.log('INFO nothing was deleted.');
+    console.log(`NEXT perform this plan: npx rhinoq verify delete ${name} --apply`);
+    return;
+  }
+  console.log(`PASS Rule ${name} deleted.`);
+}
+
 type RuleResponse = { id: string; version?: number; status?: string };
+type RuleWireRecord = {
+  id?: string;
+  version?: number;
+  status?: string;
+  subjectType?: string;
+  query?: string;
+  everyMs?: number;
+  withinMs?: number;
+  maxRows?: number;
+  statementTimeoutMs?: number;
+  maxPlanCost?: number;
+  maxSeqScanRows?: number;
+};
+type RuleDeletionResponse = {
+  versions?: number[];
+  explanations?: number;
+  schedules?: number;
+  outcomes?: number;
+  findings?: number;
+  findingEvents?: number;
+  applied?: boolean;
+};
 type RuleEvaluationResponse = {
   observations?: Array<{ subjectId: string; status: string; reason?: string; evidence?: string }>;
   hasMore?: boolean;
@@ -162,6 +289,7 @@ type RuleOptions = {
   maxSeqScanRows: number;
   subjectId: string;
   cursor: string;
+  force: boolean;
 };
 
 function ruleName(value: string | undefined): string {
@@ -182,9 +310,17 @@ function parseRuleOptions(args: string[], runOnly = false): RuleOptions {
     maxSeqScanRows: 10_000,
     subjectId: '',
     cursor: '',
+    force: false,
   };
   for (let index = 0; index < args.length; index += 1) {
     const raw = args[index]!;
+    // --force takes no value, so it must be recognised before the generic
+    // "next argument is the value" step consumes the flag that follows it.
+    if (raw === '--force') {
+      if (runOnly) fail('--force is only valid for verify apply', `Run: npx rhinoq verify apply <rule-name> --force`);
+      options.force = true;
+      continue;
+    }
     const [key, inline] = raw.split('=', 2);
     const value = inline ?? args[++index];
     switch (key) {
@@ -267,7 +403,7 @@ function humanizeRuleName(name: string): string {
   return name.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 }
 
-async function gatewayRequest(path: string, init: RequestInit): Promise<any> {
+async function gatewayRequest(path: string, init: RequestInit, allowMissing = false): Promise<any> {
   const base = (process.env.RHINOQ_AGENT_URL ?? process.env.RHINOQ_GATEWAY_URL ?? '').replace(/\/+$/, '');
   if (!base) fail('RHINOQ_AGENT_URL/RHINOQ_GATEWAY_URL is not set', 'Start the Go Gateway with the full Rule schema, set its URL and retry');
   const headers = new Headers(init.headers);
@@ -277,6 +413,10 @@ async function gatewayRequest(path: string, init: RequestInit): Promise<any> {
   let response: Response;
   try { response = await fetch(`${base}${path}`, { ...init, headers }); }
   catch (error) { fail(`cannot reach Go Gateway: ${safe(error)}`, 'Start the Gateway and verify RHINOQ_AGENT_URL/RHINOQ_AGENT_TOKEN'); }
+  if (allowMissing && response.status === 404) {
+    await response.text();
+    return undefined;
+  }
   const text = await response.text();
   let payload: any = {};
   try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
@@ -287,9 +427,17 @@ async function gatewayRequest(path: string, init: RequestInit): Promise<any> {
   return payload;
 }
 
+// doctor checks the isolated Task profile and local Rule files. It is
+// deliberately not the Go `rhinoq doctor`, which also validates worker
+// identity, lease/heartbeat/reaper timing and migration state. They share a
+// name because they answer the same question for different planes, so this one
+// says out loud what it did not look at: a PASS here is not a runtime PASS.
 async function doctor(): Promise<void> {
   const url = databaseURL();
   if (!url) fail('DATABASE_URL/RHINOQ_DATABASE_URL is not set', 'Set it to PostgreSQL, then run: npx rhinoq doctor');
+  console.log('INFO scope: Task schema, local Rule files and client packages.');
+  console.log('INFO not checked here: worker identity, lease/heartbeat/reaper timing,');
+  console.log('     RhinoQ migration state. Those need the Go CLI: rhinoq doctor --ci');
   const pool = new Pool({ connectionString: url, connectionTimeoutMillis: 5_000 });
   let invalidRules = false;
   try {
@@ -305,6 +453,7 @@ async function doctor(): Promise<void> {
   if (process.env.REDIS_URL) console.log('PASS REDIS_URL detected for BullMQ.');
   else console.log('INFO REDIS_URL is absent; this is fine unless the app uses BullMQ.');
   console.log('NEXT create the visible failure fixture: npx rhinoq fixture failure');
+  console.log('NEXT before a pilot, run the runtime checks too: rhinoq doctor --ci');
 }
 
 async function doctorRules(pool: Pool): Promise<boolean> {
@@ -415,4 +564,4 @@ function escapeHTML(value: unknown): string { return String(value ?? '').replace
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify DATABASE_URL, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }
-function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq doctor\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nEvery failure includes the next action.`); }
+function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq doctor\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nverify apply on an existing Rule prints what changed and needs --force, because\na new version does not reopen Findings recorded against the old one.\nverify delete previews by default; --apply performs it.\n\nThis CLI checks the isolated Task profile only. For runtime checks - fencing,\nlease/heartbeat timing, the reaper and migration state - build and run the Go\nCLI: rhinoq doctor.\n\nEvery failure includes the next action.`); }

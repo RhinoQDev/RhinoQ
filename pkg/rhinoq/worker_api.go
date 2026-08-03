@@ -1,9 +1,11 @@
 package rhinoq
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -80,11 +82,59 @@ type FailureReport struct {
 	Fingerprint string            `json:"fingerprint"`
 	Details     map[string]string `json:"details,omitempty"`
 	Language    string            `json:"language,omitempty"`
-	// RetryAfter is the provider's own instruction, used by rate_limited.
-	RetryAfter time.Duration `json:"retryAfterMs,omitempty"`
+	// RetryAfter is the provider's own instruction, used by rate_limited. It is
+	// a real duration in Go and milliseconds on the wire; see the JSON methods
+	// below, which are the only place the two units meet.
+	RetryAfter time.Duration `json:"-"`
 	// Attempt is which attempt failed. The engine uses the stored attempt count
 	// when this is zero.
 	Attempt int `json:"attempt,omitempty"`
+}
+
+// failureReportWire is the wire shape of FailureReport. RetryAfter is a
+// time.Duration in Go and a millisecond count on the wire, and nothing else may
+// hold a duration in one unit while claiming another: letting encoding/json see
+// the time.Duration directly would put Go's nanoseconds behind a field named
+// retryAfterMs and delay every rate-limited retry by a factor of a million.
+type failureReportWire struct {
+	Type         string            `json:"type"`
+	RetryClass   string            `json:"retryClass"`
+	Message      string            `json:"message"`
+	Fingerprint  string            `json:"fingerprint"`
+	Details      map[string]string `json:"details,omitempty"`
+	Language     string            `json:"language,omitempty"`
+	RetryAfterMs int64             `json:"retryAfterMs,omitempty"`
+	Attempt      int               `json:"attempt,omitempty"`
+}
+
+func (r FailureReport) MarshalJSON() ([]byte, error) {
+	return json.Marshal(failureReportWire{
+		Type: r.Type, RetryClass: r.RetryClass, Message: r.Message,
+		Fingerprint: r.Fingerprint, Details: r.Details, Language: r.Language,
+		RetryAfterMs: r.RetryAfter.Milliseconds(), Attempt: r.Attempt,
+	})
+}
+
+// UnmarshalJSON keeps the endpoint's strict-field behaviour: an SDK that
+// misspells a field must be told, not silently given a default.
+func (r *FailureReport) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var wire failureReportWire
+	if err := decoder.Decode(&wire); err != nil {
+		return err
+	}
+	if wire.RetryAfterMs < 0 {
+		return errors.New("retryAfterMs must not be negative")
+	}
+	*r = FailureReport{
+		Type: wire.Type, RetryClass: wire.RetryClass, Message: wire.Message,
+		Fingerprint: wire.Fingerprint, Details: wire.Details,
+		Language:   wire.Language,
+		RetryAfter: time.Duration(wire.RetryAfterMs) * time.Millisecond,
+		Attempt:    wire.Attempt,
+	}
+	return nil
 }
 
 // GroupingKey returns the report's fingerprint, deriving a stable one from the

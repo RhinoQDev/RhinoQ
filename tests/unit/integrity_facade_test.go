@@ -32,7 +32,8 @@ func TestIntegrityClientExposesNoRuntimeSurface(t *testing.T) {
 
 func TestIntegrityClientExposesTheVerificationSurface(t *testing.T) {
 	required := []string{
-		"RegisterRule", "ListRules", "ExplainRule", "EnableRule", "DisableRule",
+		"RegisterRule", "GetRule", "ListRules", "ExplainRule", "EnableRule",
+		"DisableRule", "DeleteRule",
 		"Scan", "Changed", "DrainChanges", "GetIntegrityState",
 		"ListFindings", "FindingHistory", "TransitionFinding", "RunScheduler",
 	}

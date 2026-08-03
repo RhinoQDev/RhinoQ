@@ -118,9 +118,14 @@ func NewIntegrity(db *sql.DB) (*IntegrityClient, error) {
 // process, so a Finding it opens disappears with it.
 func NewInMemoryIntegrity() *IntegrityClient {
 	ruleStore := memory.NewRuleStore()
+	findingStore := memory.NewFindingStore()
+	subjectOutcomes := memory.NewSubjectOutcomeStore()
+	// PostgreSQL removes these through foreign keys; the in-memory stores need
+	// to be introduced to each other so a Rule delete behaves the same way.
+	ruleStore.TrackRuleDependents(findingStore, subjectOutcomes)
 	return &IntegrityClient{
-		findings: memory.NewFindingStore(), rules: ruleStore,
-		ruleSchedules: ruleStore, subjectOutcomes: memory.NewSubjectOutcomeStore(),
+		findings: findingStore, rules: ruleStore,
+		ruleSchedules: ruleStore, subjectOutcomes: subjectOutcomes,
 		changes: memory.NewChangeStore(), providerOperations: memory.NewProviderOperationStore(),
 		repairs: memory.NewRepairStore(), notificationDeliveries: memory.NewNotificationDeliveryStore(),
 	}

@@ -234,6 +234,125 @@ func (s *RuleStore) SetRuleStatus(
 	return record, nil
 }
 
+// DeleteRule removes a Rule and everything derived from it in one transaction.
+//
+// Explanations, schedules and subject outcomes cascade from the definition, so
+// they are counted before the delete rather than after it. Findings do not
+// cascade: they are keyed by rule id as free text precisely so an operator
+// decision survives a definition being rewritten, which is also why discarding
+// them has to be asked for explicitly.
+func (s *RuleStore) DeleteRule(
+	ctx context.Context,
+	request rule.DeleteRequest,
+) (rule.Deletion, error) {
+	if err := request.Validate(); err != nil {
+		return rule.Deletion{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return rule.Deletion{}, err
+	}
+	defer tx.Rollback()
+
+	// version = 0 means every version; the same predicate is reused by each
+	// dependent count so the plan cannot drift from what is deleted.
+	const versionFilter = "($2 = 0 OR version = $2)"
+	rows, err := tx.QueryContext(ctx, `
+		SELECT version, status
+		FROM rhinoq_rules
+		WHERE id = $1 AND `+versionFilter+`
+		ORDER BY version
+		FOR UPDATE`, request.ID, request.Version)
+	if err != nil {
+		return rule.Deletion{}, err
+	}
+	deletion := rule.Deletion{RuleID: request.ID}
+	for rows.Next() {
+		var version int
+		var status string
+		if err := rows.Scan(&version, &status); err != nil {
+			rows.Close()
+			return rule.Deletion{}, err
+		}
+		deletion.Versions = append(deletion.Versions, version)
+		if rule.Status(status) == rule.Enabled {
+			deletion.EnabledVersions = append(deletion.EnabledVersions, version)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return rule.Deletion{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return rule.Deletion{}, err
+	}
+	if len(deletion.Versions) == 0 {
+		return deletion, ports.ErrRuleNotFound
+	}
+	if len(deletion.EnabledVersions) > 0 {
+		return deletion, rule.ErrRuleEnabled
+	}
+
+	for _, count := range []struct {
+		into      *int
+		statement string
+	}{
+		{&deletion.Explanations, `
+			SELECT count(*) FROM rhinoq_rule_explanations
+			WHERE rule_id = $1 AND ($2 = 0 OR rule_version = $2)`},
+		{&deletion.Schedules, `
+			SELECT count(*) FROM rhinoq_rule_schedules
+			WHERE rule_id = $1 AND ($2 = 0 OR rule_version = $2)`},
+		{&deletion.Outcomes, `
+			SELECT count(*) FROM rhinoq_subject_outcomes
+			WHERE rule_id = $1 AND ($2 = 0 OR rule_version = $2)`},
+		{&deletion.Findings, `
+			SELECT count(*) FROM rhinoq_findings
+			WHERE rule_id = $1 AND ($2 = 0 OR invariant_version = $2)`},
+		{&deletion.FindingEvents, `
+			SELECT count(*) FROM rhinoq_finding_events
+			WHERE rule_id = $1 AND ($2 = 0 OR invariant_version = $2)`},
+	} {
+		if err := tx.QueryRowContext(
+			ctx, count.statement, request.ID, request.Version,
+		).Scan(count.into); err != nil {
+			return rule.Deletion{}, err
+		}
+	}
+	if deletion.Findings > 0 && !request.PurgeFindings {
+		return deletion, rule.ErrFindingsRemain
+	}
+
+	if request.PurgeFindings {
+		// Events cascade from the Finding, so one delete is enough and the
+		// counted history stays consistent with what actually disappears.
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM rhinoq_findings
+			WHERE rule_id = $1 AND ($2 = 0 OR invariant_version = $2)`,
+			request.ID, request.Version,
+		); err != nil {
+			return rule.Deletion{}, err
+		}
+	} else {
+		deletion.Findings, deletion.FindingEvents = 0, 0
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM rhinoq_rules
+		WHERE id = $1 AND `+versionFilter, request.ID, request.Version,
+	); err != nil {
+		return rule.Deletion{}, err
+	}
+	if request.DryRun {
+		// The rollback in the deferred call is the point: the caller sees the
+		// real cost of the delete without paying it.
+		return deletion, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return rule.Deletion{}, err
+	}
+	deletion.Applied = true
+	return deletion, nil
+}
+
 func (s *RuleStore) SaveRuleExplanation(
 	ctx context.Context,
 	id string,

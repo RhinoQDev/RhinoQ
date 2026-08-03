@@ -174,7 +174,7 @@ source files. Prefer `RHINOQ_DATABASE_URL` when the application already uses
 ### 3. Install the pinned SDK
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
 ```
 
 Why: `pg` is a peer dependency and lets RhinoQ reuse the application's pool.
@@ -337,7 +337,7 @@ RhinoQ has two local visual surfaces:
 ### Try Workbench without a database
 
 Download the archive for your OS/CPU from the
-[beta.7 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.7),
+[beta.8 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.8),
 extract it, place `rhinoq` (`rhinoq.exe` on Windows) on `PATH`, then run:
 
 ```bash
@@ -622,7 +622,7 @@ Read [Production readiness](./production-readiness.md),
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
 | repair is unavailable | Workbench is read-only or handler is not registered | supply the callback allowlist and start with `--actions` |
 | repair becomes `stale` | the business object changed after preview | investigate again and create a new plan; do not bypass the precondition |
-| npm installs an older beta | npm trusted publishing is not current | install the pinned beta.7 GitHub tarball shown above |
+| npm installs an older beta | npm trusted publishing is not current | install the pinned beta.8 GitHub tarball shown above |
 
 ## Honest current limits
 

@@ -29,7 +29,7 @@ test('Task migration CLI reports the package version without a database', () => 
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), '0.1.0-beta.7');
+  assert.equal(result.stdout.trim(), '0.1.0-beta.8');
   assert.equal(result.stderr, '');
 });
 
@@ -39,7 +39,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   assert.match(help.stdout, /npx rhinoq init/);
   const version = spawnSync(process.execPath, [developerCLI, '--version'], { encoding: 'utf8', env: {} });
   assert.equal(version.status, 0, version.stderr);
-  assert.equal(version.stdout.trim(), '0.1.0-beta.7');
+  assert.equal(version.stdout.trim(), '0.1.0-beta.8');
   const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-cli-'));
   try {
     const first = spawnSync(process.execPath, [developerCLI, 'verify', 'add', 'completed-report-has-output'], { cwd, encoding:'utf8', env:{} });
@@ -100,8 +100,14 @@ test('verify apply sends the Rule through the Go Gateway and keeps it disabled',
     const [status] = await once(child, 'close');
     assert.equal(status, 0, stderr);
     assert.match(stdout, /status=disabled/);
-    assert.equal(requests.length, 2);
-    const payload = JSON.parse(requests[0].body);
+    // The apply probes for an existing Rule first so it can show a diff before
+    // bumping a version; an unknown Rule answers 404 and the apply continues.
+    assert.equal(requests.length, 3);
+    assert.deepEqual(
+      { method: requests[0].method, url: requests[0].url },
+      { method: 'GET', url: '/v1/rules/completed-report-has-output' },
+    );
+    const payload = JSON.parse(requests[1].body);
     assert.equal(payload.scope, 'table');
     assert.equal(payload.subjectType, 'report');
     assert.match(payload.query, /\$1/);
@@ -152,4 +158,146 @@ test('verify run warns when the baseline matches no subjects', async () => {
     server.close();
     rmSync(cwd, { recursive:true, force:true });
   }
+});
+
+// The mock Gateway runs in this process, so a blocking spawnSync would stop it
+// answering and deadlock the test. Every CLI run that talks to it goes through
+// here instead.
+async function runCLI(args, options = {}) {
+  const child = spawn(process.execPath, [developerCLI, ...args], {
+    ...options,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  const [status] = await once(child, 'close');
+  return { status, stdout, stderr };
+}
+
+// A re-apply appends a new immutable version, and Findings stay attached to the
+// version that observed them. Bumping silently therefore cuts the history an
+// operator was reading, so the change is shown and the bump needs --force.
+test('verify apply on a changed Rule prints a diff and refuses without --force', async () => {
+  const existing = JSON.parse(readFileSync(new URL('../../../testdata/contracts/rule-record-v1.json', import.meta.url), 'utf8'));
+  existing.version = 2;
+  existing.query = 'SELECT id::text AS subject_id\nWHERE created_at >= $1 AND id::text > $2\nLIMIT $3\n';
+  const posts = [];
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume request */ }
+    if (request.method === 'POST') posts.push(request.url);
+    response.setHeader('content-type', 'application/json');
+    if (request.method === 'GET' && request.url === '/v1/rules/completed-report-has-output') {
+      response.end(JSON.stringify({ rule: existing }));
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/v1/rules') {
+      response.end(JSON.stringify({ rule: { ...existing, version: 3, status: 'draft' } }));
+      return;
+    }
+    response.end(JSON.stringify({ rule: { id: 'completed-report-has-output', version: 3, status: 'disabled' } }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-cli-diff-'));
+  const env = { ...process.env, RHINOQ_AGENT_URL: `http://127.0.0.1:${address.port}`, RHINOQ_AGENT_TOKEN: 'test-token' };
+  try {
+    assert.equal(spawnSync(process.execPath, [developerCLI, 'verify', 'add', 'completed-report-has-output'], { cwd, encoding: 'utf8', env: {} }).status, 0);
+
+    const refused = await runCLI(['verify', 'apply', 'completed-report-has-output', '--subject-type', 'report'], { cwd, env });
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.match(refused.stdout, /already exists at v2/);
+    assert.match(refused.stdout, /query line 1 - SELECT id::text AS subject_id/);
+    assert.match(refused.stdout, /query line 1 \+ SELECT id::text AS subject_id,/);
+    assert.match(refused.stdout, /will not be reopened/);
+    assert.match(refused.stderr, /--force/);
+    assert.equal(posts.length, 0, 'a refused apply must not register anything');
+
+    const forced = await runCLI(['verify', 'apply', 'completed-report-has-output', '--subject-type', 'report', '--force'], { cwd, env });
+    assert.equal(forced.status, 0, forced.stderr);
+    assert.match(forced.stdout, /query line 1 -/);
+    assert.equal(posts[0], '/v1/rules');
+  } finally {
+    server.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('verify apply on an identical Rule registers nothing', async () => {
+  const golden = readFileSync(new URL('../../../testdata/rules/completed-report-has-output.sql', import.meta.url), 'utf8');
+  const existing = JSON.parse(readFileSync(new URL('../../../testdata/contracts/rule-record-v1.json', import.meta.url), 'utf8'));
+  existing.query = golden;
+  const posts = [];
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume request */ }
+    if (request.method === 'POST') posts.push(request.url);
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ rule: existing }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-cli-same-'));
+  try {
+    assert.equal(spawnSync(process.execPath, [developerCLI, 'verify', 'add', 'completed-report-has-output'], { cwd, encoding: 'utf8', env: {} }).status, 0);
+    const result = await runCLI(['verify', 'apply', 'completed-report-has-output', '--subject-type', 'report'], {
+      cwd,
+      env: { ...process.env, RHINOQ_AGENT_URL: `http://127.0.0.1:${address.port}` },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /KEEP Rule completed-report-has-output@v1 already matches/);
+    assert.equal(posts.length, 0, 'an unchanged apply must not bump the version');
+  } finally {
+    server.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+// A trial is where people create Rules they never meant to keep. Without a
+// delete the list only grows, and an operator who cannot clean it stops reading
+// it, which is worse than the probe Rule they were trying to remove.
+test('verify delete previews before it removes', async () => {
+  const calls = [];
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* consume request */ }
+    calls.push({ method: request.method, url: request.url });
+    response.setHeader('content-type', 'application/json');
+    const applied = request.url.includes('dryRun=false');
+    response.end(JSON.stringify({
+      deletion: {
+        ruleId: 'probe-rule', versions: [1], explanations: 1, schedules: 1,
+        outcomes: 3, findings: 0, findingEvents: 0, applied,
+      },
+    }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  const env = { ...process.env, RHINOQ_AGENT_URL: `http://127.0.0.1:${address.port}` };
+  try {
+    const preview = await runCLI(['verify', 'delete', 'probe-rule'], { env });
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /subject outcomes 3/);
+    assert.match(preview.stdout, /INFO nothing was deleted/);
+    assert.match(calls[0].url, /dryRun=true/);
+
+    const applied = await runCLI(['verify', 'delete', 'probe-rule', '--apply'], { env });
+    assert.equal(applied.status, 0, applied.stderr);
+    assert.match(applied.stdout, /PASS Rule probe-rule deleted/);
+    assert.equal(calls[1].method, 'DELETE');
+    assert.match(calls[1].url, /dryRun=false/);
+  } finally {
+    server.close();
+  }
+});
+
+// The two doctors share a name and differ four-fold in depth. A PASS from the
+// Node one must not read as "the runtime was checked".
+test('Node CLI help separates its doctor from the Go runtime doctor', () => {
+  const result = spawnSync(process.execPath, [developerCLI, 'help'], { encoding: 'utf8', env: {} });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /isolated Task profile only/);
+  assert.match(result.stdout, /rhinoq doctor/);
 });

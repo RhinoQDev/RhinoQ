@@ -154,11 +154,18 @@ rhinoq workbench
 | `rhinoq findings list` | inspect integrity Findings | DB | No |
 | `rhinoq findings <transition>` | record a Finding decision | DB | DB |
 | `rhinoq rules list` | inspect Rules | DB | No |
+| `rhinoq rules create <id>` | register a Rule version from a `.sql` file | DB | DB |
 | `rhinoq scan <id>` | verify one enabled Rule against real data | DB | Findings |
 | `rhinoq explain <id>` | inspect the safety plan for one Rule | DB/Gateway | Evidence |
 | `rhinoq rules enable` | Explain and enable one Rule | DB | DB |
 | `rhinoq rules disable` | stop future claims for one Rule | DB | DB |
+| `rhinoq rules delete <id>` | preview a Rule deletion | DB | No |
+| `rhinoq rules delete <id> --apply` | delete a Rule and its derived rows | DB | DB |
 | `rhinoq rules run` | run the long-lived Rule scheduler | DB | DB |
+| `rhinoq notify add\|remove` | configure a delivery destination | No | File |
+| `rhinoq notify list` | list destinations with endpoints redacted | No | No |
+| `rhinoq notify test <name>` | send one synthetic signed event | No | No |
+| `rhinoq notify send <name>` | deliver one real Finding | DB | DB |
 | `rhinoq workbench` | open the local developer UI; actions require `--actions` | DB | No by default |
 | `rhinoq workbench --demo` | open sample data without PostgreSQL | No | No |
 

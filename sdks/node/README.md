@@ -3,17 +3,16 @@
 Catch background jobs that succeeded technically but failed in the real world.
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 ```
 
-The Node `init` path creates the isolated Task profile. The published beta.7
-archive predates the complete Verified Rule loop. For Verified Rules, build or
-install the package from this checkout (or use a later release that explicitly
-contains `verify apply`), start the full Go Gateway, set `RHINOQ_AGENT_URL` and
-a token of at least 32 bytes, then run:
+The Node `init` path creates the isolated Task profile. `beta.8` is the first
+archive that contains the complete Verified Rule loop; an older tarball answers
+`FAIL verify requires 'add <rule-name>'`. For Verified Rules, start the full Go
+Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32 bytes, then run:
 
 ```bash
 npx rhinoq verify apply completed-report-has-output --subject-type report
@@ -38,7 +37,7 @@ Node.js support has two deliberately separate paths:
 
 This package is a development preview. npm `next` still points to the older
 `0.1.0-beta.2`; trusted-publisher permission blocked the beta.5 npm upload.
-Use the beta.7 GitHub release archive or a local beta.7 tarball for the current
+Use the beta.8 GitHub release archive or a local beta.8 tarball for the current
 contract. No prerelease is a production stability promise. The preview targets
 Node.js 22+.
 
@@ -57,24 +56,24 @@ npm ci                 # install exactly what package-lock.json records
 npm run typecheck      # check TypeScript without producing dist/
 npm test               # build dist/ and run the SDK tests
 npm run pack:check     # show the files that would enter the package
-npm pack               # create rhinoq-node-0.1.0-beta.7.tgz
+npm pack               # create rhinoq-node-0.1.0-beta.8.tgz
 ```
 
 Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.7.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.8.tgz pg
 ```
 
 For an application evaluation without a source checkout, pin the release
 archive rather than the stale npm `next` tag:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
 ```
 
-That beta.7 archive contains the embedded Task profile and BullMQ contracts.
+That beta.8 archive contains the embedded Task profile and BullMQ contracts.
 It must not be used as evidence that the current source's Verified Rule CLI is
 published; verify an archive with `grep -c "verify apply" package/dist/cli/rhinoq.js`
 or build from this checkout.

@@ -231,10 +231,12 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /v1/findings/history", s.guard(s.handleFindingHistory))
 	mux.HandleFunc("POST /v1/rules", s.guard(s.handleRegisterRule))
 	mux.HandleFunc("GET /v1/rules", s.guard(s.handleListRules))
+	mux.HandleFunc("GET /v1/rules/{id}", s.guard(s.handleGetRule))
 	mux.HandleFunc("POST /v1/rules/{id}/explain", s.guard(s.handleExplainRule))
 	mux.HandleFunc("POST /v1/rules/{id}/enable", s.guard(s.handleEnableRule))
 	mux.HandleFunc("POST /v1/rules/{id}/disable", s.guard(s.handleDisableRule))
 	mux.HandleFunc("POST /v1/rules/{id}/evaluate", s.guard(s.handleEvaluateRule))
+	mux.HandleFunc("DELETE /v1/rules/{id}", s.guard(s.handleDeleteRule))
 
 	s.mux = mux
 }
@@ -1101,6 +1103,24 @@ func (s *Server) handleListRules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rules": records})
 }
 
+// handleGetRule reads one Rule without running Explain. A client about to
+// re-register a Rule needs the current definition to show what its change
+// would alter, and paying for a query plan to answer that would make the safe
+// habit the expensive one.
+func (s *Server) handleGetRule(w http.ResponseWriter, r *http.Request) {
+	record, found, err := s.client.GetRule(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if !found {
+		status, body := describe(rhinoq.ErrRuleNotFound)
+		writeJSON(w, status, errorResponse{Error: body})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rule": record})
+}
+
 func (s *Server) handleExplainRule(w http.ResponseWriter, r *http.Request) {
 	record, explanation, err := s.client.ExplainRule(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -1137,6 +1157,35 @@ func (s *Server) handleDisableRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rule": record})
+}
+
+// handleDeleteRule takes its arguments from the query string rather than a
+// body: DELETE bodies are dropped by enough proxies that a purge flag hidden in
+// one would eventually be lost in transit, and losing that flag turns a refusal
+// into a silent discard of operator history.
+func (s *Server) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	deletion, err := s.client.DeleteRule(r.Context(), rhinoq.RuleDeleteRequest{
+		ID:            r.PathValue("id"),
+		Version:       intParam(query.Get("version"), 0),
+		PurgeFindings: query.Get("purgeFindings") == "true",
+		DryRun:        query.Get("dryRun") == "true",
+	})
+	if err != nil {
+		// The refusals carry the plan with them: an operator who is told the
+		// Rule is still enabled also needs to know which version to disable.
+		if errors.Is(err, rhinoq.ErrRuleEnabled) ||
+			errors.Is(err, rhinoq.ErrRuleFindingsRemain) {
+			status, body := describe(err)
+			writeJSON(w, status, map[string]any{
+				"deletion": deletion, "error": body,
+			})
+			return
+		}
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deletion": deletion})
 }
 
 type evaluateRuleRequest struct {
@@ -1278,7 +1327,8 @@ func (s *Server) handleFail(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &request) {
 		return
 	}
-	request.Error.RetryAfter = time.Duration(request.Error.RetryAfter) * time.Millisecond
+	// No unit conversion here: FailureReport owns the millisecond wire contract
+	// so a second, divergent conversion cannot appear at a call site.
 	summary, err := s.client.FailJob(r.Context(), request.Lease, request.Error)
 	if err != nil {
 		s.fail(w, err)

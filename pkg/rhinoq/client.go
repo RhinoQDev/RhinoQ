@@ -361,6 +361,9 @@ func NewInMemory() *Client {
 	findingStore := memory.NewFindingStore()
 	ruleStore := memory.NewRuleStore()
 	subjectOutcomes := memory.NewSubjectOutcomeStore()
+	// PostgreSQL removes these through foreign keys; the in-memory stores need
+	// to be introduced to each other so a Rule delete behaves the same way.
+	ruleStore.TrackRuleDependents(findingStore, subjectOutcomes)
 	changeStore := memory.NewChangeStore()
 	providerStore := memory.NewProviderOperationStore()
 	repairStore := memory.NewRepairStore()

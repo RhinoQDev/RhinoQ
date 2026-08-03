@@ -114,6 +114,10 @@ func describe(err error) (int, ErrorBody) {
 		return http.StatusBadRequest, ErrorBody{Code: "RHINOQ_INVALID_REQUEST", Message: err.Error()}
 	case errors.Is(err, rule.ErrRuleUnsafe):
 		return http.StatusUnprocessableEntity, ErrorBody{Code: "RHINOQ_RULE_UNSAFE", Message: err.Error()}
+	case errors.Is(err, rule.ErrRuleEnabled):
+		return http.StatusConflict, ErrorBody{Code: "RHINOQ_RULE_ENABLED", Message: err.Error()}
+	case errors.Is(err, rule.ErrFindingsRemain):
+		return http.StatusConflict, ErrorBody{Code: "RHINOQ_RULE_HAS_FINDINGS", Message: err.Error()}
 	case errors.Is(err, rule.ErrUnsafeQuery),
 		errors.Is(err, rule.ErrInvalidRule),
 		errors.Is(err, rule.ErrBaselineRequired),

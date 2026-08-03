@@ -1,7 +1,11 @@
 # Code of conduct
 
-Contributors phải giao tiếp tôn trọng, cụ thể và tập trung vào code/behavior thay vì công kích cá nhân.
+Contributors are expected to communicate respectfully and specifically, about
+code and behaviour rather than about people.
 
-Không chấp nhận quấy rối, phân biệt đối xử, đe dọa, tiết lộ thông tin riêng tư hoặc cố ý làm lộ credential.
+Harassment, discrimination, threats, publishing someone's private information
+and deliberately exposing credentials are not accepted.
 
-Báo cáo vi phạm riêng cho maintainer theo [SECURITY.md](./SECURITY.md). Maintainer có quyền đóng issue/PR hoặc giới hạn quyền contributor để bảo vệ dự án.
+Report a violation privately to the maintainer through the channel in
+[SECURITY.md](./SECURITY.md). The maintainer may close an issue or pull request,
+or limit a contributor's access, to protect the project.

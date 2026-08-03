@@ -1,7 +1,11 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+
 	"bytes"
+	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,7 +118,7 @@ func TestScanRejectsSubjectWithCursorBeforeOpeningDatabase(t *testing.T) {
 func TestHelpDocumentsEveryPublicCommand(t *testing.T) {
 	for _, topic := range []string{
 		"help", "init", "migrate", "doctor", "jobs", "queue",
-		"attention", "findings", "rules", "scan", "explain", "workbench",
+		"attention", "findings", "rules", "scan", "explain", "notify", "workbench",
 		"ui", "version",
 	} {
 		t.Run(topic, func(t *testing.T) {
@@ -136,5 +140,80 @@ func TestHelpRejectsUnknownTopic(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "unknown help topic") {
 		t.Fatalf("help should explain the failure: %s", output.String())
+	}
+}
+
+func TestRuleCreateRejectsAnUnsafeQueryBeforeOpeningDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unsafe.sql")
+	if err := os.WriteFile(path, []byte("DELETE FROM reports WHERE id = $1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	code := runRuleCreate(
+		[]string{"probe", "--query-file", path, "--subject-type", "report"},
+		func(string) string { return "" },
+		&output,
+	)
+	if code != 1 || !strings.Contains(output.String(), "read-only SELECT") {
+		t.Fatalf("a mutation must be refused locally: code=%d output=%s", code, output.String())
+	}
+}
+
+func TestRuleCreateRequiresAQueryFileAndSubjectType(t *testing.T) {
+	var output bytes.Buffer
+	code := runRuleCreate([]string{"probe"}, func(string) string { return "" }, &output)
+	if code != 2 || !strings.Contains(output.String(), "--query-file") {
+		t.Fatalf("unexpected result: code=%d output=%s", code, output.String())
+	}
+}
+
+// A re-apply appends a version, and a version bump cuts the link to every
+// Finding recorded against the old one. The operator has to see what changed
+// before that happens, so the diff is part of the contract, not decoration.
+func TestRuleChangeDiffNamesTheChangedQueryLineAndBudget(t *testing.T) {
+	existing := rhinoq.RuleRecord{
+		RuleDefinition: rhinoq.RuleDefinition{
+			ID: "probe", Name: "Probe", Scope: rhinoq.RuleScopeTable,
+			SubjectType: "report", Query: "SELECT $1\nWHERE status = 'done'\nLIMIT $3",
+			MaxRows: 500,
+		},
+		Version: 2,
+	}
+	proposed := existing.RuleDefinition
+	proposed.Query = "SELECT $1\nWHERE status = 'completed'\nLIMIT $3"
+	proposed.MaxRows = 100
+
+	changes := describeRuleChanges(existing, proposed)
+	joined := strings.Join(changes, "\n")
+	if !strings.Contains(joined, "max rows: 500 -> 100") {
+		t.Fatalf("a changed budget must be named: %s", joined)
+	}
+	if !strings.Contains(joined, "query line 2 - WHERE status = 'done'") ||
+		!strings.Contains(joined, "query line 2 + WHERE status = 'completed'") {
+		t.Fatalf("the changed predicate must be shown, not summarised: %s", joined)
+	}
+	if strings.Contains(joined, "query line 1") || strings.Contains(joined, "query line 3") {
+		t.Fatalf("unchanged lines must stay out of the diff: %s", joined)
+	}
+}
+
+func TestIdenticalRuleDefinitionProducesNoChanges(t *testing.T) {
+	record := rhinoq.RuleRecord{
+		RuleDefinition: rhinoq.RuleDefinition{
+			ID: "probe", Name: "Probe", Scope: rhinoq.RuleScopeTable,
+			SubjectType: "report", Query: "SELECT $1 LIMIT $3", MaxRows: 500,
+		},
+		Version: 1,
+	}
+	if changes := describeRuleChanges(record, record.RuleDefinition); len(changes) != 0 {
+		t.Fatalf("an unchanged re-apply must not claim a diff: %v", changes)
+	}
+}
+
+func TestRuleDeleteRequiresARuleID(t *testing.T) {
+	var output bytes.Buffer
+	code := runRuleDelete([]string{"--apply"}, func(string) string { return "" }, &output)
+	if code != 2 || !strings.Contains(output.String(), "rules delete <rule-id>") {
+		t.Fatalf("unexpected result: code=%d output=%s", code, output.String())
 	}
 }

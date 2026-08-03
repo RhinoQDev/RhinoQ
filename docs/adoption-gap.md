@@ -122,7 +122,7 @@ estimates below are estimates.
 4. **Publish `rhinoq-agent` as a binary and an image.** Building a Go binary
    from source is a hard stop for a Node team evaluating on a Tuesday
    afternoon.
-5. **Publish `0.1.0-beta.7` and move the `latest` dist-tag.** `terminalProjection`
+5. **Publish `0.1.0-beta.8` and move the `latest` dist-tag.** `terminalProjection`
    is now required and the wire contract gained per-execution fields, so `main`
    and the published `0.1.0-beta.2` share a version number but not an API.
 6. **Cancellation needs hands, not just a state machine.** `cancel_requested`,

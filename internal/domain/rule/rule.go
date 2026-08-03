@@ -52,6 +52,8 @@ var (
 	ErrIntervalRequired  = errors.New("table-scoped rule requires a positive interval")
 	ErrRuleUnsafe        = errors.New("rule explain exceeded its query safety budget")
 	ErrScheduleLeaseLost = errors.New("rule schedule lease was lost")
+	ErrRuleEnabled       = errors.New("an enabled rule must be disabled before it can be deleted")
+	ErrFindingsRemain    = errors.New("the rule still owns findings; deleting it would discard their history")
 )
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -207,6 +209,52 @@ func (q Query) Validate() error {
 		}
 	}
 	return nil
+}
+
+// DeleteRequest removes a Rule definition and everything derived from it.
+//
+// Evaluation is trial-and-error work: the first hour with RhinoQ produces
+// probe Rules that were never meant to survive, and a list nobody can clean is
+// a list nobody trusts. Deletion is still narrow on purpose. An enabled Rule is
+// refused because removing it silently stops a check somebody is relying on,
+// and a Rule with Findings is refused unless PurgeFindings is explicit because
+// a Finding carries operator decisions that outlive the definition.
+type DeleteRequest struct {
+	ID string
+	// Version removes exactly one immutable version. Zero removes every
+	// version of the Rule.
+	Version int
+	// PurgeFindings also discards the Findings and their append-only lifecycle
+	// history. Without it a Rule that has ever opened a Finding is refused.
+	PurgeFindings bool
+	// DryRun computes the deletion and rolls it back, so the printed plan is
+	// produced by the same code path that performs the work.
+	DryRun bool
+}
+
+func (r DeleteRequest) Validate() error {
+	if r.ID == "" || len(r.ID) > MaxIDBytes || !idPattern.MatchString(r.ID) ||
+		r.Version < 0 {
+		return ErrInvalidRule
+	}
+	return nil
+}
+
+// Deletion is what a delete removed, or would remove when DryRun was set.
+type Deletion struct {
+	RuleID string
+	// Versions are the Rule versions in scope, ascending.
+	Versions []int
+	// EnabledVersions are versions still enabled. A non-empty list is why the
+	// deletion was refused, and names what to disable.
+	EnabledVersions []int
+	Explanations    int
+	Schedules       int
+	Outcomes        int
+	Findings        int
+	FindingEvents   int
+	// Applied is false for a dry run.
+	Applied bool
 }
 
 type SeqScan struct {

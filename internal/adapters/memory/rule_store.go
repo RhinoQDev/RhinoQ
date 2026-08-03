@@ -20,6 +20,26 @@ type RuleStore struct {
 	records      map[string]map[int]rule.Record
 	explanations map[string]map[int]rule.Explanation
 	schedules    map[string]memoryRuleSchedule
+
+	// findings and outcomes are the rows PostgreSQL removes through foreign
+	// keys inside one transaction. In memory they are separate maps, so a
+	// delete has to reach them explicitly; without this the in-memory client
+	// would report a clean delete while leaving Findings behind, and every
+	// memory-backed test of deletion would be testing the wrong thing.
+	findings *FindingStore
+	outcomes *SubjectOutcomeStore
+}
+
+// TrackRuleDependents wires the stores that hold rows derived from a Rule.
+// It is optional: a bare RuleStore still deletes definitions, explanations and
+// schedules, and reports no dependents rather than guessing at zero.
+func (s *RuleStore) TrackRuleDependents(
+	findings *FindingStore,
+	outcomes *SubjectOutcomeStore,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.findings, s.outcomes = findings, outcomes
 }
 
 type memoryRuleSchedule struct {
@@ -175,6 +195,80 @@ func (s *RuleStore) SetRuleStatus(
 		s.schedules[key] = schedule
 	}
 	return record, nil
+}
+
+// DeleteRule mirrors the PostgreSQL contract: an enabled version is refused,
+// Findings are refused unless the caller asked to discard them, and a dry run
+// reports exactly what the applied call would remove.
+func (s *RuleStore) DeleteRule(
+	_ context.Context,
+	request rule.DeleteRequest,
+) (rule.Deletion, error) {
+	if err := request.Validate(); err != nil {
+		return rule.Deletion{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deletion := rule.Deletion{RuleID: request.ID}
+	for version, record := range s.records[request.ID] {
+		if request.Version != 0 && version != request.Version {
+			continue
+		}
+		deletion.Versions = append(deletion.Versions, version)
+		if record.Status == rule.Enabled {
+			deletion.EnabledVersions = append(deletion.EnabledVersions, version)
+		}
+	}
+	sort.Ints(deletion.Versions)
+	sort.Ints(deletion.EnabledVersions)
+	if len(deletion.Versions) == 0 {
+		return deletion, ports.ErrRuleNotFound
+	}
+	if len(deletion.EnabledVersions) > 0 {
+		return deletion, rule.ErrRuleEnabled
+	}
+	for _, version := range deletion.Versions {
+		if _, found := s.explanations[request.ID][version]; found {
+			deletion.Explanations++
+		}
+		if _, found := s.schedules[scheduleKey(request.ID, version)]; found {
+			deletion.Schedules++
+		}
+		if s.outcomes != nil {
+			deletion.Outcomes += s.outcomes.countRuleOutcomes(request.ID, version)
+		}
+		if s.findings != nil {
+			records, events := s.findings.countRuleFindings(request.ID, version)
+			deletion.Findings += records
+			deletion.FindingEvents += events
+		}
+	}
+	if deletion.Findings > 0 && !request.PurgeFindings {
+		return deletion, rule.ErrFindingsRemain
+	}
+	if !request.PurgeFindings {
+		deletion.Findings, deletion.FindingEvents = 0, 0
+	}
+	if request.DryRun {
+		return deletion, nil
+	}
+	for _, version := range deletion.Versions {
+		delete(s.records[request.ID], version)
+		delete(s.explanations[request.ID], version)
+		delete(s.schedules, scheduleKey(request.ID, version))
+		if s.outcomes != nil {
+			s.outcomes.deleteRuleOutcomes(request.ID, version)
+		}
+		if request.PurgeFindings && s.findings != nil {
+			s.findings.deleteRuleFindings(request.ID, version)
+		}
+	}
+	if len(s.records[request.ID]) == 0 {
+		delete(s.records, request.ID)
+		delete(s.explanations, request.ID)
+	}
+	deletion.Applied = true
+	return deletion, nil
 }
 
 func (s *RuleStore) SaveRuleExplanation(

@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.1.0-beta.8
+
+The first release whose Node package contains the `verify` onboarding commands.
+Three rounds of fixes existed only inside this repository until this tag: the
+`beta.7` tarball predates `verify apply`, so a reader following the README got
+`FAIL verify requires 'add <rule-name>'`.
+
+### Rule lifecycle
+
+- Added `rhinoq rules delete` and `DELETE /v1/rules/{id}`. Deletion removes the
+  definition, its explain evidence, its schedule and its subject outcomes in one
+  transaction. It previews by default: the dry run is computed by the same
+  transaction that would perform the work and then rolled back, so the plan an
+  operator approves is the plan that runs. An enabled Rule is refused and the
+  refusal names the version to disable, because deleting one silently stops a
+  check nobody decided to stop. A Rule that owns Findings is refused unless
+  `--purge-findings` says to discard those operator decisions too.
+- Added `rhinoq rules create`, so a Go-only team can register a Rule from a
+  `.sql` file without hand-writing HTTP. Registering over an existing Rule
+  prints a field and query-line diff and refuses without `--force`.
+- `npx rhinoq verify apply` does the same: it reads the current Rule, prints
+  what would change, and refuses a changed re-apply without `--force`. An
+  identical re-apply now registers nothing instead of silently bumping the
+  version. A version bump cuts the link to every Finding recorded against the
+  old version, which is not something to do by accident.
+- Added `npx rhinoq verify delete` and `GET /v1/rules/{id}`.
+
+### Notifications
+
+- Added `rhinoq notify add|list|remove|test|send`. Destinations were previously
+  configurable only by building a `rhinoq.NotificationDestination` in Go and
+  embedding it in an application, which a Node or Python team cannot do at all,
+  so the README's "Findings reach people" was not true for most of its readers.
+- `notify test` sends one synthetic HMAC-signed event and writes nothing: no
+  Finding, no delivery ledger row, no database connection. A signed webhook is
+  the one part of the system that cannot be verified by reading code.
+- The destination registry never stores a secret. It records the name of an
+  environment variable and the value is read at send time, so a leaked registry
+  is a list of URLs rather than a set of working credentials. `notify list`
+  redacts endpoints and reports whether each secret is actually present.
+
+### Correctness
+
+- `FailureReport.RetryAfter` now owns its own JSON contract in milliseconds
+  instead of being a `time.Duration` behind a field named `retryAfterMs` that a
+  call site had to remember to multiply. This was the last instance of the unit
+  ambiguity that produced the Rule Record casing/unit bug, and the conversion
+  now exists in exactly one place. Unknown and negative fields are rejected.
+
+### Signals
+
+- The two `doctor` commands no longer look interchangeable. The Node one states
+  that it covers the Task profile and local Rule files only and points at the Go
+  runtime checks; the Go one names its own scope in its first line.
+- Removed `sdks/typescript/`: 24 directories of `.gitkeep` and no code, which
+  made the repository look like it had two SDKs when `sdks/node` is the
+  TypeScript one.
+- Translated `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` and `GOVERNANCE.md` to
+  English; they are the files GitHub surfaces in the repository sidebar.
+- The README now opens with real `scan`/`findings`/`attention` output, the
+  Explain gate that answers "why not a cron job", the three observation states
+  and the `doctor` timing checks - parts of the product that were already built
+  and invisible to anyone who had not run it.
+
 ## Unreleased
 
 - Made the security workflow detect whether GitHub Dependency graph is enabled

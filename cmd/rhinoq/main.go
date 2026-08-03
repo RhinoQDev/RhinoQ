@@ -55,6 +55,8 @@ func main() {
 		os.Exit(runScan(os.Args[2:], os.Getenv, os.Stdout))
 	case "rules":
 		os.Exit(runRules(os.Args[2:], os.Getenv, os.Stdout))
+	case "notify":
+		os.Exit(runNotify(os.Args[2:], os.Getenv, os.Stdout))
 	case "workbench", "ui":
 		os.Exit(runWorkbench(os.Args[2:], os.Getenv, os.Stdout))
 	case "explain":
@@ -138,6 +140,12 @@ func runDoctor(ci bool) int {
 	}
 
 	failures, warnings := 0, 0
+	// The Node SDK ships a command with the same name that checks the isolated
+	// Task profile only. Saying which one is running here stops a PASS from one
+	// being read as a PASS from the other.
+	fmt.Println("rhinoq doctor · runtime plane: configuration, fencing, timing, PostgreSQL, migrations")
+	fmt.Println("  (npx rhinoq doctor checks the Node Task profile and local Rule files instead)")
+	fmt.Println()
 	fmt.Println("Configuration")
 	fmt.Println("  PASS runtime configuration is valid")
 	fmt.Printf("       concurrency=%d prefetch=%.1f max_claim_batch=%d\n", c.Concurrency, c.PrefetchFactor, c.MaxClaimBatch)
@@ -344,9 +352,10 @@ func printRootHelp(output io.Writer) {
 	fmt.Fprintln(output, "  queue       count, pause or resume one queue")
 	fmt.Fprintln(output, "  attention   list work that needs a developer decision")
 	fmt.Fprintln(output, "  findings    list and triage persistent business-integrity drift")
-	fmt.Fprintln(output, "  rules       list, enable, disable or schedule integrity Rules")
+	fmt.Fprintln(output, "  rules       create, list, enable, disable, delete or schedule Rules")
 	fmt.Fprintln(output, "  scan        verify one enabled Rule against real data, bounded")
 	fmt.Fprintln(output, "  explain     inspect the PostgreSQL safety plan for one Rule")
+	fmt.Fprintln(output, "  notify      configure and prove signed webhook/Slack destinations")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Developer interface")
 	fmt.Fprintln(output, "  workbench   open the loopback-only developer Workbench (read-only by default)")
@@ -434,6 +443,10 @@ Usage:
 Checks typed runtime configuration, worker identity, lease/heartbeat/reaper
 timing, PostgreSQL connectivity and migration state. It never applies a
 migration.
+
+The Node SDK ships a command with the same name. "npx rhinoq doctor" checks the
+isolated Task profile, local Rule files and client packages; it does not look at
+fencing, timing, the reaper or RhinoQ migration state. Before a pilot, run both.
 
 Without --ci, the command prints a diagnostic report. With --ci, any FAIL
 returns exit code 1 so a deployment pipeline can stop safely.
@@ -565,8 +578,10 @@ Examples:
 
 Usage:
   rhinoq rules list [flags]
+  rhinoq rules create <rule-id> --query-file <path> --subject-type <type> [flags]
   rhinoq rules enable <rule-id>
   rhinoq rules disable <rule-id>
+  rhinoq rules delete <rule-id> [--version n] [--purge-findings] [--apply]
   rhinoq rules run [flags]
 
 List flags:
@@ -576,6 +591,44 @@ List flags:
   --offset <n>         default 0
   --json               machine-readable output
 
+Create flags:
+  --query-file <path>        the Rule SELECT; required
+  --subject-type <type>      business subject type; required
+  --name <text>              human-readable name; defaults to the id
+  --scope <table|job>        default table
+  --job-name <name>          required for job scope
+  --baseline <RFC3339>       table Rule baseline; defaults to now
+  --every <duration>         evaluation interval; default 5m
+  --within <duration>        grace before a job subject is checked; default 0
+  --cursor <subject|changed> how a table Rule walks; default subject
+  --on-unknown <retry|finding>  what an inconclusive check does; default retry
+  --unknown-grace <duration> unknown streak before a Finding opens; default 0
+  --max-rows <n>             rows per page; default 500
+  --statement-timeout <dur>  PostgreSQL statement timeout; default 5s
+  --max-plan-cost <n>        Explain gate budget; default 100000
+  --max-seq-scan-rows <n>    Explain gate budget; default 10000
+  --force                    append a version even though the definition changed
+  --json                     machine-readable output
+
+Delete flags:
+  --version <n>        remove one version instead of every version
+  --purge-findings     also discard Findings and their lifecycle history
+  --apply              perform the plan; without it nothing is deleted
+
+Create registers a new immutable version and leaves it in draft. Re-creating an
+existing Rule prints what changed and refuses without --force, because a new
+version does not reopen Findings recorded against the old one.
+
+Enable first runs the PostgreSQL Explain safety gate. Disable prevents future
+claims but does not corrupt a page already leased.
+
+Delete previews by default and removes the definition, its explain evidence,
+its schedule and its subject outcomes. It refuses an enabled Rule — disable it
+first — and refuses a Rule that owns Findings unless --purge-findings says to
+discard those operator decisions too.
+
+"rules run" is long-lived; stop it with Ctrl+C/SIGTERM for graceful shutdown.
+
 Scheduler flags:
   --owner <name>          unique scheduler identity; defaults to hostname/pid
   --poll <duration>       idle poll interval; default 1s
@@ -583,9 +636,57 @@ Scheduler flags:
   --error-backoff <dur>   retry delay after evaluation error; default 30s
   --batch <n>             maximum Rules claimed per cycle; default 4
 
-Enable first runs the PostgreSQL Explain safety gate. Disable prevents future
-claims but does not corrupt a page already leased. "rules run" is long-lived;
-stop it with Ctrl+C/SIGTERM for graceful shutdown.`)
+Examples:
+  rhinoq rules create completed-report-has-output \
+    --query-file .rhinoq/rules/completed-report-has-output.sql \
+    --subject-type report --every 5m
+  rhinoq rules delete probe-rule
+  rhinoq rules delete probe-rule --apply`)
+	case "notify":
+		fmt.Fprintln(output, `rhinoq notify — configure where Findings are delivered
+
+Usage:
+  rhinoq notify add <name> --webhook <url> [--secret-env VAR] [flags]
+  rhinoq notify add <name> --slack <url> [flags]
+  rhinoq notify list [--json]
+  rhinoq notify remove <name>
+  rhinoq notify test <name>
+  rhinoq notify send <name> --rule <id> --subject-type <type> --subject <id> --version <n>
+
+Add flags:
+  --kind <webhook|slack>  destination type; default webhook
+  --url <url>             endpoint, stored in the registry file
+  --url-env <VAR>         endpoint read from the environment instead
+  --secret-env <VAR>      environment variable holding the HMAC secret
+  --timeout <duration>    per-delivery timeout; default 10s
+  --grace <duration>      delay a first notification; a Finding that clears
+                          inside the window never reaches a person
+  --include-evidence      send Finding evidence; it may contain business data
+  --link-base <url>       base URL used to build an openable Finding link
+  --replace               overwrite an existing destination with this name
+
+Destinations live in .rhinoq/notifications.json, or the path in
+RHINOQ_NOTIFY_CONFIG. No secret is ever written there: the file records the
+name of an environment variable and the value is read at send time, so a
+registry that leaks is a list of URLs rather than working credentials.
+
+"notify test" sends one synthetic signed event and writes nothing - no Finding,
+no delivery record, no database connection. It exists because a signed webhook
+is the one part of this system that cannot be verified by reading code: the
+secret, the URL, the receiver's signature check and its TLS all have to line up
+at the far end.
+
+"notify send" delivers a real Finding through the durable delivery ledger, so
+repeating it for the same event and destination reports "deduplicated" rather
+than paging somebody twice.
+
+Automatic multi-node scheduling is not implemented in this prerelease; call
+send from your own scheduler or the Rule scheduler host.
+
+Example:
+  export RHINOQ_NOTIFY_SECRET_OPS="$(openssl rand -hex 32)"
+  rhinoq notify add ops --webhook https://example.com/hooks/rhinoq --secret-env RHINOQ_NOTIFY_SECRET_OPS
+  rhinoq notify test ops`)
 	case "explain":
 		fmt.Fprintln(output, `rhinoq explain — inspect one Rule before enabling it
 

@@ -5,7 +5,7 @@
 With Node.js 22 and PostgreSQL available:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -21,9 +21,9 @@ The Node `init` path creates only the isolated Task profile. Verified Rules use
 the full Go schema and authenticated Gateway. From the RhinoQ checkout, start
 both Go processes with the same database configuration before continuing:
 
-The published beta.7 Node archive predates `verify apply`; use the Node package
-built from this checkout (or a later release that contains that command) for
-the Verified Rule steps below.
+The `beta.8` archive is the first release whose Node package contains the
+`verify` commands. An older tarball answers `FAIL verify requires 'add
+<rule-name>'`; if that is what you see, you are on `beta.7` or earlier.
 
 ```bash
 go build -o rhinoq ./cmd/rhinoq
@@ -73,11 +73,11 @@ For a Node application keeping its existing queue, prefer the isolated
 Task-only path instead of the full Go migration chain:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.7.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.8.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
-The beta.7 tarball is attached to its GitHub prerelease while npm trusted
+The beta.8 tarball is attached to its GitHub prerelease while npm trusted
 publishing is pending. It creates exactly three tables in `rhinoq_task` and
 reuses the application's `pg.Pool` through `PostgresTaskClient`.
 

@@ -134,6 +134,24 @@ func (s *Service) Disable(ctx context.Context, id string) (rule.Record, error) {
 	)
 }
 
+// Delete removes a Rule definition and everything derived from it.
+//
+// Evaluation is where people create Rules they never meant to keep, and a list
+// that can only grow is a list nobody cleans. The store enforces the two rules
+// that matter: an enabled Rule must be disabled first, because deleting it
+// silently stops a check somebody is relying on, and a Rule that has opened
+// Findings keeps them unless the caller says otherwise, because a Finding
+// records an operator decision that outlives the query which produced it.
+func (s *Service) Delete(
+	ctx context.Context,
+	request rule.DeleteRequest,
+) (rule.Deletion, error) {
+	if err := request.Validate(); err != nil {
+		return rule.Deletion{}, err
+	}
+	return s.store.DeleteRule(ctx, request)
+}
+
 func (s *Service) Evaluate(
 	ctx context.Context,
 	id, subjectID, cursor string,

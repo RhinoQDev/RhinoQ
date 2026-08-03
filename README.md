@@ -31,6 +31,94 @@ detect -> investigate -> decide -> repair -> verify
 > RBAC, multi-node notification dispatch and deployment-shaped chaos evidence
 > still block a production-ready claim.
 
+## What it actually does
+
+Four commands against a real database. No queue, no worker, no cutover — a Rule
+and a connection string are enough.
+
+```console
+$ rhinoq rules enable completed-report-has-output
+PASS Rule completed-report-has-output@v3 enabled · plan cost 29.31
+
+$ rhinoq scan completed-report-has-output
+Rule:              completed-report-has-output
+Pages:             1
+Observed:          3
+Passed:            1
+Violated:          2
+Unknown:           0
+Findings touched:  2
+Duration:          20ms
+Status:            complete
+
+Inspect what was found:
+  rhinoq findings list --rule completed-report-has-output
+
+$ rhinoq findings
+RULE                         SUBJECT      STATUS  SEEN  LAST OBSERVED         OWNER
+completed-report-has-output  report/2@v3  open    2     2026-08-03T03:14:34Z  —
+completed-report-has-output  report/3@v3  open    2     2026-08-03T03:14:34Z  —
+
+$ rhinoq attention
+KIND               JOB / REFERENCE                          REASON
+integrity_finding  completed-report-has-output/report/3@v3  business invariant is violated
+integrity_finding  completed-report-has-output/report/2@v3  business invariant is violated
+```
+
+Two reports that a queue reported as completed have no output. They are named,
+versioned against the Rule that found them, and waiting in an inbox. Reproduce
+this on a disposable database with the
+[integrity-only example](./examples/integrity-only/).
+
+### "I could write a cron job that runs that SQL"
+
+You could. It would not have a gate.
+
+`plan cost 29.31` is printed **before** the Rule is allowed to run. Enabling a
+Rule first runs `EXPLAIN` against your database and refuses the Rule if the plan
+exceeds `MaxPlanCost` or `MaxSeqScanRows`. The query then executes in a
+`READ ONLY` transaction under a `statement_timeout`, paged, with a hard row
+limit. An integrity checker that can table-scan production at 3am is not a
+safety net; it is a second outage.
+
+```console
+$ rhinoq explain completed-report-has-output
+```
+
+### Three outcomes, not two
+
+Every observation is `passed`, `violated` or **`unknown`** — and an unknown
+carries a reason: `provider_timeout`, `permission_denied`, `evidence_missing`,
+`awaiting_confirmation`.
+
+This is the difference between "we looked and it was wrong" and "we could not
+look". Forced into a boolean, a provider timeout reads as *this subject is
+fine*, and drift disappears because a network hiccup voted for it. RhinoQ keeps
+SQL's `NULL` as `unknown` and applies the Rule's own policy: retry quietly, or
+open a Finding after a grace period. See
+[failure semantics](./docs/failure-semantics.md).
+
+### The preflight is written by someone who has been paged
+
+```console
+$ rhinoq doctor
+Fencing
+  WARN RHINOQ_WORKER_NAME is empty
+       The worker falls back to hostname-pid. Epoch fencing still protects
+       writes, but an explicit unique name makes logs and incidents clearer.
+       Fix: set RHINOQ_WORKER_NAME uniquely per process.
+Timing
+  PASS heartbeat has room to renew before the lease expires
+  PASS expired leases are swept at least once per lease period
+```
+
+It checks whether the heartbeat can renew before the lease expires, and whether
+the reaper sweeps at least once per lease period. Both are how a job silently
+gets executed twice. Every failure carries a `Fix:` line.
+
+`npx rhinoq doctor` is a different, smaller command: it checks the isolated Task
+profile and local Rule files, not the runtime. Before a pilot, run both.
+
 **New here?** Read the [complete beginner guide](./docs/start-here.md): the
 failure story, every setup command and why it exists, the two dashboards,
 BullMQ/ProviderOperation integration, safe repair, troubleshooting, and an
@@ -42,7 +130,7 @@ Node.js 22 and PostgreSQL are the only requirements for the shortest path. The
 GitHub release archive is used until npm trusted publishing is enabled:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.7/rhinoq-node-0.1.0-beta.7.tgz pg
+npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -69,21 +157,37 @@ export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
 RHINOQ_AGENT_TOKEN="$RHINOQ_AGENT_TOKEN" ./rhinoq-agent
 ```
 
-In another shell, with the Node CLI installed from this checkout or a release
-that contains the `verify` commands, apply and run the Rule you edited:
+In another shell, apply and run the Rule you edited. `beta.8` is the first
+release whose Node package contains these commands:
 
 ```bash
 export RHINOQ_AGENT_URL=http://127.0.0.1:8080
 export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
 npx rhinoq verify apply completed-report-has-output --subject-type report
 npx rhinoq verify run completed-report-has-output
+npx rhinoq verify delete completed-report-has-output   # preview; --apply removes it
 ```
 
 `verify apply` reads `.rhinoq/rules/<name>.sql`, sends it through the Go Rule
-boundary and leaves it disabled. `verify run` enables it only for a bounded
-evaluation, prints violated subjects/evidence, then disables it again. The Go
+boundary and leaves it disabled. Applying a Rule that already exists prints the
+query diff and refuses without `--force`, because a new version does not reopen
+Findings recorded against the old one. `verify run` enables it only for a
+bounded evaluation, prints violated subjects/evidence, then disables it again.
+`verify delete` previews what it would remove and needs `--apply`. The Go
 Gateway and full migrations are required because Node remains an SDK/CLI
 producer and does not reimplement Rule correctness.
+
+A Go-only team does not need the Node package at all:
+
+```bash
+./rhinoq rules create completed-report-has-output \
+  --query-file .rhinoq/rules/completed-report-has-output.sql \
+  --subject-type report --every 5m
+./rhinoq explain completed-report-has-output
+./rhinoq rules enable completed-report-has-output
+./rhinoq scan completed-report-has-output
+./rhinoq rules delete probe-rule --apply
+```
 
 ## The demo that explains the product
 
@@ -144,12 +248,42 @@ See [Safe repair](./docs/safe-repair.md) and [Workbench](./docs/workbench.md).
 
 ## Findings reach people
 
-Findings can be delivered to signed generic webhooks or Slack with severity,
-grace period, regression escalation, stable event IDs and direct Workbench
-links. A durable delivery ledger deduplicates destination/event pairs. Automatic
-multi-node scheduling remains a deployment responsibility in this prerelease.
+Configure a destination from the terminal and prove it before you trust it:
+
+```bash
+export RHINOQ_NOTIFY_SECRET_OPS="$(openssl rand -hex 32)"
+rhinoq notify add ops --webhook https://example.com/hooks/rhinoq --secret-env RHINOQ_NOTIFY_SECRET_OPS
+rhinoq notify test ops
+rhinoq notify list
+```
+
+`notify test` sends one synthetic HMAC-signed event and writes nothing — no
+Finding, no delivery record, no database connection — so a receiver's signature
+check and TLS can be proven before a real incident depends on them. The registry
+never stores a secret: it records the *name* of an environment variable, and the
+value is read at send time.
+
+Findings are delivered to signed generic webhooks or Slack with severity, grace
+period, regression escalation, stable event IDs and direct Workbench links. A
+durable delivery ledger deduplicates destination/event pairs. Automatic
+multi-node scheduling remains a deployment responsibility in this prerelease:
+call `rhinoq notify send` from your own scheduler.
 
 See [Notifications](./docs/notifications.md).
+
+## The Workbench tells you what it can reach
+
+```text
+Access   loopback only · read-only · payloads omitted
+source   {"mode": "live", "label": "127.0.0.1/rhinoq_full", "readOnly": true}
+```
+
+That header is on the page, not in a policy document. The server binds only to
+127.0.0.1, is read-only unless `--actions` is passed, never exposes job payloads
+and never accepts SQL from the browser. A team that handles payments should be
+able to read what a new tool can touch without reading its source.
+
+See [Workbench](./docs/workbench.md).
 
 ## Existing infrastructure stays in place
 
@@ -179,8 +313,10 @@ exists but is not the default browser polling shape.
 | Recheck and guarded repair workflow | implemented; callback registration is application-owned |
 | Summary polling and cursor-paginated Executions | implemented |
 | Signed webhook and Slack notifications with durable dedup | implemented |
+| Notification destinations configurable from the CLI, with a delivery probe | implemented |
+| Rule lifecycle: create, explain, enable, disable, delete, from Go or Node | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
-| Release archives, verifiable checksum bundle, SBOM and non-root image | beta.7 release pipeline verified in CI |
+| Release archives, verifiable checksum bundle, SBOM and non-root image | beta.8 release pipeline verified in CI |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Durable multi-node notification scheduler | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
@@ -222,6 +358,8 @@ through a public issue.
 - [ProviderOperation](./docs/provider-operations.md)
 - [Safe repair](./docs/safe-repair.md)
 - [Notifications](./docs/notifications.md)
+- [Failure semantics: why unknown is not a pass](./docs/failure-semantics.md)
+- [Benchmarks, with their limits](./docs/benchmarks.md)
 - [Architecture](./ARCHITECTURE.md)
 - [Release process](./docs/releasing.md)
 - [Roadmap and honest blockers](./docs/roadmap.md)

@@ -182,3 +182,43 @@ func (s *FindingStore) ListFindingEvents(
 	}
 	return result, nil
 }
+
+// countRuleFindings and deleteRuleFindings back the in-memory Rule delete.
+// They are unexported because a Finding is never removed on its own: its whole
+// purpose is to outlive the observation that opened it, so only the deletion of
+// the Rule it belongs to may discard it.
+func (s *FindingStore) countRuleFindings(ruleID string, version int) (int, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	records, events := 0, 0
+	for key, record := range s.records {
+		if !findingBelongsToRule(record.Key, ruleID, version) {
+			continue
+		}
+		records++
+		events += len(s.events[key])
+	}
+	return records, events
+}
+
+func (s *FindingStore) deleteRuleFindings(ruleID string, version int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for key, record := range s.records {
+		if !findingBelongsToRule(record.Key, ruleID, version) {
+			continue
+		}
+		delete(s.records, key)
+		delete(s.events, key)
+		removed++
+	}
+	return removed
+}
+
+// findingBelongsToRule treats version 0 as "every version of this Rule",
+// matching the Rule delete contract.
+func findingBelongsToRule(key finding.Key, ruleID string, version int) bool {
+	return key.RuleID == ruleID &&
+		(version == 0 || key.ObservedInvariantVersion == version)
+}

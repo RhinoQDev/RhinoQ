@@ -22,11 +22,32 @@ const (
 	RuleDisabled = "disabled"
 )
 
+// Rule budget defaults. They are exported because a client that registers a
+// Rule has to choose them, and a caller left to invent its own numbers is a
+// caller whose Explain gate means something different from everyone else's.
+const (
+	DefaultRuleMaxRows          = rule.DefaultMaxRows
+	MaximumRuleMaxRows          = rule.MaximumMaxRows
+	DefaultRuleStatementTimeout = rule.DefaultStatementLimit
+	MaximumRuleStatementTimeout = rule.MaximumStatementLimit
+	DefaultRuleMaxPlanCost      = rule.DefaultMaxPlanCost
+	DefaultRuleMaxSeqScanRows   = rule.DefaultMaxSeqScanRows
+)
+
+// ValidateRuleQuery is the local syntax guard a client can run before paying
+// for a round trip. It is not the security boundary: a read-only transaction
+// and a restricted PostgreSQL role are.
+func ValidateRuleQuery(query string) error { return rule.ValidateQuery(query) }
+
 var (
 	ErrRuleUnsafe      = rule.ErrRuleUnsafe
 	ErrRuleInvalid     = rule.ErrInvalidRule
 	ErrRuleUnsafeQuery = rule.ErrUnsafeQuery
 	ErrRuleNotFound    = ports.ErrRuleNotFound
+	// ErrRuleEnabled refuses to delete a Rule that is still running.
+	ErrRuleEnabled = rule.ErrRuleEnabled
+	// ErrRuleFindingsRemain refuses to discard operator decisions implicitly.
+	ErrRuleFindingsRemain = rule.ErrFindingsRemain
 )
 
 type RuleDefinition struct {
@@ -242,6 +263,24 @@ func (c *IntegrityClient) RegisterRule(
 	return publicRule(record), err
 }
 
+// GetRule reads the latest version of one Rule. It is what a re-apply consults
+// before overwriting: a caller that cannot read the current definition cannot
+// show an operator what its change is about to do.
+func (c *IntegrityClient) GetRule(
+	ctx context.Context,
+	id string,
+) (RuleRecord, bool, error) {
+	service, err := c.ruleService()
+	if err != nil {
+		return RuleRecord{}, false, err
+	}
+	record, found, err := service.Get(ctx, id)
+	if err != nil || !found {
+		return RuleRecord{}, found, err
+	}
+	return publicRule(record), true, nil
+}
+
 func (c *IntegrityClient) ListRules(ctx context.Context, query RuleQuery) ([]RuleRecord, error) {
 	service, err := c.ruleService()
 	if err != nil {
@@ -288,6 +327,64 @@ func (c *IntegrityClient) EnableRule(
 	}
 	record, explanation, err := service.Enable(ctx, id)
 	return publicRule(record), publicExplanation(explanation), err
+}
+
+// RuleDeleteRequest asks for a Rule and everything derived from it to be
+// removed. Version zero means every version.
+type RuleDeleteRequest struct {
+	ID      string `json:"id"`
+	Version int    `json:"version,omitempty"`
+	// PurgeFindings also discards Findings and their lifecycle history. Without
+	// it, a Rule that has ever opened a Finding is refused.
+	PurgeFindings bool `json:"purgeFindings,omitempty"`
+	// DryRun computes the deletion and rolls it back, so an operator can review
+	// the real cost before paying it.
+	DryRun bool `json:"dryRun,omitempty"`
+}
+
+// RuleDeletion is what a delete removed, or would remove for a dry run.
+type RuleDeletion struct {
+	RuleID   string `json:"ruleId"`
+	Versions []int  `json:"versions"`
+	// EnabledVersions is why a deletion was refused and names what to disable.
+	EnabledVersions []int `json:"enabledVersions,omitempty"`
+	Explanations    int   `json:"explanations"`
+	Schedules       int   `json:"schedules"`
+	Outcomes        int   `json:"outcomes"`
+	Findings        int   `json:"findings"`
+	FindingEvents   int   `json:"findingEvents"`
+	Applied         bool  `json:"applied"`
+}
+
+// DeleteRule removes a Rule definition, its explain evidence, its schedule and
+// its subject outcomes. An enabled Rule is refused: disable it first, so
+// stopping a check is always a separate, deliberate act.
+func (c *IntegrityClient) DeleteRule(
+	ctx context.Context,
+	request RuleDeleteRequest,
+) (RuleDeletion, error) {
+	service, err := c.ruleService()
+	if err != nil {
+		return RuleDeletion{}, err
+	}
+	deletion, err := service.Delete(ctx, rule.DeleteRequest{
+		ID: request.ID, Version: request.Version,
+		PurgeFindings: request.PurgeFindings, DryRun: request.DryRun,
+	})
+	return publicDeletion(deletion), err
+}
+
+func publicDeletion(deletion rule.Deletion) RuleDeletion {
+	return RuleDeletion{
+		RuleID:   deletion.RuleID,
+		Versions: append([]int(nil), deletion.Versions...),
+		EnabledVersions: append(
+			[]int(nil), deletion.EnabledVersions...,
+		),
+		Explanations: deletion.Explanations, Schedules: deletion.Schedules,
+		Outcomes: deletion.Outcomes, Findings: deletion.Findings,
+		FindingEvents: deletion.FindingEvents, Applied: deletion.Applied,
+	}
 }
 
 func (c *IntegrityClient) DisableRule(ctx context.Context, id string) (RuleRecord, error) {

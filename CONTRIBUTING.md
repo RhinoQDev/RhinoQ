@@ -1,30 +1,30 @@
 # Contributing
 
-RhinoQ nhận contribution qua pull request. Dự án đang ở active development nên
-public API, migration và protocol còn thay đổi; hãy mở issue để thống nhất
-hướng trước khi làm thay đổi lớn.
+RhinoQ accepts contributions through pull requests. The project is under active
+development, so the public API, migrations and protocol still change. Open an
+issue to agree on the direction before starting a large change.
 
-Contribution được nhận theo [Apache-2.0](./LICENSE), đúng như mục 5 của license
-quy định. Không cần ký CLA riêng.
+Contributions are accepted under [Apache-2.0](./LICENSE), as section 5 of the
+license provides. There is no separate CLA to sign.
 
-## Trước khi tạo pull request
+## Before opening a pull request
 
-1. Đọc `AGENTS.md`, `ARCHITECTURE.md` và `.ai/DEFINITION_OF_DONE.md`.
-2. Tạo task có acceptance criteria.
-3. Giữ thay đổi nhỏ và đúng layer.
-4. Chạy `gofmt`, `go test ./...`, `go vet ./...`.
-5. Chạy `npm --prefix sdks/node test` nếu chạm Node SDK.
-6. Cập nhật docs/changelog nếu public behavior thay đổi.
+1. Read `AGENTS.md`, `ARCHITECTURE.md` and `.ai/DEFINITION_OF_DONE.md`.
+2. Write a task with acceptance criteria.
+3. Keep the change small and inside one layer.
+4. Run `gofmt`, `go test ./...` and `go vet ./...`.
+5. Run `npm --prefix sdks/node test` if the change touches the Node SDK.
+6. Update the docs and changelog if public behaviour changes.
 
-## Quy tắc review
+## Review rules
 
-- Không merge khi CI fail.
-- Không merge code có secret hoặc credential.
-- Không bypass domain/application/ports boundary.
-- Không chấp nhận benchmark claim nếu thiếu script, hardware và workload.
-- Migration phải có expand → migrate → contract và rollback plan.
-- Dependency mới phải tương thích Apache-2.0; không nhận GPL hoặc AGPL.
+- Nothing merges while CI is failing.
+- Nothing merges that contains a secret or a credential.
+- The domain, application and ports boundaries are not bypassed.
+- A benchmark claim without its script, hardware and workload is not accepted.
+- A migration needs expand → migrate → contract and a rollback plan.
+- A new dependency must be Apache-2.0 compatible; GPL and AGPL are not accepted.
 
-## Báo lỗ hổng bảo mật
+## Reporting a security vulnerability
 
-Không mở issue công khai. Xem [`SECURITY.md`](./SECURITY.md).
+Do not open a public issue. See [`SECURITY.md`](./SECURITY.md).

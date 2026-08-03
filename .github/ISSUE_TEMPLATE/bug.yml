@@ -12,7 +12,7 @@ body:
     id: version
     attributes:
       label: RhinoQ version or commit
-      placeholder: 0.1.0-beta.7 or abc1234
+      placeholder: 0.1.0-beta.8 or abc1234
     validations:
       required: true
   - type: dropdown

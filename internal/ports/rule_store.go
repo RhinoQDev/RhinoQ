@@ -15,6 +15,16 @@ type RuleStore interface {
 	SetRuleStatus(ctx context.Context, id string, version int, status rule.Status, at time.Time) (rule.Record, error)
 	SaveRuleExplanation(ctx context.Context, id string, version int, explanation rule.Explanation) error
 	GetRuleExplanation(ctx context.Context, id string, version int) (rule.Explanation, bool, error)
+	// DeleteRule removes a Rule definition and everything derived from it -
+	// explanations, schedules, subject outcomes and, when the caller asked for
+	// it, Findings and their history - as one atomic unit. A Rule spans several
+	// tables, so a half-finished delete leaves an evaluation cursor or a
+	// Finding pointing at a definition nobody can read any more.
+	//
+	// A DryRun request performs the same deletion and rolls it back, so the
+	// plan an operator reviews is produced by the code that would do the work
+	// rather than by a second query that can disagree with it.
+	DeleteRule(ctx context.Context, request rule.DeleteRequest) (rule.Deletion, error)
 }
 
 type RuleExplainer interface {

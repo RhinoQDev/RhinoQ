@@ -1,29 +1,32 @@
 # Governance
 
-## Giai đoạn hiện tại
+## Where the project is today
 
-RhinoQ là dự án open source theo [Apache-2.0](./LICENSE), do một maintainer dẫn
-dắt (benevolent dictator). Maintainer giữ quyền quyết định release, public API,
-schema và license.
+RhinoQ is an open source project under [Apache-2.0](./LICENSE), led by a single
+maintainer. The maintainer decides releases, the public API, the schema and the
+license.
 
-Đây chưa phải mô hình governance có nhiều bên; nó sẽ được mở rộng khi có
-contributor thường xuyên ngoài maintainer.
+This is not yet multi-party governance. It will be widened once there are
+regular contributors beyond the maintainer.
 
-## Ranh giới open-core
+## The open-core boundary
 
-Đang mở theo Apache-2.0: Go engine/domain/application/runtime, protocol, CLI,
-Node.js SDK, docs và test nền tảng.
+Open under Apache-2.0: the Go engine, domain, application and runtime, the
+protocol, the CLI, the Node.js SDK, the documentation and the foundational
+tests.
 
-Có thể giữ thương mại: managed hosted service, enterprise Console/workflow,
-support/SLA và operational automation riêng.
+Potentially commercial: a managed hosted service, an enterprise
+Console/workflow, support with an SLA, and proprietary operational automation.
 
-Apache-2.0 không ngăn bên khác chạy hosted service trên core. Giá trị thương mại
-nằm ở vận hành, thương hiệu và cam kết hỗ trợ, không nằm ở license — xem
-ADR-0013 trong [`.ai/DECISIONS.md`](./.ai/DECISIONS.md).
+Apache-2.0 does not stop anyone else from running a hosted service on the core.
+The commercial value is in operating it, in the brand and in a support
+commitment, not in the license — see ADR-0013 in
+[`.ai/DECISIONS.md`](./.ai/DECISIONS.md).
 
-## Quyền merge
+## Merge rights
 
-- Mọi thay đổi cần PR.
-- Ít nhất một maintainer review.
-- Domain, protocol, migration hoặc security cần hai người review khi team đủ lớn.
-- Release chỉ được tạo từ commit đã pass CI.
+- Every change goes through a pull request.
+- At least one maintainer reviews it.
+- Domain, protocol, migration and security changes need two reviewers once the
+  team is large enough for that to mean anything.
+- A release is only cut from a commit that passed CI.
