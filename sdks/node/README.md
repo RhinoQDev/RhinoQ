@@ -163,6 +163,51 @@ const [collection, items] = taskRoutePatterns('/tasks'); // ['/tasks', '/tasks/*
 Both adapters accept a body that a JSON parser has already consumed, so
 `express.json()` or Fastify's built-in parser does not hang the cancel route.
 
+### Initialising under a DI framework
+
+`installPostgresTaskProfile()` is async. Under NestJS, InversifyJS or any
+container that constructs eagerly, that creates a window in which the RhinoQ
+client exists as a field but is not usable yet.
+
+The failure is quiet. A consumer built in the same tick reads the half-built
+provider, decides RhinoQ is not configured, and disables its own bridge — the
+application starts, logs nothing, and simply stops projecting.
+
+Do not initialise in `onModuleInit` while other providers read the value from
+their constructor:
+
+```ts
+// Wrong: TaskConsumer is constructed before onModuleInit resolves.
+@Injectable()
+export class RhinoQService implements OnModuleInit {
+  tasks?: PostgresTaskClient;
+  async onModuleInit() {
+    this.tasks = await installPostgresTaskProfile(this.pool);
+  }
+}
+```
+
+Use an async factory provider instead. The container awaits it and injects
+nothing until it settles, so there is no half-built state to read:
+
+```ts
+@Module({
+  providers: [{
+    provide: 'RHINOQ_TASKS',
+    inject: [Pool],
+    useFactory: (pool: Pool) => installPostgresTaskProfile(pool),
+  }],
+  exports: ['RHINOQ_TASKS'],
+})
+export class RhinoQModule {}
+```
+
+The same rule applies to `BullMQTaskBridge`: build it in a factory that
+depends on `RHINOQ_TASKS`, so the bridge and its scope registration happen once
+the client is real. If a readiness flag is unavoidable, make the unready state
+**throw** rather than read as "disabled" — a startup crash is recoverable, a
+silently disabled bridge is not noticed until someone asks where the Tasks went.
+
 Check the [release guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/releasing.md)
 for the authoritative publication state and the trusted-publishing setup.
 
@@ -342,6 +387,49 @@ const bridge = new BullMQTaskBridge({
 });
 await bridge.cancel(taskId, [jobId]);
 ```
+
+#### An acknowledged cancellation does not end the Task
+
+`cancel()` records the cancellation *outcome*. It does not move the Task to a
+terminal state, and under `aggregate.terminal: 'manual'` — the default —
+nothing else does either. After a fully acknowledged cancellation the Task
+reads:
+
+```text
+state        cancel_requested
+cancellation acknowledged
+```
+
+and stays there. That is deliberate: `jobIds` is application-supplied, only the
+application knows whether those jobs were the whole Task, and a terminal Task
+is never reopened. It is also the single most common surprise in this API, so
+pick one of these two:
+
+```ts
+// 1. Finish it yourself. Works in every mode.
+const task = await bridge.cancel(taskId, jobIds);
+if (task.cancellation.status === 'acknowledged') {
+  await client.transitionTask(task.id, task.entityVersion, 'cancelled');
+}
+```
+
+```ts
+// 2. Let the bridge finish it, when the job list is complete.
+const bridge = new BullMQTaskBridge({
+  client, events, terminalProjection: 'execution-only',
+  cancelJob,
+  terminalizeOnCancel: true,
+});
+```
+
+`terminalizeOnCancel` cancels the named Executions and then the Task — an
+acknowledged job that leaves its attempt at `running` is a lie the batch view
+keeps telling. It refuses, and warns through `onWarning`, when any other
+Execution is still open: an incomplete `jobIds` list would otherwise close a
+Task whose remaining items are running.
+
+A Task that already refused the request (`too_late`) is left untouched by both
+paths.
 
 `terminalProjection` is required and has no default: only the application knows
 whether one BullMQ job is the whole user-facing Task. For a fan-out queue,

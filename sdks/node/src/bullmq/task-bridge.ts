@@ -160,6 +160,23 @@ export interface BullMQTaskBridgeOptions {
     | { status: 'acknowledged' }
     | { status: 'cannot_cancel_safely' | 'failed'; reason: string }
   >;
+  /**
+   * Finishes an acknowledged cancellation instead of leaving the Task at
+   * `cancel_requested`.
+   *
+   * `cancel()` records the cancellation *outcome*; it never moves the Task to a
+   * terminal state, because a terminal Task is never reopened and only the
+   * application knows whether the jobs it named are the whole Task. Under
+   * `aggregate.terminal: 'manual'` — the default — nothing else moves it
+   * either, so the Task sits at `cancel_requested` until the application
+   * transitions it.
+   *
+   * With this enabled and every named job acknowledged, the bridge cancels
+   * those Executions and then the Task. It still refuses when any other
+   * Execution is non-terminal: an incomplete `jobIds` list would otherwise
+   * close a Task while its remaining items are running.
+   */
+  terminalizeOnCancel?: boolean;
   onError?: (error: unknown, event: BullMQEvent) => void;
   /**
    * Receives configuration warnings that are not tied to one job event.
@@ -197,6 +214,8 @@ export class BullMQTaskBridge {
   private readonly resultReference?: (event: BullMQEvent) => Promise<string | undefined>;
   private readonly failureReason: (event: BullMQEvent) => string | undefined;
   private readonly cancelJob?: BullMQTaskBridgeOptions['cancelJob'];
+  private readonly terminalizeOnCancel: boolean;
+  private readonly warn: (warning: string) => void;
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
   private readonly listeners: Array<[QueueEvent, (event: BullMQEvent) => void]>;
   private closed = false;
@@ -232,6 +251,8 @@ export class BullMQTaskBridge {
     this.resultReference = options.resultReference;
     this.failureReason = options.failureReason ?? defaultFailureReason;
     this.cancelJob = options.cancelJob;
+    this.terminalizeOnCancel = options.terminalizeOnCancel === true;
+    this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
     this.onError = options.onError;
     this.warnOnDuplicateScope(options);
     this.listeners = [
@@ -519,7 +540,54 @@ export class BullMQTaskBridge {
         return this.resolveCancellation(taskId, result.status, result.reason);
       }
     }
-    return this.resolveCancellation(taskId, 'acknowledged');
+    const resolved = await this.resolveCancellation(taskId, 'acknowledged');
+    if (!this.terminalizeOnCancel) {
+      return resolved;
+    }
+    return this.terminalizeCancellation(taskId, new Set(jobIds));
+  }
+
+  /**
+   * Closes a Task whose named jobs have all durably stopped.
+   *
+   * The Executions go first: an acknowledged job that left its attempt at
+   * `running` is a lie the batch view keeps telling. The Task follows only when
+   * nothing else is still open, because `jobIds` is application-supplied and a
+   * short list would otherwise terminate a Task with items still in flight —
+   * and terminal Tasks are never reopened.
+   */
+  private async terminalizeCancellation(taskId: string, jobIds: Set<string>): Promise<TaskSnapshot> {
+    for (const jobId of jobIds) {
+      const execution = await this.find(jobId);
+      if (!execution || isTerminalExecution(execution.state)) {
+        continue;
+      }
+      await this.converge(async () => {
+        const current = await this.client.getTaskExecution(execution.id);
+        if (isTerminalExecution(current.state)) {
+          return;
+        }
+        await this.client.transitionTaskExecution(current.id, current.version, 'cancelled');
+      });
+    }
+    return this.converge(async () => {
+      const task = await this.client.getTask(taskId);
+      if (task.state !== 'cancel_requested') {
+        return task;
+      }
+      const open = latestExecutions(task.executions)
+        .filter((execution) => !isTerminalExecution(execution.state));
+      if (open.length > 0) {
+        this.warn(
+          `RhinoQ: Task ${taskId} stays at cancel_requested because ` +
+            `${open.length} Execution(s) are still open (${open.map((item) => item.id).join(', ')}). ` +
+            'terminalizeOnCancel only closes a Task whose every attempt has stopped; ' +
+            'pass the complete job list, or terminate the Task from the application.',
+        );
+        return task;
+      }
+      return this.client.transitionTask(task.id, task.entityVersion, 'cancelled');
+    });
   }
 
   /**
@@ -568,8 +636,7 @@ export class BullMQTaskBridge {
     if (existing === 0 || !this.duplicateScopeWarningEnabled(options)) {
       return;
     }
-    const warn = options.onWarning ?? ((warning: string) => console.warn(warning));
-    warn(
+    this.warn(
       `RhinoQ: ${existing + 1} BullMQTaskBridge instances share runtimeScope ` +
         `${JSON.stringify(this.runtimeScope)} in this process. Each one subscribes to ` +
         'QueueEvents, so every job event is projected once per bridge and the ' +
@@ -817,6 +884,10 @@ export class BullMQTaskBridge {
   private run(event: BullMQEvent, operation: () => Promise<void>): void {
     void operation().catch((error: unknown) => this.onError?.(error, event));
   }
+}
+
+function isTerminalExecution(state: string): boolean {
+  return state === 'succeeded' || state === 'failed' || state === 'cancelled';
 }
 
 function releaseScope(scope: string): void {
