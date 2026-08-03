@@ -1,38 +1,40 @@
 # Security policy
 
-## Trạng thái
+## Status
 
-RhinoQ đang ở active development và chưa có production-ready release. Chưa có
-version nào được hỗ trợ security patch dài hạn; fix bảo mật đi vào `main`.
-Kết quả audit gần nhất và các release blocker còn mở nằm ở
+RhinoQ is under active development and has no production-ready release yet.
+No version currently receives long-term security support; security fixes land
+on `main`. The latest audit and open release blockers are tracked in
 [`docs/security-audit-2026-07-29.md`](./docs/security-audit-2026-07-29.md).
 
-Không đưa secret, access token, refresh token, production payload hoặc thông
-tin khách hàng vào repository, issue, log hay commit.
+Never put secrets, access tokens, refresh tokens, production payloads or
+customer information in the repository, an issue, a log or a commit.
 
-## Báo cáo lỗ hổng
+## Reporting a vulnerability
 
-Không mở issue công khai cho lỗ hổng bảo mật. Dùng
+Do not open a public issue for a security vulnerability. Use
 [GitHub private vulnerability reporting](https://github.com/madebyduy/RhinoQ/security/advisories/new)
-để gửi báo cáo riêng, kèm phiên bản/commit, điều kiện tái hiện, impact và log
-đã redacted.
+and include the affected version/commit, reproduction conditions, impact and
+redacted logs.
 
-Không gửi credential thật. Nếu credential đã xuất hiện trong chat, log hoặc
-commit, phải revoke/rotate ngay; xóa khỏi file không làm credential cũ mất hiệu
-lực.
+Do not send real credentials. If a credential appears in a chat, log or commit,
+revoke and rotate it immediately; deleting it from a file does not invalidate
+the old credential.
 
-## Ghi chú về Integrity Rules
+## Integrity Rules
 
-Rule dùng SQL do developer viết. Explain gate kiểm shape, timeout, limit và plan
-cost — nó **không phải SQL sandbox**. Production phải chạy Rule bằng một
-PostgreSQL role read-only riêng, và không grant function hay extension có side
-effect ra filesystem/network. Xem [`docs/rules.md`](./docs/rules.md).
+Rules contain developer-written SQL. The Explain gate checks result shape,
+timeout, limit and plan cost; it is **not a SQL sandbox**. Production Rules
+must run with a dedicated restricted PostgreSQL read-only role, and that role
+must not be granted functions or extensions with filesystem or network side
+effects. See [`docs/rules.md`](./docs/rules.md) and
+[`docs/postgres.md`](./docs/postgres.md).
 
 ## Security baseline
 
-- Branch protected, không push trực tiếp vào `main`.
-- Mọi thay đổi cần pull request và CI pass.
-- Secret scanning và dependency scanning chạy trong CI.
-- Release dùng signed tag hoặc provenance phù hợp.
-- Payload/log phải redacted trước khi lưu.
-- Repair/operator actions phải có audit.
+- The main branch is protected; do not push directly to `main`.
+- Every change requires a pull request and passing CI.
+- Secret and dependency scanning run in CI.
+- Releases use signed tags or equivalent provenance.
+- Redact payloads and logs before persistence.
+- Repair and operator actions require an audit trail.

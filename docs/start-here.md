@@ -207,8 +207,22 @@ required `subject_id`, `violated` and bounded `evidence` shape.
 
 The generated SQL uses placeholder names `completed_reports` and `output_url`.
 Edit them before real use and add an index that matches its filter/order. This
-command generates a reviewable file; it does not silently enable or schedule a
-production Rule.
+command generates a reviewable file with the canonical `$1` baseline, `$2`
+cursor and `$3` result-limit bindings; it does not silently enable or schedule
+a production Rule. The next step is available when the full Go Rule schema and
+Gateway are running:
+
+```bash
+export RHINOQ_AGENT_URL='http://127.0.0.1:8080'
+export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
+npx rhinoq verify apply completed-report-has-output --subject-type report
+npx rhinoq verify run completed-report-has-output
+```
+
+`verify apply` validates and registers the file while leaving it disabled.
+`verify run` performs one bounded evaluation, prints violated subjects and
+evidence, then disables the Rule again. If the placeholder table or column is
+wrong, the Go Explain boundary fails closed and prints the next action.
 
 ### 6. Run the health checker
 
@@ -218,7 +232,9 @@ npx rhinoq doctor
 
 Why: this verifies PostgreSQL connectivity and confirms the Task schema version
 matches the installed SDK. It also tells you whether `REDIS_URL` is present,
-without requiring Redis for Task-only use.
+without requiring Redis for Task-only use. It lints local Rule files, warns when
+the connected PostgreSQL role is a superuser and reports whether the full Rule
+schema contains each local Rule.
 
 If it reports a schema mismatch, run `npx rhinoq init` with the same database
 variable and retry `doctor`.

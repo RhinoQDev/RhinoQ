@@ -79,6 +79,13 @@ Enqueueing belongs to the application transaction. Node handlers run from the
 application's `RhinoQWorker` process, where real handler functions are
 available.
 
+The onboarding `rhinoq` command also exposes `verify add`, `verify apply` and
+`verify run`. `add` writes a reviewable table-Rule template; `apply` sends the
+file to the authoritative Go Gateway and leaves it disabled; `run` enables one
+bounded evaluation, prints violations/evidence and disables it again. These
+three commands require the full Rule schema and Gateway, not the isolated
+three-table Task-only profile.
+
 ## Build the package from this repository
 
 Build and inspect the preview locally when contributing or validating a change.

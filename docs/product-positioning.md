@@ -87,4 +87,5 @@ integrate within a controlled pilot, and produce at least one prevented or
 detected mismatch with less operational work than their current scripts. Track
 integration time, old plumbing removed, time-to-detect, duplicate prevention,
 repair safety and operator confidence. See [Design partners](./design-partners.md)
-and [Product evidence](./product-evidence.md).
+and the reproducible [benchmarks](./benchmarks.md). Internal market research is
+kept outside the public repository.

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fixed the Node Rule onboarding loop: generated table Rules now use the
+  canonical `$1` baseline, `$2` cursor and `$3` limit bindings without comments
+  or trailing statements; `verify apply` registers them through the Go Gateway
+  and `verify run` performs one bounded evaluation. The Node doctor lints local
+  Rule files, reports unapplied files and warns on PostgreSQL superuser use.
+  Added the shared Rule contract fixture, issue templates, a restricted Rule
+  role guide and the missing design-partner kill criteria.
+
 - Added one public, beginner-first Start Here guide that explains the real-world
   failure RhinoQ addresses, every onboarding/demo command and its reason, the
   light Task view versus the full Workbench, BullMQ and ProviderOperation
@@ -277,9 +285,9 @@
   user-facing Task contract; the native queue/runtime and Verified Tasks are
   explicit optional paths. A concise `docs/product-positioning.md` now separates
   the intended existing-worker adoption wedge from capabilities that are only
-  planned. `RHINOQ_PRODUCT_DIRECTION_v3.md` is labeled as long-range research,
-  so its BullMQ adapter, realtime, frontend and provider proposals cannot be
-  mistaken for implemented behavior.
+  planned. Unpublished long-range product research is kept outside the public
+  tree, so its BullMQ adapter, realtime, frontend and provider proposals cannot
+  be mistaken for implemented behavior.
 
 - Hardened the security baseline after a repository audit. Go now requires
   1.25 and prefers patched toolchain 1.26.5; pgx is upgraded to 5.9.2 and

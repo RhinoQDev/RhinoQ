@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
 import { installPostgresTaskProfile } from '../postgres/task-client.js';
@@ -59,20 +59,236 @@ async function init(): Promise<void> {
 }
 
 async function verify(args: string[]): Promise<void> {
-  if (args[0] !== 'add' || !args[1]) fail('verify requires `add <rule-name>`', 'Run: npx rhinoq verify add completed-report-has-output');
-  const name = args[1]!.trim();
-  if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(name)) fail('rule name must be 2-63 lowercase letters, digits or dashes', 'Example: completed-report-has-output');
+  const action = args[0];
+  if (action === 'add') {
+    await addRule(args.slice(1));
+    return;
+  }
+  if (action === 'apply') {
+    await applyRule(args.slice(1));
+    return;
+  }
+  if (action === 'run') {
+    await runRule(args.slice(1));
+    return;
+  }
+  fail('verify requires `add`, `apply` or `run`', 'Run: npx rhinoq verify add completed-report-has-output');
+}
+
+async function addRule(args: string[]): Promise<void> {
+  const name = ruleName(args[0]);
   const path = resolve('.rhinoq', 'rules', `${name}.sql`);
   await mkdir(resolve('.rhinoq', 'rules'), { recursive: true });
-  await writeNew(path, `-- RhinoQ Rule: ${name}\n-- Return subject_id, violated and bounded JSON evidence.\n-- Replace completed_reports/output_url with your indexed business table/column.\nSELECT id::text AS subject_id,\n       output_url IS NULL AS violated,\n       jsonb_build_object('status', status, 'hasOutput', output_url IS NOT NULL) AS evidence\nFROM completed_reports\nWHERE id::text > $1\nORDER BY id\nLIMIT $2;\n`);
+  await writeNew(path, ruleTemplate());
   console.log(`PASS generated ${path}`);
-  console.log('NEXT edit the table/column names, then run: npx rhinoq doctor');
+  console.log(`NEXT edit table/column names, then apply it through the Go Gateway: npx rhinoq verify apply ${name} --subject-type report`);
+}
+
+async function applyRule(args: string[]): Promise<void> {
+  const name = ruleName(args[0]);
+  const options = parseRuleOptions(args.slice(1));
+  const query = await readRule(name);
+  const localError = validateLocalRuleQuery(query, true);
+  if (localError) fail(`Rule file is invalid: ${localError}`, `Edit .rhinoq/rules/${name}.sql, then run: npx rhinoq doctor`);
+  const response = await gatewayRequest('/v1/rules', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: name,
+      name: humanizeRuleName(name),
+      scope: 'table',
+      subjectType: options.subjectType,
+      query,
+      baselineAt: options.baselineAt,
+      everyMs: options.everyMs,
+      withinMs: options.withinMs,
+      maxRows: options.maxRows,
+      statementTimeoutMs: options.statementTimeoutMs,
+      maxPlanCost: options.maxPlanCost,
+      maxSeqScanRows: options.maxSeqScanRows,
+    }),
+  });
+  const record = (response as { rule?: RuleResponse }).rule ?? response as RuleResponse;
+  if (!record.id) fail('Gateway returned no Rule record', 'Check the Go Gateway logs and retry the apply command');
+  if (record.status === 'draft') {
+    await gatewayRequest(`/v1/rules/${encodeURIComponent(record.id)}/disable`, { method: 'POST' });
+  }
+  console.log(`PASS applied Rule ${record.id}@v${record.version ?? '?'}; status=disabled`);
+  console.log(`NEXT run a bounded check: npx rhinoq verify run ${name}`);
+}
+
+async function runRule(args: string[]): Promise<void> {
+  const name = ruleName(args[0]);
+  const options = parseRuleOptions(args.slice(1), true);
+  await gatewayRequest(`/v1/rules/${encodeURIComponent(name)}/enable`, { method: 'POST' });
+  let evaluation: RuleEvaluationResponse;
+  try {
+    evaluation = await gatewayRequest(`/v1/rules/${encodeURIComponent(name)}/evaluate`, {
+      method: 'POST',
+      body: JSON.stringify({ subjectId: options.subjectId, cursor: options.cursor }),
+    }) as RuleEvaluationResponse;
+  } finally {
+    await gatewayRequest(`/v1/rules/${encodeURIComponent(name)}/disable`, { method: 'POST' }).catch(() => undefined);
+  }
+  const observations = Array.isArray(evaluation.observations) ? evaluation.observations : [];
+  const violated = observations.filter((item) => item.status === 'violated');
+  const unknown = observations.filter((item) => item.status === 'unknown');
+  console.log(`PASS evaluated ${name}: ${observations.length} subject(s), ${violated.length} violated, ${unknown.length} unknown`);
+  for (const item of [...violated, ...unknown]) {
+    const reason = item.reason ? ` · ${item.reason}` : '';
+    console.log(`  ${item.status.toUpperCase()} ${item.subjectId}${reason}`);
+    if (item.evidence) console.log(`    evidence: ${item.evidence}`);
+  }
+  if (evaluation.hasMore && evaluation.nextCursor) console.log(`NEXT resume with: npx rhinoq verify run ${name} --cursor ${evaluation.nextCursor}`);
+}
+
+type RuleResponse = { id: string; version?: number; status?: string };
+type RuleEvaluationResponse = {
+  observations?: Array<{ subjectId: string; status: string; reason?: string; evidence?: string }>;
+  hasMore?: boolean;
+  nextCursor?: string;
+};
+
+type RuleOptions = {
+  subjectType: string;
+  baselineAt: string;
+  everyMs: number;
+  withinMs: number;
+  maxRows: number;
+  statementTimeoutMs: number;
+  maxPlanCost: number;
+  maxSeqScanRows: number;
+  subjectId: string;
+  cursor: string;
+};
+
+function ruleName(value: string | undefined): string {
+  const name = value?.trim() ?? '';
+  if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(name)) fail('rule name must be 2-63 lowercase letters, digits or dashes', 'Example: completed-report-has-output');
+  return name;
+}
+
+function parseRuleOptions(args: string[], runOnly = false): RuleOptions {
+  const options: RuleOptions = {
+    subjectType: process.env.RHINOQ_RULE_SUBJECT_TYPE ?? 'report',
+    baselineAt: new Date().toISOString(),
+    everyMs: 5 * 60_000,
+    withinMs: 0,
+    maxRows: 500,
+    statementTimeoutMs: 5_000,
+    maxPlanCost: 100_000,
+    maxSeqScanRows: 10_000,
+    subjectId: '',
+    cursor: '',
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    switch (key) {
+      case '--subject-type': options.subjectType = requiredOption(key, value); break;
+      case '--baseline': options.baselineAt = requiredOption(key, value); break;
+      case '--every': options.everyMs = durationMs(requiredOption(key, value), key); break;
+      case '--within': options.withinMs = durationMs(requiredOption(key, value), key); break;
+      case '--max-rows': options.maxRows = positiveInteger(key, value); break;
+      case '--statement-timeout': options.statementTimeoutMs = durationMs(requiredOption(key, value), key); break;
+      case '--max-plan-cost': options.maxPlanCost = positiveNumber(key, value); break;
+      case '--max-seq-scan-rows': options.maxSeqScanRows = positiveInteger(key, value); break;
+      case '--subject':
+        if (!runOnly) fail(`${key} is only valid for verify run`, 'Run: npx rhinoq verify run <rule-name> --subject <id>');
+        options.subjectId = requiredOption(key, value); break;
+      case '--cursor':
+        if (!runOnly) fail(`${key} is only valid for verify run`, 'Run: npx rhinoq verify run <rule-name> --cursor <cursor>');
+        options.cursor = requiredOption(key, value); break;
+      default: fail(`unknown verify option ${JSON.stringify(key)}`, 'Run: npx rhinoq verify apply <rule-name> --subject-type report');
+    }
+  }
+  return options;
+}
+
+function requiredOption(key: string, value: string | undefined): string {
+  if (!value?.trim()) fail(`${key} requires a value`, `Run: npx rhinoq verify apply <rule-name> --subject-type report`);
+  return value.trim();
+}
+
+function positiveInteger(key: string, value: string | undefined): number {
+  const parsed = Number(requiredOption(key, value));
+  if (!Number.isInteger(parsed) || parsed <= 0) fail(`${key} must be a positive integer`, 'Use a bounded positive value');
+  return parsed;
+}
+
+function positiveNumber(key: string, value: string | undefined): number {
+  const parsed = Number(requiredOption(key, value));
+  if (!Number.isFinite(parsed) || parsed <= 0) fail(`${key} must be positive`, 'Use a bounded positive value');
+  return parsed;
+}
+
+function durationMs(value: string, key: string): number {
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/.exec(value.trim());
+  if (!match) fail(`${key} must use a duration such as 5m, 30s or 2h`, 'Use a positive duration');
+  const units: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+  const result = Number(match[1]) * (units[match[2]!] ?? 0);
+  if (!Number.isFinite(result) || result <= 0) fail(`${key} must be positive`, 'Use a positive duration');
+  return Math.round(result);
+}
+
+async function readRule(name: string): Promise<string> {
+  const path = resolve('.rhinoq', 'rules', `${name}.sql`);
+  try { return await readFile(path, 'utf8'); }
+  catch { fail(`Rule file not found: ${path}`, `Run: npx rhinoq verify add ${name}`); }
+}
+
+function ruleTemplate(): string {
+  return `SELECT id::text AS subject_id,
+       output_url IS NULL AS violated,
+       jsonb_build_object('status', status, 'hasOutput', output_url IS NOT NULL) AS evidence
+FROM completed_reports
+WHERE created_at >= $1
+  AND id::text > $2
+ORDER BY id
+LIMIT $3
+`;
+}
+
+function validateLocalRuleQuery(query: string, tableRule = false): string | undefined {
+  const trimmed = query.trim();
+  if (!trimmed) return 'query is empty';
+  if (trimmed.length > 32 * 1024) return 'query exceeds 32 KiB';
+  if (!/^(select|with)\s/i.test(trimmed)) return 'query must start with SELECT or WITH';
+  if (/[;]|--|\/\*|\*\//.test(trimmed)) return 'comments and multiple statements are not allowed';
+  if (!trimmed.includes('$1')) return 'query must contain $1';
+  if (tableRule && (!trimmed.includes('$2') || !trimmed.includes('$3'))) return 'table Rule must contain $2 and $3';
+  return undefined;
+}
+
+function humanizeRuleName(name: string): string {
+  return name.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
+
+async function gatewayRequest(path: string, init: RequestInit): Promise<any> {
+  const base = (process.env.RHINOQ_AGENT_URL ?? process.env.RHINOQ_GATEWAY_URL ?? '').replace(/\/+$/, '');
+  if (!base) fail('RHINOQ_AGENT_URL/RHINOQ_GATEWAY_URL is not set', 'Start the Go Gateway with the full Rule schema, set its URL and retry');
+  const headers = new Headers(init.headers);
+  if (init.body) headers.set('content-type', 'application/json');
+  const token = process.env.RHINOQ_AGENT_TOKEN ?? process.env.RHINOQ_GATEWAY_TOKEN;
+  if (token) headers.set('authorization', `Bearer ${token}`);
+  let response: Response;
+  try { response = await fetch(`${base}${path}`, { ...init, headers }); }
+  catch (error) { fail(`cannot reach Go Gateway: ${safe(error)}`, 'Start the Gateway and verify RHINOQ_AGENT_URL/RHINOQ_AGENT_TOKEN'); }
+  const text = await response.text();
+  let payload: any = {};
+  try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
+  if (!response.ok) {
+    const message = payload?.error?.message ?? payload?.error ?? payload?.message ?? text;
+    fail(`Go Gateway returned HTTP ${response.status}: ${message}`, 'Inspect the Rule schema, table/column names and Explain safety limits');
+  }
+  return payload;
 }
 
 async function doctor(): Promise<void> {
   const url = databaseURL();
   if (!url) fail('DATABASE_URL/RHINOQ_DATABASE_URL is not set', 'Set it to PostgreSQL, then run: npx rhinoq doctor');
   const pool = new Pool({ connectionString: url, connectionTimeoutMillis: 5_000 });
+  let invalidRules = false;
   try {
     await pool.query('SELECT 1');
     const result = await pool.query<{ version: number }>('SELECT COALESCE(MAX(version),0)::int AS version FROM rhinoq_task.migrations');
@@ -80,10 +296,60 @@ async function doctor(): Promise<void> {
     if (installed !== TASK_SCHEMA_VERSION) fail(`Task schema is v${installed}; SDK needs v${TASK_SCHEMA_VERSION}`, 'Run: npx rhinoq init');
     console.log('PASS PostgreSQL reachable.');
     console.log(`PASS Task schema v${installed} current.`);
+    invalidRules = await doctorRules(pool);
   } finally { await pool.end(); }
+  if (invalidRules) fail('one or more local Rule files failed the safety contract', 'Edit the reported .rhinoq/rules/*.sql files, then rerun: npx rhinoq doctor');
   if (process.env.REDIS_URL) console.log('PASS REDIS_URL detected for BullMQ.');
   else console.log('INFO REDIS_URL is absent; this is fine unless the app uses BullMQ.');
   console.log('NEXT create the visible failure fixture: npx rhinoq fixture failure');
+}
+
+async function doctorRules(pool: Pool): Promise<boolean> {
+  const directory = resolve('.rhinoq', 'rules');
+  let files: string[];
+  try { files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort(); }
+  catch { console.log('INFO no local .rhinoq/rules directory; Rule checks skipped.'); return false; }
+  if (files.length === 0) {
+    console.log('INFO no local Rule files found.');
+    return false;
+  }
+  let invalid = false;
+  for (const file of files) {
+    const query = await readFile(resolve(directory, file), 'utf8');
+    const problem = validateLocalRuleQuery(query);
+    if (problem) {
+      invalid = true;
+      console.log(`FAIL Rule file ${file}: ${problem}`);
+    } else {
+      console.log(`PASS Rule file ${file} matches the bounded table Rule contract.`);
+    }
+  }
+  const role = await pool.query<{ name: string; superuser: boolean }>(
+    'SELECT current_user AS name, rolsuper AS superuser FROM pg_roles WHERE rolname = current_user',
+  );
+  const currentRole = role.rows[0];
+  if (currentRole?.superuser) {
+    console.log(`WARN PostgreSQL role ${currentRole.name} is a superuser; use a restricted read-only Rule role before evaluating business SQL.`);
+  } else if (currentRole) {
+    console.log(`PASS PostgreSQL role ${currentRole.name} is not a superuser.`);
+  }
+  const relation = await pool.query<{ relation: string | null }>(
+    `SELECT to_regclass('public.rhinoq_rules')::text AS relation`,
+  );
+  if (!relation.rows[0]?.relation) {
+    console.log('INFO full Rule schema is not installed; local Rule files are linted but not applied.');
+    return invalid;
+  }
+  const ids = files.map((file) => file.slice(0, -4));
+  const applied = await pool.query<{ id: string; status: string }>(
+    'SELECT id, status FROM rhinoq_rules WHERE id = ANY($1::text[])', [ids],
+  );
+  const appliedIDs = new Set(applied.rows.map((row) => row.id));
+  for (const id of ids) {
+    if (!appliedIDs.has(id)) console.log(`WARN Rule file ${id}.sql has not been applied to rhinoq_rules.`);
+    else console.log(`PASS Rule ${id} is present in rhinoq_rules.`);
+  }
+  return invalid;
 }
 
 async function fixture(args: string[]): Promise<void> {
@@ -134,7 +400,7 @@ async function dev(args: string[]): Promise<void> {
 
 function page(rows: unknown[]): string {
   const body = rows.map((value) => { const row = value as Record<string, unknown>; return `<tr><td>${escapeHTML(row.id)}</td><td>${escapeHTML(row.type)}</td><td><strong>${escapeHTML(row.state)}</strong></td><td>${escapeHTML(row.version)}</td></tr>`; }).join('');
-  return `<!doctype html><meta charset="utf-8"><title>RhinoQ dev</title><style>body{font:16px system-ui;max-width:960px;margin:4rem auto;padding:0 1rem;background:#0b1020;color:#eef}table{width:100%;border-collapse:collapse}td,th{padding:.8rem;border-bottom:1px solid #334}strong{color:#ffcc66}</style><h1>RhinoQ dev</h1><p>Technical completion is not the same as a real-world outcome.</p><table><thead><tr><th>Task</th><th>Type</th><th>Real-world state</th><th>Version</th></tr></thead><tbody>${body}</tbody></table>`;
+  return `<!doctype html><meta charset="utf-8"><title>RhinoQ dev</title><style>body{font:16px system-ui;max-width:960px;margin:4rem auto;padding:0 1rem;background:#0b1020;color:#eef}table{width:100%;border-collapse:collapse}td,th{padding:.8rem;border-bottom:1px solid #334}strong{color:#ffcc66}code{color:#9fe}</style><h1>RhinoQ dev</h1><p>Technical completion is not the same as a real-world outcome.</p><p><strong>Next step:</strong> write a Rule for a real business table, apply it through the Go Gateway, then run a bounded verification: <code>npx rhinoq verify apply &lt;name&gt; --subject-type &lt;type&gt;</code> → <code>npx rhinoq verify run &lt;name&gt;</code>.</p><table><thead><tr><th>Task</th><th>Type</th><th>Real-world state</th><th>Version</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean }> {
@@ -146,4 +412,4 @@ function escapeHTML(value: unknown): string { return String(value ?? '').replace
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify DATABASE_URL, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }
-function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq doctor\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nEvery failure includes the next action.`); }
+function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq doctor\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nEvery failure includes the next action.`); }

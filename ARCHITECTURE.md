@@ -1,15 +1,16 @@
-# RhinoQ — Kiến trúc chuẩn
+# RhinoQ architecture
 
-Tài liệu này là blueprint triển khai cho RhinoQ: cách chia module, dependency, runtime và lộ trình scale để hệ thống còn dễ sửa chữa, nâng cấp. Product contract và trạng thái thực thi nằm ở [`README.md`](./README.md) và [`docs/`](./docs/).
+This document is the implementation blueprint for RhinoQ: module boundaries,
+dependencies, runtime responsibilities and the conditions for scaling. The
+product contract and implementation status live in [`README.md`](./README.md)
+and [`docs/`](./docs/).
 
-Product baseline hiện tại là **Task Platform với capability Verified Tasks**.
-Task là user-facing abstraction mới; `Job` vẫn là execution/runtime primitive
-đã có và không bị đổi tên trong slice đầu tiên. Verified Tasks dùng lại
-Effect Ledger, Outcome, Rule và Finding cho các task cần chứng minh business
-result. Chi tiết baseline nằm ở [`.ai/PRODUCT_BASELINE.md`](./.ai/PRODUCT_BASELINE.md)
-và ADR-0014.
-
-Mô hình quan hệ mục tiêu:
+The current product baseline is a **Task Platform with an optional Verified
+Tasks capability**. `Task` is the user-facing abstraction; `Job` remains the
+existing execution/runtime primitive in the first slice. Verified Tasks reuse
+the Effect Ledger, Outcome, Rule and Finding modules when a task must prove a
+business result. See [`.ai/PRODUCT_BASELINE.md`](./.ai/PRODUCT_BASELINE.md) and
+ADR-0014 for the baseline decision.
 
 ```text
 Task 1:N Execution
@@ -18,26 +19,32 @@ Execution 0:N ProviderOperation
 Task 0:1 VerifiedTaskPolicy
 ```
 
-Task state, Execution/Job state, Effect state và Outcome state là các state
-machine độc lập. Provider integration chỉ cung cấp lifecycle/evidence của
-external operation; business logic vẫn thuộc application.
+Task, Execution/Job, Effect and Outcome are independent state machines. A
+provider integration supplies external-operation lifecycle and evidence; the
+application still owns business logic.
 
-**Quyết định ngôn ngữ:** Go là authoritative engine/runtime và cũng là nơi
-triển khai CLI chính thức. Node.js/TypeScript là SDK preview cho producer,
-worker lifecycle và operator API. Correctness không nằm trong SDK.
+**Language decision:** Go is the authoritative engine/runtime and implements
+the official CLI. Node.js/TypeScript is a developer-facing SDK for producers,
+worker lifecycle and operator APIs. Correctness does not move into the SDK.
 
-## 1. Nguyên tắc nền
+## 1. Principles
 
-1. Domain không biết PostgreSQL, Redis, HTTP, CLI hay framework.
-2. Application chỉ điều phối use case qua port, không gọi adapter trực tiếp.
-3. Runtime chịu trách nhiệm scheduling, lease, retry, concurrency và process lifecycle.
-4. Effect Ledger là nguồn evidence có thẩm quyền cho effect đã khai báo; không suy đoán confirmation từ log hoặc callback return.
-5. Outcome observation là evidence cho business verification; không đồng nhất với execution success và không chiếm ownership của business record.
-6. Control plane có quyền vận hành nhưng không được chứa business logic của worker.
-7. Mọi boundary đều có contract version, idempotency và telemetry.
-8. Scale theo bottleneck thực tế; không tách service chỉ vì thấy nhiều thư mục.
+1. The Domain does not know PostgreSQL, Redis, HTTP, the CLI or a framework.
+2. Application coordinates use cases through ports and does not call adapters
+   directly.
+3. Runtime owns scheduling, leases, retry timing, concurrency and process
+   lifecycle.
+4. The Effect Ledger is authoritative evidence for declared effects; never
+   infer confirmation from logs or a callback return.
+5. An Outcome observation is evidence for business verification. It is not
+   execution success and does not own the application's business record.
+6. The control plane can operate the system but must not contain worker
+   business logic.
+7. Every boundary has a versioned contract, idempotency and telemetry.
+8. Scale from measured bottlenecks; do not split services because the tree has
+   many directories.
 
-## 2. Mô hình tầng chuẩn
+## 2. Layer model
 
 ```mermaid
 flowchart TB
@@ -67,131 +74,102 @@ flowchart TB
   INF --> RUN
 ```
 
-### Tầng 1 — Public Contracts (Protocol)
+### Layer 1 — Public Contracts
 
-Chứa các kiểu dữ liệu và giao thức ổn định mà người dùng nhìn thấy:
+This layer contains stable types and protocols visible to adopters:
 
-- `JobDefinition`, `JobPayload`, `JobContext`
-- versioned `TaskSnapshot` với `schemaVersion` và `entityVersion`
-- `TaskProgress`, `TaskExecutionSummary` và command precondition
-- `EffectDefinition`, `ConfirmationPolicy`, `EffectState`
-- `OutcomeContract`, `OutcomeState`
-- `RetryPolicy`, `Lease`, `Attempt`, `Finding`, `RepairPlan`
-- error envelope, event envelope, correlation và tenant context
+- `JobDefinition`, `JobPayload` and `JobContext`;
+- versioned `TaskSnapshot` with `schemaVersion` and `entityVersion`;
+- `TaskProgress`, `TaskExecutionSummary` and command preconditions;
+- `EffectDefinition`, `ConfirmationPolicy` and `EffectState`;
+- `OutcomeContract`, `OutcomeState`, `RetryPolicy`, `Lease` and `Attempt`;
+- `Finding`, `RepairPlan`, error envelopes, event envelopes, correlation and
+  tenant context.
 
-Không đặt implementation vào đây. Contract phải có version và backward-compatibility policy.
-`TaskSnapshot.entityVersion` là aggregate revision: Task mutation và
-create/update Execution đều phải tăng nó trong cùng store transaction. Nếu chỉ
-tăng `Execution.Version`, stale-response rejection ở frontend sẽ không sound.
+Contracts contain no implementation. They are versioned and have a documented
+backward-compatibility policy. `TaskSnapshot.entityVersion` is the aggregate
+revision: Task mutations and Execution create/update operations must increment
+it in the same store transaction. Incrementing only `Execution.Version` would
+make stale-response rejection in the frontend unsound.
 
-### Tầng 2 — Domain (Go)
+### Layer 2 — Domain (Go)
 
-Chứa invariant thuần nghiệp vụ của RhinoQ:
+The Domain contains pure RhinoQ invariants:
 
-- state machine của job, attempt, effect và outcome
-- Rule version/scope/status và Finding lifecycle
-- điều kiện chuyển trạng thái
-- retry classification
-- quy tắc fail-closed khi unknown/uncertain
-- idempotency scope và effect fencing
-- eligibility của replay, resume, repair
+- job, attempt, effect and outcome state machines;
+- Rule version/scope/status and Finding lifecycle;
+- transition conditions and retry classification;
+- fail-closed handling for unknown/uncertain results;
+- idempotency scope, effect fencing and replay/resume/repair eligibility.
 
-Domain nhận input và trả decision/event. Không query database và không gọi provider.
+Domain accepts input and returns decisions/events. It does not query a database
+or call a provider.
 
-### Tầng 3 — Application (Go)
+### Layer 3 — Application (Go)
 
-Chứa use case, transaction boundary và orchestration cấp sản phẩm:
+Application owns use cases, transaction boundaries and product orchestration:
 
-- `EnqueueJob`
-- `ClaimJobs`
-- `RunAttempt`
-- `BeginEffect`, `ConfirmEffect`, `VerifyOutcome`
-- `RegisterRule`, `ExplainRule`, `EvaluateRule`
-- fold Rule observation vào persistent Finding
-- `RetryJob`, `ResumeJob`, `RepairJob`
-- `PauseQueue`, `DrainQueue`, `CancelJob`
+- `EnqueueJob`, `ClaimJobs`, `RunAttempt`;
+- `BeginEffect`, `ConfirmEffect`, `VerifyOutcome`;
+- `RegisterRule`, `ExplainRule`, `EvaluateRule` and Finding projection;
+- `RetryJob`, `ResumeJob`, `RepairJob`;
+- `PauseQueue`, `DrainQueue` and `CancelJob`.
 
-Application gọi các port, phối hợp Domain với Runtime và quyết định commit nào cần atomic. Đây là nơi đặt transaction script, không phải trong adapter.
+Application calls ports, coordinates Domain with Runtime and decides which
+operations must commit atomically. Transaction scripts belong here, not in an
+adapter.
 
-### Tầng 4 — Runtime/Agent (Go)
+### Layer 4 — Runtime/Agent (Go)
 
-Chứa cơ chế thực thi có thể scale độc lập:
+Runtime contains mechanisms that can scale independently:
 
-- scheduler và timing wheel cho delayed jobs
-- claim batch, lease, heartbeat và fencing token
-- worker pool, concurrency và resource class
-- retry/backoff/jitter/rate limit
-- graceful shutdown, cancellation và poison-job protection
-- local execution và process isolation
+- delayed-job scheduling and timing;
+- claim batches, leases, heartbeats and fencing tokens;
+- worker pools, concurrency and resource classes;
+- retry/backoff/jitter/rate limiting;
+- graceful shutdown, cancellation and poison-job protection;
+- local execution and process isolation.
 
-Runtime không được tự quyết định business outcome. Nó chỉ phát job execution và ghi nhận observation qua Application.
+Runtime does not decide business outcomes. It emits execution observations and
+records them through Application.
 
-### Tầng 5 — Ports (Go interfaces)
+### Layer 5 — Ports (Go interfaces)
 
-Các interface mà core cần, ví dụ:
+Ports describe capabilities needed by the core without exposing SQL clients,
+ORM models or HTTP responses. Examples include `JobStore`, `EffectStore`,
+`OutcomeVerifier` and `Clock`.
 
-```ts
-interface JobStore {
-  enqueue(input: EnqueueInput): Promise<JobId>;
-  claim(input: ClaimInput): Promise<ClaimedJob[]>;
-  complete(input: CompleteInput): Promise<void>;
-}
-
-interface EffectStore {
-  begin(input: BeginEffectInput): Promise<EffectRecord>;
-  transition(input: EffectTransition): Promise<void>;
-}
-
-interface OutcomeVerifier {
-  verify(
-    contract: OutcomeContract,
-    context: VerifyContext,
-  ): Promise<OutcomeObservation>;
-}
-
-interface Clock {
-  now(): Promise<DatabaseTime>;
+```go
+type JobStore interface {
+    Enqueue(ctx context.Context, input EnqueueInput) (JobID, error)
+    Claim(ctx context.Context, input ClaimInput) ([]ClaimedJob, error)
+    Complete(ctx context.Context, input CompleteInput) error
 }
 ```
 
-Port chỉ mô tả capability, không để lộ SQL client, ORM model hoặc HTTP response.
+### Layer 6 — Adapters (Go)
 
-### Tầng 6 — Adapters (Go)
+Adapters implement ports and translate external systems:
 
-Các implementation có thể thay thế:
+- PostgreSQL job, effect, outcome, Rule and Finding stores;
+- migration and read-only Rule explain/evaluate adapters;
+- provider HTTP, Stripe, S3 and provisioning adapters;
+- metadata adapters for Drizzle and Prisma;
+- metrics/tracing, console HTTP, gRPC agent and CLI adapters.
 
-- `postgres-job-store`
-- `postgres-effect-store`
-- `postgres-outcome-store`
-- `postgres-rule-store`, read-only `postgres-rule-explainer/evaluator`
-- `postgres-finding-store`
-- `postgres-migration`
-- `provider-http`, `provider-stripe`, `provider-s3`
-- `drizzle-metadata`, `prisma-metadata`
-- `prometheus-metrics`, `opentelemetry-tracing`
-- `console-http`, `grpc-agent`, `cli`
+Adapters do not contain retry business rules, repair logic or Domain
+invariants. Rule SQL is executed only after Domain/Application validation, in a
+read-only transaction with a local statement timeout and hard result limit.
+The database role remains a required security boundary.
 
-Adapter dịch dữ liệu giữa external system và port. Không đặt retry business, repair logic hoặc invariant vào adapter.
+### Layer 7 — Infrastructure
 
-Rule SQL adapter chỉ thực thi contract do domain/application đã validate. Nó
-phải dùng read-only transaction, local statement timeout và hard result limit;
-database role bị giới hạn vẫn là security boundary bắt buộc.
+Infrastructure is the only layer that knows frameworks and environment details.
+It contains dependency injection/composition roots, configuration and secret
+references, connection pools, logging/metrics/tracing, migrations and
+health/readiness/liveness wiring.
 
-### Tầng 7 — Infrastructure (Go + deployment)
-
-Chứa wiring và vận hành:
-
-- dependency injection/composition root
-- config loading và secret references
-- connection pool
-- logging, metrics, tracing
-- migrations
-- health/readiness/liveness
-- process bootstrap
-
-Infrastructure là nơi duy nhất biết framework, environment variable và cách khởi động process.
-
-## 3. Dependency rule bắt buộc
+## 3. Dependency rules
 
 ```text
 interfaces → public facade → application → domain
@@ -200,58 +178,38 @@ application/runtime → ports ← adapters
 infrastructure → composition root + adapters
 ```
 
-Quy tắc import:
+- `domain` imports only the standard library, domain siblings or contracts.
+- `contracts` contains data, versions and pure validation; Domain-to-contract
+  mapping belongs in Application.
+- `application` imports Domain, contracts and ports.
+- `runtime` imports Domain, contracts and ports.
+- `adapters` implement ports and do not import Application internals.
+- Console, CLI and SDK call the public Application facade, never a store.
+- A reverse dependency uses an event or port, never a circular import.
 
-- `domain` chỉ import `contracts`.
-- `application` import `domain`, `contracts`, `ports`.
-- `runtime` import `domain`, `contracts`, `ports`; public facade/composition root khởi tạo runtime.
-- `adapters` implement `ports`; không được import ngược `application` để gọi use case nội bộ.
-- `console`, `cli`, `sdk` gọi public application facade, không truy cập store trực tiếp.
-- Không dùng shared utility để phá dependency rule; utility phải thuộc đúng tầng.
+`tests/unit/architecture_test.go` enforces these directions. Add a rule to that
+gate when introducing a new boundary instead of bypassing it with a shared
+utility.
 
-Nếu cần một chiều ngược, dùng event hoặc port, không dùng import vòng.
-
-## 4. Cấu trúc repository hiện tại và hướng mở rộng
+## 4. Repository shape
 
 ```text
 cmd/
-  rhinoq-agent/
-  rhinoq-worker/
-  rhinoq/
+  rhinoq-agent/       # optional authenticated HTTP Gateway
+  rhinoq-worker/      # native worker process
+  rhinoq/             # official CLI
 internal/
-  contracts/       # DTO/protocol thuần, không import domain
-  domain/
-  application/
-  runtime/
-  ports/
-  adapters/
-  infrastructure/
-  interfaces/
-proto/
-  rhinoq/v1/
-sdks/
-  node/
-    src/
-  python/       # sau này
-tests/
-  unit/
-  contract/
-  integration/
-  fault/
-  benchmark/
+  contracts/ domain/ application/ runtime/ ports/
+  adapters/ infrastructure/ interfaces/
+proto/rhinoq/v1/
+sdks/node/            # producer, worker lifecycle and operator SDK
+tests/unit/ tests/contract/ tests/integration/ tests/fault/ tests/benchmark/
 ```
 
-Mỗi feature nên đi theo vertical slice bên trong các tầng: `enqueue`, `effect`, `outcome`, `recovery`. Không tạo một thư mục khổng lồ kiểu `services/` chứa mọi logic.
+Features should be vertical slices across these layers. Do not create a single
+`services/` directory containing every kind of logic.
 
-Dependency direction được khóa bằng
-`tests/unit/architecture_test.go`. Contract chỉ chứa dữ liệu/version/validation;
-mapping domain ↔ contract nằm ở Application. Audit chi tiết và những pattern
-được chọn hoặc từ chối nằm tại
-[`docs/architecture-review.md`](docs/architecture-review.md).
-
-Sơ đồ sequence chuẩn để review implementation và vẽ Console nằm tại [`docs/runtime-flows.md`](docs/runtime-flows.md).
-
-## 5. Luồng dữ liệu chuẩn
+## 5. Data flows
 
 ### Enqueue
 
@@ -264,9 +222,10 @@ Application request
   → worker claim
 ```
 
-Nếu queue nằm ngoài database, dùng local outbox. Không dual-write trực tiếp giữa business database và queue.
+When the queue is outside PostgreSQL, use a local outbox. Do not dual-write a
+business database and a queue directly.
 
-### Execute effect
+### Execute an effect
 
 ```text
 claim attempt
@@ -276,55 +235,51 @@ claim attempt
   → persist transition with fencing token
 ```
 
-`confirm` phải là policy explicit: `on-return`, `external-signal`, `verify`, hoặc predicate. Provider trả `202` không tự động là confirmed.
+`confirm` is an explicit policy: `on-return`, `external-signal`, `verify` or a
+predicate. A provider `202 Accepted` is not automatically `confirmed`.
 
-### Verify outcome
+### Verify an outcome
 
 ```text
-effect confirmed hoặc execution complete
+effect confirmed or execution complete
   → schedule notBefore
   → verify indexed contract / signal
   → pending | achieved | mismatch | unverifiable | stale
-  → finding / recovery action nếu cần
+  → Finding / recovery action if needed
 ```
 
-`notBefore` mặc định là `0`. Telemetry chỉ được dùng để đề xuất cấu hình, không tự apply.
+`notBefore` defaults to `0`. Telemetry may suggest configuration but does not
+apply it automatically.
 
-## 6. Ranh giới triển khai
+## 6. Deployment boundaries
 
-### V0.1 — Go authoritative engine + Node.js preview
+### V0.1 — Go authoritative engine + Node preview
 
-Có ba deployment path, không ép mọi người dùng cùng một topology:
+There are three supported deployment paths:
 
-- Go producer/worker dùng embedded `pkg/rhinoq` và PostgreSQL, không cần
-  Gateway;
-- Node producer dùng `PostgresProducer` trên pool/transaction hiện có, không
-  cần Gateway;
-- Node worker/operator dùng `RhinoQWorker`/`RhinoQClient` qua HTTP Gateway.
+- Go producer/worker uses embedded `pkg/rhinoq` and PostgreSQL, with no Gateway;
+- Node producer uses `PostgresProducer` on the application's pool/transaction,
+  with no Gateway;
+- Node worker/operator uses `RhinoQWorker`/`RhinoQClient` through the optional
+  HTTP Gateway.
 
-Go giữ authoritative state transition, lease/fencing, retry decision và Effect
-Ledger. Node SDK chỉ điều phối wire lifecycle và không tự quyết định job state.
-Tách module bằng code boundary trước, chỉ thêm network boundary khi worker
-không viết bằng Go.
+Go owns state transitions, leases, fencing, retry decisions and the Effect
+Ledger. Node coordinates wire lifecycle and reports observations. It does not
+implement a second job state machine.
 
-### Workbench local dành cho developer
+### Local Workbench
 
-Workbench nằm tại `internal/interfaces/workbench` và được composition root
-`cmd/rhinoq` khởi tạo. HTTP handler chỉ biết `Reader` read-only; nó không import
-PostgreSQL adapter và không query bảng trực tiếp. Live reader dịch dữ liệu từ
-public `rhinoq.Client`, còn demo reader dùng cùng contract.
+Workbench lives in `internal/interfaces/workbench` and is composed by
+`cmd/rhinoq`. Its HTTP handler knows only the read/action `Reader` interface;
+it does not import a PostgreSQL adapter or query tables directly. Static
+HTML/CSS/JavaScript is embedded in the Go binary and binds to `127.0.0.1`.
+The browser never receives database credentials or payloads. Mutating actions
+must use Application use cases with actor, reason and audit data.
 
-Static HTML/CSS/JavaScript được embed trong binary Go và chỉ bind
-`127.0.0.1`. Browser không nhận database credential hoặc payload. Khi cần scale
-read, `Reader` có thể chuyển sang read model/read replica mà không đổi browser
-contract. Mọi action ghi trong tương lai vẫn phải đi qua application use case
-với actor, reason và audit; Console không được bypass boundary này.
+### V0.2 — Scale the Go worker
 
-### V0.2 — Scale Go worker
-
-Scale ngang worker theo queue/resource class. Mỗi worker gửi danh sách handler;
-PostgreSQL lọc queue trước khi khóa candidate. Node app chỉ gọi protocol hoặc
-SQL enqueue, không chạy authoritative correctness logic trong process ứng dụng.
+Scale horizontally by queue/resource class. Each worker sends its registered
+handler list so PostgreSQL filters queues before locking candidates.
 
 ```text
 API replicas  → PostgreSQL
@@ -332,73 +287,75 @@ Worker pool   → PostgreSQL
 Console       → read API / operator API
 ```
 
-### V0.3 — Tách control plane
+### V0.3 — Separate the control plane
 
-Khi Console, reconciliation hoặc query history ảnh hưởng workload chính:
+When Console, reconciliation or history queries affect the primary workload,
+separate Console API from the worker write path, add a read model/read replica
+for history and run reconciliation separately. The Effect Ledger and state
+transitions remain in the authoritative store.
 
-- tách Console API khỏi worker write path
-- read replica/read model cho history
-- background reconciliation riêng
-- vẫn giữ Effect Ledger và state transition ở authoritative store
+### V1 — Additional SDKs
 
-### V1 — SDK đa ngôn ngữ
+Add Python/Java/.NET only when adoption evidence justifies it. SDKs speak the
+versioned protocol; authoritative correctness remains in Go.
 
-Gateway đã là Go core từ v0.1. Chỉ thêm Python/Java/.NET SDK khi có nhu cầu;
-các SDK chỉ nói protocol, authoritative correctness vẫn nằm ở Go engine.
+## 7. Data strategy
 
-## 7. Chiến lược dữ liệu
+| Data type | Purpose | Rule |
+|---|---|---|
+| Hot state | claim, lease and current status | small indexes and fenced updates |
+| Evidence | attempts, effects, outcome observations and audit | append-only with retention/partitioning |
+| Payload | large input/output and secret references | object storage or a separate payload table |
 
-Tách rõ ba loại dữ liệu:
+Console must not run heavy history queries against hot state. Build a read
+model from evidence/events when read scale requires it.
 
-| Loại      | Mục đích                                       | Quy tắc                                 |
-| --------- | ---------------------------------------------- | --------------------------------------- |
-| Hot state | claim, lease, current status                   | index nhỏ, update có fencing            |
-| Evidence  | attempts, effects, outcome observations, audit | append-only, partition/retention        |
-| Payload   | input/output lớn, secret reference             | object storage hoặc payload table riêng |
+Important state transitions carry `job_id`, `attempt_id`, `effect_id`,
+`tenant_id`, `correlation_id`, handler/contract versions, database time,
+fencing epoch and actor/source.
 
-Không để Console query trực tiếp bảng hot với truy vấn lịch sử nặng. Khi cần scale read, xây read model từ event/evidence.
+## 8. Scaling and upgrade rules
 
-Mọi state transition quan trọng phải có:
+1. Measure claim latency, DB connections, WAL, lock waits, outcome query cost
+   and provider latency before splitting a service.
+2. Scale reads with indexes/read models before scaling the write database.
+3. Scale workers by resource class rather than raising global concurrency.
+4. Handlers are idempotent or protected by the Effect Ledger.
+5. Migrations use expand → migrate → contract; old and new workers coexist.
+6. Contract changes add a version; never change the meaning of an existing
+   field in place.
+7. Every release has a rollback handler, migration plan and protocol plan.
+8. Console and repair cannot bypass Application use cases.
 
-- `job_id`, `attempt_id`, `effect_id`
-- `tenant_id`, `correlation_id`
-- `handler_version`, `contract_version`
-- `occurred_at` theo database time
-- fencing/epoch
-- actor/source
+## 9. Test gates
 
-## 8. Quy tắc scale và nâng cấp
+- **Unit:** Domain transitions, retry classification, confirmation and outcome.
+- **Contract:** ports/adapters, SDK protocol, ORM metadata and providers.
+- **Integration:** PostgreSQL transactions, lease expiry, outbox and migration.
+- **Fault:** worker loss during effects, database outage, duplicate delivery,
+  retry storms and clock skew.
+- **Benchmark:** claim, enqueue, Effect Ledger overhead, outcome batches and
+  payload size with hardware/workload/script recorded.
+- **Release:** compatibility, security, tenant isolation and restore/readiness.
 
-1. Đo trước khi tách: claim latency, DB connections, WAL, lock wait, outcome query cost, provider latency.
-2. Scale read bằng index/read model trước khi scale write database.
-3. Scale worker theo resource class, không tăng concurrency toàn cục.
-4. Handler phải idempotent hoặc được bảo vệ bằng Effect Ledger.
-5. Schema migration dùng expand → migrate → contract; worker cũ và mới phải chạy đồng thời được.
-6. Event/contract đổi bằng version mới; không đổi nghĩa field cũ tại chỗ.
-7. Mỗi release phải có rollback handler, migration và protocol.
-8. Không cho console/repair bypass application use case.
+Do not call the system production-ready without reproducible fault-test logs and
+benchmarks. No throughput, latency or reliability promise is made without the
+matching evidence.
 
-## 9. Test gate theo tầng
+## 10. Accepted decisions
 
-- **Unit:** domain transition, retry classification, confirmation policy, outcome state.
-- **Contract:** ports/adapters, SDK protocol, ORM metadata và provider adapter.
-- **Integration:** PostgreSQL transaction, lease expiry, outbox, migration.
-- **Fault:** kill worker giữa effect, DB outage, duplicate delivery, retry storm, clock skew.
-- **Benchmark:** claim, enqueue, effect ledger overhead, outcome batch, payload size; luôn ghi hardware/workload/script.
-- **Release:** backward compatibility, security, tenant isolation, restore/readiness.
+- PostgreSQL is the default authoritative store.
+- Redis/brokers are transport adapters, not business truth.
+- Application facade is the only API for CLI, Console, SDK and worker actions.
+- Effect Ledger and Outcome are core modules, enabled for the jobs/effects that
+  need them.
+- The control plane observes and requests actions through Application commands.
+- A Go modular monolith is the starting point; process/service splits require
+  measured bottlenecks.
+- Node SDK does not contain job state machines, retry decisions or Effect
+  Ledger correctness. Worker lifecycle only carries fencing data and reports
+  observations to the Go engine.
 
-Không gọi hệ thống “production-ready” nếu chưa có fault-test logs và benchmark tái lập.
-
-## 10. Quyết định kiến trúc chốt
-
-- PostgreSQL là authoritative store mặc định.
-- Redis/broker chỉ là adapter/transport tùy deployment, không chứa business truth.
-- Application facade là API duy nhất cho CLI, Console, SDK và worker.
-- Effect Ledger và Outcome contract là module lõi, nhưng chỉ bật theo job/effect cần thiết.
-- Control plane chỉ quan sát và yêu cầu action qua application command.
-- Go modular monolith là điểm bắt đầu; tách process/service là bước scale có điều kiện.
-- Node SDK không được chứa job state machine, retry decision hoặc Effect Ledger
-  correctness; worker lifecycle chỉ renew/carry fencing token và báo
-  observation về Go engine.
-
-Với mô hình này, thay PostgreSQL, provider, ORM, transport, Console hoặc ngôn ngữ SDK không buộc phải viết lại Domain và Application. Đó là boundary quan trọng nhất để RhinoQ có thể scale mà vẫn sửa chữa được.
+Replacing PostgreSQL, a provider, transport, Workbench or SDK language should
+not require rewriting Domain and Application. That boundary is the reason
+RhinoQ can scale while remaining repairable.

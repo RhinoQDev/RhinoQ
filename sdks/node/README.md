@@ -9,6 +9,19 @@ npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 ```
 
+The Node `init` path creates the isolated Task profile. For Verified Rules,
+start the full Go Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32
+bytes, then run:
+
+```bash
+npx rhinoq verify apply completed-report-has-output --subject-type report
+npx rhinoq verify run completed-report-has-output
+```
+
+`apply` reads the local SQL file through the Go Rule boundary and leaves it
+disabled. `run` performs one bounded evaluation, prints violations/evidence and
+disables the Rule again. Node does not reimplement Rule correctness.
+
 The embedded PostgreSQL Task client and BullMQ bridge reduce onboarding cost;
 the Go Gateway remains authoritative for ProviderOperation uncertainty,
 evidence and guarded repair.

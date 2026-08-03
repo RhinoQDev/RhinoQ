@@ -29,7 +29,6 @@
 ## Thiết kế
 
 - [Task Platform architecture history and current status table](./task-platform.md)
-- [Product evidence and validation log](./product-evidence.md)
 - [Implemented product strengths and proof boundaries](./product-strengths.md)
 - [Runtime foundation and implementation matrix](./feature-matrix.md)
 - [Integrity Rules](./rules.md)

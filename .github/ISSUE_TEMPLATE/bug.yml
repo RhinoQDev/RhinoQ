@@ -1,0 +1,47 @@
+name: Bug report
+description: Report a reproducible problem in RhinoQ.
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove secrets, tokens, customer payloads and private URLs before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: RhinoQ version or commit
+      placeholder: 0.1.0-beta.7 or abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Node SDK / CLI
+        - Go CLI / runtime
+        - PostgreSQL / migrations
+        - Gateway / Workbench
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include the smallest safe command sequence and redacted output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or test output
+      render: text

@@ -17,6 +17,20 @@ Set `DATABASE_URL` before `init`. The generated Rule is intentionally a
 template: edit its indexed business table and output column before using it
 outside the fixture. `init` does not overwrite existing config or Rules.
 
+The Node `init` path creates only the isolated Task profile. Verified Rules use
+the full Go schema and authenticated Gateway. After starting that Gateway and
+applying the full migrations, continue the Rule loop with:
+
+```bash
+export RHINOQ_AGENT_URL='http://127.0.0.1:8080'
+export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
+npx rhinoq verify apply completed-report-has-output --subject-type report
+npx rhinoq verify run completed-report-has-output
+```
+
+`verify apply` leaves the Rule disabled; `verify run` enables it for one bounded
+evaluation and disables it after printing violated subjects and evidence.
+
 To see queue completion diverge from reality and recover safely, run the
 [official Stripe failure demo](../examples/nextjs-bullmq-stripe/).
 

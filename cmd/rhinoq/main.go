@@ -194,6 +194,23 @@ func runDoctor(ci bool) int {
 		} else {
 			defer db.Close()
 			fmt.Println("  PASS PostgreSQL connection is healthy")
+			var roleName string
+			var isSuperuser bool
+			if err := db.QueryRowContext(dbCtx, `
+				SELECT current_user, rolsuper
+				FROM pg_roles
+				WHERE rolname = current_user`).Scan(&roleName, &isSuperuser); err != nil {
+				warnings++
+				fmt.Printf("  WARN cannot inspect PostgreSQL role: %v\n", err)
+				fmt.Println("       Verify the connection uses a restricted read-only role before evaluating Rules.")
+			} else if isSuperuser {
+				warnings++
+				fmt.Printf("  WARN PostgreSQL role %s is a superuser\n", roleName)
+				fmt.Println("       Rule SQL runs in a read-only transaction, but production still needs a restricted read-only role.")
+				fmt.Println("       Fix: configure RHINOQ_DATABASE_URL with the dedicated Rule role described in docs/postgres.md.")
+			} else {
+				fmt.Printf("  PASS PostgreSQL role %s is not a superuser\n", roleName)
+			}
 			runner, err := migrations.NewRunner(db)
 			if err != nil {
 				failures++

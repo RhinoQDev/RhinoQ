@@ -5,8 +5,8 @@
 **Accepted baseline:** Task Platform with an optional Verified Tasks capability.
 
 [`docs/product-positioning.md`](../docs/product-positioning.md) is the concise
-public messaging source. `RHINOQ_PRODUCT_DIRECTION_v3.md` remains long-range
-design research. Neither is an implementation contract unless a decision below
+public messaging source. The long-range product direction is kept as unpublished
+local research. Neither is an implementation contract unless a decision below
 is explicitly updated in this file, `DECISIONS.md`, the architecture documents
 and tests.
 

@@ -55,6 +55,23 @@ what is missing, refuses to overwrite generated Rules, and prints a next action
 for every failure. Open the URL printed by `rhinoq dev` to see a technically
 successful Execution whose real-world Task is `uncertain`.
 
+The five-minute path uses the isolated Task profile. To continue into the
+Verified Tasks loop, use the full Go schema and a local authenticated Gateway,
+then apply and run the Rule you edited:
+
+```bash
+export RHINOQ_AGENT_URL=http://127.0.0.1:8080
+export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
+npx rhinoq verify apply completed-report-has-output --subject-type report
+npx rhinoq verify run completed-report-has-output
+```
+
+`verify apply` reads `.rhinoq/rules/<name>.sql`, sends it through the Go Rule
+boundary and leaves it disabled. `verify run` enables it only for a bounded
+evaluation, prints violated subjects/evidence, then disables it again. The Go
+Gateway and full migrations are required because Node remains an SDK/CLI
+producer and does not reimplement Rule correctness.
+
 ## The demo that explains the product
 
 The official [Next.js + BullMQ + PostgreSQL + Stripe sandbox demo](./examples/nextjs-bullmq-stripe/)
@@ -178,6 +195,11 @@ first partners are teams with payments/refunds, provisioning/storage, or
 generated reports where a green queue status can still hide a customer-visible
 failure. The concrete recruiting channels, outreach message, pilot scope and
 success/kill metrics are in [Design partners](./docs/design-partners.md).
+
+Questions and pilot requests can use the repository's [integration question](https://github.com/madebyduy/RhinoQ/issues/new?template=integration-question.yml)
+or [design partner](https://github.com/madebyduy/RhinoQ/issues/new?template=design-partner.yml)
+forms. Please report vulnerabilities through [SECURITY.md](./SECURITY.md), not
+through a public issue.
 
 ## Documentation
 

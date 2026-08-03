@@ -2,6 +2,7 @@ package unit_test
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -42,5 +43,24 @@ func TestRuleQueryRejectsMultipleStatementsAndComments(t *testing.T) {
 		if !errors.Is(rule.ValidateQuery(query), rule.ErrUnsafeQuery) {
 			t.Fatalf("unsafe query should be rejected: %s", query)
 		}
+	}
+}
+
+func TestNodeRuleTemplateSatisfiesCanonicalRuleContract(t *testing.T) {
+	query, err := os.ReadFile("../../testdata/rules/completed-report-has-output.sql")
+	if err != nil {
+		t.Fatalf("read shared Node Rule template: %v", err)
+	}
+	if err := rule.ValidateQuery(string(query)); err != nil {
+		t.Fatalf("Node Rule template must pass ValidateQuery: %v", err)
+	}
+	record := rule.Record{
+		ID: "completed-report-has-output", Version: 1,
+		Name: "Completed reports have an output", Scope: rule.TableScope,
+		Status: rule.Draft, SubjectType: "report", Query: string(query),
+		BaselineAt: time.Now().UTC(), Every: time.Minute,
+	}
+	if err := record.WithDefaults().Validate(); err != nil {
+		t.Fatalf("Node Rule template must pass the table Rule contract: %v", err)
 	}
 }

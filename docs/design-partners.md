@@ -57,3 +57,16 @@ does not replace their workflow engine: <https://temporal.io/community>.
 Track candidates privately with: source, contact permission, workload, current
 workaround, incident frequency, pilot owner, next step and outcome. Never add a
 person to the public repository without consent.
+
+## Kill criteria
+
+Stop and revisit the onboarding or positioning instead of adding features when
+the pilot produces any of these signals:
+
+| Signal | Threshold | Decision |
+|---|---:|---|
+| Partner writes the first Rule | more than 60 minutes | return to onboarding and remove the largest source of friction |
+| A Rule catches a real mismatch | 0 partners in 14 days | test whether the problem is painful enough or the Rule contract is wrong |
+| Partner writes a second Rule unaided | 0 of 3 partners by day 30 | the product is not self-serve yet |
+| Findings per week | more than 50 with no operator action | reduce noise or revisit the alert policy |
+| Partners retained at day 30 | fewer than 2 of 3 | stop expansion and interview for the reason |

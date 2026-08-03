@@ -1,0 +1,35 @@
+name: Integration question
+description: Ask whether RhinoQ fits an existing queue, provider or database setup.
+title: "[integration] "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, customer data or unreleased incident details.
+  - type: input
+    id: stack
+    attributes:
+      label: Current stack
+      description: Name the queue/runtime, database and provider involved.
+      placeholder: BullMQ + PostgreSQL + Stripe test mode
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome you need to verify
+      description: What can be technically successful while still wrong in the real world?
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Mention whether queue migration, a Gateway process or application callbacks are acceptable.
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What you tried
+      description: Include a redacted command, Rule or error if relevant.

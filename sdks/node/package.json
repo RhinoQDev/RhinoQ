@@ -8,7 +8,7 @@
     "url": "git+https://github.com/madebyduy/RhinoQ.git",
     "directory": "sdks/node"
   },
-  "homepage": "https://github.com/madebyduy/RhinoQ/tree/main/sdks/node#readme",
+  "homepage": "https://github.com/madebyduy/RhinoQ/blob/main/docs/start-here.md",
   "bugs": {
     "url": "https://github.com/madebyduy/RhinoQ/issues"
   },

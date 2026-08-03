@@ -71,6 +71,35 @@ Function kiểm `session_user`—login gọi hàm—thay vì `current_user`, vì
 `SECURITY DEFINER`, `current_user` là owner của function. Không grant
 `INSERT`/`UPDATE` trực tiếp trên `rhinoq_jobs` cho producer.
 
+## Role chỉ đọc cho Rule
+
+Rule SQL là code do ứng dụng khai báo. Read-only transaction, statement timeout
+và hard result limit bảo vệ engine khỏi ghi dữ liệu và truy vấn không bị chặn;
+chúng không làm cho một database superuser trở thành role an toàn. Dùng một
+login riêng cho Rule evaluation và chỉ cấp `SELECT` trên đúng các bảng cần
+kiểm tra:
+
+```sql
+CREATE ROLE rhinoq_rules LOGIN PASSWORD 'generate-a-long-random-password';
+GRANT CONNECT ON DATABASE app TO rhinoq_rules;
+GRANT USAGE ON SCHEMA public TO rhinoq_rules;
+GRANT SELECT ON TABLE public.completed_reports TO rhinoq_rules;
+
+-- Nếu bảng do một owner riêng tạo, cấp quyền mặc định cho các bảng tương lai:
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public
+  GRANT SELECT ON TABLES TO rhinoq_rules;
+
+-- Không cho role Rule tạo object trong schema ứng dụng.
+REVOKE CREATE ON SCHEMA public FROM rhinoq_rules;
+```
+
+Thay `app`, `completed_reports` và `app_owner` bằng tên thật của hệ thống.
+Không cấp `SUPERUSER`, `CREATEDB`, `CREATEROLE` hoặc quyền ghi cho role này;
+cũng không grant các function/extension có thể truy cập filesystem hoặc network.
+Đặt `RHINOQ_DATABASE_URL` của quá trình Rule scheduler/scan dùng login này.
+`rhinoq doctor` cảnh báo nếu login hiện tại là superuser; cảnh báo đó phải được
+xử lý trước controlled pilot, không được coi là chỉ báo đã an toàn.
+
 ## Chi phí truy vấn cần biết
 
 | Đường đi | Chi phí |
