@@ -425,6 +425,13 @@ from the application's running workers on db 0), the published bridge in
 | item 1 succeeded → Task | still `running` | `running` | PASS |
 | item 2 succeeded → Task | still `running` | `running` | PASS |
 | item 3 real transient failure + BullMQ retry | Task not terminal | `running`; `attemptsMade` reached 2 | PASS |
+<!-- The retry row above is a record of what this run observed, not the
+current contract. At the time, a BullMQ retry reused its job ID and left no
+RhinoQ record, so item 3 stayed at one Execution. Since the per-attempt
+history change the same run produces four Executions -- item 3 attempt 1
+failed, attempt 2 succeeded -- and the "3 jobs → 3 distinct Executions" row
+would read 3 items / 4 attempts. Re-running this proof would update the
+numbers; the observations are kept as they were made. -->
 | all 3 succeeded, bridge only | still `running` | `running` at v18 | PASS |
 | aggregate artifact verified before completion | exists | verified on disk before the call | PASS |
 | application `CompleteTask` | now `succeeded` | `succeeded` at v20, `hasResult` true | PASS |

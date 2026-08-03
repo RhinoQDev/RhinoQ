@@ -845,11 +845,17 @@ reproducible.
 - npm `next` is stale until trusted publishing is authorized; use the exact
   beta.8 GitHub release tarball, which includes all three CLI commands.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
-  install of the packed tarball in both module systems. A NestJS *module* — DI
-  wiring, lifecycle hooks — is still not provided; only `require()` works.
+  install of the packed tarball in both module systems.
+- Express, Fastify and NestJS have request adapters (`createNodeTaskMiddleware`,
+  `registerFastifyTaskRoutes`) and a documented async-provider initialisation
+  pattern. A NestJS *module* — `RhinoQModule.forRootAsync()`, injectable
+  providers, lifecycle hooks — is still not shipped; the middleware is wired by
+  hand.
 - Node workers for the native RhinoQ runtime require the HTTP Gateway; embedded
   Task management does not.
-- NestJS integration and framework lifecycle hooks are not implemented.
+- `TaskReconciler` is a timer in one process, not a distributed scheduler.
+  Running it in several replicas is safe but wasteful and needs an idempotent
+  callback; electing one owner is a deployment decision.
 - Gateway multi-tenant isolation and per-job HTTP RBAC are not complete.
 - Async effect confirmation has no built-in webhook authentication or
   confirmation-deadline scheduler yet; the application authenticates evidence
