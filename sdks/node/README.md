@@ -565,6 +565,42 @@ workers before returning; repeat the same deterministic IDs to recover.
 Executions already past `pending_dispatch` are not sent to `Queue.add` again,
 and concurrent callers converge if one wins the durable bind.
 
+#### `itemKey` is the idempotency key
+
+`itemKey` decides whether two Executions are *the same work, retried* or *two
+different things*. Attempts are numbered per `itemKey`, and the aggregate counts
+one item per key.
+
+Omitting it stores the key `default`. That is correct for a Task that is one
+item, and wrong for every fan-out:
+
+```text
+50 items, no itemKey  →  attempts 1..50 of one item
+                      →  aggregate reads { completed: 1, total: 1 }
+                      →  all-succeeded terminates on the first finish
+```
+
+A terminal Task is never reopened, so that is unrecoverable and silent.
+`dispatchMany` therefore requires an `itemKey` on every item and refuses
+duplicates within a batch, before any durable or Queue work happens.
+
+Use the business identity of the item — an invoice number, a file key, a row
+ID. It must be the same across retries of that item and different for every
+other item:
+
+```ts
+await bridge.dispatchMany(files.map((file) => ({
+  task,
+  itemKey: file.storageKey,       // stable across retries of this file
+  executionId: `${task.id}:${file.storageKey}`,
+  jobId: `${task.id}:${file.storageKey}`,
+  job: { name: 'transcode', data: { key: file.storageKey } },
+})));
+```
+
+`track()` and `dispatch()` still accept an omitted `itemKey`, because a
+single-item Task genuinely has one.
+
 The current Task Snapshot includes every Execution summary. For large batches,
 run `npm run benchmark:postgres` with `RHINOQ_BENCH_FANOUT_SIZES` before choosing
 a batch size; bounded dispatch does not make an unbounded snapshot free.

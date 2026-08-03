@@ -55,7 +55,19 @@ export interface BullMQEvent {
 export interface BullMQTaskBinding {
   task: TaskCreateRequest;
   executionId: string;
-  /** Stable logical item; retries of the same item share this key. */
+  /**
+   * The idempotency key of one logical item.
+   *
+   * Attempts are numbered per `itemKey`, and the aggregate counts one item per
+   * key, so this is what decides whether two Executions are "the same work,
+   * retried" or "two different things". It is not a label.
+   *
+   * Omitting it stores the key `default`. That is correct for a Task that is
+   * one item and wrong for every fan-out: fifty items with no key become
+   * attempts 1..50 of a single item, the aggregate reads `total: 1`, and an
+   * `all-succeeded` batch terminates on the first finish. `dispatchMany`
+   * therefore requires it.
+   */
   itemKey?: string;
   jobId: string;
 }
@@ -1015,6 +1027,7 @@ function assertConsistentBatch(inputs: readonly BullMQTaskDispatch[]): void {
   const first = inputs[0]!;
   const executionIds = new Set<string>();
   const jobIds = new Set<string>();
+  const itemKeys = new Set<string>();
   for (const input of inputs) {
     if (
       input.task.type !== first.task.type ||
@@ -1031,6 +1044,26 @@ function assertConsistentBatch(inputs: readonly BullMQTaskDispatch[]): void {
     }
     executionIds.add(input.executionId);
     jobIds.add(input.jobId);
+
+    // itemKey is the idempotency key, not a label. Without one the store
+    // records every item under `default`, which makes them attempts of one
+    // item: the aggregate reads total 1 and an all-succeeded batch terminates
+    // on the first finish. That is silent, and terminal Tasks never reopen.
+    const itemKey = input.itemKey?.trim();
+    if (!itemKey) {
+      throw new TypeError(
+        `dispatchMany requires an itemKey on every item (missing on Execution ${input.executionId}). ` +
+          'It is the idempotency key: attempts are numbered per itemKey and the aggregate counts ' +
+          'one item per key, so a fan-out without one becomes repeated attempts of a single item.',
+      );
+    }
+    if (itemKeys.has(itemKey)) {
+      throw new TypeError(
+        `dispatchMany contains duplicate itemKey ${JSON.stringify(itemKey)}. Two items sharing a key ` +
+          'are recorded as two attempts of the same item, and only the later one is counted.',
+      );
+    }
+    itemKeys.add(itemKey);
   }
 }
 

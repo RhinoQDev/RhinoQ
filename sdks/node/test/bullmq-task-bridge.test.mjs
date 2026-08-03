@@ -240,6 +240,7 @@ test('dispatchMany rejects ambiguous batch identities before any durable or Queu
     task,
     executionId: `exec-${index}`,
     jobId: `job-${index}`,
+    itemKey: `item-${index}`,
     job: { name: 'work', data: index },
     ...overrides,
   });
@@ -258,6 +259,22 @@ test('dispatchMany rejects ambiguous batch identities before any durable or Queu
       input(2, { task: { ...task, definitionVersion: 2 } }),
     ]),
     /consistent Task definition/,
+  );
+
+  // itemKey is the idempotency key. Fifty items with no key are stored as
+  // attempts 1..50 of one item: the aggregate reads total 1 and an
+  // all-succeeded batch terminates on its first finish, irreversibly.
+  await assert.rejects(
+    bridge.dispatchMany([input(1), { ...input(2), itemKey: undefined }]),
+    /requires an itemKey on every item/,
+  );
+  await assert.rejects(
+    bridge.dispatchMany([input(1), input(2, { itemKey: '   ' })]),
+    /requires an itemKey on every item/,
+  );
+  await assert.rejects(
+    bridge.dispatchMany([input(1), input(2, { itemKey: 'item-1' })]),
+    /duplicate itemKey/,
   );
   assert.equal(calls, 0);
 });
