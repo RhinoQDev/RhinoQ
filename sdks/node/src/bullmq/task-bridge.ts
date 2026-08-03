@@ -10,6 +10,7 @@ import type {
 } from '../gateway/types.js';
 import type { TaskClient } from '../tasks/client.js';
 import type { TaskMetrics } from '../observe/metrics.js';
+import type { ProjectionFailure, ProjectionFailureSink } from '../tasks/projection-failures.js';
 
 type QueueEvent = 'waiting' | 'active' | 'progress' | 'completed' | 'failed';
 
@@ -191,6 +192,62 @@ export interface BullMQTaskBridgeOptions {
    */
   terminalizeOnCancel?: boolean;
   /**
+   * What to do when a job becomes active again after its attempt finished.
+   *
+   * BullMQ reuses the job ID across retries. The first attempt is already
+   * terminal by then, its state machine refuses to move, and the retry left no
+   * record at all — the `attempt` column never advanced past 1 for any
+   * external runtime.
+   *
+   * `new-attempt` (the default) supersedes the finished attempt and opens the
+   * next one for the same item, keeping the previous outcome and reason. That
+   * is the answer to the only question anyone asks about a retried job.
+   *
+   * `ignore` restores the old behaviour. Use it while rolling the Task schema
+   * back past v4, where the retry row cannot exist.
+   */
+  retryProjection?: 'new-attempt' | 'ignore';
+  /**
+   * Names the Execution opened for a retry. Defaults to
+   * `<previous execution id>#<attempt>`, which is deterministic, so a repeated
+   * projection of the same retry converges instead of forking.
+   */
+  retryExecutionId?: (previous: TaskExecution, attempt: number) => string;
+  /**
+   * Called once, when every item of a fan-out has reached a terminal state.
+   *
+   * `aggregate.progress: 'terminal-items'` writes progress on every
+   * completion; this is the single moment the batch became complete. Every
+   * adopter wrote that themselves as "did I just see the last one?", counting
+   * in application code — an answer that is wrong the moment two workers
+   * finish concurrently or an event is re-delivered.
+   *
+   * Exactly-once is enforced in one SQL statement, not by this process, so it
+   * survives a crash and several bridges. It needs a client that implements
+   * `settleTaskItems`; the Gateway client does not, and the bridge says so
+   * once rather than silently never firing.
+   *
+   * A throw here is reported through `onError`. The signal is not re-delivered:
+   * it already fired.
+   */
+  onItemsSettled?: (task: TaskSnapshot) => Promise<void> | void;
+  /**
+   * Writes a failed projection somewhere it survives the process.
+   *
+   * `onError` is a callback: it fires once, in the process that failed, and
+   * that process is often being killed — the reason the projection failed is
+   * frequently the reason the process is going away. The event is then gone
+   * and nothing knows the job ever happened.
+   *
+   * The sink is application-owned on purpose. The Task-only profile promises
+   * exactly three tables, replaying a projection is a business decision, and
+   * the row belongs beside whatever the job was doing.
+   *
+   * Recording is awaited before `onError` runs, so a sink that throws is
+   * reported rather than swallowed.
+   */
+  projectionFailures?: ProjectionFailureSink;
+  /**
    * Counts projections and their failures. The embedded path has no Gateway
    * and therefore no /metrics; this is the replacement. It records counts
    * only — no latency, no rate — because a performance number without its
@@ -235,6 +292,12 @@ export class BullMQTaskBridge {
   private readonly failureReason: (event: BullMQEvent) => string | undefined;
   private readonly cancelJob?: BullMQTaskBridgeOptions['cancelJob'];
   private readonly terminalizeOnCancel: boolean;
+  private readonly retryProjection: 'new-attempt' | 'ignore';
+  private readonly retryExecutionId: (previous: TaskExecution, attempt: number) => string;
+  private readonly onItemsSettled?: (task: TaskSnapshot) => Promise<void> | void;
+  private readonly projectionFailures?: ProjectionFailureSink;
+  private warnedAboutRetrySupport = false;
+  private warnedAboutSettleSupport = false;
   private readonly metrics?: TaskMetrics;
   private readonly warn: (warning: string) => void;
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
@@ -273,17 +336,20 @@ export class BullMQTaskBridge {
     this.failureReason = options.failureReason ?? defaultFailureReason;
     this.cancelJob = options.cancelJob;
     this.terminalizeOnCancel = options.terminalizeOnCancel === true;
+    this.retryProjection = options.retryProjection ?? 'new-attempt';
+    this.retryExecutionId = options.retryExecutionId
+      ?? ((previous, attempt) => `${previous.id}#${attempt}`);
+    this.onItemsSettled = options.onItemsSettled;
     this.metrics = options.metrics;
     this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
     this.onError = options.onError;
     this.warnOnDuplicateScope(options);
-    this.listeners = [
-      ['waiting', (event) => this.run(event, () => this.project('waiting', event))],
-      ['active', (event) => this.run(event, () => this.project('active', event))],
-      ['progress', (event) => this.run(event, () => this.project('progress', event))],
-      ['completed', (event) => this.run(event, () => this.project('completed', event))],
-      ['failed', (event) => this.run(event, () => this.project('failed', event))],
-    ];
+    this.projectionFailures = options.projectionFailures;
+    this.listeners = (['waiting', 'active', 'progress', 'completed', 'failed'] as const)
+      .map((name): [QueueEvent, (event: BullMQEvent) => void] => [
+        name,
+        (event) => this.run(name, event, () => this.project(name, event)),
+      ]);
     for (const [name, listener] of this.listeners) {
       this.events.on(name, listener);
     }
@@ -691,9 +757,72 @@ export class BullMQTaskBridge {
 
   private async start(jobId: string): Promise<void> {
     const execution = await this.find(jobId);
-    if (execution) {
-      await this.activate(execution);
+    if (!execution) {
+      return;
     }
+    // A job going active again after its attempt finished is a retry. Without
+    // this the terminal state machine simply refuses the move and the second
+    // run disappears.
+    const current = isTerminalExecution(execution.state)
+      ? await this.openRetryAttempt(execution)
+      : execution;
+    if (!current) {
+      return;
+    }
+    await this.activate(current);
+  }
+
+  /**
+   * Supersedes a finished attempt and returns the one that replaces it.
+   *
+   * Returns undefined when nothing should move: retry projection is off, the
+   * client cannot record attempts, or another bridge already opened the next
+   * attempt while this one was reading.
+   */
+  private async openRetryAttempt(previous: TaskExecution): Promise<TaskExecution | undefined> {
+    if (this.retryProjection === 'ignore') {
+      return undefined;
+    }
+    if (!this.client.retryTaskExecution) {
+      // The Gateway client owns attempt identity for the runtimes it runs
+      // itself, so this is not a defect there. Say it once rather than on
+      // every retried job.
+      if (!this.warnedAboutRetrySupport) {
+        this.warnedAboutRetrySupport = true;
+        this.warn(
+          'RhinoQ: this Task client cannot record a retry as a new attempt, so a BullMQ retry ' +
+            'of an already-finished job leaves no record. Use the embedded PostgreSQL client, ' +
+            "or set retryProjection: 'ignore' to accept that.",
+        );
+      }
+      return undefined;
+    }
+    const nextAttempt = (previous.attempt ?? 1) + 1;
+    try {
+      await this.client.retryTaskExecution(
+        previous.id,
+        previous.version,
+        this.retryExecutionId(previous, nextAttempt),
+      );
+    } catch (error) {
+      // A concurrent bridge, or a repeated projection of the same retry, wins
+      // the supersede. The durable lookup is authoritative either way.
+      if (
+        !isVersionConflict(error) &&
+        !isCode(error, 'RHINOQ_EXECUTION_SUPERSEDED') &&
+        !isCode(error, 'RHINOQ_EXECUTION_ALREADY_EXISTS')
+      ) {
+        throw error;
+      }
+    }
+    this.metrics?.increment('rhinoq_task_execution_retried_total', {
+      ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
+    });
+    const replacement = await this.find(previous.externalId ?? '');
+    if (!replacement || replacement.id === previous.id) {
+      return undefined;
+    }
+    return replacement;
   }
 
   /**
@@ -751,8 +880,10 @@ export class BullMQTaskBridge {
 
     if (this.terminalProjection === 'execution-only') {
       await this.updateAggregate(execution.taskId);
+      await this.signalSettlement(execution.taskId);
       return;
     }
+    await this.signalSettlement(execution.taskId);
     // One job is the whole Task here, so its output is also the Task's.
     await this.ensureTask(execution.taskId, 'succeeded');
     if (reference) {
@@ -784,6 +915,36 @@ export class BullMQTaskBridge {
     } else {
       await this.updateAggregate(execution.taskId);
     }
+    await this.signalSettlement(execution.taskId);
+  }
+
+  /**
+   * Fires `onItemsSettled` for the one caller that closed the last item.
+   *
+   * The exactly-once decision is a single SQL statement, not a check in this
+   * process, so it survives a crash, a re-delivered event and several bridges.
+   */
+  private async signalSettlement(taskId: string): Promise<void> {
+    if (!this.onItemsSettled) {
+      return;
+    }
+    if (!this.client.settleTaskItems) {
+      if (!this.warnedAboutSettleSupport) {
+        this.warnedAboutSettleSupport = true;
+        this.warn(
+          'RhinoQ: onItemsSettled was configured but this Task client cannot settle items, ' +
+            'so the signal will never fire. Use the embedded PostgreSQL client.',
+        );
+      }
+      return;
+    }
+    if (!(await this.client.settleTaskItems(taskId))) {
+      return;
+    }
+    this.metrics?.increment('rhinoq_task_items_settled_total', {
+      ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
+    });
+    await this.onItemsSettled(await this.client.getTask(taskId));
   }
 
   private async updateAggregate(taskId: string): Promise<void> {
@@ -912,16 +1073,53 @@ export class BullMQTaskBridge {
     throw lastConflict;
   }
 
-  private run(event: BullMQEvent, operation: () => Promise<void>): void {
-    void operation().catch((error: unknown) => {
+  private run(name: QueueEvent, event: BullMQEvent, operation: () => Promise<void>): void {
+    void operation().catch(async (error: unknown) => {
       // A listener failure is otherwise invisible unless onError is wired: the
       // promise is not awaited by anyone. Counting it is what makes a bridge
       // that has silently stopped projecting show up on a dashboard.
       this.metrics?.increment('rhinoq_bridge_projection_failed_total', {
         ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
       });
+      // Durable first. onError is a callback in a process that is often about
+      // to die; the record has to exist before that happens.
+      try {
+        await this.recordProjectionFailure(name, event, error);
+      } catch (sinkError) {
+        this.onError?.(sinkError, event);
+      }
       this.onError?.(error, event);
     });
+  }
+
+  private async recordProjectionFailure(
+    event: QueueEvent,
+    observation: BullMQEvent,
+    error: unknown,
+  ): Promise<void> {
+    if (!this.projectionFailures) {
+      return;
+    }
+    const failure: ProjectionFailure = {
+      schemaVersion: 1,
+      event,
+      runtime: 'bullmq',
+      runtimeScope: this.runtimeScope,
+      externalId: observation.jobId,
+      observation: {
+        jobId: observation.jobId,
+        ...(observation.data === undefined ? {} : { data: observation.data }),
+        ...(observation.returnvalue === undefined ? {} : { returnvalue: observation.returnvalue }),
+        ...(observation.failedReason === undefined ? {} : { failedReason: observation.failedReason }),
+      },
+      // The message, never the stack: a stack is not portable across processes
+      // and leaks filesystem paths into a table somebody will read in a ticket.
+      message: error instanceof Error ? error.message : String(error),
+      ...(error instanceof RhinoQError ? { code: error.code } : {}),
+      observedAt: new Date().toISOString(),
+      attempts: 1,
+    };
+    await this.projectionFailures.record(failure);
   }
 }
 

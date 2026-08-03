@@ -9,6 +9,8 @@ export * from './bullmq/task-bridge.js';
 export * from './tasks/client.js';
 export * from './tasks/http.js';
 export * from './tasks/adapters.js';
+export * from './tasks/reconciler.js';
+export * from './tasks/projection-failures.js';
 export * from './observe/metrics.js';
 export * from './notify/registry.js';
 export * from './notify/sender.js';

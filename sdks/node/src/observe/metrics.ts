@@ -21,6 +21,13 @@ export type TaskMetricName =
   | 'rhinoq_task_cancellation_resolved_total'
   | 'rhinoq_bridge_event_projected_total'
   | 'rhinoq_bridge_projection_failed_total'
+  | 'rhinoq_task_execution_retried_total'
+  | 'rhinoq_task_items_settled_total'
+  | 'rhinoq_reconciler_sweep_skipped_total'
+  | 'rhinoq_reconciler_sweep_failed_total'
+  | 'rhinoq_reconciler_task_selected_total'
+  | 'rhinoq_reconciler_task_reconciled_total'
+  | 'rhinoq_reconciler_task_failed_total'
   | 'rhinoq_bridge_version_conflict_total';
 
 export type MetricLabels = Readonly<Record<string, string>>;

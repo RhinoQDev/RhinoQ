@@ -50,6 +50,24 @@ export interface TaskClient {
     reference: string,
   ): Promise<TaskSnapshot>;
   getTaskExecutionResults(taskId: string): Promise<TaskExecutionResults>;
+  /**
+   * Closes a finished attempt and opens the next one for the same item.
+   *
+   * Optional: the Gateway client does not implement it, because the Go engine
+   * owns attempt identity for the runtimes it runs itself. It exists for
+   * external runtimes that reuse one job identity across retries, where
+   * otherwise the second run leaves no record at all.
+   */
+  retryTaskExecution?(
+    executionId: string,
+    expectedVersion: number,
+    nextExecutionId: string,
+  ): Promise<TaskSnapshot>;
+  /**
+   * Marks a Task as having every item finished, returning true only for the
+   * caller that did it. Optional for the same reason as `retryTaskExecution`.
+   */
+  settleTaskItems?(taskId: string): Promise<boolean>;
   transitionTask(
     taskId: string,
     expectedVersion: number,

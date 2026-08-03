@@ -1,7 +1,7 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 2;
-export const TASK_SCHEMA_NAME = '002_task_summary_aggregates';
+export const TASK_SCHEMA_VERSION = 5;
+export const TASK_SCHEMA_NAME = '005_items_settled_signal';
 
 /**
  * Task-only PostgreSQL profile.
@@ -650,9 +650,165 @@ END;
 $$;
 `;
 
+/**
+ * Expand step for per-attempt history of an external runtime's retries.
+ *
+ * A BullMQ retry reuses its job ID. `executions_runtime_ref_unique` allowed
+ * exactly one Execution per (runtime, scope, external id), so the retry had
+ * nowhere to go: the first attempt was already terminal, its state machine
+ * refused to move, and the second run left no record at all. The `attempt`
+ * column existed and never advanced past 1 for any external runtime.
+ *
+ * This adds `superseded_at` and a partial unique index that only covers live
+ * rows. It is purely additive: code that never sets `superseded_at` still sees
+ * at most one live row per external ID, exactly as before, so a process running
+ * the previous SDK against this schema behaves identically.
+ *
+ * The old index still forbids the second row. Dropping it is v4.
+ */
+export const TASK_SCHEMA_V3_SQL = String.raw`
+ALTER TABLE rhinoq_task.executions
+  ADD COLUMN IF NOT EXISTS superseded_at timestamptz;
+
+CREATE UNIQUE INDEX IF NOT EXISTS executions_runtime_ref_live_unique
+  ON rhinoq_task.executions (runtime, runtime_scope, external_id)
+  WHERE external_id IS NOT NULL AND superseded_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS executions_item_attempt_idx
+  ON rhinoq_task.executions (task_id, item_key, attempt DESC);
+`;
+
+/**
+ * Contract step: the old index is what forbade the retry row, so it goes.
+ *
+ * Rollback is `CREATE UNIQUE INDEX executions_runtime_ref_unique ...` and it
+ * only succeeds while no external ID has more than one row. Stop projecting
+ * retries first -- set `retryProjection: 'ignore'` on the bridge, or stop the
+ * bridge -- then roll back. Rolling back with superseded rows present fails
+ * loudly on the index build, which is the correct place to find out.
+ */
+export const TASK_SCHEMA_V4_SQL = String.raw`
+DROP INDEX IF EXISTS rhinoq_task.executions_runtime_ref_unique;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.retry_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_new_id text
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_attempt integer;
+BEGIN
+  IF btrim(COALESCE(p_new_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION');
+  END IF;
+  SELECT * INTO v_execution FROM rhinoq_task.executions
+  WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.superseded_at IS NOT NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_SUPERSEDED', p_id);
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail('RHINOQ_VERSION_CONFLICT', p_id);
+  END IF;
+  -- Only a finished attempt may be superseded. Superseding a running one
+  -- would leave two live executions of the same item, which is the exact
+  -- thing the fencing exists to prevent.
+  IF v_execution.state NOT IN ('succeeded', 'failed', 'stalled', 'cancelled') THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_TRANSITION',
+      v_execution.state || ' -> superseded');
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET superseded_at = clock_timestamp(),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id;
+
+  SELECT COALESCE(MAX(attempt), 0) + 1 INTO v_attempt
+  FROM rhinoq_task.executions
+  WHERE task_id = v_execution.task_id AND item_key = v_execution.item_key;
+
+  INSERT INTO rhinoq_task.executions (
+    id, task_id, item_key, attempt, runtime, runtime_scope, external_id, state
+  ) VALUES (
+    p_new_id, v_execution.task_id, v_execution.item_key, v_attempt,
+    v_execution.runtime, v_execution.runtime_scope, v_execution.external_id,
+    'dispatched'
+  );
+
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = v_execution.task_id;
+  RETURN v_attempt;
+EXCEPTION
+  WHEN unique_violation THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_EXISTS', p_new_id);
+    RETURN 0;
+END;
+$$;
+`;
+
+/**
+ * "Every item has finished", delivered once.
+ *
+ * A fan-out with `aggregate.progress: 'terminal-items'` writes progress on
+ * every completion: fifty items, fifty round trips, and an application that
+ * wants the single moment the batch became complete has to derive it by
+ * counting. Every adopter wrote that counter, and every one of them wrote it
+ * as "did I just see the last one?", which is wrong the moment two workers
+ * finish concurrently or an event is re-delivered.
+ *
+ * `settle_items` answers it in one statement. The flag is set by exactly one
+ * caller because the UPDATE filters on `items_settled_at IS NULL`; everyone
+ * else gets false. Repeating the call is free and stays false.
+ *
+ * Superseded attempts cannot make this fire early: only a terminal attempt may
+ * be superseded, so a superseded row never sits in a non-terminal counter.
+ */
+export const TASK_SCHEMA_V5_SQL = String.raw`
+ALTER TABLE rhinoq_task.tasks
+  ADD COLUMN IF NOT EXISTS items_settled_at timestamptz;
+
+CREATE INDEX IF NOT EXISTS tasks_state_age_idx
+  ON rhinoq_task.tasks (state, updated_at)
+  INCLUDE (id, items_settled_at);
+
+CREATE OR REPLACE FUNCTION rhinoq_task.settle_items(p_id text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_settled boolean := false;
+BEGIN
+  UPDATE rhinoq_task.tasks
+  SET items_settled_at = clock_timestamp(),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+    AND items_settled_at IS NULL
+    AND execution_total > 0
+    -- 'stalled' blocks: a stalled attempt is not a finished one, and calling
+    -- the batch complete while one is stuck is the failure this replaces.
+    AND execution_pending_dispatch + execution_dispatched
+        + execution_running + execution_stalled = 0
+  RETURNING true INTO v_settled;
+  RETURN COALESCE(v_settled, false);
+END;
+$$;
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
-  { version: 2, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V2_SQL },
+  { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
+  { version: 3, name: '003_execution_supersede_expand', sql: TASK_SCHEMA_V3_SQL },
+  { version: 4, name: '004_execution_supersede_contract', sql: TASK_SCHEMA_V4_SQL },
+  { version: 5, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V5_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {

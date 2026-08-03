@@ -48,6 +48,55 @@ open, or a claim it made that the repository could not back.
 - `require('@rhinoq/node/package.json')` no longer throws
   `ERR_PACKAGE_PATH_NOT_EXPORTED`.
 
+### Task schema v3, v4, v5
+
+Applied automatically by `installPostgresTaskProfile` and `npx rhinoq-task`.
+Verified against PostgreSQL 16: applies clean, re-runs as a no-op, and the Go
+engine harness still passes on the same database.
+
+- **v3 (expand)** adds `executions.superseded_at` and a partial unique index
+  covering only live rows. Purely additive: code that never sets the column
+  still sees at most one live row per external ID, so a process running the
+  previous SDK against this schema behaves identically.
+- **v4 (contract)** drops `executions_runtime_ref_unique` — the index that
+  forbade the retry row — and adds `retry_execution`. Rollback is recreating
+  that index and only succeeds while no external ID has more than one row:
+  stop projecting retries first (`retryProjection: 'ignore'`), then roll back.
+  Rolling back with superseded rows present fails on the index build, which is
+  the correct place to find out.
+- **v5** adds `tasks.items_settled_at`, `settle_items` and an index on
+  `(state, updated_at)` for the reconciliation query.
+
+### Fan-out, retries and reconciliation
+
+- **A retry of an external job is now a new attempt.** BullMQ reuses its job ID,
+  so the first attempt was already terminal when the retry went active, the
+  state machine refused the move, and the second run left no record at all —
+  `attempt` never advanced past 1 for any external runtime. Open since beta.3.
+  The previous row keeps its outcome and reason, so a batch view can finally
+  answer "attempt 1 failed with a 502, attempt 2 succeeded".
+- Added `onItemsSettled`, delivered exactly once when every item of a fan-out
+  reaches a terminal state. Every adopter wrote that themselves as "did I just
+  see the last one?", counting in application code — an answer that is wrong
+  the moment two workers finish concurrently or an event is re-delivered. The
+  decision is one SQL statement, so it survives a crash and several bridges.
+- Added `listTasksByState({ states, idleForMs, itemsSettled })` and
+  `TaskReconciler`. `bridge.reconcile()` has existed since beta.3 and nothing
+  ever called it on a schedule, so a Task stuck at `running` stayed stuck until
+  a human noticed. The reconciler is a timer in one process, not a distributed
+  scheduler, and says so.
+- Added `projectionFailures`, a durable sink for a projection that threw.
+  `onError` fires once, in a process that is often being killed — the reason
+  the projection failed is frequently the reason the process is going away.
+  The sink is application-owned: the Task-only profile promises exactly three
+  tables, and the row belongs beside whatever the job was doing.
+- Added `objectTransferProviderAdapter` for "fetch from a CDN, put it in S3".
+  Stripe and provisioning answer *did it happen?* from a status field; a
+  transfer has none. An object whose identity does not match is `failed`, never
+  a retry, because overwriting is not undoable on an unversioned bucket — and
+  an object with nothing comparable stays `unknown`, because "something is at
+  this key" is not proof this operation put it there.
+
 ### Evidence and test infrastructure
 
 - `tests/fault` now holds nine fault-injection scenarios: an acknowledgement

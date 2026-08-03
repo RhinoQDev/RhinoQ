@@ -601,6 +601,139 @@ await bridge.dispatchMany(files.map((file) => ({
 `track()` and `dispatch()` still accept an omitted `itemKey`, because a
 single-item Task genuinely has one.
 
+#### A retry of an external job is a new attempt
+
+BullMQ reuses its job ID across retries. The first attempt was already terminal
+by the time the retry went active, the Execution state machine refused the
+move, and the second run left no record at all — `attempt` never advanced past
+1 for any external runtime.
+
+The bridge now supersedes the finished attempt and opens the next one for the
+same `itemKey`. The previous row keeps its outcome and its reason, which is the
+answer to the only question anyone asks about a retried job:
+
+```text
+item-a  attempt 1  failed     "upstream returned 502"
+item-a  attempt 2  succeeded
+```
+
+`lookupTaskExecution` returns the live attempt; superseded rows are history and
+never come back as current. The aggregate counts one item per `itemKey`, so a
+retried item is still one item.
+
+Set `retryProjection: 'ignore'` to restore the old silent behaviour — needed
+while rolling the Task schema back past v4, where the retry row cannot exist.
+`retryExecutionId` overrides the default `<previous id>#<attempt>`, which is
+deterministic so a repeated projection converges instead of forking.
+
+This needs the embedded PostgreSQL client. The Gateway client owns attempt
+identity for the runtimes it runs itself; the bridge says so once rather than
+silently never recording a retry.
+
+#### "Every item finished", delivered once
+
+`aggregate.progress: 'terminal-items'` writes progress on every completion.
+The single moment the batch became complete is a different question, and every
+adopter answered it in application code as *did I just see the last one?* —
+which is wrong the moment two workers finish concurrently or an event is
+re-delivered.
+
+```ts
+const bridge = new BullMQTaskBridge({
+  client, events, terminalProjection: 'execution-only',
+  aggregate: { progress: 'terminal-items', terminal: 'manual' },
+  onItemsSettled: async (task) => {
+    await emailTheUser(task.ownerId, task.id);
+  },
+});
+```
+
+Exactly-once is decided by one SQL statement, not by this process, so it
+survives a crash, a re-delivered event and several bridges. A stalled attempt
+blocks it: calling a batch complete while one item is stuck is the failure this
+replaces.
+
+#### Finding Tasks that stopped moving
+
+```ts
+const stuck = await tasks.listTasksByState({
+  states: ['running'],
+  idleForMs: 60 * 60_000,
+  itemsSettled: false,
+  limit: 100,
+});
+```
+
+`idleForMs` filters `updated_at`, not `created_at`: a Task still making
+progress is not stuck, however long it has been going.
+
+`TaskReconciler` runs that query on a schedule and hands each result to a
+callback:
+
+```ts
+const reconciler = new TaskReconciler({
+  tasks,
+  query: { states: ['running'], idleForMs: 60 * 60_000 },
+  everyMs: 5 * 60_000,
+  reconcile: async (task) => {
+    const jobs = await myJobIdsFor(task.id);
+    await bridge.reconcileMany(await readBullMQStates(jobs));
+  },
+  onError: (error, task) => logger.error({ error, taskId: task?.id }),
+});
+reconciler.start();
+```
+
+`bridge.reconcile()` has existed since beta.3 and nothing ever called it on a
+schedule, so a batch stuck at `running` — a bridge that died mid-projection, a
+worker killed between the last item and the aggregate call — stayed stuck until
+a human noticed.
+
+This is **not** a distributed scheduler. It is a timer in one process. Several
+processes running it is safe but wasteful: each does the same read and calls
+`reconcile` for the same Tasks, so the callback must be idempotent. Electing
+one owner is a deployment decision. One failing Task never aborts the sweep,
+and a sweep still running when the next tick arrives skips rather than
+overlapping.
+
+#### A failed projection that survives the process
+
+`onError` fires once, in the process that failed — and that process is often
+being killed, because the reason the projection failed is frequently the reason
+the process is going away. The event is then gone and nothing knows the job
+ever happened.
+
+```ts
+const bridge = new BullMQTaskBridge({
+  client, events, terminalProjection: 'single-execution',
+  projectionFailures: {
+    async record(failure) {
+      await pool.query(
+        `INSERT INTO rhinoq_projection_failures (runtime, runtime_scope, external_id, event, observation, message, code)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (runtime, runtime_scope, external_id, event)
+         DO UPDATE SET attempts = rhinoq_projection_failures.attempts + 1,
+                       last_seen_at = clock_timestamp(), message = EXCLUDED.message`,
+        [failure.runtime, failure.runtimeScope, failure.externalId, failure.event,
+         failure.observation, failure.message, failure.code ?? null],
+      );
+    },
+  },
+});
+```
+
+The sink is application-owned on purpose: the Task-only profile promises
+exactly three tables, replaying a projection is a business decision, and the
+row belongs beside whatever the job was doing.
+`PROJECTION_FAILURE_TABLE_SQL` is the DDL above as a string;
+`InMemoryProjectionFailureSink` is for tests and says out loud that it is not
+durable.
+
+Recording happens **before** `onError`, and the record must be idempotent on
+`(runtime, runtimeScope, externalId, event)` — the same projection can fail
+repeatedly, and a sink that inserts a row each time turns one broken job into
+an unbounded table.
+
 The current Task Snapshot includes every Execution summary. For large batches,
 run `npm run benchmark:postgres` with `RHINOQ_BENCH_FANOUT_SIZES` before choosing
 a batch size; bounded dispatch does not make an unbounded snapshot free.

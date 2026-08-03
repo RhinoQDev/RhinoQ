@@ -57,6 +57,7 @@ interface ExecutionRow {
   state: string;
   result_ref: string | null;
   failure_reason: string | null;
+  superseded_at: Date | string | null;
   version: string | number;
   updated_at: Date | string;
 	created_at: Date | string;
@@ -272,9 +273,13 @@ export class PostgresTaskClient implements TaskClient {
     externalId: string,
     runtimeScope = '',
   ): Promise<TaskExecution> {
+    // An external runtime reuses its job ID across retries, so one external ID
+    // can now own several attempts. Only one of them is live; the superseded
+    // ones are history and must never be returned as the current attempt.
     const result = await this.execute<ExecutionRow>(
       `SELECT * FROM rhinoq_task.executions
-       WHERE runtime = $1 AND runtime_scope = $2 AND external_id = $3`,
+       WHERE runtime = $1 AND runtime_scope = $2 AND external_id = $3
+         AND superseded_at IS NULL`,
       [runtime, runtimeScope, externalId],
     );
     const row = result.rows[0];
@@ -282,6 +287,93 @@ export class PostgresTaskClient implements TaskClient {
       throw taskError('RHINOQ_EXECUTION_NOT_FOUND', externalId);
     }
     return mapExecution(row);
+  }
+
+  /**
+   * Marks the Task as having every item finished, and reports whether *this*
+   * call was the one that did it.
+   *
+   * Exactly one caller gets true, because the UPDATE filters on
+   * `items_settled_at IS NULL`. That is the whole point: every adopter of a
+   * fan-out wrote "did I just see the last item?" by counting, and that answer
+   * is wrong the moment two workers finish concurrently or an event is
+   * re-delivered.
+   *
+   * Returns false when items are still open, when the Task has no items, and
+   * on every call after the first.
+   */
+  async settleTaskItems(taskId: string): Promise<boolean> {
+    if (!taskId?.trim()) {
+      throw new TypeError('task id is required');
+    }
+    const result = await this.execute<{ settled: boolean }>(
+      `SELECT rhinoq_task.settle_items($1) AS settled`,
+      [taskId],
+    );
+    return result.rows[0]?.settled === true;
+  }
+
+  /**
+   * Finds Tasks by state and age, oldest first.
+   *
+   * This is the query a reconciler needs and the one the embedded profile did
+   * not have: "which batches have been running for more than an hour". Without
+   * it an application either scans its own tables and guesses, or a Task stuck
+   * at `running` because a bridge died stays stuck until a human notices.
+   *
+   * `olderThan` filters on `updated_at`, not `created_at`. A Task that is still
+   * making progress is not stuck, however long it has been going.
+   */
+  async listTasksByState(query: TaskStateQuery): Promise<TaskSummary[]> {
+    const states = query?.states ?? [];
+    if (states.length === 0 || states.length > 8) {
+      throw new RangeError('between 1 and 8 states are required');
+    }
+    const limit = query.limit ?? 100;
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 500) {
+      throw new RangeError('limit must be between 1 and 500');
+    }
+    const idleFor = query.idleForMs ?? 0;
+    if (!Number.isFinite(idleFor) || idleFor < 0) {
+      throw new RangeError('idleForMs must be a non-negative number');
+    }
+    const result = await this.execute<TaskRow>(
+      `SELECT t.*, '[]'::jsonb AS executions
+       FROM rhinoq_task.tasks AS t
+       WHERE t.state = ANY($1::text[])
+         AND t.updated_at <= clock_timestamp() - make_interval(secs => $2::double precision)
+         AND ($3::boolean IS NULL OR (t.items_settled_at IS NOT NULL) = $3::boolean)
+         AND ($4::text = '' OR t.owner_id = $4)
+       ORDER BY t.updated_at, t.id
+       LIMIT $5`,
+      [states, idleFor / 1000, query.itemsSettled ?? null, query.ownerId ?? '', limit],
+    );
+    return result.rows.map(mapSummary);
+  }
+
+  /**
+   * Closes a finished attempt and opens the next one for the same item.
+   *
+   * This is how an external runtime's retry becomes visible. BullMQ reuses its
+   * job ID, so before this the second run had nowhere to go: the first attempt
+   * was already terminal, its state machine refused to move, and the retry
+   * left no record at all.
+   *
+   * The superseded row keeps its outcome and its reason. That is the point —
+   * "attempt 1 failed with a 502, attempt 2 succeeded" is the answer to the
+   * only question anyone asks about a retried job.
+   */
+  async retryTaskExecution(
+    executionId: string,
+    expectedVersion: number,
+    nextExecutionId: string,
+  ): Promise<TaskSnapshot> {
+    const execution = await this.getTaskExecution(executionId);
+    await this.execute(
+      `SELECT rhinoq_task.retry_execution($1,$2,$3)`,
+      [executionId, expectedVersion, nextExecutionId],
+    );
+    return this.getTask(execution.taskId);
   }
 
   async getTaskExecution(executionId: string): Promise<TaskExecution> {
@@ -490,20 +582,7 @@ export class PostgresTaskClient implements TaskClient {
 		const result = await this.execute<TaskRow>(SUMMARY_SQL, [taskId, ownerId ?? null]);
 		const row = result.rows[0];
 		if (!row) throw taskError('RHINOQ_TASK_NOT_FOUND', taskId);
-		const { executions: _executions, ...summary } = mapSnapshot(row);
-		return {
-			...summary,
-			executionCounts: {
-				total: Number(row.execution_total),
-				pendingDispatch: Number(row.execution_pending_dispatch),
-				dispatched: Number(row.execution_dispatched),
-				running: Number(row.execution_running),
-				succeeded: Number(row.execution_succeeded),
-				failed: Number(row.execution_failed),
-				stalled: Number(row.execution_stalled),
-				cancelled: Number(row.execution_cancelled),
-			},
-		};
+		return mapSummary(row);
 	}
 
   private async execute<Row>(
@@ -530,6 +609,39 @@ export async function installPostgresTaskProfile(
 ): Promise<PostgresTaskClient> {
   await migrateTaskSchema(executor);
   return new PostgresTaskClient(executor);
+}
+
+/** Which Tasks a reconciler is looking for. */
+export interface TaskStateQuery {
+  /** One to eight Task states, e.g. `['running', 'cancel_requested']`. */
+  states: TaskState[];
+  /**
+   * Only Tasks untouched for at least this long. Filters `updated_at`, not
+   * `created_at`: a Task still making progress is not stuck, however old.
+   */
+  idleForMs?: number;
+  /** Restrict to Tasks whose items have (or have not) all finished. */
+  itemsSettled?: boolean;
+  ownerId?: string;
+  /** Defaults to 100, capped at 500. A reconciler walks pages, not the table. */
+  limit?: number;
+}
+
+function mapSummary(row: TaskRow): TaskSummary {
+  const { executions: _executions, ...summary } = mapSnapshot(row);
+  return {
+    ...summary,
+    executionCounts: {
+      total: Number(row.execution_total),
+      pendingDispatch: Number(row.execution_pending_dispatch),
+      dispatched: Number(row.execution_dispatched),
+      running: Number(row.execution_running),
+      succeeded: Number(row.execution_succeeded),
+      failed: Number(row.execution_failed),
+      stalled: Number(row.execution_stalled),
+      cancelled: Number(row.execution_cancelled),
+    },
+  };
 }
 
 function mapSnapshot(row: TaskRow): TaskSnapshot {
