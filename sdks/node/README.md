@@ -3,14 +3,18 @@
 Catch background jobs that succeeded technically but failed in the real world.
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install @rhinoq/node@next pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 ```
 
+**Install `@next`, not the bare name.** The `latest` dist-tag still points at
+`0.1.0-beta.1`, so `npm install @rhinoq/node` fetches a build from before the
+embedded Task profile, the BullMQ bridge and the Verified Rule loop existed.
+
 The Node `init` path creates the isolated Task profile. `beta.8` is the first
-archive that contains the complete Verified Rule loop; an older tarball answers
+release that contains the complete Verified Rule loop; an older tarball answers
 `FAIL verify requires 'add <rule-name>'`. For Verified Rules, start the full Go
 Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32 bytes, then run:
 
@@ -35,11 +39,10 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. npm `next` still points to the older
-`0.1.0-beta.2`; trusted-publisher permission blocked the beta.5 npm upload.
-The newest published archive is the beta.8 GitHub release; this source is
-beta.9 and is only available by building it here. No prerelease is a production
-stability promise. The preview targets Node.js 22+.
+This package is a development preview. npm `next` carries `0.1.0-beta.9`, which
+is this source; `latest` is still the much older `0.1.0-beta.1`, so always
+install `@next` or an exact version. No prerelease is a production stability
+promise. The preview targets Node.js 22+.
 
 The package ships both an ESM and a CommonJS build, so a NestJS application —
 which still compiles to CommonJS by default — can `require('@rhinoq/node')` in
@@ -82,17 +85,19 @@ npm run verify:installed -- /absolute/path/to/the-application
 Use `npm run pack` rather than `npm pack` directly: it removes earlier archives
 first, so a stale one cannot be picked up by a path that still names it.
 
-For an application evaluation without a source checkout, pin the release
-archive rather than the stale npm `next` tag:
+For an application evaluation without a source checkout, install from npm and
+pin the exact version rather than a moving tag:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install @rhinoq/node@0.1.0-beta.9 pg
 ```
 
-That beta.8 archive contains the embedded Task profile and BullMQ contracts.
-It must not be used as evidence that the current source's Verified Rule CLI is
-published; verify an archive with `grep -c "verify apply" package/dist/cli/rhinoq.js`
-or build from this checkout.
+A published copy carries the same provenance a locally packed one does. It is
+not in the `exports` map, so read it by path:
+
+```bash
+node -p "require('./node_modules/@rhinoq/node/dist/build-info.json')"
+```
 
 ## Fastest Task-only setup
 

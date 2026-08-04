@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.9
+
+Published to npm under the `next` tag. **`latest` still resolves to
+`0.1.0-beta.1`**, so `npm install @rhinoq/node` without a tag installs a build
+from before the Task profile existed; install `@next` or an exact version until
+that tag moves.
 
 Follow-up to the beta.8 audit. Every item here closes a gap the release left
 open, or a claim it made that the repository could not back.

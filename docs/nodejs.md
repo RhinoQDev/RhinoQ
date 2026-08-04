@@ -1,9 +1,9 @@
 # Node.js integration
 
-> Status: development preview. npm `next` still points to `0.1.0-beta.2`.
-> Use the installable beta.8 GitHub release archive for the current contract
-> until npm trusted publishing is enabled. Pin an exact version and see
-> [releasing.md](./releasing.md) before evaluating it.
+> Status: development preview. npm `next` carries `0.1.0-beta.9`; `latest` is
+> still `0.1.0-beta.1`, so `npm install @rhinoq/node` without a tag fetches a
+> build from before the Task profile existed. Install `@next` or an exact
+> version, and see [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
 with two separate integration paths. Choose the smaller path that solves the
@@ -97,7 +97,7 @@ npm ci
 npm run typecheck
 npm test
 npm run pack:check
-npm pack
+npm run pack
 ```
 
 Each command has a different purpose:
@@ -108,9 +108,15 @@ Each command has a different purpose:
 | `npm run typecheck` | checks public TypeScript types without emitting JavaScript | none |
 | `npm test` | builds `src/` into `dist/`, then runs the Node test suite | `dist/` |
 | `npm run pack:check` | builds and shows which files would enter the package without creating an archive | `dist/` |
-| `npm pack` | creates the installable preview archive | `rhinoq-node-0.1.0-beta.8.tgz` |
+| `npm run pack` | removes earlier archives, rebuilds and creates the archive | `rhinoq-node-0.1.0-beta.9.tgz` |
+| `npm run verify:installed -- <app>` | proves an installed copy was built from this source | none |
 
-`npm pack` is intentionally run from `sdks/node`. The older command
+Use `npm run pack` rather than bare `npm pack`: it deletes earlier archives
+first. `npm pack` leaves them, and a filename carries only a version — an
+archive packed before a change landed keeps installing cleanly under a version
+that implies the change is present.
+
+`npm run pack` is intentionally run from `sdks/node`. The older command
 `npm --prefix sdks/node pack` does not reliably change the package directory
 for npm's built-in `pack` command.
 
@@ -118,21 +124,22 @@ Install the generated tarball and the PostgreSQL driver in the target Node
 application. Replace the example path with the absolute path on your machine:
 
 ```bash
-npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.9.tgz pg
 ```
 
 Windows PowerShell example:
 
 ```powershell
-npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.8.tgz pg
+npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.9.tgz pg
 ```
 
 Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
 not own or configure the application's connection pool.
 
 This source-install path is the authoritative way to evaluate changes not yet
-published in `beta.2`. A stable npm package, tagged GitHub release and prebuilt
-`rhinoq` CLI binaries remain release blockers.
+published. A stable (non-prerelease) npm package, a `latest` tag that is not
+eight versions behind, and prebuilt `rhinoq` CLI binaries remain release
+blockers.
 
 ### Verify the installed package
 
@@ -842,8 +849,12 @@ reproducible.
 
 ## Current limitations
 
-- npm `next` is stale until trusted publishing is authorized; use the exact
-  beta.8 GitHub release tarball, which includes all three CLI commands.
+- npm `next` is current at `0.1.0-beta.9`, but `latest` still resolves to
+  `0.1.0-beta.1`. An `npm install @rhinoq/node` with no tag therefore installs
+  a build without the Task profile, the BullMQ bridge or the Verified Rule CLI,
+  and nothing about it announces that. Install `@next` or an exact version.
+- The `rhinoq` CLI distribution alias is not published; use
+  `npx --package @rhinoq/node rhinoq` or the package's own `bin` entries.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems.
 - Express, Fastify and NestJS have request adapters (`createNodeTaskMiddleware`,
