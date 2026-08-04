@@ -5,6 +5,19 @@
 Follow-up to the beta.8 audit. Every item here closes a gap the release left
 open, or a claim it made that the repository could not back.
 
+### Upgrading
+
+1. Apply migration 023 **before** rolling out the new binary. It clears
+   `evidence` on passing subject outcomes, adds a `CHECK` that keeps it clear,
+   and drops a foreign key. A new binary is compatible with the old schema; an
+   old binary against the new schema fails every scan on the `CHECK`. See
+   [Migration recovery](./docs/migration-rollback.md#023_subject_outcome_hot_path)
+   for the row-rewrite cost and how to export what it clears.
+2. `rhinoq doctor` now exits 1 on any FAIL. A pipeline that already runs it and
+   has been passing may start failing — that is the point, but expect it at the
+   moment you deploy rather than later. `--ci` still works and prints a
+   deprecation note, so no existing pipeline breaks.
+
 ### Rule evaluation performance
 
 Measured against a production-shaped schema — cal.com's real 102-table Prisma
@@ -50,11 +63,16 @@ the same rows takes about 0.26 s. The rest was RhinoQ's own bookkeeping.
 
 ### Preflight
 
-- **Breaking:** `rhinoq doctor` now exits 1 when any check FAILs. `--ci` is
-  gone; `--report` is the new opt-out for a human reading the output. A
-  preflight whose default is to exit 0 while printing FAIL is one a pipeline
-  quietly passes, and the README documented `doctor` as the gate without ever
-  mentioning the flag that made it one.
+- **Breaking:** `rhinoq doctor` now exits 1 when any check FAILs. `--report` is
+  the opt-out for a human reading the output. A preflight whose default is to
+  exit 0 while printing FAIL is one a pipeline quietly passes, and the README
+  documented `doctor` as the gate without ever mentioning the flag that made it
+  one.
+- `--ci` is deprecated but still accepted, so a pipeline that passes it keeps
+  working and gets exactly the behaviour it asked for. It prints a note.
+- Any other argument to `doctor` is now a usage error (exit 2). It used to be
+  ignored, which meant a mistyped `--report` silently became a gate — and, once
+  `--report` existed, a mistyped one could silently disable it.
 
 ### Workbench
 

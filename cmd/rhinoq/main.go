@@ -38,7 +38,18 @@ func main() {
 			os.Exit(2)
 		}
 	case "doctor":
-		os.Exit(runDoctor(reportOnlyMode()))
+		reportOnly, deprecatedCI, invalid := doctorFlags(os.Args[2:])
+		if invalid != "" {
+			fmt.Fprintf(os.Stderr, "FAIL unknown doctor option %q\n", invalid)
+			fmt.Fprintln(os.Stderr, "Usage: rhinoq doctor [--report]")
+			os.Exit(2)
+		}
+		if deprecatedCI {
+			fmt.Println("NOTE --ci is deprecated and does nothing: any FAIL already exits 1.")
+			fmt.Println("     Drop the flag, or use --report to print the diagnosis and exit 0.")
+			fmt.Println()
+		}
+		os.Exit(runDoctor(reportOnly))
 	case "init":
 		os.Exit(runInit(os.Args[2:], os.Stdout))
 	case "migrate":
@@ -122,19 +133,30 @@ func runExplain(args []string, getenv func(string) string, output io.Writer) int
 	return 0
 }
 
-// reportOnlyMode is the escape hatch from doctor's exit code.
+// doctorFlags reads doctor's arguments.
 //
-// It replaces --ci, which had the polarity backwards: a preflight that exits 0
-// while printing FAIL is one a pipeline silently passes, and --ci had to be
-// remembered to make it honest. Failing by default means the mistake is a
-// pipeline that stops, not one that ships.
-func reportOnlyMode() bool {
-	for _, arg := range os.Args[2:] {
-		if arg == "--report" {
-			return true
+// --report is the escape hatch from the exit code. It replaces --ci, which had
+// the polarity backwards: a preflight that exits 0 while printing FAIL is one a
+// pipeline silently passes, and --ci had to be remembered to make it honest.
+// Failing by default means the mistake is a pipeline that stops, not one that
+// ships.
+//
+// --ci is still accepted. Every pipeline that already asks for a gate keeps
+// working and gets the behaviour it asked for; deprecating it is a note in the
+// output, not a broken deployment. An argument that is neither is a usage
+// error, so a mistyped --report is loud rather than silently ignored.
+func doctorFlags(args []string) (reportOnly, deprecatedCI bool, invalid string) {
+	for _, arg := range args {
+		switch arg {
+		case "--report":
+			reportOnly = true
+		case "--ci":
+			deprecatedCI = true
+		default:
+			return false, false, arg
 		}
 	}
-	return false
+	return reportOnly, deprecatedCI, ""
 }
 
 // runDoctor reports setup, runtime and safety findings and returns the process
@@ -467,8 +489,11 @@ Any FAIL returns exit code 1, so putting this in a pipeline is enough to stop a
 deployment. A WARN never changes the exit code. --report prints the same
 diagnosis and always exits 0, for a human reading the output rather than a gate.
 
-(--ci used to be required to make a FAIL fail. It is gone: a preflight whose
-default is to exit 0 while printing FAIL is one a pipeline quietly passes.)
+--ci used to be required to make a FAIL fail. It is now the default: a preflight
+whose default is to exit 0 while printing FAIL is one a pipeline quietly passes.
+--ci is still accepted and does nothing, so an existing pipeline keeps working;
+it prints a deprecation note. Any other argument is a usage error (exit 2), so a
+mistyped --report cannot silently disable the gate.
 
 Required for database checks:
   RHINOQ_DATABASE_URL
