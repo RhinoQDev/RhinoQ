@@ -48,7 +48,7 @@ này rỗng.
 
 ```bash
 rhinoq doctor        # báo cáo: configuration, fencing, timing, database
-rhinoq doctor --ci   # exit code khác 0 nếu có mục FAIL
+rhinoq doctor   # exit code khác 0 nếu có mục FAIL
 ```
 
 `doctor` kết nối PostgreSQL thật và kiểm migration checksum/trạng thái. Nó

@@ -22,7 +22,7 @@ rhinoq migrate plan      # read-only
 rhinoq migrate status    # read-only
 rhinoq migrate sql       # SQL pending để DBA review
 rhinoq migrate apply     # write explicit
-rhinoq doctor --ci
+rhinoq doctor
 ```
 
 Migration runner embed đúng SQL đã phát hành, kiểm SHA-256 checksum, khóa bằng

@@ -335,6 +335,18 @@ func (s *RuleStore) DeleteRule(
 	} else {
 		deletion.Findings, deletion.FindingEvents = 0, 0
 	}
+	// Subject outcomes used to disappear through ON DELETE CASCADE. That
+	// foreign key cost one index probe into rhinoq_rules for every row written
+	// during a scan, so it is gone and the delete is explicit. It runs inside
+	// the same transaction, so a dry run still rolls it back and a real delete
+	// cannot leave the outcomes of a removed Rule version behind.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM rhinoq_subject_outcomes
+		WHERE rule_id = $1 AND ($2 = 0 OR rule_version = $2)`,
+		request.ID, request.Version,
+	); err != nil {
+		return rule.Deletion{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM rhinoq_rules
 		WHERE id = $1 AND `+versionFilter, request.ID, request.Version,

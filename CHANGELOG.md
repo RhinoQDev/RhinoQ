@@ -5,6 +5,79 @@
 Follow-up to the beta.8 audit. Every item here closes a gap the release left
 open, or a claim it made that the repository could not back.
 
+### Rule evaluation performance
+
+Measured against a production-shaped schema — cal.com's real 102-table Prisma
+schema, 40 300 bookings and payments, 17 seeded drifts — a full scan took 138
+seconds and stopped incomplete on its two-minute budget. The Rule's own SQL for
+the same rows takes about 0.26 s. The rest was RhinoQ's own bookkeeping.
+
+- Evaluation now folds a page in three phases — read the page's state, decide in
+  memory, write the page — instead of deciding one subject at a time.
+  `SubjectOutcomeStore` gained `GetSubjectOutcomes`/`SaveSubjectOutcomes` and
+  `FindingStore` gained `GetFindingsForSubjects`, each one statement per page.
+- A passing subject with no Finding no longer opens a transaction, takes an
+  advisory lock and issues a `SELECT ... FOR UPDATE` to discover there is
+  nothing to resolve. `finding.ApplyPass` always returned "no change" for that
+  case, which is nearly every subject in a system worth running this against.
+- The same 40 000-subject scan now completes in **2.4 s** in a single run, with
+  the same 17 Findings and no false positives. PostgreSQL transactions for a
+  2 500-subject run fell from 7 519 to 36.
+- Subject outcomes no longer store evidence for passing subjects. Evidence
+  explains why something is wrong; keeping it for everything made the
+  materialized state larger than the business table it observes (16 MB against
+  a 13 MB `Booking`). `rhinoq_subject_outcomes` is now 10 MB for the same data,
+  and a `CHECK` enforces it. Migration 023 clears existing rows.
+- Dropped the `rhinoq_subject_outcomes → rhinoq_rules` foreign key, which cost
+  one index probe per written row — 40 099 lookups of a value constant for the
+  whole page. `DeleteRule` now removes outcomes explicitly in the same
+  transaction instead of relying on `ON DELETE CASCADE`.
+- Added `BenchmarkScanHealthy` and `BenchmarkScanHalfViolated` to
+  `tests/postgres`. The existing benchmarks measure domain functions at
+  nanosecond scale, where RhinoQ was never slow; nothing in the suite could
+  observe the cost above.
+
+### Retention
+
+- Added `rhinoq retention prune`. It previews by default like `rules delete`,
+  deletes in bounded batches, and refuses a cutoff younger than 24h. It
+  reclaims passing observations, lifecycle history of already-resolved Findings
+  and settled delivery-ledger entries; it never touches an open Finding, a
+  pending delivery, a repair or a ProviderOperation.
+- Rewrote `docs/retention.md`. It previously gave fifteen lines of advice
+  without naming `rhinoq_subject_outcomes`, the largest and fastest-growing
+  table RhinoQ owns.
+
+### Preflight
+
+- **Breaking:** `rhinoq doctor` now exits 1 when any check FAILs. `--ci` is
+  gone; `--report` is the new opt-out for a human reading the output. A
+  preflight whose default is to exit 0 while printing FAIL is one a pipeline
+  quietly passes, and the README documented `doctor` as the gate without ever
+  mentioning the flag that made it one.
+
+### Workbench
+
+- Fixed the subject investigation panel returning HTTP 500 with "rhinoq effect
+  store is not configured". `NewPostgres` built the Effect Ledger store and then
+  omitted it from the embedded `IntegrityClient`, so every fully configured
+  PostgreSQL deployment failed to open the panel. `NewWithStore` had the same
+  omission.
+- `SubjectDetail` no longer treats a missing Effect Ledger as fatal. An
+  integrity-only deployment — a Rule and a connection string, the path the
+  README leads with — has no ledger by design, and the Findings, evidence and
+  decision history were being hidden behind that failure. The gap is now a
+  notice on the page.
+- The interface is dark-only. The light theme, its toggle and the stored
+  preference are gone: a theme switch is one more thing that can be wrong during
+  an incident.
+- Replaced the palette and the type. The stylesheet asked for `Inter` at the top
+  and overrode it with `Bahnschrift` at the bottom, and shipped neither, so the
+  same build rendered differently on macOS and Windows. It now uses the
+  platform's own UI face. The gold accent is replaced by one blue accent, with
+  amber, red and green reserved for state, and status badges carry enough
+  contrast to be read at a glance.
+
 ### Node SDK
 
 - `npx rhinoq notify add|list|remove|test` now exists. `notify` shipped in

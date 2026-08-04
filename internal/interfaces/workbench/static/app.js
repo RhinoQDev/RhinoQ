@@ -80,7 +80,7 @@ function cacheElements() {
     "attempt-timeline", "effect-total", "effect-list", "outcome-total", "outcome-list",
     "audit-section", "audit-total", "audit-list", "rail-subject", "rail-notice",
     "command-trigger",
-    "command-palette", "palette-input", "palette-results", "theme-toggle", "theme-icon",
+    "command-palette", "palette-input", "palette-results",
     "mobile-nav-button", "sidebar", "mobile-scrim", "toast",
   ].forEach((id) => {
     elements[id] = document.getElementById(id);
@@ -96,10 +96,11 @@ function configurePlatformKeys() {
 }
 
 function restorePreferences() {
-  const storedTheme = localStorage.getItem("rhinoq.theme");
-  const theme = storedTheme || (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
-  document.documentElement.dataset.theme = theme;
-  updateThemeIcon();
+  // The Workbench is dark-only. A stored preference from an older build must
+  // not be able to put the page back into a theme this stylesheet no longer
+  // defines, which would render it as unstyled black text on white.
+  localStorage.removeItem("rhinoq.theme");
+  document.documentElement.dataset.theme = "dark";
 
   const density = localStorage.getItem("rhinoq.density") || "compact";
   document.documentElement.dataset.density = density;
@@ -164,7 +165,6 @@ function bindEvents() {
     });
   });
 
-  elements["theme-toggle"].addEventListener("click", toggleTheme);
   elements["command-trigger"].addEventListener("click", openPalette);
   elements["palette-input"].addEventListener("input", renderPalette);
   elements["palette-input"].addEventListener("keydown", onPaletteKeydown);
@@ -774,17 +774,6 @@ function closeMenus() {
   });
 }
 
-function toggleTheme() {
-  document.documentElement.dataset.theme =
-    document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  localStorage.setItem("rhinoq.theme", document.documentElement.dataset.theme);
-  updateThemeIcon();
-}
-
-function updateThemeIcon() {
-  elements["theme-icon"].textContent = document.documentElement.dataset.theme === "dark" ? "☼" : "◐";
-}
-
 function paletteCommandDefinitions() {
   return [
     { id: "jobs", group: "Navigate", label: "Execution worktable", detail: "Inspect jobs and execution state", icon: "01", run: () => setView("jobs") },
@@ -793,7 +782,6 @@ function paletteCommandDefinitions() {
     { id: "rules", group: "Navigate", label: "Rules", detail: "Review deterministic invariant checks", icon: "R", run: () => setView("rules") },
     { id: "refresh", group: "Actions", label: "Refresh local evidence", detail: "Read the bounded snapshot again", icon: "↻", run: () => loadSnapshot() },
     { id: "search", group: "Actions", label: "Focus table search", detail: "Search the current view", icon: "/", run: () => elements["search-input"].focus() },
-    { id: "theme", group: "Preferences", label: "Toggle color theme", detail: "Switch between light and dark", icon: "◐", run: toggleTheme },
     { id: "density", group: "Preferences", label: "Toggle table density", detail: "Switch compact and comfortable rows", icon: "≡", run: toggleDensity },
   ];
 }

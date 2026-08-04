@@ -123,6 +123,24 @@ func (s *FindingStore) GetFinding(
 	return record, found, nil
 }
 
+func (s *FindingStore) GetFindingsForSubjects(
+	_ context.Context,
+	keys []finding.Key,
+) (map[string]finding.Record, error) {
+	records := make(map[string]finding.Record, len(keys))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, key := range keys {
+		if err := key.Validate(); err != nil {
+			return nil, err
+		}
+		if record, found := s.records[key.String()]; found {
+			records[key.SubjectID] = record
+		}
+	}
+	return records, nil
+}
+
 func (s *FindingStore) ListFindings(
 	_ context.Context,
 	query finding.Query,

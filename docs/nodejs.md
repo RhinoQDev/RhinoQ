@@ -215,7 +215,7 @@ above.
 export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app'
 rhinoq migrate plan
 rhinoq migrate apply
-rhinoq doctor --ci
+rhinoq doctor
 ```
 
 ### Windows PowerShell
@@ -224,7 +224,7 @@ rhinoq doctor --ci
 $env:RHINOQ_DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/app'
 rhinoq migrate plan
 rhinoq migrate apply
-rhinoq doctor --ci
+rhinoq doctor
 ```
 
 What the commands mean:
@@ -233,7 +233,7 @@ What the commands mean:
 |---|---|:---:|
 | `rhinoq migrate plan` | verifies migration history and shows pending versions | No |
 | `rhinoq migrate apply` | applies the reviewed schema under an advisory lock | Yes |
-| `rhinoq doctor --ci` | fails if configuration, connection or schema is unsafe | No |
+| `rhinoq doctor` | fails if configuration, connection or schema is unsafe | No |
 
 If the CLI is not installed, run the source equivalent from the repository
 root:
@@ -241,7 +241,7 @@ root:
 ```bash
 go run ./cmd/rhinoq migrate plan
 go run ./cmd/rhinoq migrate apply
-go run ./cmd/rhinoq doctor --ci
+go run ./cmd/rhinoq doctor
 ```
 
 Register every producer job name deliberately:
@@ -753,7 +753,7 @@ Use separate terminals so each long-lived process remains visible.
 ```bash
 export RHINOQ_DATABASE_URL='postgres://postgres:postgres@localhost:5432/app'
 rhinoq migrate apply
-rhinoq doctor --ci
+rhinoq doctor
 ```
 
 Register `generate-report` in `rhinoq.job_allowlist` through your migration,

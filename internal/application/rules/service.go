@@ -199,38 +199,60 @@ func (s *Service) evaluateRecord(
 		return rule.Evaluation{}, nil, err
 	}
 	changed := make([]finding.Record, 0, len(evaluation.Observations))
+	if len(evaluation.Observations) == 0 {
+		return evaluation, changed, nil
+	}
+
+	// The page is folded in three phases: read the whole page's state, decide
+	// in memory, then write. Deciding one subject at a time meant a healthy
+	// subject — nearly every subject, in a system worth running this against —
+	// paid six network round trips to establish that nothing had changed.
+	outcomeKeys := make([]subjectoutcome.Key, 0, len(evaluation.Observations))
+	findingKeys := make([]finding.Key, 0, len(evaluation.Observations))
 	for _, observation := range evaluation.Observations {
-		outcomeKey := subjectoutcome.Key{
+		outcomeKeys = append(outcomeKeys, subjectoutcome.Key{
 			RuleID: record.ID, RuleVersion: record.Version,
 			SubjectType: record.SubjectType, SubjectID: observation.SubjectID,
-		}
-		existingOutcome, found, err := s.outcomes.GetSubjectOutcome(
-			ctx, outcomeKey,
+		})
+		findingKeys = append(findingKeys, finding.Key{
+			RuleID: record.ID, SubjectType: record.SubjectType,
+			SubjectID:                observation.SubjectID,
+			ObservedInvariantVersion: record.Version,
+		})
+	}
+
+	existingOutcomes, err := s.outcomes.GetSubjectOutcomes(ctx, outcomeKeys)
+	if err != nil {
+		return evaluation, changed, err
+	}
+	materialized := make([]subjectoutcome.Record, 0, len(evaluation.Observations))
+	for index, observation := range evaluation.Observations {
+		existing, found := existingOutcomes[observation.SubjectID]
+		next, err := subjectoutcome.Apply(
+			existing, found, outcomeKeys[index], observation, evaluation.EvaluatedAt,
 		)
 		if err != nil {
 			return evaluation, changed, err
 		}
-		materialized, err := subjectoutcome.Apply(
-			existingOutcome, found, outcomeKey, observation,
-			evaluation.EvaluatedAt,
-		)
-		if err != nil {
-			return evaluation, changed, err
-		}
-		applied, err := s.outcomes.SaveSubjectOutcome(ctx, materialized)
-		if err != nil {
-			return evaluation, changed, err
-		}
-		if !applied {
+		materialized = append(materialized, next)
+	}
+	applied, err := s.outcomes.SaveSubjectOutcomes(ctx, materialized)
+	if err != nil {
+		return evaluation, changed, err
+	}
+
+	existingFindings, err := s.findings.GetFindingsForSubjects(ctx, findingKeys)
+	if err != nil {
+		return evaluation, changed, err
+	}
+
+	for index, observation := range evaluation.Observations {
+		if !applied[observation.SubjectID] {
 			// Scan and Changed may overlap. A stale observation is evidence
 			// about the past and must not mutate today's Finding projection.
 			continue
 		}
-		key := finding.Key{
-			RuleID: record.ID, SubjectType: record.SubjectType,
-			SubjectID:                observation.SubjectID,
-			ObservedInvariantVersion: record.Version,
-		}
+		key := findingKeys[index]
 		switch observation.Status {
 		case rule.Violated:
 			item, err := s.findings.ObserveFinding(ctx, finding.Observation{
@@ -249,7 +271,7 @@ func (s *Service) evaluateRecord(
 			if record.OnUnknown != rule.UnknownOpensFinding {
 				continue
 			}
-			if !materialized.UnknownEscalationDue(
+			if !materialized[index].UnknownEscalationDue(
 				record.UnknownGrace, evaluation.EvaluatedAt,
 			) {
 				continue
@@ -264,6 +286,16 @@ func (s *Service) evaluateRecord(
 			changed = append(changed, item)
 
 		default:
+			// A pass can only ever resolve a Finding that already exists and is
+			// not already resolved. The page read above answers that without
+			// touching the database, so the common case costs nothing here.
+			// ObserveFindingPass still re-reads under its own lock, so a
+			// Finding opened between the two reads is not lost — it is simply
+			// resolved by the next evaluation rather than this one.
+			existing, found := existingFindings[observation.SubjectID]
+			if !found || existing.Status == finding.Resolved {
+				continue
+			}
 			item, didChange, err := s.findings.ObserveFindingPass(
 				ctx, key, evaluation.EvaluatedAt,
 			)
