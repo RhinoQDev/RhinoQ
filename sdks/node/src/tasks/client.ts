@@ -5,6 +5,7 @@ import type {
   TaskExecutionBinding,
   TaskExecutionCreateRequest,
   TaskExecutionResults,
+	TaskExecutionRuntimeRefs,
 	TaskExecutionPage,
   TaskProgress,
   TaskResult,
@@ -38,6 +39,12 @@ export interface TaskClient {
     runtimeScope?: string,
   ): Promise<TaskExecution>;
   getTaskExecution(executionId: string): Promise<TaskExecution>;
+  /**
+   * Returns server-side runtime identities for reconciliation. Optional so the
+   * legacy Gateway client can keep its existing contract; the embedded Task
+   * profile implements it in one bounded query.
+   */
+  listTaskExecutionRuntimeRefs?(taskId: string): Promise<TaskExecutionRuntimeRefs>;
   transitionTaskExecution(
     executionId: string,
     expectedVersion: number,

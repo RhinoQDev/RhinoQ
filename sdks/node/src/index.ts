@@ -3,6 +3,8 @@ export * from './gateway/client.js';
 export * from './postgres/producer.js';
 export * from './postgres/task-client.js';
 export * from './postgres/task-schema.js';
+export * from './postgres/projector-lease.js';
+export * from './postgres/projection-failure-sink.js';
 export * from './worker/errors.js';
 export * from './worker/worker.js';
 export * from './bullmq/task-bridge.js';

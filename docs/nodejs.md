@@ -49,6 +49,11 @@ shape and non-regressing-version check against the application-owned endpoint.
 configurable `1..64`), rejects ambiguous batch identities before side effects
 and drains sibling workers before surfacing a partial failure, making an
 immediate deterministic retry safe from overlap with the previous call.
+Each BullMQ `failed` event closes the current RhinoQ Execution attempt; the
+`isTerminalFailure` callback controls only whether the parent Task is terminal.
+For restart recovery, `reconcileTask()` reads the latest embedded runtime refs
+and accepts a one-based runtime attempt so a missed failed/active pair becomes
+durable history instead of a stuck attempt.
 
 ```ts
 import { watchTask } from '@rhinoq/node';
@@ -862,6 +867,8 @@ reproducible.
   hand.
 - Node workers for the native RhinoQ runtime require the HTTP Gateway; embedded
   Task management does not.
+- A BullMQ `runtimeScope` has one projector owner. Duplicate bridges fail fast
+  in one process; use `PostgresProjectorLease` for cross-process ownership.
 - `TaskReconciler` is a timer in one process, not a distributed scheduler.
   Running it in several replicas is safe but wasteful and needs an idempotent
   callback; electing one owner is a deployment decision.

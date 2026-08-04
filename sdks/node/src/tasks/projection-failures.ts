@@ -19,7 +19,13 @@ export interface ProjectionFailure {
   runtimeScope: string;
   externalId: string;
   /** The raw observation, as the runtime delivered it. */
-  observation: { jobId: string; data?: unknown; returnvalue?: unknown; failedReason?: string };
+  observation: {
+    jobId: string;
+    attempt?: number;
+    data?: unknown;
+    returnvalue?: unknown;
+    failedReason?: string;
+  };
   /** Error message. Never the stack: it is not portable and it leaks paths. */
   message: string;
   /** RhinoQ error code when the failure came from the store. */

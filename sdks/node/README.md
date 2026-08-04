@@ -567,33 +567,42 @@ throws.
 
 A bridge subscribes to `QueueEvents`. Two bridges on the same `runtimeScope`
 therefore see every job event twice and contend for the same Task version.
-RhinoQ does not elect a leader between them and will not: coordination belongs
-to your deployment, not to a client library.
+RhinoQ fails fast when it can see a duplicate in the same process. Across
+processes, use the PostgreSQL advisory-lock lease shown below.
 
 The rule is one live bridge per scope. Scale by giving each queue its own
 `runtimeScope`, not by running the same scope in six replicas.
 
 Constructing a second bridge with a scope already live **in this process**
-logs a warning naming the scope. Across processes RhinoQ cannot see the
-duplicate at all, so the warning is a floor, not a guarantee — a six-replica
-deployment stays silent and still races.
+throws before subscribing. Across processes each process has its own memory, so
+the in-process check is not enough for a six-replica deployment.
 
 ```ts
 new BullMQTaskBridge({
   client, events, runtimeScope: 'reports',
   terminalProjection: 'single-execution',
-  // Route the warning into your logger instead of console.warn.
-  onWarning: (warning) => logger.warn({ warning }),
-  // Acknowledge a deliberate duplicate. Changes no behaviour.
-  // RHINOQ_ALLOW_CONCURRENT_BRIDGES=1 does the same process-wide.
-  allowConcurrentBridges: false,
+  // Explicitly acknowledge duplicate projection when this is intentional.
+  allowConcurrentBridges: true,
 });
 ```
 
-Duplicate projection is wasteful rather than corrupting: every write carries an
-expected version and the second bridge finds the target state already reached.
-That is why this warns instead of throwing. It still doubles the round trips
-and can spend the bridge's version-convergence budget under load.
+For multiple processes, hold a database-backed owner lease before subscribing:
+
+```ts
+import { PostgresProjectorLease } from '@rhinoq/node';
+
+const bridge = new BullMQTaskBridge({
+  client, events, runtimeScope: 'reports',
+  terminalProjection: 'single-execution',
+  projectorLease: new PostgresProjectorLease(pool, 'reports'),
+});
+await bridge.start(); // only the lock holder subscribes to QueueEvents
+```
+
+`PostgresProjectorLease` uses a session advisory lock, adds no table to the
+three-table Task profile, and releases ownership when its database session
+ends. `allowConcurrentBridges` (or `RHINOQ_ALLOW_CONCURRENT_BRIDGES=1`) is an
+explicit escape hatch; it does not provide ownership or improve correctness.
 
 `close()` releases the scope, so a rolling replacement — construct the new
 bridge after closing the old one — does not warn.
@@ -679,6 +688,13 @@ item-a  attempt 2  succeeded
 never come back as current. The aggregate counts one item per `itemKey`, so a
 retried item is still one item.
 
+Every BullMQ `failed` event closes the current RhinoQ Execution attempt.
+`isTerminalFailure` only decides whether that failure also ends the user-facing
+Task, so a `failed` → `active` sequence keeps its retry history. If a restart
+missed both events, pass the one-based runtime attempt in a reconciliation
+observation; the bridge closes the missing attempt before opening the current
+one.
+
 Set `retryProjection: 'ignore'` to restore the old silent behaviour — needed
 while rolling the Task schema back past v4, where the retry row cannot exist.
 `retryExecutionId` overrides the default `<previous id>#<attempt>`, which is
@@ -726,17 +742,26 @@ const stuck = await tasks.listTasksByState({
 progress is not stuck, however long it has been going.
 
 `TaskReconciler` runs that query on a schedule and hands each result to a
-callback:
+callback. With the embedded client, `reconcileTask()` reads the latest runtime
+reference for each item in one bounded query, so the application does not need
+a second Task-to-job table:
 
 ```ts
 const reconciler = new TaskReconciler({
   tasks,
   query: { states: ['running'], idleForMs: 60 * 60_000 },
   everyMs: 5 * 60_000,
-  reconcile: async (task) => {
-    const jobs = await myJobIdsFor(task.id);
-    await bridge.reconcileMany(await readBullMQStates(jobs));
-  },
+  reconcile: async (task) => bridge.reconcileTask(task.id, async (ref) => {
+    const job = await queue.getJob(ref.externalId!);
+    if (!job) return undefined;
+    return {
+      jobId: job.id!,
+      state: await job.getState(),
+      attempt: job.attemptsMade + 1,
+      terminal: job.failedReason !== undefined &&
+        job.attemptsMade >= (job.opts.attempts ?? 1) - 1,
+    };
+  }),
   onError: (error, task) => logger.error({ error, taskId: task?.id }),
 });
 reconciler.start();
@@ -749,10 +774,11 @@ a human noticed.
 
 This is **not** a distributed scheduler. It is a timer in one process. Several
 processes running it is safe but wasteful: each does the same read and calls
-`reconcile` for the same Tasks, so the callback must be idempotent. Electing
-one owner is a deployment decision. One failing Task never aborts the sweep,
-and a sweep still running when the next tick arrives skips rather than
-overlapping.
+`reconcile` for the same Tasks, so the callback must be idempotent. The
+QueueEvents projector itself should have one owner per scope; use
+`PostgresProjectorLease` for cross-process ownership. One failing Task never
+aborts the sweep, and a sweep still running when the next tick arrives skips
+rather than overlapping.
 
 #### A failed projection that survives the process
 
@@ -762,30 +788,23 @@ the process is going away. The event is then gone and nothing knows the job
 ever happened.
 
 ```ts
+import { PostgresProjectionFailureSink } from '@rhinoq/node';
+
 const bridge = new BullMQTaskBridge({
   client, events, terminalProjection: 'single-execution',
-  projectionFailures: {
-    async record(failure) {
-      await pool.query(
-        `INSERT INTO rhinoq_projection_failures (runtime, runtime_scope, external_id, event, observation, message, code)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (runtime, runtime_scope, external_id, event)
-         DO UPDATE SET attempts = rhinoq_projection_failures.attempts + 1,
-                       last_seen_at = clock_timestamp(), message = EXCLUDED.message`,
-        [failure.runtime, failure.runtimeScope, failure.externalId, failure.event,
-         failure.observation, failure.message, failure.code ?? null],
-      );
-    },
-  },
+  projectionFailures: new PostgresProjectionFailureSink(pool),
 });
 ```
 
 The sink is application-owned on purpose: the Task-only profile promises
 exactly three tables, replaying a projection is a business decision, and the
 row belongs beside whatever the job was doing.
-`PROJECTION_FAILURE_TABLE_SQL` is the DDL above as a string;
-`InMemoryProjectionFailureSink` is for tests and says out loud that it is not
-durable.
+Apply `PROJECTION_FAILURE_TABLE_SQL` through the application's migration, then
+use `PostgresProjectionFailureSink` as above. It performs the parameterized,
+idempotent upsert; `InMemoryProjectionFailureSink` is for tests and says out
+loud that it is not durable. Use the application's scheduled reconciliation
+callback to read the runtime and retry with its own backoff policy — the SDK
+does not scan or mutate an application-owned queue automatically.
 
 Recording happens **before** `onError`, and the record must be idempotent on
 `(runtime, runtimeScope, externalId, event)` — the same projection can fail

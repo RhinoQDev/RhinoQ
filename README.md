@@ -309,7 +309,12 @@ RhinoQ is not another queue and does not require rewriting handlers:
   the application still owns Redis, enqueueing and worker code. A retry of a
   job the runtime reuses becomes a new attempt with its own outcome, so a batch
   view can say "attempt 1 failed with a 502, attempt 2 succeeded" instead of
-  showing one row that changed its mind.
+  showing one row that changed its mind. Failed events close the current
+  attempt even when BullMQ will retry; a terminal-failure classifier decides
+  whether the parent Task also fails. One projector owns each `runtimeScope`;
+  use the Node SDK's PostgreSQL advisory lease when that scope spans processes.
+  Failed projections can also be recorded through the application-owned
+  PostgreSQL failure sink before process-local error handling runs.
 - **Fan-out signals:** `onItemsSettled` fires exactly once when every item of a
   batch reaches a terminal state — decided in one SQL statement, so it survives
   a crash and several bridges rather than being counted in application code.

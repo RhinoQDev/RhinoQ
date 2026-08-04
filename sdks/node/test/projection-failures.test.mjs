@@ -4,8 +4,10 @@ import test from 'node:test';
 import {
   BullMQTaskBridge,
   InMemoryProjectionFailureSink,
+  PostgresProjectionFailureSink,
   PROJECTION_FAILURE_TABLE_SQL,
   RhinoQError,
+  UPSERT_PROJECTION_FAILURE_SQL,
   projectionFailureKey,
 } from '../dist/index.js';
 
@@ -23,7 +25,7 @@ test('a failed projection is written down before onError runs', async () => {
     failWith: new RhinoQError('RHINOQ_VERSION_CONFLICT', 'exec-1', true, { status: 409 }),
   });
   try {
-    h.emit('completed', { jobId: 'bull-job-1', returnvalue: { key: 'item-2' } });
+    h.emit('completed', { jobId: 'bull-job-1', attempt: 2, returnvalue: { key: 'item-2' } });
     await h.settle(() => sink.size === 1);
 
     assert.deepEqual(order, ['sink', 'onError'], 'durable first; the callback may never return');
@@ -37,7 +39,9 @@ test('a failed projection is written down before onError runs', async () => {
     assert.equal(failure.code, 'RHINOQ_VERSION_CONFLICT');
     assert.equal(failure.attempts, 1);
     // Everything needed to replay the projection is in the record.
-    assert.deepEqual(failure.observation, { jobId: 'bull-job-1', returnvalue: { key: 'item-2' } });
+    assert.deepEqual(failure.observation, {
+      jobId: 'bull-job-1', attempt: 2, returnvalue: { key: 'item-2' },
+    });
     assert.match(failure.observedAt, /^\d{4}-\d{2}-\d{2}T/);
   } finally {
     h.bridge.close();
@@ -156,6 +160,32 @@ test('the idempotency key is the four fields a durable sink keys on', () => {
     projectionFailureKey({ runtime: 'bullmq', runtimeScope: 'a', externalId: 'b c', event: 'active' }),
   );
   assert.match(PROJECTION_FAILURE_TABLE_SQL, /PRIMARY KEY \(runtime, runtime_scope, external_id, event\)/);
+});
+
+test('PostgresProjectionFailureSink writes one parameterized idempotent upsert', async () => {
+  const calls = [];
+  const sink = new PostgresProjectionFailureSink({
+    async query(sql, values) {
+      calls.push([sql, values]);
+      return { rows: [] };
+    },
+  });
+  const failure = {
+    schemaVersion: 1, event: 'failed', runtime: 'bullmq', runtimeScope: 'reports',
+    externalId: 'job-1', observation: { jobId: 'job-1', attempt: 2 },
+    message: 'database unavailable', code: 'RHINOQ_VERSION_CONFLICT',
+    observedAt: '2026-08-04T00:00:00.000Z', attempts: 1,
+  };
+
+  await sink.record(failure);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], UPSERT_PROJECTION_FAILURE_SQL);
+  assert.match(calls[0][0], /ON CONFLICT \(runtime, runtime_scope, external_id, event\)/);
+  assert.deepEqual(calls[0][1], [
+    'bullmq', 'reports', 'job-1', 'failed', '{"jobId":"job-1","attempt":2}',
+    'database unavailable', 'RHINOQ_VERSION_CONFLICT',
+  ]);
 });
 
 test('the in-memory sink can be drained once a failure is handled', async () => {

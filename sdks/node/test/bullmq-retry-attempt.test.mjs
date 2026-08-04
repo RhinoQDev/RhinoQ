@@ -32,6 +32,42 @@ test('a job that goes active after failing opens the next attempt', async () => 
   }
 });
 
+test('a failed event followed by active closes the old attempt before retrying', async () => {
+  const h = newHarness({ firstState: 'running' });
+  try {
+    await h.bridge.project('failed', {
+      jobId: 'bull-job-1',
+      failedReason: 'upstream returned 502',
+    });
+    assert.equal(h.executions[0].state, 'failed');
+    assert.equal(h.task.state, 'running', 'a retryable failure must not fail the Task');
+
+    await h.bridge.project('active', { jobId: 'bull-job-1' });
+
+    assert.equal(h.executions.length, 2);
+    assert.equal(h.executions[0].reason, 'upstream returned 502');
+    assert.equal(h.executions[1].attempt, 2);
+    assert.equal(h.executions[1].state, 'running');
+  } finally {
+    h.bridge.close();
+  }
+});
+
+test('an observed runtime attempt repairs a missed failed and active event', async () => {
+  const h = newHarness({ firstState: 'running' });
+  try {
+    await h.bridge.reconcile({ state: 'active', jobId: 'bull-job-1', attempt: 2 });
+
+    assert.equal(h.executions.length, 2);
+    assert.equal(h.executions[0].state, 'failed');
+    assert.match(h.executions[0].reason, /runtime advanced to attempt 2/);
+    assert.equal(h.executions[1].attempt, 2);
+    assert.equal(h.executions[1].state, 'running');
+  } finally {
+    h.bridge.close();
+  }
+});
+
 test('a succeeded attempt that goes active again is also a new attempt', async () => {
   const h = newHarness({ firstState: 'succeeded' });
   try {
@@ -170,10 +206,11 @@ function newHarness({
       return executions.find((execution) => execution.id === id);
     },
     async getTask() { return task; },
-    async transitionTaskExecution(id, expectedVersion, next) {
+    async transitionTaskExecution(id, expectedVersion, next, reason) {
       const execution = executions.find((item) => item.id === id);
       assert.equal(expectedVersion, execution.version, 'stale execution version');
       execution.state = next;
+      execution.reason = reason;
       execution.version += 1;
       return task;
     },

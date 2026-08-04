@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- BullMQ retries now close the current RhinoQ Execution on every `failed`
+  event, while `isTerminalFailure` controls only parent-Task terminalization.
+  A one-based attempt in a reconciliation observation also repairs a gap where
+  both the failed and active events were missed. `reconcileTask()` reads the
+  latest embedded Task runtime references in one bounded query.
+- Duplicate BullMQ projectors now fail fast within one process. The Node SDK
+  also exports `PostgresProjectorLease`, a session advisory-lock owner for
+  cross-process `runtimeScope` coordination; it adds no Task-profile table.
+- `TaskReconciler` contains throwing error reporters, so a broken logger cannot
+  abort the rest of a reconciliation sweep.
+- The Node SDK now exports `PostgresProjectionFailureSink`, the parameterized
+  idempotent writer for the application-owned projection-failure table. Replay
+  remains a scheduled application reconciliation decision; the Task profile
+  still owns exactly three tables.
+
 - `sdks/rhinoq/bin/` is tracked. The repository's `bin/` ignore rule was meant
   for Go build output at the root, but it is unanchored, so it also swallowed
   the three hand-written CLI shims of the `rhinoq` distribution alias. They

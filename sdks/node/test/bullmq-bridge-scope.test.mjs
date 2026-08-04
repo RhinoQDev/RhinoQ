@@ -24,20 +24,15 @@ test('one bridge on a scope is silent and behaves exactly as before', async () =
   }
 });
 
-test('a second bridge on the same runtimeScope is reported once, naming the knob', () => {
+test('a second bridge on the same runtimeScope fails before subscribing', () => {
   const warnings = [];
   const harness = newHarness({ warnings });
   try {
-    harness.addBridge();
-
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /2 BullMQTaskBridge instances share runtimeScope "reports"/);
-    assert.match(warnings[0], /does not elect a leader/);
-    assert.match(warnings[0], /allowConcurrentBridges/);
-    assert.match(warnings[0], /RHINOQ_ALLOW_CONCURRENT_BRIDGES=1/);
-    // The cross-process case is the same hazard and is invisible from here.
-    // Saying so is the difference between a warning and a false assurance.
-    assert.match(warnings[0], /across processes/);
+    assert.throws(
+      () => harness.addBridge(),
+      /Only one projector.*runtimeScope.*projectorLease/,
+    );
+    assert.deepEqual(warnings, []);
   } finally {
     harness.closeAll();
   }
@@ -63,10 +58,9 @@ test('closing a bridge releases its scope for the replacement', () => {
     assert.deepEqual(warnings, [], 'a rolling replacement is not a duplicate');
 
     // close() is idempotent; a double close must not free a slot it no longer
-    // holds, or the next real duplicate goes unreported.
+    // holds, so the next real duplicate still fails.
     harness.bridges[0].close();
-    harness.addBridge();
-    assert.equal(warnings.length, 1);
+    assert.throws(() => harness.addBridge(), /Only one projector/);
   } finally {
     harness.closeAll();
   }

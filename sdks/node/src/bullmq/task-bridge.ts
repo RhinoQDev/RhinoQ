@@ -4,6 +4,7 @@ import {
 import type {
   TaskCreateRequest,
   TaskExecution,
+  TaskExecutionRuntimeRef,
   TaskProgress,
   TaskSnapshot,
   TaskState,
@@ -48,6 +49,8 @@ export interface BullMQQueue {
 
 export interface BullMQEvent {
   jobId: string;
+  /** Optional one-based runtime attempt supplied by an application read. */
+  attempt?: number;
   data?: unknown;
   returnvalue?: unknown;
   failedReason?: string;
@@ -90,8 +93,20 @@ export type BullMQObservedState = 'waiting' | 'active' | 'completed' | 'failed';
  */
 export interface BullMQTaskObservation extends BullMQEvent {
   state: BullMQObservedState;
+  /**
+   * One-based attempt observed in BullMQ. Supplying this lets reconciliation
+   * repair a gap where both the failed and active events were missed.
+   */
+  attempt?: number;
   /** Required to make an observed failed job terminal in RhinoQ. */
   terminal?: boolean;
+}
+
+export interface BullMQProjectorLease {
+  /** Returns true only for the process that owns this runtime scope. */
+  acquire(): Promise<boolean>;
+  /** Releases the ownership held by this bridge. */
+  release(): Promise<void>;
 }
 
 export interface BullMQTaskBridgeOptions {
@@ -267,6 +282,12 @@ export interface BullMQTaskBridgeOptions {
    * `RHINOQ_ALLOW_CONCURRENT_BRIDGES=1` does the same for a whole process.
    */
   allowConcurrentBridges?: boolean;
+  /**
+   * Optional durable owner lease. When supplied, call `await bridge.start()`
+   * before the application starts producing QueueEvents. A PostgreSQL
+   * advisory-lock implementation is exported as `PostgresProjectorLease`.
+   */
+  projectorLease?: BullMQProjectorLease;
 }
 
 /**
@@ -296,12 +317,16 @@ export class BullMQTaskBridge {
   private readonly retryExecutionId: (previous: TaskExecution, attempt: number) => string;
   private readonly onItemsSettled?: (task: TaskSnapshot) => Promise<void> | void;
   private readonly projectionFailures?: ProjectionFailureSink;
+  private readonly projectorLease?: BullMQProjectorLease;
+  private leaseAcquired = false;
   private warnedAboutRetrySupport = false;
   private warnedAboutSettleSupport = false;
   private readonly metrics?: TaskMetrics;
   private readonly warn: (warning: string) => void;
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
   private readonly listeners: Array<[QueueEvent, (event: BullMQEvent) => void]>;
+  private scopeRegistered = false;
+  private subscribed = false;
   private closed = false;
 
   constructor(options: BullMQTaskBridgeOptions) {
@@ -343,6 +368,10 @@ export class BullMQTaskBridge {
     this.metrics = options.metrics;
     this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
     this.onError = options.onError;
+    this.projectorLease = options.projectorLease;
+    if (this.projectorLease && !this.runtimeScope) {
+      throw new TypeError('BullMQTaskBridge projectorLease requires runtimeScope');
+    }
     this.warnOnDuplicateScope(options);
     this.projectionFailures = options.projectionFailures;
     this.listeners = (['waiting', 'active', 'progress', 'completed', 'failed'] as const)
@@ -350,9 +379,81 @@ export class BullMQTaskBridge {
         name,
         (event) => this.run(name, event, () => this.project(name, event)),
       ]);
-    for (const [name, listener] of this.listeners) {
-      this.events.on(name, listener);
+    if (!this.projectorLease) {
+      this.subscribe();
     }
+  }
+
+  /**
+   * Acquires the optional durable owner lease and subscribes to QueueEvents.
+   * Without a lease the constructor subscribes immediately for compatibility.
+   */
+  async start(): Promise<void> {
+    if (this.closed) {
+      throw new Error('BullMQTaskBridge.start() after close()');
+    }
+    const lease = this.projectorLease;
+    if (!lease) {
+      return;
+    }
+    if (this.leaseAcquired) {
+      return;
+    }
+    let acquired = false;
+    try {
+      acquired = await lease.acquire();
+    } catch (error) {
+      releaseScope(this.runtimeScope);
+      this.scopeRegistered = false;
+      throw error;
+    }
+    if (!acquired) {
+      releaseScope(this.runtimeScope);
+      this.scopeRegistered = false;
+      throw new Error(
+        `BullMQTaskBridge could not acquire projector ownership for runtimeScope ${JSON.stringify(this.runtimeScope)}; ` +
+          'run one projector per scope or wait for the current owner to release it',
+      );
+    }
+    this.leaseAcquired = true;
+    try {
+      this.subscribe();
+    } catch (error) {
+      this.leaseAcquired = false;
+      if (this.scopeRegistered) {
+        releaseScope(this.runtimeScope);
+        this.scopeRegistered = false;
+      }
+      try {
+        await lease.release();
+      } catch (releaseError) {
+        this.warn(
+          `RhinoQ: projector lease release failed after subscribe error for runtimeScope ` +
+            `${JSON.stringify(this.runtimeScope)}: ` +
+            `${releaseError instanceof Error ? releaseError.message : String(releaseError)}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private subscribe(): void {
+    if (this.subscribed) {
+      return;
+    }
+    try {
+      for (const [name, listener] of this.listeners) {
+        this.events.on(name, listener);
+      }
+    } catch (error) {
+      // A partially subscribed bridge must not leave handlers behind when a
+      // QueueEvents adapter rejects one of the listener registrations.
+      for (const [name, listener] of this.listeners) {
+        this.events.off?.(name, listener);
+      }
+      throw error;
+    }
+    this.subscribed = true;
   }
 
   /**
@@ -556,7 +657,7 @@ export class BullMQTaskBridge {
         await this.queue(observation.jobId);
         return;
       case 'active':
-        await this.start(observation.jobId);
+        await this.startJob(observation.jobId, observation.attempt);
         return;
       case 'completed':
         await this.complete(observation);
@@ -573,6 +674,52 @@ export class BullMQTaskBridge {
     for (const observation of observations) {
       await this.reconcile(observation);
     }
+  }
+
+  /**
+   * Reconciles the latest known attempt for every BullMQ item in a Task.
+   * `observe` is application-owned because the bridge must not scan or own
+   * Redis. The embedded PostgreSQL client supplies the runtime references in
+   * one query, so a restart does not require an application-maintained second
+   * Task-to-job table.
+   */
+  async reconcileTask(
+    taskId: string,
+    observe: (reference: TaskExecutionRuntimeRef) =>
+      Promise<BullMQTaskObservation | undefined>,
+  ): Promise<number> {
+    if (!this.client.listTaskExecutionRuntimeRefs) {
+      throw new TypeError(
+        'BullMQTaskBridge.reconcileTask requires a Task client with listTaskExecutionRuntimeRefs; ' +
+          'the legacy Gateway client cannot provide the bounded runtime reference read',
+      );
+    }
+    if (typeof observe !== 'function') {
+      throw new TypeError('BullMQTaskBridge.reconcileTask requires an observation callback');
+    }
+    const refs = await this.client.listTaskExecutionRuntimeRefs(taskId);
+    const latest = latestRuntimeReferences(refs.executions)
+      .filter((reference) => reference.runtime === 'bullmq')
+      .filter((reference) =>
+        !this.runtimeScope || (reference.runtimeScope ?? '') === this.runtimeScope);
+    let reconciled = 0;
+    for (const reference of latest) {
+      if (!reference.externalId) {
+        continue;
+      }
+      const observation = await observe(reference);
+      if (!observation) {
+        continue;
+      }
+      if (observation.jobId !== reference.externalId) {
+        throw new Error(
+          `BullMQ reconciliation returned job ${observation.jobId} for ${reference.externalId}`,
+        );
+      }
+      await this.reconcile(observation);
+      reconciled += 1;
+    }
+    return reconciled;
   }
 
   /**
@@ -692,7 +839,7 @@ export class BullMQTaskBridge {
       case 'waiting':
         return this.queue(observation.jobId);
       case 'active':
-        return this.start(observation.jobId);
+        return this.startJob(observation.jobId, observation.attempt);
       case 'progress':
         return this.reportProgress(observation);
       case 'completed':
@@ -707,10 +854,25 @@ export class BullMQTaskBridge {
       return;
     }
     this.closed = true;
-    for (const [name, listener] of this.listeners) {
-      this.events.off?.(name, listener);
+    if (this.subscribed) {
+      for (const [name, listener] of this.listeners) {
+        this.events.off?.(name, listener);
+      }
+      this.subscribed = false;
     }
-    releaseScope(this.runtimeScope);
+    if (this.scopeRegistered) {
+      releaseScope(this.runtimeScope);
+      this.scopeRegistered = false;
+    }
+    if (this.leaseAcquired && this.projectorLease) {
+      this.leaseAcquired = false;
+      void this.projectorLease.release().catch((error: unknown) => {
+        this.warn(
+          `RhinoQ: projector lease release failed for runtimeScope ${JSON.stringify(this.runtimeScope)}: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }
   }
 
   // Detection stops at the process boundary. Six processes each holding one
@@ -725,18 +887,19 @@ export class BullMQTaskBridge {
     }
     const existing = activeScopes.get(this.runtimeScope) ?? 0;
     activeScopes.set(this.runtimeScope, existing + 1);
+    this.scopeRegistered = true;
     if (existing === 0 || !this.duplicateScopeWarningEnabled(options)) {
       return;
     }
-    this.warn(
+    releaseScope(this.runtimeScope);
+    this.scopeRegistered = false;
+    throw new Error(
       `RhinoQ: ${existing + 1} BullMQTaskBridge instances share runtimeScope ` +
-        `${JSON.stringify(this.runtimeScope)} in this process. Each one subscribes to ` +
-        'QueueEvents, so every job event is projected once per bridge and the ' +
-        'projections contend for the same Task version. RhinoQ does not elect a ' +
-        'leader between them. Give each bridge its own runtimeScope, or keep one ' +
-        'bridge per scope and close() the others — including across processes, ' +
-        'where RhinoQ cannot see the duplicate at all. Set allowConcurrentBridges: ' +
-        'true, or RHINOQ_ALLOW_CONCURRENT_BRIDGES=1, once this is intended.',
+        `${JSON.stringify(this.runtimeScope)} in this process. Only one projector ` +
+        'may own a scope; close the existing bridge or use a different runtimeScope. ' +
+        'For multiple processes, provide projectorLease: new PostgresProjectorLease(...). ' +
+        'Set allowConcurrentBridges: true, or RHINOQ_ALLOW_CONCURRENT_BRIDGES=1, only ' +
+        'when duplicate projection is explicitly intended.',
     );
   }
 
@@ -755,7 +918,7 @@ export class BullMQTaskBridge {
     }
   }
 
-  private async start(jobId: string): Promise<void> {
+  private async startJob(jobId: string, runtimeAttempt?: number): Promise<void> {
     const execution = await this.find(jobId);
     if (!execution) {
       return;
@@ -763,13 +926,45 @@ export class BullMQTaskBridge {
     // A job going active again after its attempt finished is a retry. Without
     // this the terminal state machine simply refuses the move and the second
     // run disappears.
-    const current = isTerminalExecution(execution.state)
-      ? await this.openRetryAttempt(execution)
-      : execution;
+    const current = await this.openRetryAttempts(execution, runtimeAttempt);
     if (!current) {
       return;
     }
     await this.activate(current);
+  }
+
+  private async openRetryAttempts(
+    execution: TaskExecution,
+    runtimeAttempt?: number,
+  ): Promise<TaskExecution | undefined> {
+    let current: TaskExecution | undefined = execution;
+    const observedAttempt = runtimeAttempt === undefined
+      ? undefined
+      : validateRuntimeAttempt(runtimeAttempt);
+    while (
+      current && (isTerminalExecution(current.state) ||
+        (observedAttempt !== undefined && (current.attempt ?? 1) < observedAttempt))
+    ) {
+      // If the runtime has already advanced but the failed event was lost,
+      // close the old attempt before opening the one BullMQ is running now.
+      if (!isTerminalExecution(current.state)) {
+        await this.ensureExecution(
+          current.id,
+          'failed',
+          `runtime advanced to attempt ${observedAttempt} before the previous failure was projected`,
+        );
+        current = await this.find(execution.externalId ?? '');
+        if (!current) return undefined;
+        continue;
+      }
+      const next = await this.openRetryAttempt(current);
+      if (!next) return undefined;
+      current = next;
+      if (observedAttempt === undefined || (current.attempt ?? 1) >= observedAttempt) {
+        break;
+      }
+    }
+    return current;
   }
 
   /**
@@ -904,25 +1099,31 @@ export class BullMQTaskBridge {
   }
 
   private async failIfTerminal(event: BullMQEvent): Promise<void> {
-    if (!this.isTerminalFailure || !(await this.isTerminalFailure(event))) {
-      return;
-    }
-    await this.fail(event);
+    const terminal = this.isTerminalFailure
+      ? await this.isTerminalFailure(event)
+      : false;
+    // Every failed QueueEvent ends the current runtime attempt. The classifier
+    // only decides whether that failed attempt also ends the user-facing Task.
+    // Keeping these two decisions separate is what lets `failed` → `active`
+    // create a durable retry after the failed event was observed.
+    await this.fail(event, terminal);
   }
 
-  private async fail(event: BullMQEvent): Promise<void> {
+  private async fail(event: BullMQEvent, terminal = true): Promise<void> {
     const execution = await this.find(event.jobId);
     if (!execution) {
       return;
     }
     await this.activate(execution);
     await this.ensureExecution(execution.id, 'failed', this.failureReason(event));
-    if (this.terminalProjection === 'single-execution') {
+    if (terminal && this.terminalProjection === 'single-execution') {
       await this.ensureTask(execution.taskId, 'failed');
-    } else {
+    } else if (terminal) {
       await this.updateAggregate(execution.taskId);
     }
-    await this.signalSettlement(execution.taskId);
+    if (terminal) {
+      await this.signalSettlement(execution.taskId);
+    }
   }
 
   /**
@@ -1139,6 +1340,7 @@ export class BullMQTaskBridge {
       externalId: observation.jobId,
       observation: {
         jobId: observation.jobId,
+        ...(observation.attempt === undefined ? {} : { attempt: observation.attempt }),
         ...(observation.data === undefined ? {} : { data: observation.data }),
         ...(observation.returnvalue === undefined ? {} : { returnvalue: observation.returnvalue }),
         ...(observation.failedReason === undefined ? {} : { failedReason: observation.failedReason }),
@@ -1177,6 +1379,27 @@ function isCode(error: unknown, code: string): boolean {
 function defaultFailureReason(event: BullMQEvent): string | undefined {
   const reason = event.failedReason?.trim();
   return reason ? reason : undefined;
+}
+
+function validateRuntimeAttempt(value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError('BullMQ runtime attempt must be a positive integer');
+  }
+  return value;
+}
+
+function latestRuntimeReferences(
+  references: TaskExecutionRuntimeRef[],
+): TaskExecutionRuntimeRef[] {
+  const latest = new Map<string, TaskExecutionRuntimeRef>();
+  for (const reference of references) {
+    const key = reference.itemKey || reference.executionId;
+    const current = latest.get(key);
+    if (!current || reference.attempt > current.attempt) {
+      latest.set(key, reference);
+    }
+  }
+  return [...latest.values()];
 }
 
 function isVersionConflict(error: unknown): boolean {

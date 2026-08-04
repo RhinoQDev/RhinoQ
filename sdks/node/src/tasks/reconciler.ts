@@ -155,14 +155,14 @@ export class TaskReconciler {
           this.options.metrics?.increment('rhinoq_reconciler_task_reconciled_total');
         } catch (error) {
           this.options.metrics?.increment('rhinoq_reconciler_task_failed_total');
-          this.options.onError?.(error, task);
+          this.report(error, task);
         }
       }
     } catch (error) {
       // The read itself failed — the database is unreachable, or the schema is
       // behind. Report and let the next tick try again.
       this.options.metrics?.increment('rhinoq_reconciler_sweep_failed_total');
-      this.options.onError?.(error);
+      this.report(error);
     } finally {
       this.running = false;
       this.sweeps += 1;
@@ -183,5 +183,19 @@ export class TaskReconciler {
     // exit. Whoever wants it to hold the process open can say so themselves.
     timer.unref?.();
     this.handle = timer;
+  }
+
+  private report(error: unknown, task?: TaskSummary): void {
+    if (!this.options.onError) {
+      return;
+    }
+    try {
+      this.options.onError(error, task);
+    } catch {
+      // Error reporting is an observer. A broken logger must not abort the
+      // remaining Tasks in this sweep or create an unhandled rejection in the
+      // timer callback that keeps the reconciler alive.
+      this.options.metrics?.increment('rhinoq_reconciler_error_handler_failed_total');
+    }
   }
 }

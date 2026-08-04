@@ -145,6 +145,27 @@ test('the sweep counts what it selected, reconciled and failed', async () => {
   ]);
 });
 
+test('a throwing error reporter does not abort the remaining reconciliation work', async () => {
+  const handled = [];
+  const metrics = new TaskMetrics();
+  const reconciler = new TaskReconciler({
+    tasks: { async listTasksByState() { return [summary('a'), summary('b')]; } },
+    async reconcile(task) {
+      if (task.id === 'a') throw new Error('first task failed');
+      handled.push(task.id);
+    },
+    metrics,
+    onError: () => { throw new Error('logger failed'); },
+  });
+
+  assert.equal(await reconciler.sweep(), 1);
+  assert.deepEqual(handled, ['b']);
+  assert.equal(
+    metrics.snapshot().find((item) => item.name === 'rhinoq_reconciler_error_handler_failed_total').value,
+    1,
+  );
+});
+
 function summary(id) {
   return {
     schemaVersion: 1, entityVersion: 3, id, type: 'bulk-download', state: 'running',
