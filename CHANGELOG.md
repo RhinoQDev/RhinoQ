@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- `sdks/rhinoq/bin/` is tracked. The repository's `bin/` ignore rule was meant
+  for Go build output at the root, but it is unanchored, so it also swallowed
+  the three hand-written CLI shims of the `rhinoq` distribution alias. They
+  existed on one machine and in no clone: publishing that package from a fresh
+  checkout would have shipped three `bin` entries pointing at files that were
+  not in the tarball, and the failure would only have appeared at `npx rhinoq`.
+  The rule is now anchored to `/bin/`. Verified by installing the package into
+  a scratch project and running all three commands.
+
 ## 0.1.0-beta.9
 
 Published to npm under the `next` tag. **`latest` still resolves to
