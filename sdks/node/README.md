@@ -626,19 +626,26 @@ A terminal Task is never reopened, so that is unrecoverable and silent.
 `dispatchMany` therefore requires an `itemKey` on every item and refuses
 duplicates within a batch, before any durable or Queue work happens.
 
-Use the business identity of the item — an invoice number, a file key, a row
-ID. It must be the same across retries of that item and different for every
-other item:
+Use the business identity of the item — an invoice number, a row ID. It must be
+the same across retries of that item and different for every other item:
 
 ```ts
 await bridge.dispatchMany(files.map((file) => ({
   task,
-  itemKey: file.storageKey,       // stable across retries of this file
-  executionId: `${task.id}:${file.storageKey}`,
-  jobId: `${task.id}:${file.storageKey}`,
+  itemKey: file.id,               // stable across retries of this file
+  executionId: `${task.id}:${file.id}`,
+  jobId: `${task.id}:${file.id}`,
   job: { name: 'transcode', data: { key: file.storageKey } },
 })));
 ```
+
+**Pick a value you are willing to poll.** `itemKey` and `executionId` both
+appear on `TaskSnapshot`, which `createTaskRequestHandler` serves to a browser
+and which a UI re-reads every second. That is the same payload the storage
+reference is deliberately kept out of — `hasResult` is a boolean and the
+location is read once through `getTaskExecutionResults` — so a storage key,
+signed URL or file path used as the item identity defeats that separation. The
+job payload is a different matter: it never enters a snapshot.
 
 `track()` and `dispatch()` still accept an omitted `itemKey`, because a
 single-item Task genuinely has one.
