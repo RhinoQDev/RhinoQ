@@ -13,10 +13,15 @@
 
 ## 0.1.0-beta.9
 
-Published to npm under the `next` tag. **`latest` still resolves to
-`0.1.0-beta.1`**, so `npm install @rhinoq/node` without a tag installs a build
-from before the Task profile existed; install `@next` or an exact version until
-that tag moves.
+Published to npm as `@rhinoq/node@0.1.0-beta.9` on both `latest` and `next`,
+alongside the `rhinoq` CLI distribution alias at the same version — the first
+time that alias has been published at all. `latest` had been stranded on
+`0.1.0-beta.1`, a build from before the Task profile existed, so a bare
+`npm install @rhinoq/node` had been silently installing it.
+
+The published tarball reports `commit 2623a96` with a clean tree and
+`sourceHash 2ebe7a22`, which is what this checkout hashes to. That is the first
+release whose contents can be checked against a commit rather than trusted.
 
 Follow-up to the beta.8 audit. Every item here closes a gap the release left
 open, or a claim it made that the repository could not back.

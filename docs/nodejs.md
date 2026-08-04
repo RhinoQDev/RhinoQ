@@ -1,9 +1,9 @@
 # Node.js integration
 
-> Status: development preview. npm `next` carries `0.1.0-beta.9`; `latest` is
-> still `0.1.0-beta.1`, so `npm install @rhinoq/node` without a tag fetches a
-> build from before the Task profile existed. Install `@next` or an exact
-> version, and see [releasing.md](./releasing.md) before evaluating it.
+> Status: development preview. npm `latest` and `next` both carry
+> `0.1.0-beta.9`, which is this source, and the `rhinoq` CLI alias is published
+> at the same version. Pin an exact version and see
+> [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
 with two separate integration paths. Choose the smaller path that solves the
@@ -849,12 +849,10 @@ reproducible.
 
 ## Current limitations
 
-- npm `next` is current at `0.1.0-beta.9`, but `latest` still resolves to
-  `0.1.0-beta.1`. An `npm install @rhinoq/node` with no tag therefore installs
-  a build without the Task profile, the BullMQ bridge or the Verified Rule CLI,
-  and nothing about it announces that. Install `@next` or an exact version.
-- The `rhinoq` CLI distribution alias is not published; use
-  `npx --package @rhinoq/node rhinoq` or the package's own `bin` entries.
+- Every published version is a prerelease. `latest` resolves to
+  `0.1.0-beta.9`, so a bare `npm install @rhinoq/node` now gets this source,
+  but no beta carries a stability promise — pin an exact version in anything
+  that must not move under you.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems.
 - Express, Fastify and NestJS have request adapters (`createNodeTaskMiddleware`,

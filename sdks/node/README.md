@@ -3,15 +3,11 @@
 Catch background jobs that succeeded technically but failed in the real world.
 
 ```bash
-npm install @rhinoq/node@next pg
+npm install @rhinoq/node pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 ```
-
-**Install `@next`, not the bare name.** The `latest` dist-tag still points at
-`0.1.0-beta.1`, so `npm install @rhinoq/node` fetches a build from before the
-embedded Task profile, the BullMQ bridge and the Verified Rule loop existed.
 
 The Node `init` path creates the isolated Task profile. `beta.8` is the first
 release that contains the complete Verified Rule loop; an older tarball answers
@@ -39,10 +35,10 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. npm `next` carries `0.1.0-beta.9`, which
-is this source; `latest` is still the much older `0.1.0-beta.1`, so always
-install `@next` or an exact version. No prerelease is a production stability
-promise. The preview targets Node.js 22+.
+This package is a development preview. Both `latest` and `next` carry
+`0.1.0-beta.9`, which is this source. No prerelease is a production stability
+promise — pin an exact version if that matters to you. The preview targets
+Node.js 22+.
 
 The package ships both an ESM and a CommonJS build, so a NestJS application —
 which still compiles to CommonJS by default — can `require('@rhinoq/node')` in
