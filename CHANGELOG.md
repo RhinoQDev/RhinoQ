@@ -116,6 +116,42 @@ engine harness still passes on the same database.
 - Coverage on the beta.8 headline features: `application/rules` 28.1% → 81.5%,
   `notificationdelivery` 34.5% → 100%, `domain/attempt` 22.2% → 100%.
 
+### Release provenance
+
+- Every build now stamps `dist/build-info.json` with a hash of the source it
+  was produced from, and `npm run verify:installed -- <application>` compares an
+  installed copy against the checkout. This closes a failure that had already
+  happened: an archive packed at 14:08 kept the name
+  `rhinoq-node-0.1.0-beta.8.tgz` while the features it was supposed to contain
+  landed at 20:38, and a consuming application installed it and read the
+  version as proof. A filename carries a version, never its content.
+- `npm run pack` replaces bare `npm pack`: it removes earlier archives first, so
+  a path that still names a stale one fails loudly instead of resolving.
+- `npm run release:check` now refuses a `dist/` built from different source than
+  the checkout, built at a different version, or built from a dirty tree. The
+  three checks it had all read `package.json`, so they passed just as happily
+  against a `dist/` from weeks earlier.
+
+### Task profiles are not interchangeable
+
+- `RhinoQClient.createTaskExecution` warns the first time it is given an
+  `itemKey`. The Gateway stores Executions unique per `(task, attempt)` with no
+  column for the item, so it discarded the key silently — the same failure as
+  a fan-out dispatched without one, arriving through a different door, and
+  invisible until a retry double-charged. `docs/feature-matrix.md` now states
+  which per-item guarantees each profile actually has.
+- Added `listTaskExecutionRuntimeRefs`: every attempt's runtime job ID for one
+  Task, in one query. Cancelling a fan-out had to name the jobs to stop and
+  paid one `getTaskExecution` per Execution to learn them.
+
+  It is deliberately **not** a field on `TaskSnapshot`. The first attempt put
+  `externalId` there and `TestSnapshotIsVersionedAndExposesOwnershipWithoutRuntimeReferences`
+  refused it: the snapshot is polled, and `createTaskRequestHandler` serves it
+  to a browser through the owner-scoped routes, so a BullMQ job ID would have
+  reached end users for the same reason a storage reference must not. There is
+  no owner-scoped variant of the new read, and a test asserts no route reaches
+  it.
+
 ## 0.1.0-beta.8
 
 The first release whose Node package contains the `verify` onboarding commands.

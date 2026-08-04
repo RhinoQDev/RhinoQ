@@ -37,9 +37,9 @@ Node.js support has two deliberately separate paths:
 
 This package is a development preview. npm `next` still points to the older
 `0.1.0-beta.2`; trusted-publisher permission blocked the beta.5 npm upload.
-Use the beta.8 GitHub release archive or a local beta.8 tarball for the current
-contract. No prerelease is a production stability promise. The preview targets
-Node.js 22+.
+The newest published archive is the beta.8 GitHub release; this source is
+beta.9 and is only available by building it here. No prerelease is a production
+stability promise. The preview targets Node.js 22+.
 
 The package ships both an ESM and a CommonJS build, so a NestJS application —
 which still compiles to CommonJS by default — can `require('@rhinoq/node')` in
@@ -56,15 +56,31 @@ npm ci                 # install exactly what package-lock.json records
 npm run typecheck      # check TypeScript without producing dist/
 npm test               # build dist/ and run the SDK tests
 npm run pack:check     # show the files that would enter the package
-npm pack               # create rhinoq-node-0.1.0-beta.8.tgz
+npm run pack           # rebuild, drop earlier archives, create the .tgz
 ```
 
 Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.9.tgz pg
 ```
+
+#### Confirm what the application actually installed
+
+An archive's filename carries its version and nothing else. Source moves on
+beneath it, and an archive packed before a feature landed keeps installing
+cleanly under a version that implies the feature is present — the version
+number matching proves nothing. Every build therefore stamps
+`dist/build-info.json` with a hash of the source it came from, and one command
+compares it against this checkout:
+
+```bash
+npm run verify:installed -- /absolute/path/to/the-application
+```
+
+Use `npm run pack` rather than `npm pack` directly: it removes earlier archives
+first, so a stale one cannot be picked up by a path that still names it.
 
 For an application evaluation without a source checkout, pin the release
 archive rather than the stale npm `next` tag:
@@ -458,6 +474,31 @@ const bridge = new BullMQTaskBridge({
 await bridge.cancel(taskId, [jobId]);
 ```
 
+#### Collecting the job IDs to cancel
+
+`cancel()` needs the runtime job IDs of every open item, and reading them back
+one `getTaskExecution` at a time costs a round trip per item.
+`listTaskExecutionRuntimeRefs` answers it in one query:
+
+```ts
+const { executions } = await tasks.listTaskExecutionRuntimeRefs(taskId);
+const jobIds = executions
+  .filter((ref) => ref.state === 'running' || ref.state === 'dispatched')
+  .map((ref) => ref.externalId)
+  .filter((id): id is string => Boolean(id));
+
+await bridge.cancel(taskId, jobIds);
+```
+
+`externalId` is absent until dispatch reserves it, so filter before use — an
+attempt that never reached the runtime has no job to stop, and passing
+`undefined` would silently shorten the list that `cancel()` treats as complete.
+
+**This is a server-side read and has no owner-scoped variant.** Runtime job
+identity is deliberately absent from `TaskSnapshot`, for the same reason the
+storage reference is: the snapshot is polled, and `createTaskRequestHandler`
+serves it to a browser. Do not add a route for this one.
+
 #### An acknowledged cancellation does not end the Task
 
 `cancel()` records the cancellation *outcome*. It does not move the Task to a
@@ -600,6 +641,15 @@ await bridge.dispatchMany(files.map((file) => ({
 
 `track()` and `dispatch()` still accept an omitted `itemKey`, because a
 single-item Task genuinely has one.
+
+**`itemKey` requires the embedded PostgreSQL client.** The Gateway profile
+stores Executions as unique per `(task, attempt)`, with no column for the item,
+so it discards the key and numbers attempts per Task instead — which is the
+`50 items, no itemKey` failure above, arriving through a different door.
+`RhinoQClient.createTaskExecution` warns the first time it sees an `itemKey`,
+but a warning is not a guarantee: choose the embedded client when a Task fans
+out. The full comparison is in
+[`docs/feature-matrix.md`](../../docs/feature-matrix.md).
 
 #### A retry of an external job is a new attempt
 

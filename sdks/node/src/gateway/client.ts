@@ -70,6 +70,8 @@ export interface ClientOptions {
   fetch?: typeof globalThis.fetch;
   /** Bounds each HTTP call. Defaults to 10 seconds. */
   timeoutMs?: number;
+  /** Receives capability warnings. Defaults to `console.warn`. */
+  onWarning?: (warning: string) => void;
 }
 
 export class RhinoQClient {
@@ -77,6 +79,8 @@ export class RhinoQClient {
   private readonly token?: string;
   private readonly doFetch: typeof globalThis.fetch;
   private readonly timeoutMs: number;
+  private readonly warn: (warning: string) => void;
+  private warnedAboutItemKey = false;
   private connection?: Promise<HandshakeResult>;
 
   constructor(options: ClientOptions) {
@@ -94,6 +98,7 @@ export class RhinoQClient {
     this.token = options.token;
     this.doFetch = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
   }
 
   /** Negotiate and cache the wire contract before starting a worker. */
@@ -159,6 +164,20 @@ export class RhinoQClient {
   ): Promise<TaskSnapshot> {
     if (!request?.id || !request.runtime) {
       throw new TypeError('execution id and runtime are required');
+    }
+    // itemKey is the idempotency key of a fan-out item, and the Gateway
+    // profile has nowhere to put it: its executions are unique per
+    // (task, attempt), not per (task, item, attempt). Accepting it silently
+    // would let an adopter key idempotency on something the server discards,
+    // and only a duplicate charge would reveal it.
+    if (request.itemKey && !this.warnedAboutItemKey) {
+      this.warnedAboutItemKey = true;
+      this.warn(
+        'RhinoQ: itemKey was supplied but the Gateway profile does not carry it. ' +
+          'Attempts are numbered per Task there, not per item, and snapshots come ' +
+          'back without itemKey. Use the embedded PostgreSQL client for per-item ' +
+          'idempotency.',
+      );
     }
     return this.send<TaskSnapshot>(
       'POST',

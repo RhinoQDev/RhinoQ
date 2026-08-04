@@ -46,6 +46,31 @@ execution platforms.
 | Migration/diagnostics CLI | application-specific | read-only plan/status/SQL, explicit checksum-locked apply and database-aware doctor implemented |
 | Developer UI | separate product | embedded loopback-only Workbench preview implemented: payload-free jobs, Needs Attention, Findings, Rules, evidence, subject recheck and opt-in guarded repair; no remote hosting |
 
+## Task profiles are not equivalent
+
+The Node SDK reaches Tasks two ways, and they do not carry the same per-item
+guarantees. The difference is easy to miss because the TypeScript types are
+shared: fields the Gateway never populates are simply optional there.
+
+| Capability | Embedded PostgreSQL client | Gateway (Go engine) |
+|---|---|---|
+| `itemKey` on an Execution | yes — `UNIQUE (task_id, item_key, attempt)` | **no** — executions are `UNIQUE (task_id, attempt)`, so attempts are numbered per Task |
+| Per-item attempt history | yes — a retry opens attempt *n+1* for the same item | no — a retry cannot be distinguished from a new item |
+| `settleTaskItems` / `onItemsSettled` | yes — decided by one `items_settled_at IS NULL` UPDATE | no |
+| Bulk read of runtime job IDs | `listTaskExecutionRuntimeRefs`, one query | no — one lookup per Execution |
+
+Runtime job identity stays off `TaskSnapshot` on both profiles. The snapshot is
+polled and the owner-scoped routes serve it to a browser, so it carries no more
+infrastructure identity than it carries storage references. The embedded client
+exposes it through a separate server-side read with no owner-scoped variant.
+
+Both per-item gaps announce themselves rather than failing silently:
+`BullMQTaskBridge` warns when `onItemsSettled` is configured against a client
+that cannot settle, and `RhinoQClient.createTaskExecution` warns the first time
+an `itemKey` is supplied that the Gateway will discard. Neither is a substitute
+for choosing the right profile: **per-item idempotency requires the embedded
+PostgreSQL client.**
+
 BullMQ is a mature Redis-based queue with worker, events, delayed jobs,
 concurrency and operational features. RhinoQ uses it as one runtime reference;
 the lifecycle bridge must not claim queue replacement or feature parity. The

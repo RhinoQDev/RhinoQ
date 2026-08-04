@@ -11,6 +11,14 @@ import { test } from 'node:test';
 const cli = fileURLToPath(new URL('../dist/cli/task-migrate.js', import.meta.url));
 const developerCLI = fileURLToPath(new URL('../dist/cli/rhinoq.js', import.meta.url));
 
+// Read the expected version rather than pinning it. A release bump is routine,
+// and a test that fails on it teaches people to edit the assertion instead of
+// checking what it was actually asserting: that the CLI reports the version of
+// the package it shipped inside.
+const packageVersion = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
+
 test('Task migration CLI exposes help without connecting to PostgreSQL', () => {
   const result = spawnSync(process.execPath, [cli, '--help'], {
     encoding: 'utf8',
@@ -29,7 +37,7 @@ test('Task migration CLI reports the package version without a database', () => 
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), '0.1.0-beta.8');
+  assert.equal(result.stdout.trim(), packageVersion);
   assert.equal(result.stderr, '');
 });
 
@@ -39,7 +47,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   assert.match(help.stdout, /npx rhinoq init/);
   const version = spawnSync(process.execPath, [developerCLI, '--version'], { encoding: 'utf8', env: {} });
   assert.equal(version.status, 0, version.stderr);
-  assert.equal(version.stdout.trim(), '0.1.0-beta.8');
+  assert.equal(version.stdout.trim(), packageVersion);
   const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-cli-'));
   try {
     const first = spawnSync(process.execPath, [developerCLI, 'verify', 'add', 'completed-report-has-output'], { cwd, encoding:'utf8', env:{} });

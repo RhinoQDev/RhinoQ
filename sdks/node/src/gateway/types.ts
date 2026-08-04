@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = '1.0';
-export const SDK_VERSION = '0.1.0-beta.8';
+export const SDK_VERSION = '0.1.0-beta.9';
 export const MAX_CLAIM_BATCH = 1000;
 
 export const CLIENT_CAPABILITIES = [
@@ -95,6 +95,35 @@ export interface TaskExecutionResults {
   entityVersion: number;
   taskId: string;
   executions: TaskExecutionResult[];
+}
+
+/**
+ * One attempt's identity in its own runtime — the BullMQ job ID, for instance.
+ *
+ * Deliberately not on `TaskExecutionSummary`. The snapshot is polled, and the
+ * owner-scoped routes serve it straight to a browser; a runtime job ID is
+ * infrastructure identity that an end user has no business holding, for the
+ * same reason a storage reference is kept out of it. Cancelling a fan-out
+ * still needs every job ID at once, so it gets its own server-side read
+ * instead of one `getTaskExecution` per Execution.
+ */
+export interface TaskExecutionRuntimeRef {
+  executionId: string;
+  itemKey: string;
+  attempt: number;
+  runtime: string;
+  runtimeScope?: string;
+  /** Absent until dispatch reserves it: that attempt has no job to stop. */
+  externalId?: string;
+  state: string;
+}
+
+/** Read at a Task version, so a caller can tell it apart from a stale read. */
+export interface TaskExecutionRuntimeRefs {
+  schemaVersion: 1;
+  entityVersion: number;
+  taskId: string;
+  executions: TaskExecutionRuntimeRef[];
 }
 
 export interface TaskExecutionCreateRequest {
