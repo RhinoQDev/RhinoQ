@@ -163,6 +163,28 @@ test('Task-only profile uses three tables and serves the embedded Node client', 
         ['item-b', 1, 'queue-b'],
       ],
     );
+
+    // Cancelling a fan-out needs every runtime job ID, and used to pay one
+    // getTaskExecution per Execution to collect them. One query now answers it.
+    const refs = await tasks.listTaskExecutionRuntimeRefs(taskId);
+    assert.equal(refs.entityVersion, task.entityVersion);
+    assert.deepEqual(
+      refs.executions.map((ref) => [ref.itemKey, ref.attempt, ref.externalId]),
+      [
+        ['item-a', 1, 'job-1'],
+        ['item-a', 2, 'job-2'],
+        ['item-b', 1, 'job-1'],
+      ],
+    );
+
+    // ...and it stays off the polled snapshot, which the owner-scoped routes
+    // serve to a browser. A runtime job ID is infrastructure identity.
+    for (const snapshot of [task, await tasks.getTaskForOwner(taskId, 'owner-a')]) {
+      assert.ok(
+        !JSON.stringify(snapshot).includes('job-1'),
+        'the polled snapshot must not carry runtime job identity',
+      );
+    }
 	const summary = await tasks.getTaskSummary(taskId);
 	assert.equal(summary.entityVersion, task.entityVersion);
 	assert.equal(summary.executions, undefined);

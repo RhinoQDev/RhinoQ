@@ -675,7 +675,7 @@ Read [Production readiness](./production-readiness.md),
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
 | repair is unavailable | Workbench is read-only or handler is not registered | supply the callback allowlist and start with `--actions` |
 | repair becomes `stale` | the business object changed after preview | investigate again and create a new plan; do not bypass the precondition |
-| npm installs an older beta | npm trusted publishing is not current | install the pinned beta.8 GitHub tarball shown above |
+| npm installs an unexpected version | every published version is a prerelease and `latest` moves with each one | pin an exact version, for example `@rhinoq/node@0.1.0-beta.9` |
 
 ## Honest current limits
 

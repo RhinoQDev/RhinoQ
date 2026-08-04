@@ -1,6 +1,6 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-beta.8",
+  "version": "0.1.0-beta.9",
   "description": "Catch background jobs that succeeded technically but failed in the real world",
   "license": "Apache-2.0",
   "repository": {
@@ -43,13 +43,15 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/mark-cjs.mjs",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/mark-cjs.mjs && node scripts/build-info.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs test/*.test.cjs",
     "benchmark": "npm run build && node bench/task-benchmark.mjs",
     "benchmark:postgres": "npm run build && node bench/postgres-benchmark.mjs",
     "prepack": "npm run build",
+    "pack": "node scripts/pack.mjs",
     "pack:check": "npm pack --dry-run",
+    "verify:installed": "node scripts/verify-installed.mjs",
     "release:check": "node scripts/verify-release.mjs"
   },
   "devDependencies": {

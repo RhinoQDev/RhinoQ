@@ -3,14 +3,14 @@
 Catch background jobs that succeeded technically but failed in the real world.
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install @rhinoq/node pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 ```
 
 The Node `init` path creates the isolated Task profile. `beta.8` is the first
-archive that contains the complete Verified Rule loop; an older tarball answers
+release that contains the complete Verified Rule loop; an older tarball answers
 `FAIL verify requires 'add <rule-name>'`. For Verified Rules, start the full Go
 Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32 bytes, then run:
 
@@ -35,10 +35,9 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. npm `next` still points to the older
-`0.1.0-beta.2`; trusted-publisher permission blocked the beta.5 npm upload.
-Use the beta.8 GitHub release archive or a local beta.8 tarball for the current
-contract. No prerelease is a production stability promise. The preview targets
+This package is a development preview. Both `latest` and `next` carry
+`0.1.0-beta.9`, which is this source. No prerelease is a production stability
+promise — pin an exact version if that matters to you. The preview targets
 Node.js 22+.
 
 The package ships both an ESM and a CommonJS build, so a NestJS application —
@@ -56,27 +55,45 @@ npm ci                 # install exactly what package-lock.json records
 npm run typecheck      # check TypeScript without producing dist/
 npm test               # build dist/ and run the SDK tests
 npm run pack:check     # show the files that would enter the package
-npm pack               # create rhinoq-node-0.1.0-beta.8.tgz
+npm run pack           # rebuild, drop earlier archives, create the .tgz
 ```
 
 Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.9.tgz pg
 ```
 
-For an application evaluation without a source checkout, pin the release
-archive rather than the stale npm `next` tag:
+#### Confirm what the application actually installed
+
+An archive's filename carries its version and nothing else. Source moves on
+beneath it, and an archive packed before a feature landed keeps installing
+cleanly under a version that implies the feature is present — the version
+number matching proves nothing. Every build therefore stamps
+`dist/build-info.json` with a hash of the source it came from, and one command
+compares it against this checkout:
 
 ```bash
-npm install https://github.com/madebyduy/RhinoQ/releases/download/v0.1.0-beta.8/rhinoq-node-0.1.0-beta.8.tgz pg
+npm run verify:installed -- /absolute/path/to/the-application
 ```
 
-That beta.8 archive contains the embedded Task profile and BullMQ contracts.
-It must not be used as evidence that the current source's Verified Rule CLI is
-published; verify an archive with `grep -c "verify apply" package/dist/cli/rhinoq.js`
-or build from this checkout.
+Use `npm run pack` rather than `npm pack` directly: it removes earlier archives
+first, so a stale one cannot be picked up by a path that still names it.
+
+For an application evaluation without a source checkout, install from npm and
+pin the exact version rather than a moving tag:
+
+```bash
+npm install @rhinoq/node@0.1.0-beta.9 pg
+```
+
+A published copy carries the same provenance a locally packed one does. It is
+not in the `exports` map, so read it by path:
+
+```bash
+node -p "require('./node_modules/@rhinoq/node/dist/build-info.json')"
+```
 
 ## Fastest Task-only setup
 
@@ -458,6 +475,31 @@ const bridge = new BullMQTaskBridge({
 await bridge.cancel(taskId, [jobId]);
 ```
 
+#### Collecting the job IDs to cancel
+
+`cancel()` needs the runtime job IDs of every open item, and reading them back
+one `getTaskExecution` at a time costs a round trip per item.
+`listTaskExecutionRuntimeRefs` answers it in one query:
+
+```ts
+const { executions } = await tasks.listTaskExecutionRuntimeRefs(taskId);
+const jobIds = executions
+  .filter((ref) => ref.state === 'running' || ref.state === 'dispatched')
+  .map((ref) => ref.externalId)
+  .filter((id): id is string => Boolean(id));
+
+await bridge.cancel(taskId, jobIds);
+```
+
+`externalId` is absent until dispatch reserves it, so filter before use — an
+attempt that never reached the runtime has no job to stop, and passing
+`undefined` would silently shorten the list that `cancel()` treats as complete.
+
+**This is a server-side read and has no owner-scoped variant.** Runtime job
+identity is deliberately absent from `TaskSnapshot`, for the same reason the
+storage reference is: the snapshot is polled, and `createTaskRequestHandler`
+serves it to a browser. Do not add a route for this one.
+
 #### An acknowledged cancellation does not end the Task
 
 `cancel()` records the cancellation *outcome*. It does not move the Task to a
@@ -600,6 +642,15 @@ await bridge.dispatchMany(files.map((file) => ({
 
 `track()` and `dispatch()` still accept an omitted `itemKey`, because a
 single-item Task genuinely has one.
+
+**`itemKey` requires the embedded PostgreSQL client.** The Gateway profile
+stores Executions as unique per `(task, attempt)`, with no column for the item,
+so it discards the key and numbers attempts per Task instead — which is the
+`50 items, no itemKey` failure above, arriving through a different door.
+`RhinoQClient.createTaskExecution` warns the first time it sees an `itemKey`,
+but a warning is not a guarantee: choose the embedded client when a Task fans
+out. The full comparison is in
+[`docs/feature-matrix.md`](../../docs/feature-matrix.md).
 
 #### A retry of an external job is a new attempt
 

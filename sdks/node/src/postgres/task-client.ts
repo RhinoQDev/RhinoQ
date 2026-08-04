@@ -7,6 +7,7 @@ import type {
   TaskExecutionCreateRequest,
   TaskExecutionResult,
   TaskExecutionResults,
+  TaskExecutionRuntimeRefs,
 	TaskExecutionPage,
   TaskExecutionSummary,
   TaskProgress,
@@ -441,6 +442,40 @@ export class PostgresTaskClient implements TaskClient {
   ): Promise<TaskExecutionResults> {
     await this.getTaskForOwner(taskId, ownerId);
     return this.getTaskExecutionResults(taskId);
+  }
+
+  /**
+   * Every attempt's runtime identity for one Task, in a single query.
+   *
+   * Cancelling a fan-out has to name the jobs to stop, and reading them back
+   * one Execution at a time costs a round trip per item. They are not on the
+   * snapshot on purpose — that is polled and reaches browsers through the
+   * owner-scoped routes — so this is the server-side read that replaces the
+   * loop. There is deliberately no owner-scoped variant: an end user must not
+   * reach it, and adding one would be the leak this method exists to avoid.
+   */
+  async listTaskExecutionRuntimeRefs(taskId: string): Promise<TaskExecutionRuntimeRefs> {
+    const task = await this.getTask(taskId);
+    const result = await this.execute<ExecutionRow>(
+      `SELECT id, item_key, attempt, runtime, runtime_scope, external_id, state
+       FROM rhinoq_task.executions
+       WHERE task_id = $1 ORDER BY item_key, attempt, id`,
+      [taskId],
+    );
+    return {
+      schemaVersion: 1,
+      entityVersion: task.entityVersion,
+      taskId,
+      executions: result.rows.map((row) => ({
+        executionId: row.id,
+        itemKey: row.item_key,
+        attempt: row.attempt,
+        runtime: row.runtime,
+        ...(row.runtime_scope ? { runtimeScope: row.runtime_scope } : {}),
+        ...(row.external_id ? { externalId: row.external_id } : {}),
+        state: row.state,
+      })),
+    };
   }
 
   async transitionTask(
