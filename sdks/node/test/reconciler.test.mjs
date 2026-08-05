@@ -166,6 +166,65 @@ test('a throwing error reporter does not abort the remaining reconciliation work
   );
 });
 
+test('a reconciliation lease prevents duplicate sweeps and is released after work', async () => {
+  const metrics = new TaskMetrics();
+  let reads = 0;
+  let released = 0;
+  const lease = {
+    async acquire() { return false; },
+    async release() { released += 1; },
+  };
+  const reconciler = new TaskReconciler({
+    tasks: { async listTasksByState() { reads += 1; return []; } },
+    async reconcile() {},
+    lease,
+    metrics,
+  });
+
+  assert.equal(await reconciler.sweep(), 0);
+  assert.equal(reads, 0);
+  assert.equal(released, 0);
+  assert.equal(reconciler.ownership, 'unowned');
+  assert.equal(
+    metrics.snapshot().find((item) => item.name === 'rhinoq_reconciler_lease_not_acquired_total').value,
+    1,
+  );
+
+  let acquired = true;
+  lease.acquire = async () => acquired;
+  assert.equal(await reconciler.sweep(), 0);
+  assert.equal(reads, 1);
+  assert.equal(released, 1);
+  assert.equal(reconciler.lastSuccessfulSweepAtIso !== undefined, true);
+  acquired = false;
+});
+
+test('a lost reconciliation lease fails closed and reports ownership loss', async () => {
+  const metrics = new TaskMetrics();
+  let lost = 0;
+  let reads = 0;
+  const reconciler = new TaskReconciler({
+    tasks: { async listTasksByState() { reads += 1; return []; } },
+    async reconcile() {},
+    lease: {
+      async acquire() { return true; },
+      async release() {},
+      async verify() { return false; },
+    },
+    onLeaseLost: () => { lost += 1; },
+    metrics,
+  });
+
+  assert.equal(await reconciler.sweep(), 0);
+  assert.equal(reads, 0);
+  assert.equal(lost, 1);
+  assert.equal(reconciler.ownership, 'unowned');
+  assert.equal(
+    metrics.snapshot().find((item) => item.name === 'rhinoq_reconciler_lease_lost_total').value,
+    1,
+  );
+});
+
 function summary(id) {
   return {
     schemaVersion: 1, entityVersion: 3, id, type: 'bulk-download', state: 'running',

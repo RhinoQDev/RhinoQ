@@ -21,12 +21,13 @@ const (
 )
 
 type ProviderOperationRequest struct {
-	TaskID         string                     `json:"taskId,omitempty"`
-	Provider       string                     `json:"provider"`
-	Operation      string                     `json:"operation"`
-	IdempotencyKey string                     `json:"idempotencyKey"`
-	Confirmation   ProviderConfirmationPolicy `json:"confirmation"`
-	RetryPolicy    ProviderRetryPolicy        `json:"retryPolicy"`
+	TaskID             string                     `json:"taskId,omitempty"`
+	Provider           string                     `json:"provider"`
+	Operation          string                     `json:"operation"`
+	IdempotencyKey     string                     `json:"idempotencyKey"`
+	RequestFingerprint string                     `json:"requestFingerprint,omitempty"`
+	Confirmation       ProviderConfirmationPolicy `json:"confirmation"`
+	RetryPolicy        ProviderRetryPolicy        `json:"retryPolicy"`
 }
 
 type ProviderRetryPolicy string
@@ -59,20 +60,21 @@ type ProviderConfirmation struct {
 }
 
 type ProviderOperationRecord struct {
-	ID             string                     `json:"id"`
-	TaskID         string                     `json:"taskId,omitempty"`
-	Provider       string                     `json:"provider"`
-	Operation      string                     `json:"operation"`
-	IdempotencyKey string                     `json:"idempotencyKey"`
-	Confirmation   ProviderConfirmationPolicy `json:"confirmation"`
-	RetryPolicy    ProviderRetryPolicy        `json:"retryPolicy"`
-	State          string                     `json:"state"`
-	ProviderID     string                     `json:"providerId,omitempty"`
-	Evidence       string                     `json:"evidence,omitempty"`
-	Reason         string                     `json:"reason,omitempty"`
-	Version        int64                      `json:"version"`
-	CreatedAt      time.Time                  `json:"createdAt"`
-	UpdatedAt      time.Time                  `json:"updatedAt"`
+	ID                 string                     `json:"id"`
+	TaskID             string                     `json:"taskId,omitempty"`
+	Provider           string                     `json:"provider"`
+	Operation          string                     `json:"operation"`
+	IdempotencyKey     string                     `json:"idempotencyKey"`
+	RequestFingerprint string                     `json:"requestFingerprint,omitempty"`
+	Confirmation       ProviderConfirmationPolicy `json:"confirmation"`
+	RetryPolicy        ProviderRetryPolicy        `json:"retryPolicy"`
+	State              string                     `json:"state"`
+	ProviderID         string                     `json:"providerId,omitempty"`
+	Evidence           string                     `json:"evidence,omitempty"`
+	Reason             string                     `json:"reason,omitempty"`
+	Version            int64                      `json:"version"`
+	CreatedAt          time.Time                  `json:"createdAt"`
+	UpdatedAt          time.Time                  `json:"updatedAt"`
 }
 
 type ProviderOperationEvidence struct {
@@ -109,8 +111,9 @@ func (c *IntegrityClient) BeginProviderOperation(ctx context.Context, request Pr
 		return ProviderOperationRecord{}, err
 	}
 	service, _ := providerapp.New(c.providerOperations, nil)
-	record, err := service.Begin(ctx, provideroperation.ID(id), request.TaskID,
+	record, err := service.BeginWithFingerprint(ctx, provideroperation.ID(id), request.TaskID,
 		request.Provider, request.Operation, request.IdempotencyKey,
+		request.RequestFingerprint,
 		provideroperation.ConfirmationPolicy(request.Confirmation), provideroperation.RetryPolicy(request.RetryPolicy))
 	return publicProviderOperation(record), err
 }
@@ -351,7 +354,8 @@ func newProviderOperationID() (string, error) {
 func publicProviderOperation(record provideroperation.Record) ProviderOperationRecord {
 	return ProviderOperationRecord{ID: string(record.ID), TaskID: record.TaskID, Provider: record.Provider,
 		Operation: record.Operation, IdempotencyKey: record.IdempotencyKey,
-		Confirmation: ProviderConfirmationPolicy(record.Confirmation), RetryPolicy: ProviderRetryPolicy(record.RetryPolicy),
+		RequestFingerprint: record.RequestFingerprint,
+		Confirmation:       ProviderConfirmationPolicy(record.Confirmation), RetryPolicy: ProviderRetryPolicy(record.RetryPolicy),
 		State: string(record.State), ProviderID: record.ProviderID, Evidence: record.Evidence,
 		Reason: record.Reason, Version: record.Version, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 }

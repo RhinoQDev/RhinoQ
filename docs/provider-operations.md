@@ -4,6 +4,10 @@
 provisioning, fulfilment and email sends. It persists one operation under
 `(provider, operation, idempotencyKey)` before the call runs.
 
+Effect Ledger Lite also stores a request fingerprint. Reusing one key with a
+different command shape is rejected by Go before application code runs; the
+fingerprint is an identity guard, not a copy of the request payload.
+
 The authoritative states are:
 
 ```text
@@ -31,7 +35,8 @@ go run ./examples/stripe-failure
 It commits a fake refund, drops the response connection, confirms by read-back,
 then repeats the operation. The output must show `provider_calls=1` both times.
 
-Migrations 018 and 021 add the operation contract and append-only evidence.
+Migrations 018, 021 and 024 add the operation contract, append-only evidence
+and request fingerprint.
 Go owns the state machine. Node reserves and transitions operations through the
 Gateway before it invokes application-owned provider code:
 
@@ -45,6 +50,10 @@ const operation = await rhinoq.providerOperation({
 });
 ```
 
-Reference adapters exist for Stripe and provisioning/storage. They adapt SDK
-results only; they do not contain retry or state-machine correctness. The full
+Reference adapters exist for HTTP mutations, Stripe and provisioning/storage.
+The HTTP adapter injects the ledger idempotency key, rejects a conflicting
+caller-supplied key and turns non-2xx responses into fail-closed errors; the
+application must still provide provider-specific read-back confirmation. These
+adapters adapt transport/SDK results only; they do not contain retry or
+state-machine correctness. The full
 Next.js/BullMQ/PostgreSQL demo is in `examples/nextjs-bullmq-stripe`.

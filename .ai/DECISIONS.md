@@ -380,8 +380,9 @@
   apply token and post-apply verification.
 - **Notification boundary:** generic signed webhook and Slack delivery are
   explicit, evidence-redacted by default and deduplicated durably per event and
-  destination. Automatic multi-node scheduling is deferred until subscription,
-  retention and retry policy are specified.
+  destination. The delivery ledger also supports queued multi-node dispatch
+  with a PostgreSQL row lease, persisted backoff and an explicit dead-letter
+  state; destination resolution and secrets remain application-owned.
 - **Workbench boundary:** ADR-0012's arbitrary-mutation prohibition remains,
   but read-only operation is no longer mandatory. An explicitly action-enabled
   loopback Workbench may call recheck and guarded repair Application use cases.
@@ -391,7 +392,7 @@
 - **Alternatives:** offset pages (unstable under append); retry timeouts as
   failures (can double-charge); arbitrary repair SQL (unreviewable and unsafe);
   copying state machines into TypeScript (two correctness authorities).
-- **Consequences:** full-profile databases require migrations 018–022. The
+- **Consequences:** full-profile databases require migrations 018–025. The
   Task-only Node profile stays at exactly three tables. Node ProviderOperation
   and repair HTTP helpers reserve/transition state through Go; SDK callbacks do
   not implement the state machine. Task polling reads stored aggregate counts
@@ -442,3 +443,31 @@
   behavior, and apply an additive rollback migration only after no marker is
   needed. Existing Task/Execution rows remain readable without the helper.
 - **Owner:** engine + Node SDK
+
+## ADR-0023 — Request-bound effects and durable recovery queues
+
+- **Status:** accepted
+- **Context:** a convenient provider helper must not make it easier to reuse
+  one idempotency key for a different command. Projection failures and
+  notifications also need durable operator/scheduler workflows, but runtime
+  adapters and destination secrets are application-owned.
+- **Decision:** Effect Ledger Lite derives a command key when explicit identity
+  is supplied and sends a deterministic request fingerprint to Go. The Go
+  ProviderOperation record rejects a key whose fingerprint, task or policy
+  differs. Projection failures use an application-owned inbox with claim,
+  replay, retry and ignore states. Notification deliveries persist their
+  message payload, use PostgreSQL `FOR UPDATE SKIP LOCKED` plus a row lease,
+  exponential backoff and a bounded `dead` state.
+- **Alternatives:** derive identity only in Node (the Go ledger could not fence
+  a changed request); retry a failed projection from the process callback
+  (lost on restart); put provider secrets in the delivery table (unsafe); or
+  use a process-local cron (duplicate sends across replicas).
+- **Consequences:** migrations 024–025 are additive. A PostgreSQL failure
+  inbox table remains outside the Task-only three-table profile. A scheduler
+  can recover work after a process loss, but the application still resolves
+  runtime state, notification destinations and secrets. Tenant-wide RBAC and
+  deployment-shaped chaos evidence remain separate release gates.
+- **Rollback:** stop constructing the new scheduler/inbox, continue using the
+  synchronous notification/provider APIs, and leave the additive columns
+  unused. Existing delivery and ProviderOperation rows remain readable.
+- **Owner:** engine + Node SDK + product

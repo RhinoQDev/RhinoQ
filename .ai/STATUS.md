@@ -8,11 +8,11 @@ supporting Task/runtime layers from the detect-investigate-repair loop.
 | TASK | 5/6 | Aggregate-versioned Task Summary, keyset Execution pages, owner-scoped polling/cancel, Node browser store, result references and BullMQ projection are tested; organization/RBAC, first-class BullMQ retry and realtime remain |
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
 | RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
-| VERIFY | 4/5 | fenced Effect Ledger, ProviderOperation with explicit uncertain/read-back, versioned Rules, Explain gate and bounded scheduling exist; provider contract still needs real design-partner evidence |
-| RECOVER | 5/6 | Findings, Needs Attention, durable-dedup signed notifications and preview/four-eyes/precondition/verify repair exist; automatic multi-node notification scheduling remains |
+| VERIFY | 4/5 | fenced Effect Ledger, HTTP/Stripe/provisioning ProviderOperation adapters with explicit uncertain/read-back, versioned Rules, Explain gate and bounded scheduling exist; provider outcome evidence still needs real design-partner validation |
+| RECOVER | 6/6 | Findings, Needs Attention, durable-dedup signed notifications, queued multi-node delivery and preview/four-eyes/precondition/verify repair exist; design-partner evidence remains |
 | ADOPTION | 3/4 | one-command initialization, Rule generator, health checker, failure fixture and an official BullMQ/Stripe demo exist; three real design-partner pilots remain |
 | DX | 9/10 | embedded Go/Node paths, direct CLI tooling, ProviderOperation/repair Node APIs, application HTTP/browser helpers and action-enabled loopback Workbench exist; beta.5 binaries/image are public, npm trusted-publisher permission remains |
-| Infrastructure | 10/11 | configuration, health, process rate limit, metrics, migrations, real PostgreSQL tests, non-root image, SBOM/provenance config and a passing restore drill exist; deployment-shaped chaos evidence and full tenant RBAC remain |
+| Infrastructure | 10/11 | configuration, health, process rate limit, metrics, migrations, real PostgreSQL lease-loss/takeover tests, non-root image, SBOM/provenance config, restore drill and local Redis/BullMQ restart harness exist; PostgreSQL failover, deployment-shaped chaos and full tenant RBAC remain |
 
 ## Estimates
 
@@ -67,4 +67,4 @@ its code, tests, documentation and evidence agree.
 1. Recruit three real design partners: BullMQ fan-out, Stripe/billing and provisioning/fulfilment.
 2. Measure code/endpoints removed and time-to-detect on each pilot.
 3. Run Redis/PostgreSQL chaos and restore drills in a deployment-shaped environment.
-4. Add tenant-wide RBAC and automatic multi-node notification scheduling.
+4. Add tenant-wide RBAC and deployment-shaped chaos evidence.

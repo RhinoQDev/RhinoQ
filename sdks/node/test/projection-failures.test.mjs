@@ -4,11 +4,15 @@ import test from 'node:test';
 import {
   BullMQTaskBridge,
   InMemoryProjectionFailureSink,
+  InMemoryProjectionFailureInbox,
   PostgresProjectionFailureSink,
+  PostgresProjectionFailureInbox,
+  PROJECTION_FAILURE_TABLE_MIGRATION_SQL,
   PROJECTION_FAILURE_TABLE_SQL,
   RhinoQError,
   UPSERT_PROJECTION_FAILURE_SQL,
   projectionFailureKey,
+  replayProjectionFailure,
 } from '../dist/index.js';
 
 // onError is a callback. It fires once, in the process that failed, and that
@@ -183,9 +187,56 @@ test('PostgresProjectionFailureSink writes one parameterized idempotent upsert',
   assert.equal(calls[0][0], UPSERT_PROJECTION_FAILURE_SQL);
   assert.match(calls[0][0], /ON CONFLICT \(runtime, runtime_scope, external_id, event\)/);
   assert.deepEqual(calls[0][1], [
-    'bullmq', 'reports', 'job-1', 'failed', '{"jobId":"job-1","attempt":2}',
+    1, 'bullmq', 'reports', 'job-1', 'failed', '2026-08-04T00:00:00.000Z', '{"jobId":"job-1","attempt":2}',
     'database unavailable', 'RHINOQ_VERSION_CONFLICT',
   ]);
+});
+
+test('failure inbox claims, retries a failed replay, and reaches replayed', async () => {
+  const inbox = new InMemoryProjectionFailureInbox();
+  const failure = {
+    schemaVersion: 1, event: 'completed', runtime: 'bullmq', runtimeScope: 'reports',
+    externalId: 'job-2', observation: { jobId: 'job-2' }, message: 'projection failed',
+    observedAt: new Date().toISOString(), attempts: 1,
+  };
+  await inbox.record(failure);
+  let replayCalls = 0;
+  const identity = { runtime: 'bullmq', runtimeScope: 'reports', externalId: 'job-2', event: 'completed' };
+  const retry = await replayProjectionFailure(inbox, identity, 'operator-a', async () => {
+    replayCalls++;
+    throw new Error('runtime still unavailable');
+  }, { retryDelayMs: () => 0 });
+  assert.equal(retry.state, 'pending');
+  const replayed = await replayProjectionFailure(inbox, identity, 'operator-a', async () => {
+    replayCalls++;
+  }, { retryDelayMs: () => 0 });
+  assert.equal(replayed.state, 'replayed');
+  assert.equal(replayCalls, 2);
+  assert.equal((await inbox.list({ state: 'replayed' })).length, 1);
+});
+
+test('Postgres failure inbox uses row-claim SQL and preserves fail-closed completion', async () => {
+  const calls = [];
+  const inbox = new PostgresProjectionFailureInbox({
+    async query(sql, values) {
+      calls.push([sql, values]);
+      return { rows: sql.includes("SET state='replaying'") ? [{
+        schema_version: 1, runtime: 'bullmq', runtime_scope: 'reports', external_id: 'job-3', event: 'failed',
+        observed_at: new Date(), observation: { jobId: 'job-3' }, message: 'boom', code: null, attempts: 1, state: 'replaying',
+        replay_attempts: 1, next_attempt_at: null, claimed_by: 'worker-a',
+        claim_expires_at: new Date(Date.now() + 1000), resolved_at: null, resolution_reason: null,
+        first_seen_at: new Date(), last_seen_at: new Date(),
+      }] : [] };
+    },
+  });
+  const identity = { runtime: 'bullmq', runtimeScope: 'reports', externalId: 'job-3', event: 'failed' };
+  const claimed = await inbox.claim(identity, 'worker-a', 10_000);
+  assert.equal(claimed.state, 'replaying');
+  assert.match(calls[0][0], /claim_expires_at/);
+  const completed = await inbox.markReplayed(identity, 'worker-a');
+  assert.equal(completed, undefined, 'an empty UPDATE is not presented as replayed');
+  assert.match(calls[1][0], /claimed_by=\$7/);
+  assert.match(PROJECTION_FAILURE_TABLE_MIGRATION_SQL, /ADD COLUMN IF NOT EXISTS state/);
 });
 
 test('the in-memory sink can be drained once a failure is handled', async () => {

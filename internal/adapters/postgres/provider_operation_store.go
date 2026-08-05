@@ -19,7 +19,7 @@ func NewProviderOperationStore(db *sql.DB) (*ProviderOperationStore, error) {
 }
 
 const providerOperationSelect = `SELECT op.id, COALESCE(op.task_id,''), op.provider,
-	op.operation, op.idempotency_key, op.confirmation_policy, op.retry_policy,
+	op.operation, op.idempotency_key, COALESCE(op.request_fingerprint,''), op.confirmation_policy, op.retry_policy,
 	op.state, COALESCE(op.provider_id,''),
 	COALESCE((SELECT evidence.payload FROM rhinoq_provider_operation_evidence AS evidence
 		WHERE evidence.operation_id=op.id ORDER BY evidence.sequence DESC LIMIT 1),''),
@@ -29,7 +29,7 @@ const providerOperationSelect = `SELECT op.id, COALESCE(op.task_id,''), op.provi
 func scanProviderOperation(row rowScanner) (provideroperation.Record, error) {
 	var record provideroperation.Record
 	err := row.Scan(&record.ID, &record.TaskID, &record.Provider, &record.Operation, &record.IdempotencyKey,
-		&record.Confirmation, &record.RetryPolicy, &record.State,
+		&record.RequestFingerprint, &record.Confirmation, &record.RetryPolicy, &record.State,
 		&record.ProviderID, &record.Evidence, &record.Reason,
 		&record.Version, &record.CreatedAt, &record.UpdatedAt)
 	return record, err
@@ -40,13 +40,13 @@ func (s *ProviderOperationStore) BeginProviderOperation(ctx context.Context, rec
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO rhinoq_provider_operations
 			(id, task_id, provider, operation, idempotency_key, confirmation_policy,
-			retry_policy, state, provider_id, evidence, reason, version, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULL,NULL,NULL,$9,$10,$11)
+			retry_policy, request_fingerprint, state, provider_id, evidence, reason, version, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,NULL,NULL,$10,$11,$12)
 		ON CONFLICT (provider, operation, idempotency_key)
 		DO UPDATE SET provider = EXCLUDED.provider
 		RETURNING id`, record.ID, nullableString(record.TaskID), record.Provider,
 		record.Operation, record.IdempotencyKey, record.Confirmation, record.RetryPolicy,
-		record.State, record.Version, record.CreatedAt, record.UpdatedAt).Scan(&id)
+		record.RequestFingerprint, record.State, record.Version, record.CreatedAt, record.UpdatedAt).Scan(&id)
 	if err != nil {
 		return provideroperation.Record{}, err
 	}

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Added the standard Node/BullMQ integration boundary and the standalone
+  `@rhinoq/nest` package. Its async module factory waits for Task schema
+  readiness, defaults the BullMQ projector and reconciliation scheduler to
+  PostgreSQL advisory leases, wires health/metrics and starts/stops the bridge
+  with the host lifecycle. It still requires an application-owned BullMQ
+  runtime observer and does not move Task correctness into TypeScript.
+- `TaskReconciler` now supports an owner lease, fails closed when it cannot
+  acquire or verify that lease, exposes ownership/freshness diagnostics and
+  reports lease contention/loss counters.
+- BullMQ projectors expose ownership state for readiness checks. A scoped
+  integration reports an unowned or lost projector as degraded rather than
+  presenting a healthy database as a healthy projection path.
+- Standby integrations retry projector ownership after contention; database
+  or subscription errors remain visible through health and a counter instead
+  of becoming an unhandled timer rejection.
 - `npx rhinoq dev` now mounts the self-contained read-only Task Workbench at
   `/rhinoq`, so the Node-only onboarding path shows live state buckets and
   per-attempt detail instead of a latest-25-Tasks table.
@@ -28,6 +43,26 @@
   idempotent writer for the application-owned projection-failure table. Replay
   remains a scheduled application reconciliation decision; the Task profile
   still owns exactly three tables.
+- The Node failure sink now has a standard inbox workflow with pending,
+  replaying, replayed and ignored states, row-level claim leases, retry timing
+  and a fail-closed replay helper. The table remains application-owned and the
+  runtime-specific replay callback remains outside RhinoQ.
+- Added Effect Ledger Lite to the Node Gateway client. It derives a stable
+  command key, hashes the JSON request and sends the fingerprint to the Go
+  ProviderOperation ledger, which rejects reuse of one key for a different
+  request shape.
+- Added a durable Go notification scheduler. Findings can be queued without a
+  network call; PostgreSQL `FOR UPDATE SKIP LOCKED` plus a row lease elects a
+  sender, exponential backoff records retry timing and bounded attempts end in
+  an explicit `dead` state. Destination resolution and secrets remain
+  application-owned.
+- Added a Node HTTP ProviderOperation adapter. It injects the durable ledger
+  idempotency key, rejects conflicting caller headers, bounds non-2xx response
+  evidence and requires application-owned read-back confirmation.
+- Added real PostgreSQL notification-lease takeover and projector-session-loss
+  integration tests, plus a disposable BullMQ/Redis restart harness for the
+  official fan-out example. These are local reproducibility evidence, not
+  production reliability claims.
 
 - `sdks/rhinoq/bin/` is tracked. The repository's `bin/` ignore rule was meant
   for Go build output at the root, but it is unanchored, so it also swallowed

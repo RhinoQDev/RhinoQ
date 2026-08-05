@@ -93,6 +93,25 @@ export interface BullMQTaskDispatch extends BullMQTaskBinding {
 
 export type BullMQObservedState = 'waiting' | 'active' | 'completed' | 'failed';
 
+export type BullMQProjectorState =
+  | 'unowned'
+  | 'projecting'
+  | 'lost'
+  | 'closed';
+
+/** Non-fatal startup result: another process currently owns the scope. */
+export class BullMQProjectorUnownedError extends Error {
+  readonly code = 'RHINOQ_PROJECTOR_UNOWNED';
+
+  constructor(runtimeScope: string) {
+    super(
+      `BullMQTaskBridge could not acquire projector ownership for runtimeScope ${JSON.stringify(runtimeScope)}; ` +
+        'run one projector per scope or wait for the current owner to release it',
+    );
+    this.name = 'BullMQProjectorUnownedError';
+  }
+}
+
 /**
  * A point-in-time observation read by the application from its BullMQ Job.
  * It is intentionally not a Queue scan contract: the application decides
@@ -348,6 +367,7 @@ export class BullMQTaskBridge {
   private readonly leaseVerifyIntervalMs: number;
   private readonly onLeaseLost?: (runtimeScope: string) => void;
   private leaseAcquired = false;
+  private projectorState: BullMQProjectorState = 'unowned';
   private leaseVerifyTimer?: ReturnType<typeof setInterval>;
   private verifyingLease = false;
   private warnedAboutRetrySupport = false;
@@ -416,7 +436,13 @@ export class BullMQTaskBridge {
       ]);
     if (!this.projectorLease) {
       this.subscribe();
+      this.projectorState = 'projecting';
     }
+  }
+
+  /** Current ownership state for readiness checks and operator diagnostics. */
+  get ownership(): BullMQProjectorState {
+    return this.projectorState;
   }
 
   /**
@@ -443,14 +469,13 @@ export class BullMQTaskBridge {
       throw error;
     }
     if (!acquired) {
+      this.projectorState = 'unowned';
       releaseScope(this.runtimeScope);
       this.scopeRegistered = false;
-      throw new Error(
-        `BullMQTaskBridge could not acquire projector ownership for runtimeScope ${JSON.stringify(this.runtimeScope)}; ` +
-          'run one projector per scope or wait for the current owner to release it',
-      );
+      throw new BullMQProjectorUnownedError(this.runtimeScope);
     }
     this.leaseAcquired = true;
+    this.projectorState = 'projecting';
     try {
       this.subscribe();
     } catch (error) {
@@ -525,6 +550,7 @@ export class BullMQTaskBridge {
       return;
     }
     this.leaseAcquired = false;
+    this.projectorState = 'lost';
     this.stopLeaseVerification();
     if (this.subscribed) {
       for (const [name, listener] of this.listeners) {
@@ -1064,6 +1090,7 @@ export class BullMQTaskBridge {
       return;
     }
     this.closed = true;
+    this.projectorState = 'closed';
     this.stopLeaseVerification();
     if (this.subscribed) {
       for (const [name, listener] of this.listeners) {

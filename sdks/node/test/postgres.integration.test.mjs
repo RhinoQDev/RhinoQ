@@ -5,6 +5,7 @@ import pg from 'pg';
 
 import {
   BullMQTaskBridge,
+  PostgresProjectorLease,
   PostgresProducer,
   installPostgresTaskProfile,
   migrateTaskSchema,
@@ -389,5 +390,45 @@ test('Task-only profile uses three tables and serves the embedded Node client', 
   } finally {
     await pool.query('DROP SCHEMA IF EXISTS rhinoq_task CASCADE');
     await pool.end();
+  }
+});
+
+test('PostgresProjectorLease stops trusting a terminated database session', {
+  skip: !databaseUrl,
+}, async () => {
+  const scope = `postgres-lease-${process.pid}-${Date.now()}`;
+  const applicationName = `rhinoq-lease-test-${process.pid}-${Date.now()}`;
+  const leaseUrl = new URL(databaseUrl);
+  leaseUrl.searchParams.set('application_name', applicationName);
+  const heldPool = new pg.Pool({ connectionString: leaseUrl.toString(), max: 1 });
+  const replacementPool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  const adminPool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  // PostgreSQL reports the administrator-terminated session asynchronously;
+  // the lease's verify() call is the assertion point, not an uncaught pool
+  // error event.
+  heldPool.on('error', () => {});
+  const lease = new PostgresProjectorLease(heldPool, scope);
+  const replacement = new PostgresProjectorLease(replacementPool, scope);
+  try {
+    assert.equal(await lease.acquire(), true);
+    const pidResult = await adminPool.query(
+      `SELECT pid
+       FROM pg_stat_activity
+       WHERE application_name = $1 AND datname = current_database()
+       ORDER BY backend_start DESC
+       LIMIT 1`,
+      [applicationName],
+    );
+    const pid = pidResult.rows[0]?.pid;
+    assert.ok(pid, 'the held lease session must be visible to PostgreSQL');
+    const terminated = await adminPool.query('SELECT pg_terminate_backend($1) AS terminated', [pid]);
+    assert.equal(terminated.rows[0].terminated, true);
+
+    assert.equal(await lease.verify(), false, 'a terminated session no longer owns the advisory lock');
+    assert.equal(await replacement.acquire(), true, 'a replacement projector can take over the released lock');
+  } finally {
+    await lease.release().catch(() => undefined);
+    await replacement.release().catch(() => undefined);
+    await Promise.all([heldPool.end(), replacementPool.end(), adminPool.end()]);
   }
 });

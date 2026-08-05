@@ -25,13 +25,17 @@ func New(store ports.ProviderOperationStore, now func() time.Time) (*Service, er
 }
 
 func (s *Service) Begin(ctx context.Context, id provideroperation.ID, taskID, provider, operation, key string, confirmation provideroperation.ConfirmationPolicy, retryPolicy provideroperation.RetryPolicy) (provideroperation.Record, error) {
-	record, err := provideroperation.New(id, taskID, provider, operation, key, confirmation, retryPolicy, s.now())
+	return s.BeginWithFingerprint(ctx, id, taskID, provider, operation, key, "", confirmation, retryPolicy)
+}
+
+func (s *Service) BeginWithFingerprint(ctx context.Context, id provideroperation.ID, taskID, provider, operation, key, fingerprint string, confirmation provideroperation.ConfirmationPolicy, retryPolicy provideroperation.RetryPolicy) (provideroperation.Record, error) {
+	record, err := provideroperation.NewWithFingerprint(id, taskID, provider, operation, key, fingerprint, confirmation, retryPolicy, s.now())
 	if err != nil {
 		return provideroperation.Record{}, err
 	}
 	stored, err := s.store.BeginProviderOperation(ctx, record)
-	if err == nil && (stored.TaskID != record.TaskID || stored.Confirmation != record.Confirmation || stored.RetryPolicy != record.RetryPolicy) {
-		return stored, errors.New("provider operation idempotency key was reused with a different task or policy")
+	if err == nil && (stored.TaskID != record.TaskID || stored.RequestFingerprint != record.RequestFingerprint || stored.Confirmation != record.Confirmation || stored.RetryPolicy != record.RetryPolicy) {
+		return stored, errors.New("provider operation idempotency key was reused with a different task, request fingerprint or policy")
 	}
 	return stored, err
 }

@@ -48,15 +48,19 @@ type Record struct {
 	Provider       string
 	Operation      string
 	IdempotencyKey string
-	Confirmation   ConfirmationPolicy
-	RetryPolicy    RetryPolicy
-	State          State
-	ProviderID     string
-	Evidence       string
-	Reason         string
-	Version        int64
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// RequestFingerprint binds an idempotency key to the command shape that
+	// created it. A key may be reused to resume the same command, never to
+	// silently mutate a different request.
+	RequestFingerprint string
+	Confirmation       ConfirmationPolicy
+	RetryPolicy        RetryPolicy
+	State              State
+	ProviderID         string
+	Evidence           string
+	Reason             string
+	Version            int64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 var (
@@ -65,13 +69,18 @@ var (
 )
 
 func New(id ID, taskID, provider, operation, key string, confirmation ConfirmationPolicy, retryPolicy RetryPolicy, now time.Time) (Record, error) {
+	return NewWithFingerprint(id, taskID, provider, operation, key, "", confirmation, retryPolicy, now)
+}
+
+func NewWithFingerprint(id ID, taskID, provider, operation, key, fingerprint string, confirmation ConfirmationPolicy, retryPolicy RetryPolicy, now time.Time) (Record, error) {
 	if strings.TrimSpace(string(id)) == "" || strings.TrimSpace(provider) == "" ||
 		strings.TrimSpace(operation) == "" || strings.TrimSpace(key) == "" ||
+		strings.TrimSpace(fingerprint) != fingerprint || len(fingerprint) > 128 ||
 		!confirmation.Valid() || !retryPolicy.Valid() || now.IsZero() {
 		return Record{}, ErrInvalidRecord
 	}
 	return Record{ID: id, TaskID: strings.TrimSpace(taskID), Provider: provider, Operation: operation,
-		IdempotencyKey: key, Confirmation: confirmation, RetryPolicy: retryPolicy,
+		IdempotencyKey: key, RequestFingerprint: fingerprint, Confirmation: confirmation, RetryPolicy: retryPolicy,
 		State: Pending, Version: 1,
 		CreatedAt: now, UpdatedAt: now}, nil
 }

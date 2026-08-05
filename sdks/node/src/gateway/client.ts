@@ -27,19 +27,20 @@ import {
   type TaskExecutionCreateRequest,
   type TaskExecution,
   type TaskExecutionResults,
-	type TaskExecutionPage,
+  type TaskExecutionPage,
   type TaskProgress,
   type TaskResult,
   type TaskSnapshot,
-	type TaskSummary,
+  type TaskSummary,
   type TaskState,
   type ProviderConfirmation,
+  type EffectOptions,
   type ProviderOperationEvidence,
   type ProviderOperationOptions,
   type ProviderOperationRecord,
   type ProviderOperationRequest,
-	type RepairProposalRequest,
-	type RepairRecord,
+  type RepairProposalRequest,
+  type RepairRecord,
 } from './types.js';
 
 export class RhinoQError extends Error {
@@ -400,6 +401,7 @@ export class RhinoQClient {
       provider: options.name.slice(0, separator),
       operation: options.name.slice(separator + 1),
       idempotencyKey: options.idempotencyKey,
+      requestFingerprint: options.requestFingerprint,
       confirmation: options.confirmation ?? (options.confirm ? 'readback' : 'on-return'),
       retryPolicy: options.retryPolicy ?? 'when-not-happened',
     });
@@ -428,6 +430,50 @@ export class RhinoQClient {
       try { return await this.recheckProviderOperation(record, options.confirm); }
       catch { return record; }
     }
+  }
+
+  /**
+   * The small, safe-by-default Effect API. It derives a stable key when the
+   * caller supplies command identity, hashes the request shape, and then uses
+   * the same Go-owned ProviderOperation ledger as the full API.
+   */
+  private async effectLite<T>(options: EffectOptions<T>): Promise<ProviderOperationRecord> {
+    const provider = options?.provider?.trim();
+    const operation = options?.operation?.trim();
+    if (!provider || !operation) {
+      throw new TypeError('effect provider and operation are required');
+    }
+    if (provider.includes('.') || operation.includes('.')) {
+      throw new TypeError('effect provider and operation must not contain dots');
+    }
+    if (typeof options.execute !== 'function') {
+      throw new TypeError('effect execute callback is required');
+    }
+    const identity = options.idempotencyKey?.trim() ||
+      options.commandId?.trim() || options.taskId?.trim();
+    if (!identity) {
+      throw new TypeError('effect requires idempotencyKey, commandId, or taskId');
+    }
+    const idempotencyKey = options.idempotencyKey?.trim() ||
+      `effect:${provider}:${operation}:${identity}`;
+    if (idempotencyKey.length > 256) {
+      throw new RangeError('effect idempotency key must be at most 256 characters');
+    }
+    const requestFingerprint = await fingerprintEffect({
+      provider, operation, idempotencyKey, request: options.request,
+    });
+    return this.providerOperation({
+      taskId: options.taskId,
+      name: `${provider}.${operation}` as `${string}.${string}`,
+      idempotencyKey,
+      requestFingerprint,
+      confirmation: options.confirmation,
+      retryPolicy: options.retryPolicy,
+      execute: options.execute,
+      confirm: options.confirm,
+      providerId: options.providerId,
+      evidence: options.evidence,
+    });
   }
 
   async recheckProviderOperation(
@@ -638,11 +684,26 @@ export class RhinoQClient {
     });
   }
 
+  async effect<T>(options: EffectOptions<T>): Promise<ProviderOperationRecord>;
   async effect<T>(
     lease: LeaseToken,
     request: EffectRequest,
     run: () => Promise<{ reference: string; value: T }>,
-  ): Promise<T | undefined> {
+  ): Promise<T | undefined>;
+  async effect<T>(
+    first: EffectOptions<T> | LeaseToken,
+    second?: EffectRequest,
+    third?: () => Promise<{ reference: string; value: T }>,
+  ): Promise<ProviderOperationRecord | T | undefined> {
+    if (isEffectLiteOptions(first)) {
+      return this.effectLite(first);
+    }
+    if (!second || !third) {
+      throw new TypeError('worker effect requires lease, request and run callback');
+    }
+    const lease = first;
+    const request = second;
+    const run = third;
     try {
       await this.send<EffectResult>('POST', '/v1/effects/begin', {
         lease,
@@ -759,6 +820,56 @@ export class RhinoQClient {
     } finally {
       clearTimeout(timeout);
     }
+  }
+}
+
+async function fingerprintEffect(input: {
+  provider: string;
+  operation: string;
+  idempotencyKey: string;
+  request: unknown;
+}): Promise<string> {
+  const canonical = canonicalJSON(input.request === undefined ? null : input.request);
+  const material = `${input.provider}\u0000${input.operation}\u0000${input.idempotencyKey}\u0000${canonical}`;
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw new Error('WebCrypto is required to fingerprint an Effect request');
+  }
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(material));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function isEffectLiteOptions<T>(value: EffectOptions<T> | LeaseToken): value is EffectOptions<T> {
+  return !!value && typeof value === 'object' && 'provider' in value && 'operation' in value && 'execute' in value;
+}
+
+function canonicalJSON(value: unknown, ancestors = new Set<object>()): string {
+  if (value === null) return 'null';
+  switch (typeof value) {
+    case 'string': return JSON.stringify(value);
+    case 'boolean': return value ? 'true' : 'false';
+    case 'number':
+      if (!Number.isFinite(value)) throw new TypeError('effect request must contain JSON values');
+      return JSON.stringify(value);
+    case 'undefined': throw new TypeError('effect request must contain JSON values');
+    case 'bigint':
+    case 'function':
+    case 'symbol': throw new TypeError('effect request must contain JSON values');
+    case 'object':
+      if (ancestors.has(value)) throw new TypeError('effect request must not be circular');
+      ancestors.add(value);
+      try {
+        if (Array.isArray(value)) return `[${value.map((item) => canonicalJSON(item, ancestors)).join(',')}]`;
+        const prototype = Object.getPrototypeOf(value);
+        if (prototype !== Object.prototype && prototype !== null) {
+          throw new TypeError('effect request must contain plain JSON objects');
+        }
+        return `{${Object.keys(value as Record<string, unknown>).sort().map((key) =>
+          `${JSON.stringify(key)}:${canonicalJSON((value as Record<string, unknown>)[key], ancestors)}`).join(',')}}`;
+      } finally {
+        ancestors.delete(value);
+      }
+    default: throw new TypeError('effect request must contain JSON values');
   }
 }
 

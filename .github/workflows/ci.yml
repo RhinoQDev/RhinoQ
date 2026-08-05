@@ -119,6 +119,8 @@ jobs:
         working-directory: sdks/node
       - run: npm run pack:check
         working-directory: sdks/node
+      - run: npm test
+        working-directory: sdks/nest
 
   benchmark-smoke:
     name: Benchmark smoke (non-gating evidence)

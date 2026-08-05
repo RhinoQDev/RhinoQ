@@ -228,6 +228,8 @@ export interface ProviderOperationRequest {
   provider: string;
   operation: string;
   idempotencyKey: string;
+  /** SHA-256 of the command identity and request shape, when available. */
+  requestFingerprint?: string;
   confirmation?: ProviderConfirmationPolicy;
   retryPolicy?: ProviderRetryPolicy;
 }
@@ -265,6 +267,29 @@ export interface ProviderOperationEvidence {
 export interface ProviderOperationOptions<T> extends Omit<ProviderOperationRequest, 'provider' | 'operation'> {
   /** `stripe.refund`, `storage.provision`, or another stable provider.operation name. */
   name: `${string}.${string}`;
+  execute: (idempotencyKey: string) => Promise<T>;
+  confirm?: (operation: ProviderOperationRecord) => Promise<ProviderConfirmation>;
+  providerId?: (result: T) => string;
+  evidence?: (result: T) => string | undefined;
+}
+
+/**
+ * Effect Ledger Lite input. It keeps the provider callback ergonomic while
+ * delegating all state transitions and unknown-result handling to Go.
+ *
+ * If no idempotencyKey is supplied, commandId or taskId becomes the stable
+ * identity. `request` is JSON-shaped input used only to fingerprint the
+ * command; it is never sent to RhinoQ or stored as business payload.
+ */
+export interface EffectOptions<T> {
+  taskId?: string;
+  provider: string;
+  operation: string;
+  commandId?: string;
+  idempotencyKey?: string;
+  request?: unknown;
+  confirmation?: ProviderConfirmationPolicy;
+  retryPolicy?: ProviderRetryPolicy;
   execute: (idempotencyKey: string) => Promise<T>;
   confirm?: (operation: ProviderOperationRecord) => Promise<ProviderConfirmation>;
   providerId?: (result: T) => string;

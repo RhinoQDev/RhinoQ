@@ -27,6 +27,42 @@ The embedded PostgreSQL Task client and BullMQ bridge reduce onboarding cost;
 the Go Gateway remains authoritative for ProviderOperation uncertainty,
 evidence and guarded repair.
 
+### Effect Ledger Lite
+
+`RhinoQClient.effect()` is the short path for a provider mutation. Give it a
+task or command identity and a JSON request; it derives the idempotency key,
+fingerprints the request and delegates the state machine to Go:
+
+```ts
+await rhinoq.effect({
+  taskId, provider: 'storage', operation: 'upload', commandId: downloadId,
+  request: { key: objectKey, size: expectedSize },
+  execute: (key) => uploadToStorage(objectKey, { idempotencyKey: key }),
+  confirm: (operation) => checkObjectExists(operation),
+});
+```
+
+The timeout rule is unchanged: unknown is not failed, and a different request
+under the same key is rejected by the Go ledger. The full
+`providerOperation()` API remains available when a team needs explicit
+provider-operation control.
+
+For a provider exposed through HTTP, `httpProviderAdapter()` injects the
+ledger's idempotency key and requires the application to supply read-back
+confirmation. A non-2xx response is kept fail-closed; it is not an automatic
+permission to repeat a mutation:
+
+```ts
+await rhinoq.providerOperation({
+  name: 'billing.refund', idempotencyKey,
+  ...httpProviderAdapter({
+    request: (key) => ({ input: refundUrl, init: { method: 'POST', body, headers } }),
+    parse: (response) => response.json(),
+    confirm: (operation) => readRefundBack(operation),
+  }),
+});
+```
+
 Node.js support has two deliberately separate paths:
 
 - `PostgresProducer` enqueues through the application's existing PostgreSQL
@@ -115,10 +151,57 @@ No Gateway, Go toolchain or RhinoQ credential is involved. Use
 and `ApplicationTaskClient` in the browser; the operator token never enters
 this path.
 
+### Standard BullMQ integration
+
+For a BullMQ application, `@rhinoq/nest` packages the lifecycle wiring around
+this client: schema readiness, one PostgreSQL projector lease per
+`runtimeScope`, a separate reconciliation lease, health/metrics access and the
+Task providers. The runtime read remains application-owned because RhinoQ must
+not scan or mutate Redis:
+
+The package is included in this source checkout and has not yet been published
+as a separate npm release. From the repository, install it with
+`npm install ./sdks/nest`; use a tagged package only after its release is
+listed in the changelog.
+
+```ts
+import { RhinoQModule } from '@rhinoq/nest';
+
+RhinoQModule.forRootAsync({
+  inject: [Pool, BullMQEvents],
+  useFactory: (pool, events) => ({
+    pool,
+    events,
+    runtimeScope: 'reports',
+    terminalProjection: 'execution-only',
+    reconciliation: {
+      observe: async (reference) => readBullMQState(reference),
+    },
+  }),
+});
+```
+
+The module starts the bridge only after the async factory and Task schema are
+ready. A process that does not own the projector lease stays unowned and does
+not subscribe to `QueueEvents`; a lost session is reported as degraded. This
+is orchestration, not a second Task state machine: transitions continue to be
+decided by the versioned PostgreSQL commands.
+
 For large fan-outs, poll `getTaskSummary()` and load attempts with
 `listTaskExecutions(taskId, cursor, limit)`. `TaskStore` selects the summary
 automatically when the supplied browser client supports it. `getTask()` remains
 compatible but includes every Execution and therefore grows with the batch.
+
+### Projection failure inbox
+
+The bridge can write the application-owned `rhinoq_projection_failures` table
+through `PostgresProjectionFailureSink`. The source checkout now also exports
+`PostgresProjectionFailureInbox`: list failures, claim one with a lease, replay
+through the application's runtime adapter, then mark it `replayed`, schedule
+another attempt or `ignored`. `replayProjectionFailure()` fails closed when the
+lease is lost after the callback, so a network error is never turned into a
+blind second replay. Apply `PROJECTION_FAILURE_TABLE_SQL` for a new table or
+`PROJECTION_FAILURE_TABLE_MIGRATION_SQL` for the original sink-only shape.
 
 ### Mounting the Task routes
 

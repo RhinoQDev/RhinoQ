@@ -28,7 +28,7 @@ detect -> investigate -> decide -> repair -> verify
 
 > [!WARNING]
 > RhinoQ is a prerelease for evaluation and controlled pilots. Tenant-wide
-> RBAC, multi-node notification dispatch and deployment-shaped chaos evidence
+> RBAC, design-partner code-reduction evidence and deployment-shaped chaos
 > still block a production-ready claim.
 
 ## What it actually does
@@ -164,6 +164,33 @@ export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
 RHINOQ_AGENT_TOKEN="$RHINOQ_AGENT_TOKEN" ./rhinoq-agent
 ```
 
+For a NestJS/BullMQ application, the lower-friction path is the optional
+`@rhinoq/nest` package. Its async module factory installs the embedded Task
+profile before injection, acquires a PostgreSQL projector lease by default,
+starts a separately leased reconciliation sweep when a runtime observer is
+provided, and exposes health/metrics wiring. The application still supplies
+the BullMQ state reader; RhinoQ never scans or mutates the application's Redis:
+
+```bash
+npm install @rhinoq/node pg
+# From this checkout until @rhinoq/nest has its own npm release:
+npm install ./sdks/nest
+```
+
+```ts
+RhinoQModule.forRootAsync({
+  inject: [Pool, BullMQEvents],
+  useFactory: (pool, events) => ({
+    pool, events, runtimeScope: 'reports',
+    terminalProjection: 'execution-only',
+    reconciliation: { observe: readBullMQState },
+  }),
+});
+```
+
+This reduces lifecycle glue; it does not claim that an adopter's old status
+routes or SSE code have been deleted. That requires a before/after pilot count.
+
 In another shell, apply and run the Rule you edited. `beta.8` is the first
 release whose Node package contains these commands:
 
@@ -233,9 +260,26 @@ The Go core reserves a durable provider-operation identity before external code
 runs. A timeout is not treated as failure. Retry is allowed only after
 confirmation proves `not_happened`. Request evidence is append-only and kept
 separate from application-specific business mappings. Reference adapters exist
-for Stripe and provisioning/storage providers.
+for HTTP mutations, Stripe and provisioning/storage providers. The HTTP adapter
+injects the ledger idempotency key and requires application-owned read-back
+confirmation; non-2xx responses remain fail-closed.
 
 See [ProviderOperation](./docs/provider-operations.md).
+
+For the common case, Effect Ledger Lite derives a stable key from command
+identity and fingerprints the JSON request before calling the same Go ledger:
+
+```ts
+await rhinoq.effect({
+  taskId, provider: 'storage', operation: 'upload', commandId: downloadId,
+  request: { key: objectKey, size: expectedSize },
+  execute: (key) => uploadToStorage(objectKey, { idempotencyKey: key }),
+  confirm: (operation) => checkObjectExists(operation),
+});
+```
+
+Reusing one key with a different request fingerprint is rejected. This keeps
+the convenient API from weakening the existing unknown-result contract.
 
 ## Stop duplicate application writes across BullMQ retries
 
@@ -305,9 +349,11 @@ command.
 
 Findings are delivered to signed generic webhooks or Slack with severity, grace
 period, regression escalation, stable event IDs and direct Workbench links. A
-durable delivery ledger deduplicates destination/event pairs. Automatic
-multi-node scheduling remains a deployment responsibility in this prerelease:
-call `rhinoq notify send` from your own scheduler.
+durable delivery ledger deduplicates destination/event pairs. Go applications
+can queue a delivery and run the built-in PostgreSQL lease scheduler; failed
+attempts use bounded exponential backoff and end in an explicit `dead` state.
+The destination resolver remains application-owned so secrets do not enter the
+ledger.
 
 Applications on the embedded PostgreSQL Task client have no Gateway and
 therefore no `/metrics` or `/healthz`. `TaskMetrics` and `checkEmbeddedHealth`
@@ -386,20 +432,23 @@ exists but is not the default browser polling shape.
 | Capability | Status |
 |---|---|
 | ProviderOperation identity, idempotency, evidence and confirmation | implemented; memory/PostgreSQL tested |
+| Effect Ledger Lite with request fingerprinting | implemented; Node and Go contract tested |
 | Transactional per-item application effect gate | implemented in the embedded Task profile; callback must use its supplied PostgreSQL transaction |
 | `uncertain` Task state linked to provider uncertainty | implemented |
-| Stripe and provisioning/storage reference adapters | implemented in Node SDK |
+| HTTP, Stripe and provisioning/storage reference adapters | implemented in Node SDK; HTTP transport and fail-closed tests included |
 | Rules, Findings and Evidence Workbench | implemented |
 | Recheck and guarded repair workflow | implemented; callback registration is application-owned |
 | Summary polling and cursor-paginated Executions | implemented |
 | Signed webhook and Slack notifications with durable dedup | implemented |
+| Failure inbox with claim/replay/retry/ignore states | implemented in Node source checkout; application-owned table |
 | Notification destinations configurable from the CLI, with a delivery probe | implemented |
+| Durable multi-node notification scheduler | implemented in Go; SQL, real PostgreSQL lease takeover and memory failover tested |
 | Rule lifecycle: create, explain, enable, disable, delete, from Go or Node | implemented |
 | Bounded, previewable retention for observation and delivery evidence | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
+| Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
 | Release archives, verifiable checksum bundle, SBOM and non-root image | beta.8 release pipeline verified in CI |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
-| Durable multi-node notification scheduler | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 
 No throughput, latency or reliability promise is made without the matching
@@ -443,6 +492,7 @@ through a public issue.
 - [Start here: complete beginner guide](./docs/start-here.md)
 - [Five-minute setup](./docs/getting-started.md)
 - [Node.js and BullMQ](./docs/nodejs.md)
+- [NestJS integration package](./sdks/nest/README.md)
 - [ProviderOperation](./docs/provider-operations.md)
 - [Safe repair](./docs/safe-repair.md)
 - [Notifications](./docs/notifications.md)

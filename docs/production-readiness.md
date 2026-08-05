@@ -29,7 +29,12 @@ production-ready.
 
 - Organization membership and tenant-wide RBAC are not implemented across the
   full runtime/verification schema. Task owner credentials are not tenant RBAC.
-- A multi-node durable notification dispatcher is not implemented; delivery is
-  explicit with a durable dedup ledger.
-- Redis/BullMQ chaos and deployment-shaped benchmarks still require evidence
-  from the official demo and design partners.
+- Durable notification scheduling is implemented with PostgreSQL row leases,
+  backoff and dead-letter state. The repository now tests the takeover against
+  a real PostgreSQL instance in `tests/postgres`; PostgreSQL failover and a
+  longer deployment campaign are still required.
+- The official BullMQ demo includes a disposable Redis stop/start harness, and
+  one local run is recorded in
+  [`docs/evidence/redis-bullmq-chaos-2026-08-05.md`](evidence/redis-bullmq-chaos-2026-08-05.md).
+  This is local process-restart evidence, not a production reliability claim;
+  deployment-shaped benchmarks and design-partner measurements remain open.

@@ -220,13 +220,15 @@ provider chưa biết. Business payload, quyết định fallback và invariant 
 cùng vẫn thuộc application hoặc Verified Task policy đã khai báo.
 
 Go/PostgreSQL sở hữu state machine và append-only evidence. Node chỉ gọi
-application-owned provider code qua Gateway; Stripe và provisioning/storage là
-hai reference adapter đã test. Webhook authentication vẫn thuộc application.
+application-owned provider code qua Gateway; HTTP, Stripe và
+provisioning/storage là các reference adapter đã test. Webhook authentication
+vẫn thuộc application.
 
 ## Slice tiếp theo
 
 1. Đo adoption cost và outcome evidence trên ba design partner thật.
 2. Hoàn thiện tenant-wide RBAC/isolation trước production claim.
-3. Thêm durable multi-node notification scheduling.
-4. Chạy deployment-shaped PostgreSQL/Redis/provider chaos campaign.
+3. Chạy deployment-shaped PostgreSQL/Redis/provider chaos campaign, including
+   the durable notification scheduler.
+4. Thu thập code-reduction và outcome evidence từ design partners.
 5. Chỉ thêm realtime transport nếu polling evidence cho thấy nó cần thiết.

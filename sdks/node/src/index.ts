@@ -5,6 +5,7 @@ export * from './postgres/task-client.js';
 export * from './postgres/task-schema.js';
 export * from './postgres/projector-lease.js';
 export * from './postgres/projection-failure-sink.js';
+export * from './postgres/projection-failure-inbox.js';
 export * from './worker/errors.js';
 export * from './worker/worker.js';
 export * from './bullmq/task-bridge.js';
@@ -19,9 +20,11 @@ export * from './notify/sender.js';
 export * from './tasks/watch.js';
 export * from './tasks/store.js';
 export * from './tasks/react.js';
+export * from './integration.js';
 export * from './providers/stripe.js';
 export * from './providers/storage.js';
 export * from './providers/object-transfer.js';
+export * from './providers/http.js';
 
 // Development-preview aliases for the casing used by the original private
 // prototype. New code should use the RhinoQ-prefixed names.

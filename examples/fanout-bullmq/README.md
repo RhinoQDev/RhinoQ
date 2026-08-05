@@ -69,6 +69,25 @@ moving, items all terminal while the Task is still open, attempts dispatched
 but never observed, whether anyone holds a projector lease, and any recorded
 projection failures.
 
+## Deployment-shaped Redis restart evidence
+
+The optional `chaos` script stops and restarts a disposable Redis container
+while a BullMQ job is active, then verifies that the Task converges through the
+same bridge and PostgreSQL Task profile. It never targets the example's normal
+container unless you explicitly pass that container name; the required prefix
+is `rhinoq-chaos-`.
+
+```bash
+docker run -d --name rhinoq-chaos-redis -p 6398:6379 redis:7-alpine
+RHINOQ_DATABASE_URL='postgres://rhinoq:rhinoq@127.0.0.1:55432/rhinoq?sslmode=disable' \
+REDIS_URL='redis://127.0.0.1:6398' \
+RHINOQ_CHAOS_REDIS_CONTAINER='rhinoq-chaos-redis' npm run chaos
+docker rm -f rhinoq-chaos-redis
+```
+
+This is process-restart evidence for one local Docker/PostgreSQL setup, not a
+production reliability or throughput claim.
+
 ## Clearing up
 
 ```bash

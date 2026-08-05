@@ -10,6 +10,14 @@ export interface ReconcilableTaskSource {
   listTasksByState(query: TaskStateQuery): Promise<TaskSummary[]>;
 }
 
+/** Optional owner lease for the reconciliation sweep. */
+export interface TaskReconcilerLease {
+  acquire(): Promise<boolean>;
+  release(): Promise<void>;
+  /** Optional liveness check for session-backed leases. */
+  verify?(): Promise<boolean>;
+}
+
 export interface TaskReconcilerOptions {
   tasks: ReconcilableTaskSource;
   /**
@@ -32,6 +40,10 @@ export interface TaskReconcilerOptions {
    */
   batchLimit?: number;
   metrics?: TaskMetrics;
+  /** Prevents several application replicas from reconciling one backlog. */
+  lease?: TaskReconcilerLease;
+  /** Called when a held lease is no longer provably owned. */
+  onLeaseLost?: () => void;
   onError?: (error: unknown, task?: TaskSummary) => void;
   /** Injected for tests. Defaults to the global timer. */
   setTimer?: (handler: () => void, ms: number) => { unref?: () => void };
@@ -67,6 +79,11 @@ export class TaskReconciler {
   private running = false;
   private stopped = false;
   private sweeps = 0;
+  private leaseHeld = false;
+  private leaseState: 'unowned' | 'owned' | 'closed' = 'unowned';
+  private leaseUnavailable = false;
+  private lastSweepAt?: string;
+  private lastSuccessfulSweepAt?: string;
 
   constructor(options: TaskReconcilerOptions) {
     if (typeof options?.tasks?.listTasksByState !== 'function') {
@@ -119,11 +136,38 @@ export class TaskReconciler {
       this.clearTimer(this.handle);
       this.handle = undefined;
     }
+    this.leaseState = 'closed';
+    if (this.leaseHeld && this.options.lease) {
+      this.leaseHeld = false;
+      void this.options.lease.release().catch((error: unknown) => {
+        this.report(error);
+      });
+    }
   }
 
   /** Sweeps completed since construction. Exposed for tests and metrics. */
   get sweepCount(): number {
     return this.sweeps;
+  }
+
+  /** The scheduler's current ownership state, for readiness/diagnostics. */
+  get ownership(): 'unowned' | 'owned' | 'closed' {
+    return this.leaseState;
+  }
+
+  /** True when the last ownership check failed; idle between sweeps is normal. */
+  get leaseIsUnavailable(): boolean {
+    return this.leaseUnavailable;
+  }
+
+  /** ISO timestamp of the most recent sweep attempt, if one started. */
+  get lastSweepAtIso(): string | undefined {
+    return this.lastSweepAt;
+  }
+
+  /** ISO timestamp of the most recent sweep whose read completed. */
+  get lastSuccessfulSweepAtIso(): string | undefined {
+    return this.lastSuccessfulSweepAt;
   }
 
   /**
@@ -141,8 +185,32 @@ export class TaskReconciler {
       return 0;
     }
     this.running = true;
+    this.lastSweepAt = new Date().toISOString();
     let reconciled = 0;
+    let acquiredForSweep = false;
     try {
+      if (this.options.lease) {
+        const acquired = await this.options.lease.acquire();
+        if (!acquired) {
+          this.leaseState = 'unowned';
+          this.leaseUnavailable = true;
+          this.options.metrics?.increment('rhinoq_reconciler_lease_not_acquired_total');
+          return 0;
+        }
+        acquiredForSweep = true;
+        this.leaseHeld = true;
+        this.leaseState = 'owned';
+        this.leaseUnavailable = false;
+        if (this.options.lease.verify && !(await this.options.lease.verify())) {
+          this.leaseHeld = false;
+          acquiredForSweep = false;
+          this.leaseState = 'unowned';
+          this.leaseUnavailable = true;
+          this.options.metrics?.increment('rhinoq_reconciler_lease_lost_total');
+          this.reportLeaseLost();
+          return 0;
+        }
+      }
       const tasks = await this.options.tasks.listTasksByState({
         ...this.query,
         limit: Math.min(this.batchLimit, this.query.limit ?? this.batchLimit),
@@ -158,12 +226,22 @@ export class TaskReconciler {
           this.report(error, task);
         }
       }
+      this.lastSuccessfulSweepAt = new Date().toISOString();
     } catch (error) {
       // The read itself failed — the database is unreachable, or the schema is
       // behind. Report and let the next tick try again.
       this.options.metrics?.increment('rhinoq_reconciler_sweep_failed_total');
       this.report(error);
     } finally {
+      if (acquiredForSweep && this.options.lease) {
+        this.leaseHeld = false;
+        this.leaseState = 'unowned';
+        try {
+          await this.options.lease.release();
+        } catch (error) {
+          this.report(error);
+        }
+      }
       this.running = false;
       this.sweeps += 1;
     }
@@ -196,6 +274,15 @@ export class TaskReconciler {
       // remaining Tasks in this sweep or create an unhandled rejection in the
       // timer callback that keeps the reconciler alive.
       this.options.metrics?.increment('rhinoq_reconciler_error_handler_failed_total');
+    }
+  }
+
+  private reportLeaseLost(): void {
+    try {
+      this.options.onLeaseLost?.();
+    } catch (error) {
+      this.options.metrics?.increment('rhinoq_reconciler_error_handler_failed_total');
+      this.report(error);
     }
   }
 }

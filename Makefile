@@ -17,6 +17,7 @@ vet:
 
 test-node:
 	npm --prefix sdks/node test
+	npm --prefix sdks/nest test
 
 benchmark: benchmark-node benchmark-go
 

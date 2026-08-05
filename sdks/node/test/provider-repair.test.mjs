@@ -36,6 +36,50 @@ test('providerOperation reserves first and never repeats an uncertain mutation',
   assert.equal(requests.filter((item) => item.path.endsWith('/resolve')).length, 1);
 });
 
+test('Effect Lite derives a stable key and fingerprints request shape', async () => {
+  const requests = [];
+  const operation = {
+    id: 'provider_op_effect', taskId: 'task-1', provider: 'storage', operation: 'upload',
+    idempotencyKey: 'effect:storage:upload:command-1', confirmation: 'on-return',
+    retryPolicy: 'when-not-happened', state: 'pending', version: 1,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  const client = new RhinoQClient({ url: 'http://agent.test', token: 'x'.repeat(32), fetch: async (input, init) => {
+    const url = new URL(String(input));
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push({ path: url.pathname, body });
+    if (url.pathname === '/v1/provider-operations' && init?.method === 'POST') {
+      if (body.requestFingerprint !== requests[0].body.requestFingerprint) {
+        return Response.json({ error: { code: 'RHINOQ_REQUEST_FINGERPRINT_MISMATCH', message: 'different request' } }, { status: 409 });
+      }
+      return Response.json(operation);
+    }
+    if (url.pathname.endsWith('/accept')) return Response.json({ ...operation, state: 'accepted', version: 2, providerId: 'obj-1' });
+    if (url.pathname.endsWith('/resolve')) return Response.json({ ...operation, state: 'confirmed', version: 3, providerId: 'obj-1' });
+    throw new Error(`unexpected ${init?.method} ${url.pathname}`);
+  }});
+
+  const result = await client.effect({
+    taskId: 'task-1', provider: 'storage', operation: 'upload', commandId: 'command-1',
+    request: { key: 'video.mp4', size: 10 },
+    execute: async (key) => ({ id: key }),
+  });
+  assert.equal(result.state, 'confirmed');
+  const firstBegin = requests.find((request) => request.path === '/v1/provider-operations');
+  assert.equal(firstBegin.body.idempotencyKey, 'effect:storage:upload:command-1');
+  assert.match(firstBegin.body.requestFingerprint, /^[0-9a-f]{64}$/);
+
+  await assert.rejects(
+    client.effect({
+      taskId: 'task-1', provider: 'storage', operation: 'upload', commandId: 'command-1',
+      request: { key: 'different.mp4', size: 10 }, execute: async () => ({ id: 'never' }),
+    }),
+    /different request/,
+  );
+  const begins = requests.filter((request) => request.path === '/v1/provider-operations');
+  assert.notEqual(begins[0].body.requestFingerprint, begins[1].body.requestFingerprint);
+});
+
 test('repair client exposes propose preview approval and execute without callback logic', async () => {
   const paths = [];
   const client = new RhinoQClient({ url: 'http://agent.test', token: 'x'.repeat(32), fetch: async (input, init) => {

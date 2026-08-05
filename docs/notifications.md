@@ -24,5 +24,35 @@ _, err := client.SendFindingNotification(ctx, key, rhinoq.NotificationDestinatio
 
 Set `GracePeriod` to avoid paging on short-lived drift and `FindingBaseURL` to
 include a direct Workbench link. Open drift is high severity; a regression is
-critical and bypasses the grace period. Delivery remains explicit and
-synchronous: a multi-node scheduler for automatic fan-out is not included.
+critical and bypasses the grace period.
+
+Delivery can remain synchronous with `SendFindingNotification`, or be queued
+and claimed by the durable multi-node scheduler. The scheduler uses a
+PostgreSQL row lease plus `FOR UPDATE SKIP LOCKED`, persists the next attempt,
+and moves a delivery to `dead` after its bounded attempt budget. It receives a
+destination resolver from the application; it never stores or discovers
+secrets itself:
+
+```go
+receipt, err := client.QueueFindingNotification(ctx, key, destination)
+scheduler, err := client.NewNotificationScheduler(rhinoq.NotificationSchedulerOptions{
+    Owner: "notify-node-1",
+    Send: func(ctx context.Context, delivery rhinoq.NotificationDelivery) error {
+        // Resolve DestinationID in application configuration. Payload is the
+        // durable signed-message body; secrets stay outside the ledger.
+        return sendConfiguredFinding(ctx, delivery)
+    },
+})
+if err != nil { /* fail closed: this store has no durable lease */ }
+go scheduler.Run(ctx)
+```
+
+The full profile must apply migration `025_notification_scheduler.sql` before
+starting a scheduler. Task-only profiles do not include this delivery ledger.
+
+`QueueFindingNotification` is the durable handoff; it stores the signed-message
+payload but does not contact the receiver. A sender error is recorded before the scheduler returns, so another
+node can claim the work after the backoff. A `dead` row is an operator decision,
+not an invitation to retry blindly. Because the payload is durable, opt-in
+evidence may contain business data; protect the table and apply the same
+retention policy as the receiver-facing message.

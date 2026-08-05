@@ -6,7 +6,8 @@
   "scripts": {
     "migrate": "rhinoq-task",
     "start": "node server.mjs",
-    "doctor": "rhinoq doctor"
+    "doctor": "rhinoq doctor",
+    "chaos": "node chaos.mjs"
   },
   "dependencies": {
     "@rhinoq/node": "file:../../sdks/node",

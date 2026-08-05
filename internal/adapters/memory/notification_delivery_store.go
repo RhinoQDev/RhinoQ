@@ -2,7 +2,9 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/notificationdelivery"
 	"github.com/madebyduy/RhinoQ/internal/ports"
@@ -41,4 +43,29 @@ func (s *NotificationDeliveryStore) SaveNotificationDelivery(_ context.Context, 
 	}
 	s.byID[record.ID] = record
 	return record, nil
+}
+
+func (s *NotificationDeliveryStore) ClaimNotificationDelivery(_ context.Context, owner string, now time.Time, lease time.Duration) (notificationdelivery.Record, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0, len(s.byID))
+	for id := range s.byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		current := s.byID[id]
+		if (current.State != notificationdelivery.Pending && current.State != notificationdelivery.Failed) ||
+			(!current.NextAttemptAt.IsZero() && current.NextAttemptAt.After(now)) ||
+			(!current.LeaseUntil.IsZero() && current.LeaseUntil.After(now)) {
+			continue
+		}
+		claimed, err := current.Claim(owner, now, lease)
+		if err != nil {
+			return notificationdelivery.Record{}, false, err
+		}
+		s.byID[id] = claimed
+		return claimed, true, nil
+	}
+	return notificationdelivery.Record{}, false, nil
 }

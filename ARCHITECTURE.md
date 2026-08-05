@@ -269,6 +269,13 @@ Go owns state transitions, leases, fencing, retry decisions and the Effect
 Ledger. Node coordinates wire lifecycle and reports observations. It does not
 implement a second job state machine.
 
+The Node Effect Ledger Lite helper only derives command identity and a request
+fingerprint; the Go ProviderOperation ledger accepts or rejects the durable
+identity. The Go notification scheduler likewise owns delivery claims,
+backoff and dead-letter state. It receives a message payload and an
+application-owned destination sender, so secrets and provider-specific
+resolution stay outside Domain and the ledger.
+
 The Task-only PostgreSQL profile also exposes `onceForItem()` as a transaction
 wrapper around the versioned `rhinoq_task.claim_item_effect` command. The
 cross-attempt claim is decided in PostgreSQL and the callback receives the

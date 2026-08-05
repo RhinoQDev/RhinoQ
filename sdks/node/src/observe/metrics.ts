@@ -28,6 +28,8 @@ export type TaskMetricName =
   | 'rhinoq_reconciler_task_selected_total'
   | 'rhinoq_reconciler_task_reconciled_total'
   | 'rhinoq_reconciler_task_failed_total'
+  | 'rhinoq_reconciler_lease_not_acquired_total'
+  | 'rhinoq_reconciler_lease_lost_total'
   | 'rhinoq_bridge_version_conflict_total'
   /**
    * A projector lease lost without being released — a database failover or a

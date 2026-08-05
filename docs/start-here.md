@@ -683,8 +683,10 @@ Read [Production readiness](./production-readiness.md),
 ## Honest current limits
 
 Implemented code and tests cover the contracts described above, but RhinoQ is
-still a prerelease. Tenant-wide RBAC, durable multi-node notification
-scheduling and deployment-shaped design-partner/chaos evidence remain open.
+still a prerelease. Tenant-wide RBAC and deployment-shaped
+design-partner/chaos evidence remain open. Durable multi-node notification
+scheduling is implemented, but its deployment-shaped evidence is not yet
+collected.
 Workbench has no remote hosting/authentication and no streaming update model.
 No throughput, latency or reliability comparison is claimed here.
 
