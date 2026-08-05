@@ -488,6 +488,7 @@ async function doctor(): Promise<void> {
     if (installed !== TASK_SCHEMA_VERSION) fail(`Task schema is v${installed}; SDK needs v${TASK_SCHEMA_VERSION}`, 'Run: npx rhinoq init');
     console.log('PASS PostgreSQL reachable.');
     console.log(`PASS Task schema v${installed} current.`);
+    await doctorRuntime(pool);
     invalidRules = await doctorRules(pool);
   } finally { await pool.end(); }
   if (invalidRules) fail('one or more local Rule files failed the safety contract', 'Edit the reported .rhinoq/rules/*.sql files, then rerun: npx rhinoq doctor');
@@ -495,6 +496,135 @@ async function doctor(): Promise<void> {
   else console.log('INFO REDIS_URL is absent; this is fine unless the app uses BullMQ.');
   console.log('NEXT create the visible failure fixture: npx rhinoq fixture failure');
   console.log('NEXT before a pilot, run the runtime checks too: rhinoq doctor --ci');
+}
+
+/**
+ * What the running system looks like, not what it was configured to look like.
+ *
+ * Reaching PostgreSQL and finding the right schema version says the wiring is
+ * plausible. It does not say a projector is running, that the last batch ever
+ * finished, or that a settled batch was ever acted on — and those are the
+ * questions someone actually has at 2am. Every check here is a read.
+ */
+async function doctorRuntime(pool: Pool): Promise<void> {
+  const totals = await pool.query<{ tasks: string; executions: string }>(
+    `SELECT (SELECT count(*) FROM rhinoq_task.tasks) AS tasks,
+            (SELECT count(*) FROM rhinoq_task.executions) AS executions`,
+  );
+  const taskCount = Number(totals.rows[0]?.tasks ?? 0);
+  if (taskCount === 0) {
+    console.log('INFO no Tasks recorded yet; runtime checks need traffic to say anything.');
+    return;
+  }
+  console.log(
+    `INFO ${taskCount} Task(s), ${Number(totals.rows[0]?.executions ?? 0)} attempt(s) recorded.`,
+  );
+
+  // A Task that has not moved in an hour is either finished work nobody closed
+  // or a batch whose projector stopped. Both look identical from the app.
+  const stalled = await pool.query<{ count: string; oldest: string | null }>(
+    `SELECT count(*) AS count, min(updated_at)::text AS oldest
+     FROM rhinoq_task.tasks
+     WHERE state IN ('pending', 'queued', 'running')
+       AND updated_at < now() - interval '1 hour'`,
+  );
+  const stalledCount = Number(stalled.rows[0]?.count ?? 0);
+  if (stalledCount > 0) {
+    console.log(
+      `WARN ${stalledCount} Task(s) unfinished and idle over an hour, oldest ${stalled.rows[0]?.oldest}.`,
+    );
+    console.log('     Either no bridge is projecting them, or nothing decides what a stuck');
+    console.log('     batch means. Schedule TaskReconciler; RhinoQ will not guess.');
+  } else {
+    console.log('PASS no unfinished Task idle for over an hour.');
+  }
+
+  // Items all terminal but the Task still open: onItemsSettled either is not
+  // wired, or its handler is throwing. The signal fired and nobody caught it.
+  const settled = await pool.query<{ count: string }>(
+    `SELECT count(*) AS count FROM rhinoq_task.tasks
+     WHERE items_settled_at IS NOT NULL
+       AND state NOT IN ('succeeded', 'failed', 'cancelled')`,
+  );
+  const settledOpen = Number(settled.rows[0]?.count ?? 0);
+  if (settledOpen > 0) {
+    console.log(`WARN ${settledOpen} Task(s) have every item terminal but are not terminal themselves.`);
+    console.log('     Under aggregate.terminal: manual — the default — only the application');
+    console.log('     closes them. Wire onItemsSettled, or terminalize on the settled signal.');
+  } else {
+    console.log('PASS no Task left open after all its items finished.');
+  }
+
+  // An attempt reserved but never observed means the dispatch happened and the
+  // projection did not: the bridge is missing, or it is not on this scope.
+  const undispatched = await pool.query<{ runtime_scope: string; count: string }>(
+    `SELECT runtime_scope, count(*) AS count
+     FROM rhinoq_task.executions
+     WHERE state IN ('pending_dispatch', 'dispatched')
+       AND updated_at < now() - interval '15 minutes'
+     GROUP BY runtime_scope ORDER BY count DESC LIMIT 5`,
+  );
+  if (undispatched.rows.length > 0) {
+    for (const row of undispatched.rows) {
+      const scope = row.runtime_scope || '(no runtimeScope)';
+      console.log(`WARN ${row.count} attempt(s) in scope ${scope} dispatched but never observed for 15m.`);
+    }
+    console.log('     That is what a stopped projector looks like from the database.');
+    console.log('     Check the bridge process and rhinoq_bridge_lease_lost_total.');
+  } else {
+    console.log('PASS no attempt left dispatched-but-unobserved.');
+  }
+
+  // Who holds a projector lease right now. An advisory lock is session-scoped,
+  // so this is live truth rather than a heartbeat table that can go stale.
+  const leases = await pool.query<{ count: string }>(
+    `SELECT count(*) AS count FROM pg_locks
+     WHERE locktype = 'advisory' AND granted AND objsubid = 1`,
+  );
+  const scopes = new Set(
+    (await pool.query<{ runtime_scope: string }>(
+      `SELECT DISTINCT runtime_scope FROM rhinoq_task.executions
+       WHERE runtime_scope <> '' AND updated_at > now() - interval '24 hours'`,
+    )).rows.map((row) => row.runtime_scope),
+  );
+  if (scopes.size > 0) {
+    console.log(
+      `INFO ${scopes.size} runtime scope(s) active in the last 24h; ` +
+        `${leases.rows[0]?.count ?? 0} advisory lock(s) held on this database.`,
+    );
+    console.log('     A count of zero with active scopes means no PostgresProjectorLease is');
+    console.log('     held: either the bridges run without one, or none of them is running.');
+  }
+
+  await doctorProjectionFailures(pool);
+}
+
+/** The failure table is application-owned, so its absence is not a fault. */
+async function doctorProjectionFailures(pool: Pool): Promise<void> {
+  const present = await pool.query<{ present: boolean }>(
+    `SELECT to_regclass('public.rhinoq_projection_failures') IS NOT NULL AS present`,
+  );
+  if (present.rows[0]?.present !== true) {
+    console.log('INFO no rhinoq_projection_failures table; a failed projection leaves no trace.');
+    console.log('     Apply PROJECTION_FAILURE_TABLE_SQL and pass PostgresProjectionFailureSink');
+    console.log('     if losing one matters. onError alone dies with the process that failed.');
+    return;
+  }
+  const failures = await pool.query<{ count: string; attempts: string; newest: string | null }>(
+    `SELECT count(*) AS count, COALESCE(sum(attempts), 0) AS attempts, max(last_seen_at)::text AS newest
+     FROM rhinoq_projection_failures`,
+  );
+  const count = Number(failures.rows[0]?.count ?? 0);
+  if (count === 0) {
+    console.log('PASS projection-failure table present and empty.');
+    return;
+  }
+  console.log(
+    `WARN ${count} recorded projection failure(s), ${failures.rows[0]?.attempts} attempt(s) total, ` +
+      `newest ${failures.rows[0]?.newest}.`,
+  );
+  console.log('     Each row is a queue event RhinoQ could not write down. Replaying one is');
+  console.log('     an application decision: RhinoQ will not touch your queue on its own.');
 }
 
 async function doctorRules(pool: Pool): Promise<boolean> {
