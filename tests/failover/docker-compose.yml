@@ -1,0 +1,85 @@
+# A two-node PostgreSQL with real streaming replication, for failover drills.
+#
+#   docker compose -f tests/failover/docker-compose.yml up -d
+#   ./scripts/failover-drill.sh
+#   docker compose -f tests/failover/docker-compose.yml down -v
+#
+# This is a drill rig, not a production reference. It has no witness, no
+# fencing agent and no automatic promotion, so it cannot tell a dead primary
+# from a partitioned one — which is exactly the decision a real HA setup exists
+# to make. What it can do is answer one question honestly: when the primary
+# stops and the replica is promoted, what happened to writes RhinoQ had already
+# acknowledged?
+#
+# Ports are non-default so a drill cannot touch a database anyone cares about.
+services:
+  primary:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rhinoq
+      POSTGRES_PASSWORD: rhinoq
+      POSTGRES_DB: rhinoq
+      # Replication needs its own credentials so the drill can revoke them
+      # without touching the application role.
+      REPLICATION_USER: replicator
+      REPLICATION_PASSWORD: replicator
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=8
+      - -c
+      - max_replication_slots=8
+      - -c
+      - hot_standby=on
+      # synchronous_commit=on is the default and is the setting the drill is
+      # actually testing. It means a COMMIT is durable on the primary's disk
+      # before the client is told it succeeded — but says nothing about the
+      # replica. Whether an acknowledged write survives promotion is therefore
+      # a real question, not a foregone conclusion, and the drill measures it.
+      - -c
+      - synchronous_commit=on
+    ports:
+      - "55433:5432"
+    volumes:
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rhinoq -d rhinoq"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  replica:
+    image: postgres:16-alpine
+    depends_on:
+      primary:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: replicator
+    ports:
+      - "55434:5432"
+    # The replica is built by pg_basebackup from the running primary rather
+    # than by initdb, which is what makes it a real standby streaming real WAL
+    # instead of a second empty database that happens to have the same schema.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+          rm -rf /var/lib/postgresql/data/*
+          until pg_basebackup -h primary -p 5432 -U replicator \
+              -D /var/lib/postgresql/data -Fp -Xs -P -R; do
+            echo "waiting for the primary to accept a base backup"
+            sleep 2
+          done
+          chmod 0700 /var/lib/postgresql/data
+        fi
+        exec postgres
+    user: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rhinoq -d rhinoq"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

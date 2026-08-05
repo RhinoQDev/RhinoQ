@@ -16,7 +16,9 @@ package postgres_test
 import (
 	"context"
 	"database/sql"
+	neturl "net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +30,11 @@ import (
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
-var testDB *sql.DB
+var (
+	testDB *sql.DB
+	// adminDB owns the schema and is used only by fixtures.
+	adminDB *sql.DB
+)
 
 func TestMain(m *testing.M) {
 	url := os.Getenv("RHINOQ_TEST_DATABASE_URL")
@@ -37,7 +43,43 @@ func TestMain(m *testing.M) {
 		// reason is visible in the output.
 		os.Exit(m.Run())
 	}
-	db, err := sql.Open("pgx", url)
+	// Migrations run as the owner. Everything after them runs as an
+	// unprivileged role, because PostgreSQL exempts superusers and any role
+	// with BYPASSRLS from row-level security — FORCE included. The official
+	// postgres image makes POSTGRES_USER a superuser, so a harness that keeps
+	// using it would run the entire isolation suite with the policies switched
+	// off and report green. That is the failure this line exists to prevent.
+	admin, err := sql.Open("pgx", url)
+	if err != nil {
+		panic("open test database: " + err.Error())
+	}
+	ctxSetup, cancelSetup := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := admin.PingContext(ctxSetup); err != nil {
+		panic("the test database is not reachable: " + err.Error())
+	}
+	if err := applyMigrations(admin); err != nil {
+		panic(err.Error())
+	}
+	if err := provisionApplicationRole(ctxSetup, admin); err != nil {
+		panic(err.Error())
+	}
+	cancelSetup()
+	// The owner pool stays open for fixtures only. Resetting tables between
+	// tests needs ownership of the sequences, which the application role
+	// deliberately does not have — a runtime that can TRUNCATE ... RESTART
+	// IDENTITY is a runtime that can erase the audit trail.
+	adminDB = admin
+
+	appURL, err := asApplicationRole(url)
+	if err != nil {
+		panic(err.Error())
+	}
+	// Every connection in this pool announces its tenant, which is how a
+	// single-tenant deployment is meant to be wired: the isolation is a
+	// property of the connection, not something each query has to remember.
+	// Running the whole existing suite through it is the point — if a tenant
+	// predicate is missing anywhere, these tests stop passing.
+	db, err := sql.Open("pgx", withTenantOption(appURL, "tnt_system"))
 	if err != nil {
 		panic("open test database: " + err.Error())
 	}
@@ -46,12 +88,13 @@ func TestMain(m *testing.M) {
 	if err := db.PingContext(ctx); err != nil {
 		panic("the test database is not reachable: " + err.Error())
 	}
-	if err := applyMigrations(db); err != nil {
+	if err := assertPoliciesApply(ctx, db); err != nil {
 		panic(err.Error())
 	}
 	testDB = db
 	code := m.Run()
 	_ = db.Close()
+	_ = adminDB.Close()
 	os.Exit(code)
 }
 
@@ -86,6 +129,86 @@ func applyMigrations(db *sql.DB) error {
 		return migrationError{file: "search_path", err: err}
 	}
 	return validateSchemaLayout(ctx, conn)
+}
+
+// applicationRole is what RhinoQ is meant to connect as in a deployment: it
+// can read and write the tables and it can do nothing else. Owning nothing and
+// holding neither SUPERUSER nor BYPASSRLS is not a detail — those are the two
+// attributes that switch row-level security off.
+const applicationRole = "rhinoq_app"
+
+func provisionApplicationRole(ctx context.Context, admin *sql.DB) error {
+	statements := []string{
+		`DO $$
+		 BEGIN
+		     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rhinoq_app') THEN
+		         CREATE ROLE rhinoq_app LOGIN PASSWORD 'rhinoq_app'
+		             NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+		     END IF;
+		 END
+		 $$`,
+		`GRANT USAGE ON SCHEMA public TO rhinoq_app`,
+		// CREATE is a harness concession, not a deployment recommendation: the
+		// Rule tests build the adopter's own business tables to scan. A real
+		// deployment grants the Rule-reading role SELECT on those tables and
+		// nothing more, as docs/postgres.md sets out.
+		`GRANT CREATE ON SCHEMA public TO rhinoq_app`,
+		`CREATE SCHEMA IF NOT EXISTS rhinoq`,
+		`GRANT USAGE ON SCHEMA rhinoq TO rhinoq_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public TO rhinoq_app`,
+		`GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON ALL TABLES IN SCHEMA rhinoq TO rhinoq_app`,
+		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rhinoq_app`,
+		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO rhinoq_app`,
+		`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA rhinoq TO rhinoq_app`,
+	}
+	for _, statement := range statements {
+		if _, err := admin.ExecContext(ctx, statement); err != nil {
+			return migrationError{file: "provision " + applicationRole, err: err}
+		}
+	}
+	return nil
+}
+
+func asApplicationRole(raw string) (string, error) {
+	parsed, err := neturl.Parse(raw)
+	if err != nil {
+		return "", migrationError{file: "parse database url", err: err}
+	}
+	parsed.User = neturl.UserPassword(applicationRole, "rhinoq_app")
+	return parsed.String(), nil
+}
+
+// assertPoliciesApply refuses to run the suite if the connection it was given
+// is exempt from row-level security. Every isolation test below would pass
+// vacuously against a superuser, so the harness checks the one precondition
+// that makes their result mean anything.
+func assertPoliciesApply(ctx context.Context, db *sql.DB) error {
+	var exempt bool
+	if err := db.QueryRowContext(ctx, `
+		SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user`).
+		Scan(&exempt); err != nil {
+		return migrationError{file: "row-level security precondition", err: err}
+	}
+	if exempt {
+		return migrationError{file: "row-level security precondition", err: errString(
+			"the harness connected as a role that bypasses row-level security; " +
+				"every tenant isolation test would pass without isolating anything",
+		)}
+	}
+	return nil
+}
+
+// withTenantOption binds a connection string to one tenant using PostgreSQL's
+// `options` parameter, so rhinoq.tenant_id is set by the server at connection
+// time. Doing it here rather than with a SET statement after connecting means
+// there is no window in which a pooled connection is live without a tenant,
+// and no way for a query to run before the SET.
+func withTenantOption(url, tenant string) string {
+	separator := "?"
+	if strings.Contains(url, "?") {
+		separator = "&"
+	}
+	return url + separator + "options=" + neturl.QueryEscape("-c rhinoq.tenant_id="+tenant)
 }
 
 type queryRower interface {
@@ -138,7 +261,7 @@ func newClient(t *testing.T) *rhinoq.Client {
 
 func truncate(t *testing.T) {
 	t.Helper()
-	_, err := testDB.Exec(`
+	_, err := adminDB.Exec(`
 		TRUNCATE rhinoq_notification_deliveries, rhinoq_repairs, rhinoq_provider_operations,
 		         rhinoq_task_executions, rhinoq_tasks,
 		         rhinoq_subject_changes, rhinoq_subject_outcomes,
@@ -149,7 +272,7 @@ func truncate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reset tables: %v", err)
 	}
-	if _, err := testDB.Exec(`TRUNCATE rhinoq.job_allowlist`); err != nil {
+	if _, err := adminDB.Exec(`TRUNCATE rhinoq.job_allowlist`); err != nil {
 		t.Fatalf("reset allowlist: %v", err)
 	}
 }
