@@ -868,6 +868,65 @@ const { executions } = await client.getTaskExecutionResults(taskId);
 list can render without a second call; only the references themselves require
 `getTaskExecutionResults`, which is owner-scoped like the Task result.
 
+## Operator Workbench
+
+The Go `rhinoq workbench` needs the full engine schema and a process of its own.
+An application on the three-table Task profile had neither, which meant the
+quickest way to adopt RhinoQ was also the one with nothing to look at.
+
+`createWorkbenchHandler` is the same Fetch shape as `createTaskRequestHandler`,
+so it mounts on the application's own server — no extra process, no Go
+toolchain, no new table:
+
+```ts
+import { createNodeWorkbenchMiddleware } from '@rhinoq/node';
+
+app.use(createNodeWorkbenchMiddleware({
+  tasks,
+  requireOperator: (request) => isOperator(request),
+  basePath: '/admin/rhinoq',
+}));
+```
+
+It shows Task counts by state, the list behind each one, and — per Task — every
+item with its attempt number, state, runtime job ID and failure reason.
+
+### It is not the owner-scoped API
+
+`requireOperator` is required and has no default. This console reads **across
+owners** and shows **runtime job identity**, both of which the owner-scoped
+routes deliberately withhold. Mount it on an internal route, behind operator
+authentication, and never expose it to end users. A gate that throws is a
+refusal, and the reason never reaches the response.
+
+`actions` is off by default. A console that can only look is a different risk
+from one that can cancel, and that should be a decision rather than something
+inherited. With it on, cancellation still carries the `entityVersion` fence.
+
+### Realtime, without a reload
+
+`GET {basePath}/api/stream` is a server-sent event stream. The server re-reads
+the store every second (`streamIntervalMs`) and writes **only when something
+changed**; an idle console costs one keep-alive comment. A batch moving through
+its items updates in place, and rows that changed flash once.
+
+The page shows skeletons until the first payload arrives, so "loading" never
+looks like "nothing there", and a status dot reports `live`, `reconnecting`,
+`polling` or `disconnected`.
+
+Use `createNodeWorkbenchMiddleware`, not `createNodeTaskMiddleware`, for the
+Express/NestJS mount. The Task middleware finishes a response with
+`await result.text()` — correct for JSON, and for a stream that never finishes
+it means the request hangs instead of failing. The Workbench middleware pumps
+the body instead.
+
+If the mount still cannot stream, the page falls back to polling on its own:
+after three connection errors, or after eight seconds with the stream open and
+nothing delivered, which is what a buffering proxy looks like from the browser.
+The status reads `polling` in that case. Behind Nginx the handler already sends
+`X-Accel-Buffering: no`; without it the stream is buffered and the console
+looks frozen.
+
 ## Owner-scoped Task client
 
 Keep the operator/runtime token in backend workers. A browser-facing backend

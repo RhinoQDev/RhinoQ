@@ -32,3 +32,4 @@ export {
 export {
   RhinoQWorker as RhinoqWorker,
 } from './worker/worker.js';
+export * from './workbench/handler.js';
