@@ -110,6 +110,26 @@ INSERT INTO rhinoq_tenants (id, slug, name, status)
 VALUES ('tnt_system', 'system', 'System (pre-RBAC rows)', 'active')
 ON CONFLICT (id) DO NOTHING;
 
+-- rhinoq.tenant_id is read with missing_ok = true so an unset variable is NULL
+-- rather than an error, and NULLIF maps an empty value to NULL as well: a
+-- connection string that sets the option to nothing is the same mistake as not
+-- setting it. NULL against a NOT NULL column then refuses the write, which is
+-- the intended reading of "nobody said which tenant".
+--
+-- This lives in 026 rather than alongside the policies in 027 for an upgrade
+-- reason. The column below is NOT NULL, so between a 026 that leaves no
+-- default and a 027 that adds one there is a window where every INSERT from a
+-- running binary fails. Defining the function here and defaulting the column
+-- to it in the same migration closes that window: an operator who has already
+-- put the tenant option on the connection string keeps writing throughout the
+-- upgrade. See docs/migration-rollback.md.
+CREATE OR REPLACE FUNCTION rhinoq_current_tenant() RETURNS text
+LANGUAGE sql STABLE PARALLEL SAFE
+AS $$ SELECT NULLIF(current_setting('rhinoq.tenant_id', true), '') $$;
+
+COMMENT ON FUNCTION rhinoq_current_tenant IS
+    'The tenant of the current session, or NULL. NULL denies every row-level policy and fails every insert.';
+
 -- Parents first, then children, so each composite foreign key has something to
 -- point at when it is created.
 ALTER TABLE rhinoq_tasks
@@ -134,17 +154,23 @@ ALTER TABLE rhinoq_queue_controls
     ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT 'tnt_system'
         REFERENCES rhinoq_tenants(id);
 
--- The DEFAULT exists to backfill existing rows in one statement. Leaving it in
--- place afterwards would mean a store that forgets tenant_id silently writes
--- into tnt_system instead of failing, which is the quietest possible way to
--- lose isolation. Drop it: from here a writer must be explicit.
-ALTER TABLE rhinoq_tasks               ALTER COLUMN tenant_id DROP DEFAULT;
-ALTER TABLE rhinoq_jobs                ALTER COLUMN tenant_id DROP DEFAULT;
-ALTER TABLE rhinoq_findings            ALTER COLUMN tenant_id DROP DEFAULT;
-ALTER TABLE rhinoq_rules               ALTER COLUMN tenant_id DROP DEFAULT;
-ALTER TABLE rhinoq_repairs             ALTER COLUMN tenant_id DROP DEFAULT;
-ALTER TABLE rhinoq_provider_operations ALTER COLUMN tenant_id DROP DEFAULT;
-ALTER TABLE rhinoq_queue_controls      ALTER COLUMN tenant_id DROP DEFAULT;
+-- The literal 'tnt_system' default above exists only to backfill existing rows
+-- in one statement. Leaving it would mean a writer that forgets tenant_id
+-- silently lands in tnt_system, which is the quietest possible way to lose
+-- isolation: no error, no log line, wrong tenant.
+--
+-- It is replaced rather than dropped. Dropping it would make the column NOT
+-- NULL with no default, and every INSERT already in flight from a running
+-- binary would fail from this statement onward. Defaulting to the session
+-- tenant keeps those writes working — and still refuses them when no tenant
+-- was announced, because the function returns NULL.
+ALTER TABLE rhinoq_tasks               ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
+ALTER TABLE rhinoq_jobs                ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
+ALTER TABLE rhinoq_findings            ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
+ALTER TABLE rhinoq_rules               ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
+ALTER TABLE rhinoq_repairs             ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
+ALTER TABLE rhinoq_provider_operations ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
+ALTER TABLE rhinoq_queue_controls      ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
 
 -- ---------------------------------------------------------------------------
 -- Make cross-tenant references unrepresentable
@@ -165,7 +191,8 @@ FROM rhinoq_tasks parent
 WHERE execution.task_id = parent.id AND execution.tenant_id IS DISTINCT FROM parent.tenant_id;
 
 ALTER TABLE rhinoq_task_executions
-    ALTER COLUMN tenant_id SET NOT NULL;
+    ALTER COLUMN tenant_id SET NOT NULL,
+    ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
 
 ALTER TABLE rhinoq_task_executions
     ADD CONSTRAINT rhinoq_task_executions_task_tenant_fkey
@@ -189,7 +216,8 @@ WHERE evidence.operation_id = parent.id
   AND evidence.tenant_id IS DISTINCT FROM parent.tenant_id;
 
 ALTER TABLE rhinoq_provider_operation_evidence
-    ALTER COLUMN tenant_id SET NOT NULL;
+    ALTER COLUMN tenant_id SET NOT NULL,
+    ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant();
 
 ALTER TABLE rhinoq_provider_operation_evidence
     ADD CONSTRAINT rhinoq_provider_operation_evidence_tenant_fkey

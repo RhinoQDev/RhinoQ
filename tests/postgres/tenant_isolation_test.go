@@ -341,6 +341,57 @@ func TestRevokingMembershipRemovesItsCredentials(t *testing.T) {
 	}
 }
 
+// An upgrade-safety invariant, not a feature. Every tenant_id column is NOT
+// NULL, so if any of them lacks a default then the first INSERT from a binary
+// that predates this change fails — turning `rhinoq migrate apply` into an
+// outage rather than an expand-compatible step. docs/migration-rollback.md
+// promises the upgrade is safe with the connection option in place; this is
+// what makes that promise checkable.
+func TestEveryTenantColumnDefaultsToTheSessionTenant(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rows, err := adminDB.QueryContext(ctx, `
+		SELECT c.table_name, coalesce(c.column_default, '')
+		FROM information_schema.columns c
+		WHERE c.table_schema = 'public'
+		  AND c.column_name = 'tenant_id'
+		  AND c.is_nullable = 'NO'
+		ORDER BY c.table_name`)
+	if err != nil {
+		t.Fatalf("read column defaults: %v", err)
+	}
+	defer rows.Close()
+
+	checked := 0
+	for rows.Next() {
+		var table, columnDefault string
+		if err := rows.Scan(&table, &columnDefault); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		checked++
+		// The identity tables are written explicitly by the membership code
+		// and never inherit a tenant, so they are allowed to have no default.
+		if table == "rhinoq_memberships" || table == "rhinoq_credentials" {
+			continue
+		}
+		if !strings.Contains(columnDefault, "rhinoq_current_tenant()") {
+			t.Fatalf("%s.tenant_id is NOT NULL with default %q; "+
+				"an INSERT that omits tenant_id fails, which breaks the upgrade path",
+				table, columnDefault)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if checked == 0 {
+		t.Fatal("no tenant_id columns found; the query is wrong, not the schema")
+	}
+}
+
 // The guard that makes all of the above trustworthy in a real deployment.
 // Everything else here proves isolation holds for an unprivileged role; this
 // proves RhinoQ notices when it has not been given one.

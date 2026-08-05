@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+- **Breaking (deployment):** migrations 026 and 027 introduce the tenant
+  boundary and change what a working connection needs. **Put
+  `?options=-c%20rhinoq.tenant_id%3Dtnt_system` on `RHINOQ_DATABASE_URL` and
+  deploy that first, before applying the migrations.** On the old schema the
+  parameter is ignored, so it ships safely on its own; after 026 every
+  `tenant_id` column is `NOT NULL` and defaults to the session tenant, so an
+  older binary keeps writing normally without ever naming the column. A
+  connection that announces no tenant reads nothing and cannot write. Full
+  procedure in [`docs/migration-rollback.md`](docs/migration-rollback.md).
+- **Breaking (deployment):** `rhinoq doctor` now FAILs when the database role
+  holds `SUPERUSER` or `BYPASSRLS`. PostgreSQL exempts both from row-level
+  security including `FORCE`, and the official `postgres` image makes
+  `POSTGRES_USER` a superuser — so that configuration silently ignores every
+  tenant policy while every test still passes. Connect the runtime as a role
+  created `NOSUPERUSER NOBYPASSRLS`; migrations still run as the owner.
+- **Breaking (multi-environment):** `rhinoq_queue_controls` is now keyed by
+  `(tenant_id, queue_name)`. Pausing a queue no longer affects a queue of the
+  same name in another tenant. Single-tenant deployments see no change.
+- Added tenant isolation enforced by PostgreSQL rather than by application SQL.
+  Every tenant-owned row carries `tenant_id`; twelve tables carry forced
+  row-level policies keyed on one session variable; and
+  `rhinoq_task_executions` and `rhinoq_provider_operation_evidence` reference
+  their parent by `(id, tenant_id)`, so a child row in the wrong tenant is a
+  constraint violation rather than a policy question. A forgotten `WHERE` now
+  reads zero rows instead of another tenant's data.
+- Added `internal/domain/authz`: tenants, principals, memberships, six built-in
+  roles and one decision point. The role gate and the tenant gate are
+  independent — an `owner` of one tenant holds every permission and still
+  cannot read another tenant's Task — and cross-tenant denials are concealed as
+  not-found, so an endpoint cannot be used to test whether an id exists
+  elsewhere. The agent's HTTP surface is **not yet** wired to this and still
+  authorises with one operator token plus a per-owner credential list. See
+  [`docs/tenancy.md`](docs/tenancy.md).
+- Added `scripts/failover-drill.sh` and a two-node streaming-replication rig.
+  It kills the primary with SIGKILL, promotes the standby with `pg_promote()`,
+  confirms recovery ended and writes to the promoted node before reporting
+  anything. One run recorded: 150 of 150 acknowledged writes survived and
+  policies stayed forced after promotion. One host, no witness, no fencing —
+  split brain is untested and this is not a high-availability claim.
+- Added `tests/postgres/adopter_workload_bench_test.go`, which measures Task
+  summary polling and Execution paging at fan-out 100/1,000/5,000 — the only
+  form in which "polling stays bounded" can be falsified. Summary is flat.
+  Paging was not: migration 028 adds the index matching the keyset order,
+  taking a page of fifty at fan-out 5,000 from 6.84 ms to 1.92 ms and flat.
+  Both the index and current table statistics are needed; with stale statistics
+  the planner picks a bitmap scan and sorts everything anyway.
+- Added `scripts/code-reduction.sh`, which measures an adopter repository
+  between two refs and leaves the process, datastore and credential rows blank
+  because those are not derivable from a diff. RhinoQ still has **no**
+  code-reduction claim; `docs/adoption-gap.md` stands at 0 lines removed.
 - Added the standard Node/BullMQ integration boundary and the standalone
   `@rhinoq/nest` package. Its async module factory waits for Task schema
   readiness, defaults the BullMQ projector and reconciliation scheduler to

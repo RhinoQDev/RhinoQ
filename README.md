@@ -27,9 +27,17 @@ detect -> investigate -> decide -> repair -> verify
 ![Status](https://img.shields.io/badge/status-prerelease-f59e0b)
 
 > [!WARNING]
-> RhinoQ is a prerelease for evaluation and controlled pilots. Tenant-wide
-> RBAC, design-partner code-reduction evidence and deployment-shaped chaos
-> still block a production-ready claim.
+> RhinoQ is a prerelease for evaluation and controlled pilots. The tenant
+> boundary is now enforced in PostgreSQL ([`docs/tenancy.md`](docs/tenancy.md)),
+> but the HTTP surface is not yet wired to it, design-partner code-reduction
+> evidence does not exist, and chaos evidence is one local drill rather than a
+> deployment-shaped campaign. Those still block a production-ready claim.
+
+> [!IMPORTANT]
+> Upgrading past migration 026 changes what a working connection needs, and
+> running as a PostgreSQL superuser silently disables tenant isolation. Read
+> [`docs/migration-rollback.md`](docs/migration-rollback.md) before applying,
+> and verify with `rhinoq doctor`.
 
 ## What it actually does
 

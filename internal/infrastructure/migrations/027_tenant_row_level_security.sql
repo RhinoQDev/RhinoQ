@@ -27,20 +27,12 @@
 -- pretended to here.
 SET search_path = public;
 
--- rhinoq.tenant_id is read with missing_ok = true so an unset variable is NULL
--- rather than an error. NULL then makes every policy comparison NULL, which is
--- not true, which denies. Failing closed on "nobody said which tenant" is the
--- only safe reading of that state.
+-- rhinoq_current_tenant() is defined in 026, not here, so the tenant_id
+-- columns can default to it in the same migration that makes them NOT NULL.
+-- A NULL return makes every policy comparison below NULL, which is not true,
+-- which denies. Failing closed on "nobody said which tenant" is the only safe
+-- reading of that state.
 --
--- NULLIF maps the empty string to NULL as well, because a connection string
--- that sets the option to an empty value is the same mistake as not setting it.
-CREATE OR REPLACE FUNCTION rhinoq_current_tenant() RETURNS text
-LANGUAGE sql STABLE PARALLEL SAFE
-AS $$ SELECT NULLIF(current_setting('rhinoq.tenant_id', true), '') $$;
-
-COMMENT ON FUNCTION rhinoq_current_tenant IS
-    'The tenant of the current session, or NULL. NULL denies every row-level policy.';
-
 -- Maintenance work — retention, the notification scheduler, recovery sweeps,
 -- the projector — is legitimately cross-tenant. It opts out explicitly and
 -- visibly rather than by holding a credential that quietly sees everything.
@@ -67,12 +59,6 @@ BEGIN
         'rhinoq_queue_controls'
     ]
     LOOP
-        -- The default is what keeps 026's NOT NULL from breaking every INSERT
-        -- in the codebase. It is not a fallback value: an unset session gets
-        -- NULL and the INSERT fails, which is the intended outcome.
-        EXECUTE format(
-            'ALTER TABLE %I ALTER COLUMN tenant_id SET DEFAULT rhinoq_current_tenant()', target);
-
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', target);
         -- FORCE matters more than ENABLE here. Without it the table owner —
         -- which is the role the Agent and the test harness both connect as —
