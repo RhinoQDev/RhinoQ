@@ -51,6 +51,48 @@ func (s *SubjectOutcomeStore) SaveSubjectOutcome(
 	return true, nil
 }
 
+// GetSubjectOutcomes and SaveSubjectOutcomes exist so the in-memory store keeps
+// the same contract as PostgreSQL. There is no round trip to save here, so they
+// are the single-subject calls under one lock rather than a different algorithm.
+func (s *SubjectOutcomeStore) GetSubjectOutcomes(
+	_ context.Context,
+	keys []subjectoutcome.Key,
+) (map[string]subjectoutcome.Record, error) {
+	outcomes := make(map[string]subjectoutcome.Record, len(keys))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, key := range keys {
+		if err := key.Validate(); err != nil {
+			return nil, err
+		}
+		if record, found := s.records[subjectOutcomeKey(key)]; found {
+			outcomes[key.SubjectID] = record
+		}
+	}
+	return outcomes, nil
+}
+
+func (s *SubjectOutcomeStore) SaveSubjectOutcomes(
+	_ context.Context,
+	records []subjectoutcome.Record,
+) (map[string]bool, error) {
+	applied := make(map[string]bool, len(records))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, record := range records {
+		if err := record.Key.Validate(); err != nil {
+			return nil, err
+		}
+		existing, found := s.records[subjectOutcomeKey(record.Key)]
+		if found && existing.LastObservedAt.After(record.LastObservedAt) {
+			continue
+		}
+		s.records[subjectOutcomeKey(record.Key)] = record
+		applied[record.SubjectID] = true
+	}
+	return applied, nil
+}
+
 // countRuleOutcomes and deleteRuleOutcomes back the in-memory Rule delete.
 // An Outcome is the canonical state for one Rule version and one subject, so
 // it has no meaning once that version is gone.

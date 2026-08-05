@@ -457,8 +457,13 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 		IntegrityClient: &IntegrityClient{
 			findings: findingStore, rules: ruleStore, ruleExplainer: ruleExplainer,
 			ruleEvaluator: ruleEvaluator, ruleSchedules: ruleStore,
-			subjectOutcomes:        subjectOutcomes,
-			changes:                changeStore,
+			subjectOutcomes: subjectOutcomes,
+			changes:         changeStore,
+			// The Effect Ledger is the same store the Client holds above. Leaving
+			// it unset here made SubjectEffects report "effect store is not
+			// configured" from a fully configured PostgreSQL client, which is what
+			// the Workbench subject panel surfaced as a failure to read.
+			externalEffects:        effects,
 			providerOperations:     providerStore,
 			repairs:                repairStore,
 			notificationDeliveries: notificationDeliveries,
@@ -504,6 +509,9 @@ func NewWithStore(store ports.JobStore) *Client {
 	}
 	if changes, ok := store.(ports.ChangeStore); ok {
 		client.changes = changes
+	}
+	if externalEffects, ok := store.(ports.ExternalEffectStore); ok {
+		client.externalEffects = externalEffects
 	}
 	if operations, ok := store.(ports.ProviderOperationStore); ok {
 		client.providerOperations = operations

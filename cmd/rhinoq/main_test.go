@@ -217,3 +217,43 @@ func TestRuleDeleteRequiresARuleID(t *testing.T) {
 		t.Fatalf("unexpected result: code=%d output=%s", code, output.String())
 	}
 }
+
+// doctor is the deployment gate, so what its arguments mean has to be exact.
+// The old --ci flag is the reason: it existed to make a FAIL fail, which is now
+// the default, and silently dropping it would break every pipeline that still
+// passes it.
+func TestDoctorFlags(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		args       []string
+		reportOnly bool
+		ci         bool
+		invalid    string
+	}{
+		"no arguments gate by default": {args: nil},
+		"report opts out of the gate":  {args: []string{"--report"}, reportOnly: true},
+		"ci is still accepted":         {args: []string{"--ci"}, ci: true},
+		"ci and report together":       {args: []string{"--ci", "--report"}, reportOnly: true, ci: true},
+		"a mistyped report is loud":    {args: []string{"--reprot"}, invalid: "--reprot"},
+		"an unknown flag is loud":      {args: []string{"--force"}, invalid: "--force"},
+		"a stray argument is loud":     {args: []string{"production"}, invalid: "production"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reportOnly, ci, invalid := doctorFlags(testCase.args)
+			if invalid != testCase.invalid {
+				t.Fatalf("invalid: got %q want %q", invalid, testCase.invalid)
+			}
+			if invalid != "" {
+				// A usage error must never also look like a report request,
+				// which would turn a typo into a silently disabled gate.
+				if reportOnly || ci {
+					t.Fatalf("a rejected argument must decide nothing: report=%v ci=%v", reportOnly, ci)
+				}
+				return
+			}
+			if reportOnly != testCase.reportOnly || ci != testCase.ci {
+				t.Fatalf("got report=%v ci=%v want report=%v ci=%v",
+					reportOnly, ci, testCase.reportOnly, testCase.ci)
+			}
+		})
+	}
+}

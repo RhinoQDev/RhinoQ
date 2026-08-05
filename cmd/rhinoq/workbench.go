@@ -549,13 +549,22 @@ func (r *liveWorkbenchReader) SubjectDetail(
 	if err != nil {
 		return workbench.SubjectDetail{}, err
 	}
+	// An integrity-only deployment — a Rule and a connection string, no queue and
+	// no worker — has no Effect Ledger at all. Treating that as fatal hid the
+	// Findings, their evidence and their whole decision history behind a failure
+	// for exactly the adoption path this product leads with. A missing ledger is
+	// a gap in the page, not a reason to refuse to draw it.
+	var effectsUnavailable string
 	effects, err := r.client.SubjectEffects(ctx, rhinoq.SubjectRef{
 		Type: subject.Type, ID: subject.ID,
 	}, 0, 200)
 	if err != nil {
-		return workbench.SubjectDetail{}, err
+		effects, effectsUnavailable = nil, err.Error()
 	}
-	if len(findings) == 0 && len(effects) == 0 {
+	if len(findings) == 0 && len(effects) == 0 && effectsUnavailable == "" {
+		return workbench.SubjectDetail{}, workbench.ErrNotFound
+	}
+	if len(findings) == 0 && effectsUnavailable != "" {
 		return workbench.SubjectDetail{}, workbench.ErrNotFound
 	}
 
@@ -594,6 +603,11 @@ func (r *liveWorkbenchReader) SubjectDetail(
 	detail.Notices = []string{
 		"Payloads are excluded from every Workbench response by design.",
 		"Business repair is not implemented: this page reports what happened, it cannot fix it.",
+	}
+	if effectsUnavailable != "" {
+		detail.Notices = append(detail.Notices,
+			"No Effect Ledger is available for this deployment, so the execution "+
+				"timeline below is empty: "+effectsUnavailable)
 	}
 	return detail, nil
 }

@@ -52,6 +52,59 @@ func scanFinding(row findingScanner) (finding.Record, error) {
 	return record, err
 }
 
+// GetFindingsForSubjects reads the Findings an evaluated page already has.
+//
+// A Rule page is one Rule id, one subject type and one immutable version, so
+// only the subject varies and the result is keyed by subject id.
+func (s *FindingStore) GetFindingsForSubjects(
+	ctx context.Context,
+	keys []finding.Key,
+) (map[string]finding.Record, error) {
+	records := make(map[string]finding.Record, len(keys))
+	if len(keys) == 0 {
+		return records, nil
+	}
+	identity := keys[0]
+	arguments := make([]any, 0, len(keys)+3)
+	arguments = append(arguments,
+		identity.RuleID, identity.SubjectType, identity.ObservedInvariantVersion)
+	for _, key := range keys {
+		if err := key.Validate(); err != nil {
+			return nil, err
+		}
+		if key.RuleID != identity.RuleID ||
+			key.SubjectType != identity.SubjectType ||
+			key.ObservedInvariantVersion != identity.ObservedInvariantVersion {
+			return nil, errors.New(
+				"a finding batch must belong to one Rule, subject type and invariant version",
+			)
+		}
+		arguments = append(arguments, key.SubjectID)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+findingColumns+`
+		FROM rhinoq_findings
+		WHERE rule_id = $1 AND subject_type = $2 AND invariant_version = $3
+		  AND subject_id IN (`+placeholders(4, len(keys))+`)`,
+		arguments...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		record, err := scanFinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		records[record.SubjectID] = record
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return records, rows.Close()
+}
+
 func (s *FindingStore) ObserveFinding(
 	ctx context.Context,
 	observation finding.Observation,

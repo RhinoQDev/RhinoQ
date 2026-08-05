@@ -61,7 +61,15 @@ func Apply(
 	}
 	record.Status = observation.Status
 	record.Reason = observation.Reason
-	record.Evidence = observation.Evidence
+	// Evidence explains why something is wrong, so a passing subject does not
+	// keep any. Storing it made the materialized state larger than the business
+	// table it observes, and a subject that passes today can always be
+	// re-evaluated to produce evidence again.
+	if observation.Status == rule.Passed {
+		record.Evidence = ""
+	} else {
+		record.Evidence = observation.Evidence
+	}
 	record.LastObservedAt = observedAt
 	record.UpdatedAt = observedAt
 	if observation.Status == rule.Unknown {

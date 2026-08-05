@@ -87,7 +87,7 @@ go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
 export RHINOQ_DATABASE_URL='postgres://user:pass@localhost:5432/app?sslmode=disable'
 rhinoq migrate plan
 rhinoq migrate apply
-rhinoq doctor --ci
+rhinoq doctor
 ```
 
 GitHub prereleases are tagged, but `@latest` remains an old npm evaluation

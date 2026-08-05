@@ -365,7 +365,7 @@ export RHINOQ_DATABASE_URL='postgres://user:pass@127.0.0.1:5432/app?sslmode=disa
 rhinoq migrate status
 rhinoq migrate plan
 rhinoq migrate apply
-rhinoq doctor --ci
+rhinoq doctor
 rhinoq workbench
 ```
 
@@ -376,7 +376,7 @@ $env:RHINOQ_DATABASE_URL = 'postgres://user:pass@127.0.0.1:5432/app?sslmode=disa
 rhinoq migrate status
 rhinoq migrate plan
 rhinoq migrate apply
-rhinoq doctor --ci
+rhinoq doctor
 rhinoq workbench
 ```
 
@@ -386,7 +386,7 @@ Why the sequence matters:
 - `migrate plan` is read-only and shows exactly what would change;
 - `migrate apply` is the explicit schema write, protected by checksums and an
   advisory lock;
-- `doctor --ci` fails non-interactively if fencing, timing or schema checks do
+- `doctor` exits non-zero if fencing, timing or schema checks do
   not pass;
 - `workbench` starts only after the data contract is current.
 
@@ -670,7 +670,7 @@ Read [Production readiness](./production-readiness.md),
 | Task schema version mismatch | SDK and database Task profile differ | run the pinned SDK's `npx rhinoq init` |
 | generated Rule fails in PostgreSQL | placeholder table/column names remain | edit the SQL and test it with a restricted read-only role |
 | `npx rhinoq dev` has no rows | no Task exists in this database | run `npx rhinoq fixture failure` or point to the application database |
-| Workbench cannot open its data source | full migrations are missing or URL is wrong | run `rhinoq migrate status`, `plan`, `apply`, then `doctor --ci` |
+| Workbench cannot open its data source | full migrations are missing or URL is wrong | run `rhinoq migrate status`, `plan`, `apply`, then `doctor` |
 | port already in use | another local service owns the port | use `npx rhinoq dev --port=8798` or `rhinoq workbench --port 0` |
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
 | repair is unavailable | Workbench is read-only or handler is not registered | supply the callback allowlist and start with `--actions` |

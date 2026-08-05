@@ -116,6 +116,10 @@ It checks whether the heartbeat can renew before the lease expires, and whether
 the reaper sweeps at least once per lease period. Both are how a job silently
 gets executed twice. Every failure carries a `Fix:` line.
 
+Any `FAIL` exits non-zero, so putting `rhinoq doctor` in a pipeline is enough to
+stop a deployment. Add `--report` when a person wants the diagnosis without the
+exit code.
+
 `npx rhinoq doctor` is a different, smaller command: it checks the isolated Task
 profile and local Rule files, not the runtime. Before a pilot, run both.
 
@@ -287,6 +291,25 @@ not a claim this project makes.
 
 See [Notifications](./docs/notifications.md).
 
+## Evidence does not accumulate forever
+
+Every scan writes one row per observed subject, per Rule, per Rule version.
+`rhinoq_subject_outcomes` is the largest table RhinoQ owns, and it needs a
+decision rather than a paragraph of advice:
+
+```bash
+rhinoq retention prune --older-than 90d           # preview; changes nothing
+rhinoq retention prune --older-than 90d --apply
+```
+
+Prune previews by default, deletes in bounded batches, and refuses a cutoff
+younger than 24h. It reclaims passing observations, the lifecycle history of
+Findings already resolved, and settled delivery-ledger entries. It never removes
+an open Finding, a pending delivery, a repair or a ProviderOperation, at any
+age. RhinoQ does not choose a legal retention period for the adopter.
+
+See [Retention](./docs/retention.md).
+
 ## The Workbench tells you what it can reach
 
 ```text
@@ -345,6 +368,7 @@ exists but is not the default browser polling shape.
 | Signed webhook and Slack notifications with durable dedup | implemented |
 | Notification destinations configurable from the CLI, with a delivery probe | implemented |
 | Rule lifecycle: create, explain, enable, disable, delete, from Go or Node | implemented |
+| Bounded, previewable retention for observation and delivery evidence | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Release archives, verifiable checksum bundle, SBOM and non-root image | beta.8 release pipeline verified in CI |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
@@ -397,6 +421,7 @@ through a public issue.
 - [Notifications](./docs/notifications.md)
 - [Failure semantics: why unknown is not a pass](./docs/failure-semantics.md)
 - [Benchmarks, with their limits](./docs/benchmarks.md)
+- [Retention](./docs/retention.md)
 - [Architecture](./ARCHITECTURE.md)
 - [Release process](./docs/releasing.md)
 - [Roadmap and honest blockers](./docs/roadmap.md)

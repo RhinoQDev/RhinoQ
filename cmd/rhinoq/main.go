@@ -38,7 +38,18 @@ func main() {
 			os.Exit(2)
 		}
 	case "doctor":
-		os.Exit(runDoctor(ciMode()))
+		reportOnly, deprecatedCI, invalid := doctorFlags(os.Args[2:])
+		if invalid != "" {
+			fmt.Fprintf(os.Stderr, "FAIL unknown doctor option %q\n", invalid)
+			fmt.Fprintln(os.Stderr, "Usage: rhinoq doctor [--report]")
+			os.Exit(2)
+		}
+		if deprecatedCI {
+			fmt.Println("NOTE --ci is deprecated and does nothing: any FAIL already exits 1.")
+			fmt.Println("     Drop the flag, or use --report to print the diagnosis and exit 0.")
+			fmt.Println()
+		}
+		os.Exit(runDoctor(reportOnly))
 	case "init":
 		os.Exit(runInit(os.Args[2:], os.Stdout))
 	case "migrate":
@@ -57,6 +68,8 @@ func main() {
 		os.Exit(runRules(os.Args[2:], os.Getenv, os.Stdout))
 	case "notify":
 		os.Exit(runNotify(os.Args[2:], os.Getenv, os.Stdout))
+	case "retention":
+		os.Exit(runRetention(os.Args[2:], os.Getenv, os.Stdout))
 	case "workbench", "ui":
 		os.Exit(runWorkbench(os.Args[2:], os.Getenv, os.Stdout))
 	case "explain":
@@ -120,18 +133,35 @@ func runExplain(args []string, getenv func(string) string, output io.Writer) int
 	return 0
 }
 
-func ciMode() bool {
-	for _, arg := range os.Args[2:] {
-		if arg == "--ci" {
-			return true
+// doctorFlags reads doctor's arguments.
+//
+// --report is the escape hatch from the exit code. It replaces --ci, which had
+// the polarity backwards: a preflight that exits 0 while printing FAIL is one a
+// pipeline silently passes, and --ci had to be remembered to make it honest.
+// Failing by default means the mistake is a pipeline that stops, not one that
+// ships.
+//
+// --ci is still accepted. Every pipeline that already asks for a gate keeps
+// working and gets the behaviour it asked for; deprecating it is a note in the
+// output, not a broken deployment. An argument that is neither is a usage
+// error, so a mistyped --report is loud rather than silently ignored.
+func doctorFlags(args []string) (reportOnly, deprecatedCI bool, invalid string) {
+	for _, arg := range args {
+		switch arg {
+		case "--report":
+			reportOnly = true
+		case "--ci":
+			deprecatedCI = true
+		default:
+			return false, false, arg
 		}
 	}
-	return false
+	return reportOnly, deprecatedCI, ""
 }
 
-// runDoctor reports setup, runtime and safety findings. It returns the process
-// exit code: in CI mode a failure is an error, otherwise it is a report.
-func runDoctor(ci bool) int {
+// runDoctor reports setup, runtime and safety findings and returns the process
+// exit code. A FAIL is an error unless --report asks for the report alone.
+func runDoctor(reportOnly bool) int {
 	c, err := config.LoadFromEnv(os.Getenv)
 	if err != nil {
 		fmt.Println("FAIL configuration")
@@ -241,7 +271,13 @@ func runDoctor(ci bool) int {
 	}
 
 	fmt.Printf("\n%d failing, %d warning\n", failures, warnings)
-	if ci && failures > 0 {
+	if failures > 0 {
+		if reportOnly {
+			// --report is for a human reading the output, where the exit code
+			// is not what they are looking at.
+			fmt.Println("Exit code suppressed by --report. Drop it to fail on a FAIL.")
+			return 0
+		}
 		return 1
 	}
 	return 0
@@ -356,6 +392,7 @@ func printRootHelp(output io.Writer) {
 	fmt.Fprintln(output, "  scan        verify one enabled Rule against real data, bounded")
 	fmt.Fprintln(output, "  explain     inspect the PostgreSQL safety plan for one Rule")
 	fmt.Fprintln(output, "  notify      configure and prove signed webhook/Slack destinations")
+	fmt.Fprintln(output, "  retention   preview or reclaim evidence past its retention window")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "Developer interface")
 	fmt.Fprintln(output, "  workbench   open the loopback-only developer Workbench (read-only by default)")
@@ -406,7 +443,7 @@ Next:
   copy the values into your environment
   rhinoq migrate plan
   rhinoq migrate apply
-  rhinoq doctor --ci`)
+  rhinoq doctor`)
 	case "migrate":
 		fmt.Fprintln(output, `rhinoq migrate — manage the RhinoQ PostgreSQL schema
 
@@ -429,7 +466,7 @@ Production flow:
   rhinoq migrate plan
   rhinoq migrate sql > rhinoq-pending.sql
   rhinoq migrate apply
-  rhinoq doctor --ci
+  rhinoq doctor
 
 Apply refuses checksum drift, version gaps, a newer schema and untracked RhinoQ
 objects. It does not guess or automatically repair a migration baseline.`)
@@ -438,7 +475,7 @@ objects. It does not guess or automatically repair a migration baseline.`)
 
 Usage:
   rhinoq doctor
-  rhinoq doctor --ci
+  rhinoq doctor --report
 
 Checks typed runtime configuration, worker identity, lease/heartbeat/reaper
 timing, PostgreSQL connectivity and migration state. It never applies a
@@ -448,14 +485,22 @@ The Node SDK ships a command with the same name. "npx rhinoq doctor" checks the
 isolated Task profile, local Rule files and client packages; it does not look at
 fencing, timing, the reaper or RhinoQ migration state. Before a pilot, run both.
 
-Without --ci, the command prints a diagnostic report. With --ci, any FAIL
-returns exit code 1 so a deployment pipeline can stop safely.
+Any FAIL returns exit code 1, so putting this in a pipeline is enough to stop a
+deployment. A WARN never changes the exit code. --report prints the same
+diagnosis and always exits 0, for a human reading the output rather than a gate.
+
+--ci used to be required to make a FAIL fail. It is now the default: a preflight
+whose default is to exit 0 while printing FAIL is one a pipeline quietly passes.
+--ci is still accepted and does nothing, so an existing pipeline keeps working;
+it prints a deprecation note. Any other argument is a usage error (exit 2), so a
+mistyped --report cannot silently disable the gate.
 
 Required for database checks:
   RHINOQ_DATABASE_URL
 
 Example:
-  rhinoq doctor --ci`)
+  rhinoq doctor
+  rhinoq doctor --report`)
 	case "jobs":
 		fmt.Fprintln(output, `rhinoq jobs — inspect jobs without exporting payloads
 
@@ -642,6 +687,42 @@ Examples:
     --subject-type report --every 5m
   rhinoq rules delete probe-rule
   rhinoq rules delete probe-rule --apply`)
+	case "retention":
+		fmt.Fprintln(output, `rhinoq retention — reclaim evidence that has outlived its window
+
+Usage:
+  rhinoq retention prune [flags]
+
+Flags:
+  --older-than <age>  age at which evidence becomes prunable; default 90d
+                      accepts 90d, 720h or any Go duration; minimum 24h
+  --rule <id>         narrow subject outcomes and finding history to one Rule
+  --batch <n>         rows deleted per statement; default 5000
+  --apply             perform the plan; without it nothing is deleted
+  --json              machine-readable output
+
+Prune previews by default, exactly like rhinoq rules delete.
+
+What it removes:
+  rhinoq_subject_outcomes         passing observations not seen since the cutoff
+  rhinoq_finding_events           history of Findings already resolved
+  rhinoq_notification_deliveries  settled delivery ledger entries
+
+What it never removes: an open Finding, a pending delivery, a repair, a
+ProviderOperation or its evidence. Retention must outlive the longest provider
+dispute, audit and repair window you are subject to; RhinoQ does not choose
+that period for you.
+
+Every delete is bounded by --batch and runs as its own statement, because an
+unbounded DELETE against the table a running scan is writing to is how a
+retention job becomes the outage it was meant to prevent.
+
+PostgreSQL reuses the freed space for new rows. Run VACUUM, or VACUUM FULL in a
+maintenance window, to return it to the filesystem.
+
+Example:
+  rhinoq retention prune --older-than 90d
+  rhinoq retention prune --older-than 90d --apply`)
 	case "notify":
 		fmt.Fprintln(output, `rhinoq notify — configure where Findings are delivered
 

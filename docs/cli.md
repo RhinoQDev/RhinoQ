@@ -127,7 +127,7 @@ rhinoq migrate sql
 rhinoq migrate apply
 
 # 5. Fail the deployment if config, connectivity or schema is invalid.
-rhinoq doctor --ci
+rhinoq doctor
 
 # 6. Open the developer view.
 rhinoq workbench
@@ -145,7 +145,7 @@ rhinoq workbench
 | `rhinoq migrate status` | show authoritative migration state | DB | No |
 | `rhinoq migrate sql` | print pending SQL for review | DB | No |
 | `rhinoq migrate apply` | apply pending migrations safely | DB | DB |
-| `rhinoq doctor [--ci]` | validate config, DB and schema | DB | No |
+| `rhinoq doctor [--report]` | validate config, DB and schema | DB | No |
 | `rhinoq jobs list` | list payload-free job summaries | DB | No |
 | `rhinoq queue counts` | count jobs by state | DB | No |
 | `rhinoq queue pause` | stop new claims for one queue | DB | DB |
@@ -295,7 +295,7 @@ rhinoq migrate plan
 rhinoq migrate sql > rhinoq-pending.sql
 # Review rhinoq-pending.sql in the deployment change.
 rhinoq migrate apply
-rhinoq doctor --ci
+rhinoq doctor
 ```
 
 The runner fails closed when:
@@ -316,7 +316,7 @@ Validate the environment before a process handles production work.
 
 ```bash
 rhinoq doctor
-rhinoq doctor --ci
+rhinoq doctor
 ```
 
 The report checks:
@@ -329,10 +329,11 @@ The report checks:
 
 `doctor` is read-only and never calls `migrate apply`.
 
-Use the normal form while developing. Use `--ci` in a deployment gate:
+Any FAIL exits non-zero, so `rhinoq doctor` is already a deployment gate. Add
+`--report` when a human wants the diagnosis without the exit code:
 
 ```bash
-rhinoq doctor --ci
+rhinoq doctor
 if [ "$?" -ne 0 ]; then
   echo "RhinoQ is not ready"
   exit 1
@@ -682,7 +683,7 @@ shorter than the requested limit. Do not request unbounded exports.
 | `jobs list` shows no payload | intentional privacy boundary | fetch payload only inside an authorized handler/API |
 | paused queue still has active work | pause affects future claims | wait for leased handlers or cancel through the public API |
 | Rule cannot enable | Explain gate rejected it | run `rhinoq explain <id>` and fix query/index/budget |
-| Workbench cannot connect | missing URL or pending migration | run `rhinoq doctor --ci` |
+| Workbench cannot connect | missing URL or pending migration | run `rhinoq doctor` |
 | `--until 1d` fails | Go duration syntax has no day unit | use `24h` |
 
 ## Current preview boundary
