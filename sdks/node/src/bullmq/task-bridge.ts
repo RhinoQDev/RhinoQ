@@ -107,6 +107,14 @@ export interface BullMQProjectorLease {
   acquire(): Promise<boolean>;
   /** Releases the ownership held by this bridge. */
   release(): Promise<void>;
+  /**
+   * Returns false once ownership has been lost without being released — a
+   * database failover or a killed session drops the lock while this process
+   * carries on. Optional so an existing implementation still type-checks, but
+   * a lease without it cannot report the failure it exists to prevent, and the
+   * bridge says so at `start()`.
+   */
+  verify?(): Promise<boolean>;
 }
 
 export interface BullMQTaskBridgeOptions {
@@ -288,6 +296,18 @@ export interface BullMQTaskBridgeOptions {
    * advisory-lock implementation is exported as `PostgresProjectorLease`.
    */
   projectorLease?: BullMQProjectorLease;
+  /**
+   * How often to re-check that the lease is still held. Defaults to 15s;
+   * `0` disables the check. Only used when the lease implements `verify()`.
+   */
+  leaseVerifyIntervalMs?: number;
+  /**
+   * Called once when the lease is lost without being released. The bridge has
+   * already stopped projecting by then; this is where an application decides
+   * whether to exit, alert, or attempt to take ownership again. A lost lease
+   * means another process may now be projecting this scope.
+   */
+  onLeaseLost?: (runtimeScope: string) => void;
 }
 
 /**
@@ -318,7 +338,11 @@ export class BullMQTaskBridge {
   private readonly onItemsSettled?: (task: TaskSnapshot) => Promise<void> | void;
   private readonly projectionFailures?: ProjectionFailureSink;
   private readonly projectorLease?: BullMQProjectorLease;
+  private readonly leaseVerifyIntervalMs: number;
+  private readonly onLeaseLost?: (runtimeScope: string) => void;
   private leaseAcquired = false;
+  private leaseVerifyTimer?: ReturnType<typeof setInterval>;
+  private verifyingLease = false;
   private warnedAboutRetrySupport = false;
   private warnedAboutSettleSupport = false;
   private readonly metrics?: TaskMetrics;
@@ -369,6 +393,8 @@ export class BullMQTaskBridge {
     this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
     this.onError = options.onError;
     this.projectorLease = options.projectorLease;
+    this.leaseVerifyIntervalMs = options.leaseVerifyIntervalMs ?? 15_000;
+    this.onLeaseLost = options.onLeaseLost;
     if (this.projectorLease && !this.runtimeScope) {
       throw new TypeError('BullMQTaskBridge projectorLease requires runtimeScope');
     }
@@ -434,6 +460,89 @@ export class BullMQTaskBridge {
         );
       }
       throw error;
+    }
+    this.startLeaseVerification(lease);
+  }
+
+  /**
+   * Polls the lease so a lost one stops this projector instead of leaving two
+   * of them running. The lock lives in a database session; a failover or a
+   * killed backend releases it server-side, and nothing arrives here to say so.
+   */
+  private startLeaseVerification(lease: BullMQProjectorLease): void {
+    if (typeof lease.verify !== 'function') {
+      this.warn(
+        `RhinoQ: the projector lease for runtimeScope ${JSON.stringify(this.runtimeScope)} ` +
+          'does not implement verify(), so a lease lost to a failover or a killed ' +
+          'session cannot be detected and this process would keep projecting ' +
+          'alongside its replacement. Use PostgresProjectorLease.',
+      );
+      return;
+    }
+    if (this.leaseVerifyIntervalMs <= 0 || this.leaseVerifyTimer) {
+      return;
+    }
+    this.leaseVerifyTimer = setInterval(() => {
+      void this.verifyLeaseOnce(lease);
+    }, this.leaseVerifyIntervalMs);
+    // Ownership polling must not be the reason a process refuses to exit.
+    this.leaseVerifyTimer.unref?.();
+  }
+
+  private async verifyLeaseOnce(lease: BullMQProjectorLease): Promise<void> {
+    if (this.verifyingLease || this.closed || !this.leaseAcquired) {
+      return;
+    }
+    this.verifyingLease = true;
+    try {
+      if (await lease.verify?.()) {
+        return;
+      }
+    } catch (error) {
+      // An unreadable lease is an unowned lease: it cannot be shown to be held.
+      this.warn(
+        `RhinoQ: projector lease check failed for runtimeScope ${JSON.stringify(this.runtimeScope)}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.verifyingLease = false;
+    }
+    this.loseLease();
+  }
+
+  /** Stops projecting. Another process may already own this scope. */
+  private loseLease(): void {
+    if (!this.leaseAcquired) {
+      return;
+    }
+    this.leaseAcquired = false;
+    this.stopLeaseVerification();
+    if (this.subscribed) {
+      for (const [name, listener] of this.listeners) {
+        this.events.off?.(name, listener);
+      }
+      this.subscribed = false;
+    }
+    if (this.scopeRegistered) {
+      releaseScope(this.runtimeScope);
+      this.scopeRegistered = false;
+    }
+    this.metrics?.increment('rhinoq_bridge_lease_lost_total', {
+      ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
+    });
+    this.warn(
+      `RhinoQ: lost projector ownership of runtimeScope ${JSON.stringify(this.runtimeScope)} ` +
+        'without releasing it, so this bridge stopped projecting. Another process may ' +
+        'have taken the scope. Events produced while nobody owned it are not replayed: ' +
+        'reconcile with TaskReconciler before trusting the aggregate.',
+    );
+    this.onLeaseLost?.(this.runtimeScope);
+  }
+
+  private stopLeaseVerification(): void {
+    if (this.leaseVerifyTimer) {
+      clearInterval(this.leaseVerifyTimer);
+      this.leaseVerifyTimer = undefined;
     }
   }
 
@@ -854,6 +963,7 @@ export class BullMQTaskBridge {
       return;
     }
     this.closed = true;
+    this.stopLeaseVerification();
     if (this.subscribed) {
       for (const [name, listener] of this.listeners) {
         this.events.off?.(name, listener);

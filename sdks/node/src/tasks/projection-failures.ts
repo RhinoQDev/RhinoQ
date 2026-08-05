@@ -39,12 +39,13 @@ export interface ProjectionFailure {
 /**
  * Somewhere durable to put a failed projection.
  *
- * RhinoQ does not ship a PostgreSQL implementation of this. The Task-only
- * profile promises exactly three tables and a fourth would break that promise
- * for every adopter, including the ones who will never have a failed
- * projection. The application owns the table, and it should own it: replaying
- * a projection is a business decision, and the row belongs in the same
- * database as whatever the job was doing.
+ * `PostgresProjectionFailureSink` implements this, but the table is not part of
+ * the Task-only profile: that promises exactly three tables and a fourth would
+ * break the promise for every adopter, including the ones who will never have
+ * a failed projection. Apply `PROJECTION_FAILURE_TABLE_SQL` in the
+ * application's own migration first. The row belongs there anyway — replaying
+ * a projection is a business decision, and it should live in the same database
+ * as whatever the job was doing.
  */
 export interface ProjectionFailureSink {
   /**

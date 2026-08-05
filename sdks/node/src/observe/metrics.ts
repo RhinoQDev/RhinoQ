@@ -28,7 +28,13 @@ export type TaskMetricName =
   | 'rhinoq_reconciler_task_selected_total'
   | 'rhinoq_reconciler_task_reconciled_total'
   | 'rhinoq_reconciler_task_failed_total'
-  | 'rhinoq_bridge_version_conflict_total';
+  | 'rhinoq_bridge_version_conflict_total'
+  /**
+   * A projector lease lost without being released — a database failover or a
+   * killed session. Non-zero means some window had no owner for that scope,
+   * and possibly two. Alert on it.
+   */
+  | 'rhinoq_bridge_lease_lost_total';
 
 export type MetricLabels = Readonly<Record<string, string>>;
 

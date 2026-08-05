@@ -604,6 +604,36 @@ three-table Task profile, and releases ownership when its database session
 ends. `allowConcurrentBridges` (or `RHINOQ_ALLOW_CONCURRENT_BRIDGES=1`) is an
 explicit escape hatch; it does not provide ownership or improve correctness.
 
+The session ending is the case worth planning for. A failover, a restart or a
+`pg_terminate_backend` drops the lock in the database while this process still
+holds a connection object and keeps projecting — and the next process to call
+`start()` is told, correctly, that nobody owns the scope. Two projectors, each
+believing it is the only one, is what the lease exists to prevent.
+
+The bridge therefore re-checks ownership every 15 seconds
+(`leaseVerifyIntervalMs`, `0` disables it). On loss it unsubscribes, stops
+projecting, increments `rhinoq_bridge_lease_lost_total`, warns, and calls
+`onLeaseLost`:
+
+```ts
+const bridge = new BullMQTaskBridge({
+  client, events, runtimeScope: 'reports',
+  terminalProjection: 'single-execution',
+  projectorLease: new PostgresProjectorLease(pool, 'reports'),
+  onLeaseLost: () => process.exit(1),   // let the orchestrator restart it
+});
+```
+
+Events produced while nobody owned the scope are not replayed. Run
+`TaskReconciler` after a takeover before trusting the aggregate.
+
+A custom lease that does not implement `verify()` cannot report this, and the
+bridge warns at `start()` rather than pretending the check happened.
+
+**PgBouncer in transaction mode breaks this**, along with every other session
+advisory lock: the lock and the queries that rely on it can land on different
+backends. Give the lease a direct connection or a session-mode pool.
+
 `close()` releases the scope, so a rolling replacement — construct the new
 bridge after closing the old one — does not warn.
 
