@@ -452,6 +452,11 @@ checked BullMQ's retry policy/attempts. The bridge dispatches only through an
 application-supplied Queue and reconciles only application-supplied jobs. It
 does not discover/scan a whole queue after downtime or invent retry identity.
 
+When `dispatch()` or `dispatchMany()` receives a BullMQ Queue whose
+`defaultJobOptions` has no `attempts`, the bridge emits one warning. This does
+not override per-job options; it makes an implicit “no retries by default”
+policy visible before a failed job is mistaken for a retried one.
+
 Cancellation is application-owned and fail-closed. Configure `cancelJob` to
 remove a waiting job or cooperate with a running worker, then pass the known
 job IDs. Return `acknowledged` only after stop is durable; return
@@ -688,8 +693,30 @@ location is read once through `getTaskExecutionResults` — so a storage key,
 signed URL or file path used as the item identity defeats that separation. The
 job payload is a different matter: it never enters a snapshot.
 
-`track()` and `dispatch()` still accept an omitted `itemKey`, because a
-single-item Task genuinely has one.
+`track()` and `dispatch()` accept an omitted `itemKey` for a single-item Task.
+`track()` refuses a second job without a key once the Task already has an
+unkeyed item, because silently turning that job into attempt 2 of `default`
+would corrupt the batch total. Give every fan-out item a stable key or use
+`dispatchMany()`.
+
+#### Transactional application effects
+
+When a BullMQ retry must not write the same business row twice, use the
+embedded client’s transaction gate:
+
+```ts
+const result = await tasks.onceForItem(executionId, 'deduct-credits', async (tx) => {
+  await tx.query('INSERT INTO credit_logs (item_id) VALUES ($1)', [itemId]);
+  return 'written';
+});
+```
+
+The claim is stored through `rhinoq_task.claim_item_effect` and is checked
+across all attempts for that `itemKey`. The callback must use the supplied
+connection. A committed repeat returns `{ executed: false }`; a callback
+failure rolls back the claim. This is for writes in the same PostgreSQL
+transaction, not for external provider calls; those still require
+ProviderOperation and an idempotency/confirmation policy.
 
 **`itemKey` requires the embedded PostgreSQL client.** The Gateway profile
 stores Executions as unique per `(task, attempt)`, with no column for the item,

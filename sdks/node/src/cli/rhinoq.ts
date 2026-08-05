@@ -18,6 +18,7 @@ import {
   type NotifyKind,
 } from '../notify/registry.js';
 import { sendTestNotification } from '../notify/sender.js';
+import { createNodeWorkbenchMiddleware } from '../workbench/handler.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -902,24 +903,25 @@ async function dev(args: string[]): Promise<void> {
   const portValue = Number(args.find((item) => item.startsWith('--port='))?.slice(7) ?? 8788);
   if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) fail('port must be 1..65535', 'Example: npx rhinoq dev --port=8788');
   const pool = new Pool(requireDatabase('dev').pool);
-  const server = createServer(async (_request, response) => {
-    try {
-      const result = await pool.query(`SELECT id,type,state,version,updated_at FROM rhinoq_task.tasks ORDER BY updated_at DESC LIMIT 25`);
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      response.end(page(result.rows));
-    } catch (error) {
-      response.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
-      response.end(`RhinoQ cannot read PostgreSQL. NEXT run: npx rhinoq doctor\n${safe(error)}`);
-    }
+  const tasks = await installPostgresTaskProfile(pool);
+  const workbench = createNodeWorkbenchMiddleware({
+    tasks,
+    basePath: '/rhinoq',
+    // `dev` binds to loopback and is an inspection surface only. Production
+    // applications must mount the same middleware behind real operator auth.
+    requireOperator: () => true,
   });
-  server.listen(portValue, '127.0.0.1', () => console.log(`PASS RhinoQ dev view: http://127.0.0.1:${portValue}\nNEXT press Ctrl+C to stop.`));
+  const server = createServer((request, response) => {
+    if (request.url === '/') {
+      response.writeHead(302, { location: '/rhinoq', 'cache-control': 'no-store' });
+      response.end();
+      return;
+    }
+    workbench(request, response);
+  });
+  server.listen(portValue, '127.0.0.1', () => console.log(`PASS RhinoQ Workbench: http://127.0.0.1:${portValue}/rhinoq\nNEXT press Ctrl+C to stop.`));
   const close = () => server.close(() => pool.end().finally(() => process.exit(0)));
   process.once('SIGINT', close); process.once('SIGTERM', close);
-}
-
-function page(rows: unknown[]): string {
-  const body = rows.map((value) => { const row = value as Record<string, unknown>; return `<tr><td>${escapeHTML(row.id)}</td><td>${escapeHTML(row.type)}</td><td><strong>${escapeHTML(row.state)}</strong></td><td>${escapeHTML(row.version)}</td></tr>`; }).join('');
-  return `<!doctype html><meta charset="utf-8"><title>RhinoQ dev</title><style>body{font:16px system-ui;max-width:960px;margin:4rem auto;padding:0 1rem;background:#0b1020;color:#eef}table{width:100%;border-collapse:collapse}td,th{padding:.8rem;border-bottom:1px solid #334}strong{color:#ffcc66}code{color:#9fe}</style><h1>RhinoQ dev</h1><p>Technical completion is not the same as a real-world outcome.</p><p><strong>Next step:</strong> write a Rule for a real business table, apply it through the Go Gateway, then run a bounded verification: <code>npx rhinoq verify apply &lt;name&gt; --subject-type &lt;type&gt;</code> → <code>npx rhinoq verify run &lt;name&gt;</code>.</p><table><thead><tr><th>Task</th><th>Type</th><th>Real-world state</th><th>Version</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
 async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean }> {
@@ -927,7 +929,6 @@ async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean }> {
   catch { return {pg:false,bullmq:false}; }
 }
 async function writeNew(path: string, content: string): Promise<void> { try { await access(path); console.log(`KEEP ${path} already exists.`); } catch { await writeFile(path, content, { flag:'wx' }); } }
-function escapeHTML(value: unknown): string { return String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!)); }
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }

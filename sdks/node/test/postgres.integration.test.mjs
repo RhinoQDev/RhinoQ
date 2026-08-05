@@ -204,6 +204,28 @@ test('Task-only profile uses three tables and serves the embedded Node client', 
     assert.equal(bound.itemKey, 'item-a');
     assert.equal(bound.attempt, 1);
 
+    let effectRuns = 0;
+    const firstEffect = await tasks.onceForItem(
+      'node-task-item-a-attempt-1',
+      'deduct-credits',
+      async (transaction) => {
+        effectRuns += 1;
+        await transaction.query('SELECT 1', []);
+        return 'applied';
+      },
+    );
+    const retryEffect = await tasks.onceForItem(
+      'node-task-item-a-attempt-2',
+      'deduct-credits',
+      async () => {
+        effectRuns += 1;
+        return 'must-not-run';
+      },
+    );
+    assert.deepEqual(firstEffect, { executed: true, value: 'applied' });
+    assert.deepEqual(retryEffect, { executed: false });
+    assert.equal(effectRuns, 1);
+
     await assert.rejects(
       tasks.getTaskForOwner(taskId, 'owner-b'),
       (error) => error.code === 'RHINOQ_TASK_NOT_FOUND',

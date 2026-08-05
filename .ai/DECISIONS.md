@@ -412,3 +412,33 @@
 - Rollback:
 - Owner:
 ```
+
+## ADR-0022 — Transactional per-item application effect gate
+
+- **Status:** accepted
+- **Context:** an existing BullMQ worker can retry the same logical item after
+  a process or acknowledgement failure. Observing the retry is not enough for
+  application writes such as credit logs or inventory deductions; the adopter
+  needs a small guard without replacing BullMQ or adding a fourth Task-profile
+  table.
+- **Decision:** the Task-only PostgreSQL profile adds an append-only set of
+  named `effect_keys` to Executions and the versioned
+  `rhinoq_task.claim_item_effect` command. `PostgresTaskClient.onceForItem()`
+  opens one transaction, claims the key across all attempts for the item, and
+  passes the same checked-out connection to the application callback. A
+  committed callback returns `executed: false` on a later retry; a callback
+  error rolls the claim back. Provider calls remain outside this promise and
+  must use ProviderOperation/idempotency/confirmation.
+- **Alternatives:** a TypeScript in-memory lock (lost on restart); a Redis
+  counter (not atomic with PostgreSQL business data); a fourth effect table in
+  the Task-only profile (more durable but raises onboarding/storage cost); or
+  replacing BullMQ with a workflow engine (outside RhinoQ's boundary).
+- **Consequences:** the profile still owns exactly three tables and PostgreSQL
+  remains the correctness authority. The callback must use the supplied
+  transaction connection; a pool-backed client is required. The marker is
+  bounded to 256 keys per item and increments the aggregate version with the
+  execution mutation.
+- **Rollback:** stop calling `onceForItem`, set the bridge to its prior retry
+  behavior, and apply an additive rollback migration only after no marker is
+  needed. Existing Task/Execution rows remain readable without the helper.
+- **Owner:** engine + Node SDK

@@ -144,8 +144,11 @@ npx rhinoq dev
 
 Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and BullMQ, previews
 what is missing, refuses to overwrite generated Rules, and prints a next action
-for every failure. Open the URL printed by `rhinoq dev` to see a technically
-successful Execution whose real-world Task is `uncertain`.
+for every failure. Open the Workbench URL printed by `rhinoq dev` to see a
+technically successful Execution whose real-world Task is `uncertain`. The
+Node-only path mounts the same self-contained, read-only Task Workbench used by
+the SDK, including live state buckets and per-attempt detail; it binds to
+loopback and does not enable operator actions.
 
 The five-minute path uses the isolated Task profile. To continue into the
 Verified Tasks loop, build the Go CLI and Gateway from the same checkout, apply
@@ -233,6 +236,29 @@ separate from application-specific business mappings. Reference adapters exist
 for Stripe and provisioning/storage providers.
 
 See [ProviderOperation](./docs/provider-operations.md).
+
+## Stop duplicate application writes across BullMQ retries
+
+For a fan-out item, a retry can be a second handler run even when the business
+write from the first run already committed. The embedded Task profile provides
+an item-scoped transaction gate without replacing BullMQ:
+
+```ts
+const result = await tasks.onceForItem(executionId, 'deduct-credits', async (tx) => {
+  await tx.query(
+    'INSERT INTO credit_logs (item_id) VALUES ($1)',
+    [itemId],
+  );
+  return 'written';
+});
+// A later BullMQ retry receives { executed: false } for this item/effect key.
+```
+
+The claim and the application write commit together in PostgreSQL, and the
+claim spans RhinoQ attempt history per `itemKey`. If the callback rolls back,
+the next retry may try again. This protects transactional application writes;
+it is not an exactly-once promise for an external HTTP/provider call, which
+still needs ProviderOperation, idempotency and confirmation.
 
 ## Safe recovery, not arbitrary database editing
 
@@ -360,6 +386,7 @@ exists but is not the default browser polling shape.
 | Capability | Status |
 |---|---|
 | ProviderOperation identity, idempotency, evidence and confirmation | implemented; memory/PostgreSQL tested |
+| Transactional per-item application effect gate | implemented in the embedded Task profile; callback must use its supplied PostgreSQL transaction |
 | `uncertain` Task state linked to provider uncertainty | implemented |
 | Stripe and provisioning/storage reference adapters | implemented in Node SDK |
 | Rules, Findings and Evidence Workbench | implemented |

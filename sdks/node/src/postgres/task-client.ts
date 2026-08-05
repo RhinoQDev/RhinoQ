@@ -19,7 +19,7 @@ import type {
 import type { TaskClient } from '../tasks/client.js';
 import type { SqlExecutor } from './producer.js';
 import { migrateTaskSchema } from './task-schema.js';
-import type { SqlPool } from './task-schema.js';
+import type { SqlConnection, SqlPool } from './task-schema.js';
 
 interface TaskRow {
   id: string;
@@ -245,6 +245,82 @@ export class PostgresTaskClient implements TaskClient {
       ],
     );
     return this.getTask(taskId);
+  }
+
+  /**
+   * Runs one named application effect at most once for an item, with the
+   * claim and the caller's business writes in one PostgreSQL transaction.
+   *
+   * The callback must use the supplied transaction connection. A retry after a
+   * committed callback returns `{ executed: false }`; a callback error rolls
+   * the claim back so a later retry can try again. This protects transactional
+   * application writes such as credit logs or inventory rows. It does not make
+   * an HTTP/provider call exactly-once; use ProviderOperation for that boundary.
+   */
+  async onceForItem<T>(
+    executionId: string,
+    effectKey: string,
+    operation: (transaction: SqlConnection) => Promise<T>,
+  ): Promise<{ executed: boolean; value?: T }> {
+    if (!executionId?.trim() || !effectKey?.trim()) {
+      throw new TypeError('executionId and effectKey are required');
+    }
+    if (typeof operation !== 'function') {
+      throw new TypeError('onceForItem requires a transaction callback');
+    }
+    const pool = this.executor as Partial<SqlPool>;
+    if (typeof pool.connect !== 'function') {
+      throw new TypeError('onceForItem requires a PostgreSQL pool-backed Task client');
+    }
+
+    const connection = await pool.connect();
+    let inTransaction = false;
+    try {
+      await connection.query('BEGIN', []);
+      inTransaction = true;
+      let claimed: boolean;
+      try {
+        const result = await connection.query<{ claimed: boolean }>(
+          `SELECT rhinoq_task.claim_item_effect($1, $2) AS claimed`,
+          [executionId, effectKey],
+        );
+        claimed = result.rows[0]?.claimed === true;
+      } catch (error) {
+        await connection.query('ROLLBACK', []).catch(() => undefined);
+        inTransaction = false;
+        throw mapDatabaseError(error);
+      }
+
+      if (!claimed) {
+        await connection.query('COMMIT', []);
+        inTransaction = false;
+        return { executed: false };
+      }
+
+      let value: T;
+      try {
+        value = await operation(connection);
+      } catch (error) {
+        await connection.query('ROLLBACK', []).catch(() => undefined);
+        inTransaction = false;
+        throw error;
+      }
+
+      try {
+        await connection.query('COMMIT', []);
+        inTransaction = false;
+      } catch (error) {
+        await connection.query('ROLLBACK', []).catch(() => undefined);
+        inTransaction = false;
+        throw mapDatabaseError(error);
+      }
+      return { executed: true, value };
+    } finally {
+      if (inTransaction) {
+        await connection.query('ROLLBACK', []).catch(() => undefined);
+      }
+      connection.release();
+    }
   }
 
   async bindTaskExecution(

@@ -166,11 +166,13 @@ test('BullMQ Task bridge records fan-out executions without completing the aggre
   await bridge.track({
     task: { id: 'task_batch', type: 'bulk-download', definitionVersion: 1 },
     executionId: 'exec_item_1',
+    itemKey: 'item-1',
     jobId: 'bull_item_1',
   });
   await bridge.track({
     task: { id: 'task_batch', type: 'bulk-download', definitionVersion: 1 },
     executionId: 'exec_item_2',
+    itemKey: 'item-2',
     jobId: 'bull_item_2',
   });
 
@@ -184,6 +186,29 @@ test('BullMQ Task bridge records fan-out executions without completing the aggre
 
   assert.equal((await client.getTask('task_batch')).state, 'running');
   assert.equal(client.executions.get('exec_item_2').state, 'succeeded');
+  bridge.close();
+});
+
+test('track refuses to start an unkeyed second item instead of merging it into default', async () => {
+  const events = new FakeQueueEvents();
+  const client = new FakeTaskClient();
+  const bridge = new BullMQTaskBridge({ client, events, terminalProjection: 'execution-only' });
+
+  await bridge.track({
+    task: { id: 'task_key_guard', type: 'bulk-download', definitionVersion: 1 },
+    executionId: 'exec_key_guard_1',
+    jobId: 'bull_key_guard_1',
+  });
+
+  await assert.rejects(
+    bridge.track({
+      task: { id: 'task_key_guard', type: 'bulk-download', definitionVersion: 1 },
+      executionId: 'exec_key_guard_2',
+      jobId: 'bull_key_guard_2',
+    }),
+    /requires itemKey for a second job/,
+  );
+  assert.equal(client.executions.has('exec_key_guard_2'), false);
   bridge.close();
 });
 

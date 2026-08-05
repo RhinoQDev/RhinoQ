@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `npx rhinoq dev` now mounts the self-contained read-only Task Workbench at
+  `/rhinoq`, so the Node-only onboarding path shows live state buckets and
+  per-attempt detail instead of a latest-25-Tasks table.
+- `BullMQTaskBridge.track()` now fails closed when a second job omits
+  `itemKey` after an unkeyed item already exists. A missing key otherwise turns
+  fan-out items into attempts of one `default` item and corrupts settlement.
+- BullMQ dispatch bridges warn when the supplied Queue exposes no default
+  `attempts` retry policy. Per-job options remain supported; the warning makes
+  an intentional policy explicit before a production failure hides retries.
+- The embedded Task-only PostgreSQL profile adds `onceForItem()`, which claims
+  a named effect across BullMQ attempts in the same transaction as the
+  application write and returns `{ executed: false }` for a committed repeat.
 - BullMQ retries now close the current RhinoQ Execution on every `failed`
   event, while `isTerminalFailure` controls only parent-Task terminalization.
   A one-based attempt in a reconciliation observation also repairs a gap where

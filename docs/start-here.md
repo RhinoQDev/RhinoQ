@@ -104,7 +104,7 @@ recovery.
 | Your goal | Start here | What it proves |
 |---|---|---|
 | understand the full product story | [official Docker demo](#run-the-full-stripe-shaped-failure) | completed -> uncertain -> Finding -> approved repair -> verified |
-| add user-facing Task status to Node/PostgreSQL | [five-minute Node tour](#take-the-five-minute-node-tour) | Task schema, health check and light dev view |
+| add user-facing Task status to Node/PostgreSQL | [five-minute Node tour](#take-the-five-minute-node-tour) | Task schema, health check and local Task Workbench |
 | keep an existing BullMQ worker | [BullMQ bridge](#connect-an-existing-bullmq-queue) | durable Task/Execution identity and lifecycle projection |
 | protect an external provider call | [ProviderOperation](#protect-an-external-provider-operation) | idempotency identity, uncertainty and confirmation |
 | inspect evidence and Findings | [Workbench](#open-the-dashboard) | local evidence, integrity and recovery interface |
@@ -249,15 +249,17 @@ Why: a new project has no real job yet. The fixture creates a Task whose BullMQ-
 shaped Execution is `succeeded` while the real-world Task is `uncertain`. It is
 sample data for learning, not a load generator.
 
-### 8. Open the light dashboard
+### 8. Open the local Task Workbench
 
 ```bash
 npx rhinoq dev
 ```
 
-Open <http://127.0.0.1:8788>. The command reads only the latest 25 Tasks,
-binds only to loopback and shows Task ID, type, real-world state and version.
-No frontend project, account, API token or telemetry service is required.
+Open <http://127.0.0.1:8788/rhinoq>. The command mounts the SDK's
+self-contained Workbench: live state buckets, Task detail, item attempts and
+server-side BullMQ runtime references. It binds only to loopback, stays
+read-only and requires no frontend project, account, API token or telemetry
+service.
 
 Use a different port when needed:
 
@@ -265,8 +267,9 @@ Use a different port when needed:
 npx rhinoq dev --port=8798
 ```
 
-Press `Ctrl+C` to stop it. This lightweight view is for onboarding. It is not
-the full Evidence Workbench and has no operator actions.
+Press `Ctrl+C` to stop it. This is the Task-profile Workbench for onboarding;
+the Go `rhinoq workbench` remains the full Verified Tasks Evidence Workbench
+for Rules, Findings, effects and repair actions.
 
 ## Run the full Stripe-shaped failure
 
@@ -331,7 +334,7 @@ RhinoQ has two local visual surfaces:
 
 | Surface | Command | Use it for |
 |---|---|---|
-| Task dev view | `npx rhinoq dev` | first install and user-facing Task state |
+| Task Workbench | `npx rhinoq dev` | first install and user-facing Task state |
 | Workbench | `rhinoq workbench` | jobs, Needs Attention, Findings, Rules, attempts, effects, outcomes, audit and safe repair |
 
 ### Try Workbench without a database

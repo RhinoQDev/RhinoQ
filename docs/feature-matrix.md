@@ -35,6 +35,7 @@ execution platforms.
 | Audit trail | operational events | replay events use a per-job SHA-256 hash chain; signed checkpoints pending |
 | Flow/dependency graph | supported | intentionally not v0.1 |
 | Effect uncertainty | not external-effect aware by default | Effect Ledger implemented |
+| Transactional per-item application effect | application-owned idempotency write | Task-only `onceForItem()` claim is atomic with the supplied PostgreSQL transaction and spans BullMQ retry attempts; external providers still use ProviderOperation |
 | Business outcome | not native | canonical per-Rule/per-subject Outcome implemented; Findings are its operational projection, with stale-observation protection and unknown grace escalation |
 | Integrity Rules | application-specific | integrity-only facade, versioned job/table SQL contract, tri-state read-only evaluator, Explain gate, bounded CLI scan and fenced periodic scheduler implemented |
 | Metrics export | Prometheus exporters | `/metrics` text format implemented, no client library dependency |

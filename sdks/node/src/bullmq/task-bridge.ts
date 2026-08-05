@@ -45,6 +45,13 @@ export interface BullMQQueue {
     data: unknown,
     options: Record<string, unknown> & { jobId: string },
   ): Promise<{ id?: string } | undefined>;
+  /**
+   * BullMQ exposes queue defaults through `opts.defaultJobOptions`. The
+   * direct property is accepted too so adapters can pass a small structural
+   * fake without importing BullMQ's concrete type.
+   */
+  defaultJobOptions?: Record<string, unknown>;
+  opts?: { defaultJobOptions?: Record<string, unknown> };
 }
 
 export interface BullMQEvent {
@@ -392,6 +399,7 @@ export class BullMQTaskBridge {
     this.metrics = options.metrics;
     this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
     this.onError = options.onError;
+    this.warnOnQueueRetryPolicy();
     this.projectorLease = options.projectorLease;
     this.leaseVerifyIntervalMs = options.leaseVerifyIntervalMs ?? 15_000;
     this.onLeaseLost = options.onLeaseLost;
@@ -572,6 +580,9 @@ export class BullMQTaskBridge {
    * bridge restart because the runtime/external ID lookup is durable.
    */
   async track(binding: BullMQTaskBinding): Promise<TaskSnapshot> {
+    if (binding.itemKey !== undefined && !binding.itemKey.trim()) {
+      throw new TypeError('BullMQTaskBridge.track itemKey must be a non-empty string when supplied');
+    }
     let snapshot: TaskSnapshot;
     try {
       snapshot = await this.client.getTask(binding.task.id);
@@ -586,6 +597,21 @@ export class BullMQTaskBridge {
     if (existing) {
       this.assertExistingBinding(existing, binding, snapshot.id);
       return this.ensureTask(snapshot.id, 'queued');
+    }
+
+    // An omitted key means the embedded profile stores `default`. That is a
+    // useful shorthand for a one-item Task, but after the first unkeyed item
+    // it becomes an irreversible fan-out accounting bug: every later job is
+    // another attempt of the same item. Fail before the second Execution is
+    // written and point the caller at the explicit fan-out path.
+    if (
+      binding.itemKey === undefined &&
+      snapshot.executions?.some((execution) => (execution.itemKey ?? 'default') === 'default')
+    ) {
+      throw new TypeError(
+        `BullMQTaskBridge.track requires itemKey for a second job on Task ${snapshot.id}; ` +
+          'use a stable itemKey for every fan-out item or use dispatchMany()',
+      );
     }
 
     try {
@@ -737,6 +763,28 @@ export class BullMQTaskBridge {
         'job is then treated as "the attempt may still retry", so the settled check ' +
         'never runs after a failure and a batch whose last item fails will never ' +
         'settle. Supply isTerminalFailure — BullMQ knows when a job is out of attempts.',
+    );
+  }
+
+  /**
+   * Dispatch passes per-job options through, but a Queue created without an
+   * explicit default retry policy is easy to mistake for one configured with
+   * the application's usual attempts. Warn once at construction while the
+   * Queue object and deployment context are still visible.
+   */
+  private warnOnQueueRetryPolicy(): void {
+    const queue = this.bullQueue;
+    if (!queue) {
+      return;
+    }
+    const defaults = queue.defaultJobOptions ?? queue.opts?.defaultJobOptions;
+    if (!defaults || Object.prototype.hasOwnProperty.call(defaults, 'attempts')) {
+      return;
+    }
+    this.warn(
+      'RhinoQ: BullMQ Queue has no default attempts retry policy. Failed jobs retry only ' +
+        'when Queue.add supplies attempts; verify this is intentional or configure ' +
+        'defaultJobOptions.attempts.',
     );
   }
 

@@ -288,6 +288,37 @@ test('track refuses to reuse a BullMQ job identity for another Execution', async
   }), /already bound to Execution exec-1/);
 });
 
+test('the bridge warns when a dispatch Queue has no default retry policy', () => {
+  const warnings = [];
+  const bridge = new BullMQTaskBridge({
+    client: {},
+    events: { on() {}, off() {} },
+    queue: { add: async () => undefined, opts: { defaultJobOptions: {} } },
+    runtimeScope: 'retry-policy',
+    terminalProjection: 'single-execution',
+    onWarning: (warning) => warnings.push(warning),
+  });
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /no default attempts retry policy/);
+  bridge.close();
+});
+
+test('an explicit Queue retry policy is not warned about', () => {
+  const warnings = [];
+  const bridge = new BullMQTaskBridge({
+    client: {},
+    events: { on() {}, off() {} },
+    queue: { add: async () => undefined, opts: { defaultJobOptions: { attempts: 3 } } },
+    runtimeScope: 'retry-policy-configured',
+    terminalProjection: 'single-execution',
+    onWarning: (warning) => warnings.push(warning),
+  });
+
+  assert.deepEqual(warnings, []);
+  bridge.close();
+});
+
 test('concurrent deterministic dispatch converges when another caller wins the bind', async () => {
   const task = {
     schemaVersion: 1, entityVersion: 1, id: 'race-task', type: 'work',

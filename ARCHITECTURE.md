@@ -82,6 +82,7 @@ This layer contains stable types and protocols visible to adopters:
 - versioned `TaskSnapshot` with `schemaVersion` and `entityVersion`;
 - `TaskProgress`, `TaskExecutionSummary` and command preconditions;
 - `EffectDefinition`, `ConfirmationPolicy` and `EffectState`;
+- transactional per-item application-effect claim result;
 - `OutcomeContract`, `OutcomeState`, `RetryPolicy`, `Lease` and `Attempt`;
 - `Finding`, `RepairPlan`, error envelopes, event envelopes, correlation and
   tenant context.
@@ -111,6 +112,7 @@ Application owns use cases, transaction boundaries and product orchestration:
 
 - `EnqueueJob`, `ClaimJobs`, `RunAttempt`;
 - `BeginEffect`, `ConfirmEffect`, `VerifyOutcome`;
+- transactional per-item application-effect claims through the Task profile;
 - `RegisterRule`, `ExplainRule`, `EvaluateRule` and Finding projection;
 - `RetryJob`, `ResumeJob`, `RepairJob`;
 - `PauseQueue`, `DrainQueue` and `CancelJob`.
@@ -266,6 +268,13 @@ There are three supported deployment paths:
 Go owns state transitions, leases, fencing, retry decisions and the Effect
 Ledger. Node coordinates wire lifecycle and reports observations. It does not
 implement a second job state machine.
+
+The Task-only PostgreSQL profile also exposes `onceForItem()` as a transaction
+wrapper around the versioned `rhinoq_task.claim_item_effect` command. The
+cross-attempt claim is decided in PostgreSQL and the callback receives the
+same checked-out connection; Node does not implement a second effect state
+machine. Provider calls still require ProviderOperation, idempotency and
+confirmation.
 
 ### Local Workbench
 

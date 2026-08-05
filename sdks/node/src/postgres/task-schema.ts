@@ -1,7 +1,7 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 5;
-export const TASK_SCHEMA_NAME = '005_items_settled_signal';
+export const TASK_SCHEMA_VERSION = 6;
+export const TASK_SCHEMA_NAME = '006_transactional_item_effect';
 
 /**
  * Task-only PostgreSQL profile.
@@ -809,12 +809,103 @@ END;
 $$;
 `;
 
+/**
+ * Transactional application effect gate.
+ *
+ * An external BullMQ retry can run the same business handler again. This
+ * command lets an application claim a named effect for one item inside the
+ * same PostgreSQL transaction as its business write. The marker is kept on
+ * the current Execution, while the lookup spans all attempts for the item,
+ * so a retry sees the committed claim instead of running the write again.
+ * It is deliberately not an external-provider exactly-once promise: those
+ * calls still need ProviderOperation/idempotency/confirmation.
+ */
+export const TASK_SCHEMA_V6_SQL = String.raw`
+ALTER TABLE rhinoq_task.executions
+  ADD COLUMN IF NOT EXISTS effect_keys text[] NOT NULL DEFAULT ARRAY[]::text[];
+
+ALTER TABLE rhinoq_task.executions
+  DROP CONSTRAINT IF EXISTS executions_effect_keys_cardinality_check;
+ALTER TABLE rhinoq_task.executions
+  ADD CONSTRAINT executions_effect_keys_cardinality_check
+  CHECK (cardinality(effect_keys) <= 256);
+
+CREATE OR REPLACE FUNCTION rhinoq_task.claim_item_effect(
+  p_execution_id text,
+  p_effect_key text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_task_id text;
+  v_item_key text;
+  v_current_id text;
+  v_effect_key text := btrim(COALESCE(p_effect_key, ''));
+BEGIN
+  IF btrim(COALESCE(p_execution_id, '')) = ''
+     OR v_effect_key = '' OR length(v_effect_key) > 256 THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_ITEM_EFFECT');
+  END IF;
+
+  SELECT task_id, item_key INTO v_task_id, v_item_key
+  FROM rhinoq_task.executions
+  WHERE id = p_execution_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_execution_id);
+  END IF;
+
+  -- Lock the parent before inspecting all attempts. Retry creation and this
+  -- claim then serialize on the same Task row instead of racing a new item
+  -- attempt into the middle of the scan.
+  PERFORM 1 FROM rhinoq_task.tasks WHERE id = v_task_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', v_task_id);
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM rhinoq_task.executions
+    WHERE task_id = v_task_id
+      AND item_key = v_item_key
+      AND v_effect_key = ANY(effect_keys)
+  ) THEN
+    RETURN false;
+  END IF;
+
+  SELECT id INTO v_current_id
+  FROM rhinoq_task.executions
+  WHERE task_id = v_task_id
+    AND item_key = v_item_key
+    AND superseded_at IS NULL
+  ORDER BY attempt DESC, id DESC
+  LIMIT 1
+  FOR UPDATE;
+  IF v_current_id IS NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_execution_id);
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET effect_keys = array_append(effect_keys, v_effect_key),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = v_current_id;
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = v_task_id;
+  RETURN true;
+END;
+$$;
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
   { version: 3, name: '003_execution_supersede_expand', sql: TASK_SCHEMA_V3_SQL },
   { version: 4, name: '004_execution_supersede_contract', sql: TASK_SCHEMA_V4_SQL },
-  { version: 5, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V5_SQL },
+  { version: 5, name: '005_items_settled_signal', sql: TASK_SCHEMA_V5_SQL },
+  { version: 6, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V6_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {
