@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/madebyduy/RhinoQ/internal/adapters/postgres"
 	"github.com/madebyduy/RhinoQ/internal/infrastructure/config"
 	"github.com/madebyduy/RhinoQ/internal/infrastructure/migrations"
 )
@@ -266,6 +267,34 @@ func runDoctor(reportOnly bool) int {
 				} else {
 					fmt.Printf("  PASS %s\n", migrations.Summary(statuses))
 				}
+			}
+
+			// Reported separately from the role check above because the
+			// consequence is different in kind. A superuser evaluating Rules
+			// is a privilege wider than it needs to be. A superuser serving
+			// tenants means PostgreSQL is ignoring every tenant policy and all
+			// tenants share one dataset — with nothing in any log to say so.
+			// That is a FAIL, and it is the one finding here an operator
+			// cannot discover by reading output from a running system.
+			fmt.Println("Tenant isolation")
+			report, inspectErr := postgres.InspectTenantIsolation(dbCtx, db)
+			switch {
+			case inspectErr != nil:
+				failures++
+				fmt.Printf("  FAIL cannot determine whether tenant isolation is in force: %v\n", inspectErr)
+				fmt.Println("       Treat this as no isolation until it can be answered.")
+			case !report.Holds():
+				failures++
+				fmt.Println("  FAIL tenant isolation is not in force")
+				fmt.Printf("       %s\n", report.Explain())
+				fmt.Println("       Verify: rhinoq doctor")
+			case report.TenantSession == "":
+				warnings++
+				fmt.Printf("  WARN policies are in force for %s, but this session announced no tenant\n", report.Role)
+				fmt.Println("       Reads return nothing and writes fail. That is safe, and useless.")
+				fmt.Println("       Fix: append ?options=-c%20rhinoq.tenant_id%3D<tenant> to RHINOQ_DATABASE_URL.")
+			default:
+				fmt.Printf("  PASS %s\n", report.Explain())
 			}
 		}
 	}

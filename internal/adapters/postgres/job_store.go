@@ -486,7 +486,7 @@ func (s *JobStore) PauseQueue(ctx context.Context, name string) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO rhinoq_queue_controls (queue_name, paused_at)
 		VALUES ($1, now())
-		ON CONFLICT (queue_name) DO UPDATE SET paused_at = now()`, name)
+		ON CONFLICT (tenant_id, queue_name) DO UPDATE SET paused_at = now()`, name)
 	return err
 }
 
@@ -506,7 +506,7 @@ func (s *JobStore) SetQueueRateLimit(ctx context.Context, name string, limit por
 		INSERT INTO rhinoq_queue_controls
 			(queue_name, rate_limit_max, rate_limit_window_ms, rate_window_started_at, rate_window_count)
 		VALUES ($1, $2, $3, NULL, 0)
-		ON CONFLICT (queue_name) DO UPDATE
+		ON CONFLICT (tenant_id, queue_name) DO UPDATE
 		SET rate_limit_max = EXCLUDED.rate_limit_max,
 		    rate_limit_window_ms = EXCLUDED.rate_limit_window_ms,
 		    rate_window_started_at = NULL,
@@ -570,7 +570,7 @@ func (s *JobStore) SetQueueAdmission(ctx context.Context, name string, policy ad
 			(queue_name, admission_max_pending, admission_reserved_critical,
 			 admission_overflow_mode, admission_delay_ms, admission_retry_after_ms)
 		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (queue_name) DO UPDATE
+		ON CONFLICT (tenant_id, queue_name) DO UPDATE
 		SET admission_max_pending = EXCLUDED.admission_max_pending,
 		    admission_reserved_critical = EXCLUDED.admission_reserved_critical,
 		    admission_overflow_mode = EXCLUDED.admission_overflow_mode,
