@@ -673,7 +673,9 @@ await bridge.dispatchMany(files.map((file) => ({
   task,
   itemKey: file.id,               // stable across retries of this file
   executionId: `${task.id}:${file.id}`,
-  jobId: `${task.id}:${file.id}`,
+  // Not `:` — BullMQ rejects a custom job ID containing one unless it splits
+  // into exactly three parts. executionId is RhinoQ's own and is unaffected.
+  jobId: `${task.id}__${file.id}`,
   job: { name: 'transcode', data: { key: file.storageKey } },
 })));
 ```

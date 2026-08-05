@@ -550,3 +550,44 @@ function newHarness({
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+
+// BullMQ refuses a custom job ID containing ':' unless it splits into exactly
+// three parts. The natural composite has two, and this README recommended it
+// until an example was actually run. Dispatch reserves the durable Execution
+// before Queue.add, so without a pre-flight check the identity is written and
+// the enqueue then throws from inside BullMQ.
+test('a job ID BullMQ would reject is refused before anything is reserved', async () => {
+  const reads = [];
+  const bridge = new BullMQTaskBridge({
+    client: { async getTask(id) { reads.push(id); throw new Error('should not be reached'); } },
+    events: { on() {}, off() {} },
+    queue: { async add() { throw new Error('should not be reached'); } },
+    runtimeScope: 'reports',
+    terminalProjection: 'execution-only',
+  });
+  const item = (jobId) => ({
+    task: { id: 'task-1', type: 'export', definitionVersion: 1 },
+    itemKey: 'item-a',
+    executionId: 'task-1:item-a',
+    jobId,
+    job: { name: 'export', data: {} },
+  });
+
+  try {
+    await assert.rejects(
+      bridge.dispatch(item('task-1:item-a')),
+      (error) => /may not contain/.test(error.message) && /task-1__item-a/.test(error.message),
+    );
+    await assert.rejects(
+      bridge.dispatchMany([item('ok-1'), item('task-1:item-b')]),
+      /may not contain/,
+    );
+    assert.deepEqual(reads, [], 'nothing may be reserved for a job that cannot be enqueued');
+
+    // Three parts is exactly what BullMQ still allows, so RhinoQ must not
+    // invent a stricter rule than the runtime it is bridging.
+    await assert.rejects(bridge.dispatch(item('a:b:c')), /should not be reached/);
+  } finally {
+    bridge.close();
+  }
+});

@@ -66,9 +66,12 @@ test('a client that cannot settle items warns once instead of never firing', asy
     await h.finish('bull-job-1');
 
     assert.equal(h.settled.length, 0);
-    assert.equal(h.warnings.length, 1);
-    assert.match(h.warnings[0], /cannot settle items/);
-    assert.match(h.warnings[0], /never fire/);
+    // Count this warning, not every warning: the constructor also reports a
+    // settled signal configured without isTerminalFailure, which is a
+    // different trap and has its own test.
+    const unsupported = h.warnings.filter((warning) => /cannot settle items/.test(warning));
+    assert.equal(unsupported.length, 1, 'the warning fires once, not once per event');
+    assert.match(unsupported[0], /never fire/);
   } finally {
     h.bridge.close();
   }
@@ -170,3 +173,44 @@ function newHarness({ items, supportsSettle = true, withCallback = true, metrics
     finish(jobId) { return bridge.project('completed', { jobId }); },
   };
 }
+
+// Without isTerminalFailure every failure is "may still retry", so the settled
+// check does not run after one. A batch whose last item fails then never
+// settles: every item terminal, every counter right, and a callback that stays
+// silent. Measured against real PostgreSQL and BullMQ before this warning
+// existed — 46 succeeded, 4 failed, items_settled_at still null.
+test('a settled signal that cannot fire after a failure is called out', () => {
+  const warnings = [];
+  const bridge = new BullMQTaskBridge({
+    client: {},
+    events: { on() {}, off() {} },
+    runtimeScope: `settle-${Math.random().toString(36).slice(2)}`,
+    terminalProjection: 'execution-only',
+    onItemsSettled: () => {},
+    onWarning: (warning) => warnings.push(warning),
+  });
+  try {
+    assert.match(warnings.join('\n'), /isTerminalFailure/);
+    assert.match(warnings.join('\n'), /never settle/);
+  } finally {
+    bridge.close();
+  }
+});
+
+test('supplying isTerminalFailure silences it', () => {
+  const warnings = [];
+  const bridge = new BullMQTaskBridge({
+    client: {},
+    events: { on() {}, off() {} },
+    runtimeScope: `settle-${Math.random().toString(36).slice(2)}`,
+    terminalProjection: 'execution-only',
+    onItemsSettled: () => {},
+    isTerminalFailure: () => true,
+    onWarning: (warning) => warnings.push(warning),
+  });
+  try {
+    assert.deepEqual(warnings, []);
+  } finally {
+    bridge.close();
+  }
+});

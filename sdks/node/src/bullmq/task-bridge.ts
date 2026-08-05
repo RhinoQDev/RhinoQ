@@ -395,6 +395,7 @@ export class BullMQTaskBridge {
     this.projectorLease = options.projectorLease;
     this.leaseVerifyIntervalMs = options.leaseVerifyIntervalMs ?? 15_000;
     this.onLeaseLost = options.onLeaseLost;
+    this.warnIfSettlementCannotFireAfterAFailure(options);
     if (this.projectorLease && !this.runtimeScope) {
       throw new TypeError('BullMQTaskBridge projectorLease requires runtimeScope');
     }
@@ -617,6 +618,7 @@ export class BullMQTaskBridge {
    */
   async dispatch(input: BullMQTaskDispatch): Promise<TaskSnapshot> {
     this.assertDispatchReady();
+    this.assertDispatchableJobIds([input]);
     const snapshot = await this.reserve(input);
     await this.dispatchReserved(input);
     return this.ensureTask(snapshot.id, 'queued');
@@ -673,6 +675,7 @@ export class BullMQTaskBridge {
     if (!taskId || inputs.some((input) => input.task.id !== taskId)) {
       throw new TypeError('dispatchMany items must belong to one Task');
     }
+    this.assertDispatchableJobIds(inputs);
     assertConsistentBatch(inputs);
     // Establish the parent before parallel fan-out. Concurrent createTask
     // races are recoverable, but avoiding them removes noise from the hot path.
@@ -698,6 +701,56 @@ export class BullMQTaskBridge {
     }
     if (!this.runtimeScope) {
       throw new TypeError('BullMQTaskBridge dispatch requires runtimeScope');
+    }
+  }
+
+  /**
+   * BullMQ refuses a custom job ID containing `:` unless it splits into exactly
+   * three parts, a compatibility rule for old repeatable jobs. The natural
+   * composite — `${taskId}:${itemKey}` — has two, so it is rejected.
+   *
+   * Checking here matters because dispatch reserves the durable Execution
+   * before `Queue.add`. Without this the identity is written, the enqueue
+   * throws from inside BullMQ, and the caller is left holding a reserved item
+   * that never reached the queue — for a reason that names neither RhinoQ nor
+   * the field responsible.
+   */
+  /**
+   * A fan-out whose last item fails would never settle.
+   *
+   * `failIfTerminal` treats a failure as non-terminal when no classifier is
+   * supplied — correct in itself, because the attempt may still retry — but
+   * the Execution is written `failed` either way. The settled check therefore
+   * does not run after a failure, and if the last item to close is a failed
+   * one the signal never fires: the batch sits `running` with every item
+   * terminal and every counter correct.
+   *
+   * Nothing else reports this. The only symptom is a callback that stays
+   * silent, which is indistinguishable from a batch that has not finished.
+   */
+  private warnIfSettlementCannotFireAfterAFailure(options: BullMQTaskBridgeOptions): void {
+    if (!options.onItemsSettled || options.isTerminalFailure) {
+      return;
+    }
+    this.warn(
+      'RhinoQ: onItemsSettled is configured without isTerminalFailure. Every failed ' +
+        'job is then treated as "the attempt may still retry", so the settled check ' +
+        'never runs after a failure and a batch whose last item fails will never ' +
+        'settle. Supply isTerminalFailure — BullMQ knows when a job is out of attempts.',
+    );
+  }
+
+  private assertDispatchableJobIds(bindings: readonly BullMQTaskBinding[]): void {
+    for (const binding of bindings) {
+      const jobId = binding.jobId;
+      if (jobId.includes(':') && jobId.split(':').length !== 3) {
+        throw new TypeError(
+          `BullMQ rejects the job ID ${JSON.stringify(jobId)}: a custom ID may not contain ':' ` +
+            'unless it splits into exactly three parts. Use another separator — ' +
+            `for example ${JSON.stringify(jobId.replaceAll(':', '__'))}. ` +
+            'itemKey and executionId are RhinoQ identities and are unaffected.',
+        );
+      }
     }
   }
 

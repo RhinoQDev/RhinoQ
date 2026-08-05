@@ -1,0 +1,21 @@
+{
+  "name": "rhinoq-example-fanout-bullmq",
+  "private": true,
+  "type": "module",
+  "description": "Fan-out over BullMQ with progress, cancellation and an exactly-once settled signal",
+  "scripts": {
+    "migrate": "rhinoq-task",
+    "start": "node server.mjs",
+    "doctor": "rhinoq doctor"
+  },
+  "dependencies": {
+    "@rhinoq/node": "file:../../sdks/node",
+    "bullmq": "^5.81.3",
+    "express": "^4.22.2",
+    "ioredis": "^5.11.1",
+    "pg": "^8.22.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
