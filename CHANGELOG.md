@@ -2,6 +2,118 @@
 
 ## Unreleased
 
+- **Fixed (correctness): a BullMQ fan-out could hang forever, and usually did.**
+  On a 50-item batch the example settled on roughly one run in three. Every
+  stuck item had `completed` in BullMQ and a non-terminal Execution in RhinoQ,
+  and the stuck indexes always clustered at the front of the batch. Three
+  separate causes, all in the dispatch window:
+  - A job whose worker finished between `Queue.add` and the durable bind
+    produced its entire event sequence against an attempt still at
+    `pending_dispatch`. The state machine refused those events and the bridge
+    dropped them silently, so the item stayed non-terminal permanently.
+    `pending_dispatch -> running|succeeded|failed|stalled` is now legal for an
+    attempt that already carries its runtime identity, and `bind_execution` is a
+    no-op rather than an error when its first event won the race.
+  - `complete()` moved the *Task* to running before closing the attempt, and
+    that command fences on the Task version — which every concurrent dispatch,
+    bind and completion is advancing. The read-modify-write lost repeatedly, the
+    projection threw, and the item was never marked succeeded. The attempt is
+    now closed first, on its own per-attempt fence.
+  - Fan-out progress was a read-modify-write per completion, and the
+    exactly-once settled signal ran downstream of it, so a lost progress write
+    took the batch signal with it. `rhinoq_task.sync_item_progress` recomputes
+    progress under the Task row lock in one statement with no fence to lose, and
+    the settled signal now fires even when the aggregate write did not survive.
+- **Fixed (correctness): two events for one job could be applied in either
+  order.** QueueEvents delivers a job's events in order, but the listener
+  started each projection without waiting for the previous one. On a fast job
+  the `active` of a retry and the `failed` of the attempt before it overlap, and
+  applying them backwards made the bridge open an attempt the runtime had
+  already finished with — which then sat `dispatched` forever waiting for events
+  that were delivered before it existed. Roughly one item in a hundred: frequent
+  enough to hang a batch, rare enough to look like something else. Projections
+  are now chained per job id, so different items still project concurrently.
+  Added `bridge.drain()` for the shutdown window between an event arriving and
+  being written down.
+- **Fixed (correctness): a BullMQ retry was never recorded as a second
+  attempt.** BullMQ emits no `failed` QueueEvent for an attempt it is about to
+  retry — the sequence is `active -> delayed -> waiting -> active -> failed` —
+  so the retried run was projected onto attempt 1 and the per-attempt history
+  claimed every item ran exactly once. The bridge now reads `delayed` and ends
+  the attempt as `stalled`, which is also the one state the settled signal
+  refuses to count, so a batch cannot be declared complete in the gap between an
+  attempt ending and its replacement starting.
+- **Fixed (correctness): cancelling a fan-out stopped at the first job it could
+  not stop.** One item that happened to be running left the other 199 queued
+  jobs to run to completion after the user pressed Cancel. Every job is now
+  asked, the outcome reports the worst result, and the attempts that did stop
+  are closed — so a removed job cannot strand its Execution at `dispatched`
+  forever, which would have made cancelling the reason a batch never finishes.
+- **Fixed: `POST /tasks/:id/cancel` rejected almost every cancellation of a busy
+  batch.** `expectedVersion` is the right fence for a read-modify-write and the
+  wrong one for an intent: a fan-out advances the Task version several times a
+  second, so a version a browser read was already stale when the request landed,
+  and the busier the batch the more reliably Cancel returned 409. The field is
+  now optional; omitting it converges server-side. Callers who want the fence
+  keep it by sending it.
+- **Added: `npx create-rhinoq-app`.** One command to a running fan-out — it
+  brings up PostgreSQL and Redis on ports it checks are free, applies the
+  schema, runs a 50-item batch and opens the browser. Includes a button that
+  deletes the output of a job the queue reported as `completed`, and a
+  verification pass that finds it.
+- **Added: `rhinoq({ pool, queue, events })`.** A high-level entry point that
+  makes the decisions with one right answer for a queue-backed fan-out —
+  `terminalProjection`, the retry projection, the projector lease, the terminal
+  failure classifier, the reconciliation sweep and cancellation — and exposes
+  `dispatch`, `cancel`, `audit`, `reconcile`, `routes()` and `workbench()`. The
+  long-form API is unchanged and reachable through `app.bridge`/`app.tasks`.
+- **Added: `objectExists`, `httpReadBack`, `rowMatches` and
+  `recordVerification`.** A Rule is SQL under a role that may not have network
+  functions, so no Rule can HEAD an object or read a provider back. These are
+  the loop every adopter was writing, with `unknown` kept as a third outcome so
+  a timeout cannot vote that a subject is fine.
+- **Added: `npm run smoke` in `examples/fanout-bullmq`, gating in CI.** Runs
+  batches in two shapes — zero-length jobs at high concurrency, then the
+  example's normal timings — and exits non-zero unless every item reaches a
+  terminal state and the settled signal fires exactly once per batch. The
+  defects above survived every manual review, the author's included, because a
+  green run is not evidence about a race.
+- **Added: `TaskSummary.itemCounts`.** `executionCounts` counts attempts, so a
+  200-URL batch with three retries reads `total: 203` on the screen next to the
+  200 URLs the user pasted in. `itemCounts` counts items and carries `retries`.
+  Show `itemCounts` to users and keep `executionCounts` for operators.
+- **Added: `dispatchMany(items, { awaitEnqueue: false })`.** Returns once every
+  item is durably reserved, without holding the request open for the whole
+  enqueue. On a 200-item batch a measurable share of the work used to be done
+  before the caller had the Task id, so the first progress bar a browser drew
+  started around 45%.
+- **Added: `bridge.auditTask()` / `app.audit()`.** Lists every attempt whose
+  stored state disagrees with the queue — the join that previously had to be
+  written by hand while a batch was stuck. Read-only.
+- **Changed: version conflicts now say what happened.** `RhinoQError.message`
+  was the bare entity id, so a log line named neither the command nor either
+  version. It now reads
+  `transitionTaskExecution(job-x:item-7): expected Execution version 41, current version 58`.
+- **Added: `RHINOQ_WRONG_VERSION_SCOPE`.** Passing `TaskSnapshot.entityVersion`
+  to an Execution command used to raise `RHINOQ_VERSION_CONFLICT` —
+  indistinguishable from real contention, so the reasonable response is to
+  re-read and retry, which never terminates. The two axes are also now named
+  apart in the TypeScript signatures: `expectedTaskVersion` and
+  `expectedExecutionVersion`.
+- **Added: `dispatched -> succeeded|failed`.** A runtime that reports a result
+  without ever reporting a start — a webhook, a batch callback, or two events
+  delivered out of order — was refused and its item stranded at `dispatched`,
+  which also means its batch never settles.
+- **Changed:** Task schema migration 007. It redefines functions only, adds no
+  columns and takes no long locks; `settle_items` moves from the stored attempt
+  counters to the live attempts, which is what makes it correct in the presence
+  of a superseded `stalled` attempt.
+- Added [`docs/two-doors.md`](docs/two-doors.md) and
+  [`docs/what-you-still-write.md`](docs/what-you-still-write.md). The first
+  names the one architectural decision that flips the code-reduction number from
+  −37% to +8% and was previously mentioned nowhere; the second is the list an
+  adopter had to assemble themselves, one surprise at a time.
+
 - **Breaking (deployment):** migrations 026 and 027 introduce the tenant
   boundary and change what a working connection needs. **Put
   `?options=-c%20rhinoq.tenant_id%3Dtnt_system` on `RHINOQ_DATABASE_URL` and

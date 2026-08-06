@@ -1,6 +1,62 @@
 # RhinoQ for Node.js
 
-Catch background jobs that succeeded technically but failed in the real world.
+A BullMQ fan-out with progress, cancellation, per-attempt history and an
+operator console — and, later, the answer to whether the work actually happened.
+
+## The short way in
+
+```bash
+npx create-rhinoq-app my-batch && cd my-batch && npm start
+```
+
+Or, in an application that already has a `pg.Pool`, a BullMQ `Queue` and its
+`QueueEvents`:
+
+```ts
+import { rhinoq } from '@rhinoq/node';
+
+const app = await rhinoq({
+  pool, queue, events,
+  ownerFromRequest: (request) => request.headers.get('x-user'),
+});
+
+server.use('/tasks', app.routes());                          // read + cancel
+server.use(app.workbench({ token, basePath: '/admin' }));    // operator console
+
+await app.dispatch(taskId, urls.map((url, index) => ({
+  key: `item-${index}`,          // the idempotency key: attempts are numbered per key
+  data: { url },                 // your BullMQ job payload, unchanged
+})), { ownerId, jobOptions: { attempts: 3 } });
+```
+
+`rhinoq()` makes the decisions that have one right answer for a queue-backed
+fan-out and are silent when wrong: `terminalProjection` (`single-execution`
+closes a batch on its first finished item), the retry projection, the projector
+lease, the terminal-failure classifier, cancellation of the underlying jobs, and
+the reconciliation sweep — which is on by default, because "you were supposed to
+configure a reconciler" is not something anyone learns before the batch that
+needed it is stuck.
+
+Nothing is hidden: `app.bridge` and `app.tasks` are the same
+`BullMQTaskBridge` and `PostgresTaskClient` the long-form API gives you.
+[`examples/fanout-bullmq/`](https://github.com/madebyduy/RhinoQ/tree/main/examples/fanout-bullmq)
+is the same feature set with every decision written out.
+
+| Call | What it is |
+|---|---|
+| `app.dispatch(taskId, items, options?)` | create the Task, reserve every item durably, enqueue |
+| `app.getTask(taskId)` | state, progress, `itemCounts` and `executionCounts` |
+| `app.cancel(taskId)` | stop the jobs that can be stopped; say which could not |
+| `app.audit(taskId)` | every attempt whose stored state disagrees with the queue |
+| `app.reconcile(taskId)` | re-read the runtime for one batch and write down what it finds |
+| `app.routes()` | the owner-scoped read/cancel HTTP surface |
+| `app.workbench({ token })` | the operator console |
+
+**Items are not attempts.** `TaskSummary.executionCounts` counts attempts, so a
+200-URL batch with three retries reads `total: 203`. Render `itemCounts`, which
+counts items and carries `retries` separately.
+
+## The Rules half
 
 ```bash
 npm install @rhinoq/node pg
@@ -26,6 +82,40 @@ disables the Rule again. Node does not reimplement Rule correctness.
 The embedded PostgreSQL Task client and BullMQ bridge reduce onboarding cost;
 the Go Gateway remains authoritative for ProviderOperation uncertainty,
 evidence and guarded repair.
+
+### Verifiers: the trip a Rule cannot make
+
+A Rule is SQL in a `READ ONLY` transaction under a role that is required not to
+have network or filesystem functions, so no Rule will HEAD an object in a bucket
+or read a provider back. That check has to run in your process, with your
+credentials. It is the same loop every time, so it ships here:
+
+```ts
+import { objectExists, recordVerification, VERIFICATION_TABLE_SQL } from '@rhinoq/node';
+
+await pool.query(VERIFICATION_TABLE_SQL);
+
+const outputExists = objectExists({
+  head: async ({ bucket, key }) => {
+    try {
+      await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      return true;
+    } catch (error) {
+      if (error.$metadata?.httpStatusCode === 404) return false;
+      throw error;   // anything else is "we could not look", not "it is gone"
+    }
+  },
+});
+
+await recordVerification(pool, 'output-exists', await outputExists({ bucket, key }));
+```
+
+`objectExists`, `httpReadBack` and `rowMatches` all return one of three answers
+— `present`, `missing`, or `unknown` with a reason. Collapsing `unknown` into
+`missing` opens a Finding every time the network hiccups; collapsing it into
+`present` is worse, because drift then disappears whenever the check itself is
+broken. `recordVerification` writes the answer into `rhinoq_verifications`,
+keeping the three timestamps apart, where a Rule can read it.
 
 ### Effect Ledger Lite
 

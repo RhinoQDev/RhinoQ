@@ -8,6 +8,7 @@ import type {
 } from '../gateway/types.js';
 import type { PostgresTaskClient } from '../postgres/task-client.js';
 
+
 export interface TaskRequestHandlerOptions {
   tasks: PostgresTaskClient;
   /** Return the authenticated application owner ID; never a RhinoQ token. */
@@ -97,13 +98,14 @@ export function createTaskRequestHandler(
         relative.length === 2 &&
         relative[1] === 'cancel'
       ) {
-        const body = await request.json() as { expectedVersion?: unknown };
-        if (!Number.isInteger(body.expectedVersion) ||
-            Number(body.expectedVersion) <= 0) {
+        const body = await request.json().catch(() => ({})) as { expectedVersion?: unknown };
+        if (body.expectedVersion !== undefined &&
+            (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0)) {
           return json({ code: 'RHINOQ_INVALID_REQUEST' }, 400);
         }
-        const snapshot: TaskSnapshot =
-          await options.tasks.requestTaskCancellationForOwner(
+        const snapshot: TaskSnapshot = body.expectedVersion === undefined
+          ? await cancelWithoutFence(options.tasks, taskId, ownerId)
+          : await options.tasks.requestTaskCancellationForOwner(
             taskId,
             ownerId,
             Number(body.expectedVersion),
@@ -174,11 +176,17 @@ export class ApplicationTaskClient {
     return result.tasks;
   }
 
-  cancelTask(taskId: string, expectedVersion: number): Promise<TaskSnapshot> {
+  /**
+   * Asks for cancellation. `expectedVersion` is optional: on a fan-out the Task
+   * version moves several times a second, so a version read by a browser is
+   * already stale by the time the request lands. Omit it unless you genuinely
+   * need to refuse the cancel when the batch has moved on.
+   */
+  cancelTask(taskId: string, expectedVersion?: number): Promise<TaskSnapshot> {
     return this.send<TaskSnapshot>(
       'POST',
       `/${path(taskId)}/cancel`,
-      { expectedVersion },
+      expectedVersion === undefined ? {} : { expectedVersion },
     );
   }
 
@@ -215,6 +223,47 @@ export class ApplicationTaskClient {
     }
     return payload as T;
   }
+}
+
+/**
+ * Cancels without asking the caller to win a race it cannot win.
+ *
+ * `expectedVersion` is the right fence for a read-modify-write: it stops a
+ * caller overwriting a decision made from a snapshot it never saw. Cancellation
+ * is not that. There is no stale value being overwritten — "stop this batch" is
+ * an intent, and asking for it twice is the same as asking once.
+ *
+ * A fan-out advances the Task version on every item transition, several times a
+ * second. A browser that reads a version and then posts it has, by the time the
+ * request lands, a version that is already old — so pressing Cancel on a busy
+ * batch returned 409 essentially always, and the busier the batch the more
+ * reliably it failed. That is the exact opposite of what anyone needs.
+ *
+ * Callers who do want the fence keep it by sending `expectedVersion`.
+ */
+async function cancelWithoutFence(
+  tasks: PostgresTaskClient,
+  taskId: string,
+  ownerId: string,
+): Promise<TaskSnapshot> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const current = await tasks.getTaskForOwner(taskId, ownerId);
+    // A terminal Task answers a late request with `too_late` rather than an
+    // error, and re-requesting an in-flight cancellation is a no-op.
+    if (current.state === 'cancel_requested') {
+      return current;
+    }
+    try {
+      return await tasks.requestTaskCancellationForOwner(taskId, ownerId, current.entityVersion);
+    } catch (error) {
+      if (!(error instanceof RhinoQError) || error.code !== 'RHINOQ_VERSION_CONFLICT') {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 function json(value: unknown, status = 200): Response {

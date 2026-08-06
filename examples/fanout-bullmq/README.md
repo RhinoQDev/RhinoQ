@@ -33,6 +33,15 @@ failure to show rather than a wall of green.
 Three tables are created in the `rhinoq_task` schema. No queue tables, no
 worker tables, nothing touching your own.
 
+## How much code this is
+
+`server.mjs` is **the whole thing**: the API, the worker, the bridge, the
+reconciler, both HTTP surfaces and an operator console. It uses RhinoQ's own
+Task endpoint as the application's API rather than defining a second one, which
+is the shorter of the [two doors](../../docs/two-doors.md) and the one a new
+project can take. Building the same feature set on Postgres and BullMQ alone
+takes about 500 lines and none of them are interesting.
+
 ## Four things this example exists to get right
 
 **`itemKey` is the idempotency key.** Attempts are numbered per key and the
@@ -57,6 +66,30 @@ failed, `items_settled_at` still null.
 and the bridge moves the Task to `running` when the first job goes active.
 Setting them from the route races the projector and loses with
 `RHINOQ_INVALID_TASK_TRANSITION`.
+
+## Proving it finishes
+
+```bash
+RHINOQ_DATABASE_URL='postgres://postgres:rhinoq@127.0.0.1:55433/fanout' npm run smoke
+```
+
+`smoke` starts this server, pushes several batches through it, and exits
+non-zero unless **every** item reached a terminal state, the Task reached one
+too, and the settled signal fired **exactly once per batch**. It runs in two
+shapes, because the two failure modes need opposite conditions:
+
+| phase | jobs | what it is looking for |
+|---|---|---|
+| `instant` | zero-length, concurrency 16 | every job finishes while `dispatchMany` is still enqueueing. That window is where projections used to be lost, and the stuck items clustered at the front of the batch. |
+| `realistic` | the normal timings | a BullMQ retry has room to happen, so the second attempt must actually be recorded as attempt 2. |
+
+When a batch does not finish, it prints which items are stuck, what RhinoQ
+believes about each, and the index range they fall in — the join that otherwise
+has to be written by hand at the worst possible moment.
+
+This runs on every CI build. It exists because this example used to hang on
+roughly two runs in three and pass every manual review, the author's included:
+a green run is not evidence about a race.
 
 ## Checking on it
 

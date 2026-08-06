@@ -12,8 +12,12 @@
 export interface ProjectionFailure {
   /** Wire version of this record. Bump it before changing a field's meaning. */
   schemaVersion: 1;
-  /** The queue event that could not be projected. */
-  event: 'waiting' | 'active' | 'progress' | 'completed' | 'failed';
+  /**
+   * The queue event that could not be projected. `delayed` is here because
+   * BullMQ announces an attempt that is about to be retried that way and no
+   * other; losing one loses the boundary between two attempts.
+   */
+  event: 'waiting' | 'active' | 'progress' | 'completed' | 'failed' | 'delayed';
   /** External runtime identity, enough to look the job up again. */
   runtime: string;
   runtimeScope: string;

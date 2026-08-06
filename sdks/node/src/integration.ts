@@ -15,7 +15,7 @@ import {
 } from './observe/metrics.js';
 import { PostgresProjectorLease } from './postgres/projector-lease.js';
 import { installPostgresTaskProfile, PostgresTaskClient } from './postgres/task-client.js';
-import type { SqlPool } from './postgres/task-schema.js';
+import { TASK_SCHEMA_VERSION, type SqlPool } from './postgres/task-schema.js';
 import {
   createNodeTaskMiddleware,
   type NodeTaskMiddlewareOptions,
@@ -236,7 +236,7 @@ export class RhinoQTaskIntegration {
    * Health is a report, not a throwing probe. A database can be reachable while
    * this process owns no projector, which is degraded rather than healthy.
    */
-  async health(expectedSchemaVersion = 6): Promise<RhinoQIntegrationHealth> {
+  async health(expectedSchemaVersion = TASK_SCHEMA_VERSION): Promise<RhinoQIntegrationHealth> {
     const database = await checkEmbeddedHealth(
       this.pool as unknown as HealthQueryable,
       expectedSchemaVersion,

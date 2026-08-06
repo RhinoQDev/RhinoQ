@@ -1,24 +1,38 @@
 # RhinoQ
 
-## Catch background jobs that succeeded technically but failed in the real world.
+## A BullMQ fan-out with progress, cancellation, per-attempt history and an operator console — in one command.
 
-BullMQ can report `completed` while a payment response timed out, a provisioned
-resource never became ready, or the database still contains the old business
-state. RhinoQ keeps those truths separate, preserves the evidence, and gives an
-operator a controlled path from detection to repair.
-
-```text
-queue/runtime says completed
-            |
-            v
-provider operation: accepted | confirmed | failed | uncertain
-            |
-            v
-business rule: pass | finding
-            |
-            v
-detect -> investigate -> decide -> repair -> verify
+```bash
+npx create-rhinoq-app my-batch && cd my-batch && npm start
 ```
+
+That brings up PostgreSQL and Redis, applies the schema, runs a 50-item batch
+and opens <http://localhost:3000>. Nothing needs to exist first except Docker
+and Node 22.
+
+Inside is a live progress bar, a Cancel button that actually stops the queued
+jobs, retries recorded as separate attempts, an operator console at `/admin` —
+and a button that deletes the output file of a job the queue reported as
+`completed`, so you can watch the gap this whole project is about.
+
+```js
+const app = await rhinoq({ pool, queue, events, ownerFromRequest });
+
+server.use('/tasks', app.routes());                          // read + cancel
+server.use(app.workbench({ token, basePath: '/admin' }));    // operator console
+
+await app.dispatch(taskId, urls.map((url, index) => ({ key: `item-${index}`, data: { url } })));
+```
+
+Measured on the code in this repository, the whole loop — API, worker, bridge,
+reconciler, both HTTP surfaces and an exactly-once "the batch is done" signal —
+is [164 non-comment lines](./examples/fanout-bullmq/server.mjs). Which door you
+come through changes that number a lot, and in both directions:
+[two doors](./docs/two-doors.md).
+
+**Then, later:** when the queue says `completed` and the object is not in the
+bucket, RhinoQ already knows the difference. That is the second half of the
+product and you do not have to do anything on day one to have it.
 
 [![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
 [![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
@@ -28,16 +42,60 @@ detect -> investigate -> decide -> repair -> verify
 
 > [!WARNING]
 > RhinoQ is a prerelease for evaluation and controlled pilots. The tenant
-> boundary is now enforced in PostgreSQL ([`docs/tenancy.md`](docs/tenancy.md)),
-> but the HTTP surface is not yet wired to it, design-partner code-reduction
-> evidence does not exist, and chaos evidence is one local drill rather than a
-> deployment-shaped campaign. Those still block a production-ready claim.
+> boundary is enforced in PostgreSQL ([`docs/tenancy.md`](docs/tenancy.md)), but
+> the HTTP surface is not yet wired to it; the code-reduction numbers are a
+> reproducible local benchmark rather than a design-partner count; and chaos
+> evidence is local drills rather than a deployment-shaped campaign. Those still
+> block a production-ready claim.
 
 > [!IMPORTANT]
 > Upgrading past migration 026 changes what a working connection needs, and
 > running as a PostgreSQL superuser silently disables tenant isolation. Read
 > [`docs/migration-rollback.md`](docs/migration-rollback.md) before applying,
 > and verify with `rhinoq doctor`.
+
+## Start here
+
+| If you are… | Read |
+|---|---|
+| starting a new project | `npx create-rhinoq-app`, above |
+| adding this to a BullMQ fan-out you already have | [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) — the long form, every decision visible |
+| deciding whether it will save you code | [two doors](./docs/two-doors.md) |
+| deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
+| completely new to all of it | [the beginner guide](./docs/start-here.md) |
+
+### Four things a fan-out has to get right
+
+These cost an afternoon each when you find them yourself. The example
+[gets them right on purpose](./examples/fanout-bullmq/README.md), and
+`rhinoq()` makes all four for you.
+
+1. **`itemKey` is the idempotency key.** Omit it on a fan-out and fifty items
+   become attempts 1..50 of a single item, the aggregate reads `total: 1`, and
+   the batch terminates on the first finish — silently, and irreversibly.
+2. **`jobId` may not contain `:`.** BullMQ rejects a custom job ID containing
+   one unless it splits into exactly three parts, so the natural
+   `` `${taskId}:${itemKey}` `` is refused.
+3. **`isTerminalFailure` is required for a fan-out with retries.** Without it
+   every failure is "the attempt may still retry", the settled check never runs
+   after a failure, and a batch whose last item fails never settles at all.
+4. **Do not drive `queued` or `running` by hand.** The bridge owns them; setting
+   them from a route races the projector and loses.
+
+### Which package
+
+| Package | Install from | For |
+|---|---|---|
+| `@rhinoq/node` | npm | the Node SDK. This is the one you want. |
+| `rhinoq` | npm | a distribution alias for the same code, so `npm install rhinoq` works |
+| `create-rhinoq-app` | npm, via `npx` | the scaffolder above |
+| `@rhinoq/nest` | **not published** — `npm install ./sdks/nest` from a checkout | an optional NestJS module |
+| `rhinoq` (Go CLI) | `go build ./cmd/rhinoq` | Rules, Findings, the Gateway, full migrations |
+
+The Node SDK and the Go engine are two planes, not two versions of one thing.
+Fan-out, Tasks and the Workbench are Node-only and need no Go binary. Rules,
+Findings and ProviderOperation are the Go engine's, and Node talks to them
+through the Gateway.
 
 ## What it actually does
 
@@ -93,6 +151,28 @@ safety net; it is a second outage.
 $ rhinoq explain completed-report-has-output
 ```
 
+### A Rule can only see PostgreSQL. Something has to go and look.
+
+That gate is also a limit, and it is better said out loud than discovered. A
+Rule is SQL in a `READ ONLY` transaction under a role that is required not to
+have network or filesystem functions ([`docs/rules.md`](./docs/rules.md)), so no
+Rule will ever HEAD an object in a bucket or read a provider back.
+
+The going-and-looking ships with the SDK, and runs in your process with your
+credentials:
+
+```ts
+import { objectExists, recordVerification } from '@rhinoq/node';
+
+const check = objectExists({ head: ({ bucket, key }) => s3Head(bucket, key) });
+await recordVerification(pool, 'output-exists', await check({ bucket, key }));
+```
+
+`objectExists`, `httpReadBack` and `rowMatches` each return `present`, `missing`
+or `unknown`-with-a-reason, and `recordVerification` writes that into a table a
+Rule can read. RhinoQ stores and classifies findings; the trip to the bucket is
+yours, and the scaffold has a working one you can run.
+
 ### Three outcomes, not two
 
 Every observation is `passed`, `violated` or **`unknown`** — and an unknown
@@ -136,10 +216,11 @@ failure story, every setup command and why it exists, the two dashboards,
 BullMQ/ProviderOperation integration, safe repair, troubleshooting, and an
 honest comparison with established alternatives.
 
-## Try it in under five minutes
+## Adding it to an application you already have
 
-Node.js 22 and PostgreSQL are the only requirements for the shortest path. The
-GitHub release archive is used until npm trusted publishing is enabled:
+`create-rhinoq-app` writes a new project. To put RhinoQ into an existing one,
+the Rules half of the product starts from a database you already have — no
+queue, no worker, no cutover:
 
 ```bash
 npm install rhinoq pg
@@ -149,6 +230,11 @@ npx rhinoq doctor
 npx rhinoq fixture failure
 npx rhinoq dev
 ```
+
+For the fan-out half, [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) is
+the same feature set as the scaffold with every decision written out rather than
+made for you, and `npm run smoke` in that directory is the test that proves a
+batch finishes.
 
 Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and BullMQ, previews
 what is missing, refuses to overwrite generated Rules, and prints a next action
@@ -172,16 +258,18 @@ export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
 RHINOQ_AGENT_TOKEN="$RHINOQ_AGENT_TOKEN" ./rhinoq-agent
 ```
 
-For a NestJS/BullMQ application, the lower-friction path is the optional
-`@rhinoq/nest` package. Its async module factory installs the embedded Task
-profile before injection, acquires a PostgreSQL projector lease by default,
-starts a separately leased reconciliation sweep when a runtime observer is
-provided, and exposes health/metrics wiring. The application still supplies
-the BullMQ state reader; RhinoQ never scans or mutates the application's Redis:
+For a NestJS/BullMQ application there is an optional `@rhinoq/nest` module. It
+is **not published to npm**: install it from a checkout. Its async module
+factory installs the embedded Task profile before injection, acquires a
+PostgreSQL projector lease by default, starts a separately leased reconciliation
+sweep when a runtime observer is provided, and exposes health/metrics wiring.
+The application still supplies the BullMQ state reader; RhinoQ never scans or
+mutates the application's Redis:
 
 ```bash
 npm install @rhinoq/node pg
-# From this checkout until @rhinoq/nest has its own npm release:
+# From this checkout only — @rhinoq/nest has no npm release and `npm install
+# @rhinoq/nest` will 404.
 npm install ./sdks/nest
 ```
 

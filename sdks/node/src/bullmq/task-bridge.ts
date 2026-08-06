@@ -13,14 +13,26 @@ import type { TaskClient } from '../tasks/client.js';
 import type { TaskMetrics } from '../observe/metrics.js';
 import type { ProjectionFailure, ProjectionFailureSink } from '../tasks/projection-failures.js';
 
-type QueueEvent = 'waiting' | 'active' | 'progress' | 'completed' | 'failed';
+type QueueEvent = 'waiting' | 'active' | 'progress' | 'completed' | 'failed' | 'delayed';
 
 // Queue events and browser/API writes can legitimately race. The Gateway
 // rejects stale aggregate/execution versions, so the bridge must re-read and
 // converge instead of treating one optimistic conflict as a dropped event.
-const MAX_VERSION_CONVERGENCE_ATTEMPTS = 3;
+const MAX_VERSION_CONVERGENCE_ATTEMPTS = 10;
+const MAX_CONVERGENCE_BACKOFF_MS = 60;
 const DEFAULT_DISPATCH_CONCURRENCY = 8;
 const MAX_DISPATCH_CONCURRENCY = 64;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+// Jittered, because the losers of one race are otherwise released together and
+// collide again on the next tick.
+function backoffMs(attempt: number): number {
+  const ceiling = Math.min(2 ** attempt * 4, MAX_CONVERGENCE_BACKOFF_MS);
+  return 1 + Math.floor(Math.random() * ceiling);
+}
 
 // Every live bridge in this process, counted by runtime scope. Two bridges on
 // the same scope both subscribe to QueueEvents, so each job event is projected
@@ -89,6 +101,33 @@ export interface BullMQTaskDispatch extends BullMQTaskBinding {
     data: unknown;
     options?: Record<string, unknown>;
   };
+}
+
+export interface BullMQDispatchManyOptions {
+  /**
+   * Return once every item is durably reserved, without waiting for `Queue.add`
+   * to finish for all of them. Defaults to true.
+   *
+   * Waiting for the whole enqueue is what makes `POST /batches` hold the request
+   * open for the entire fan-out: on a 200-item batch a measurable share of the
+   * work is already done before the caller has the Task id, so the first
+   * progress a browser can render is not zero. The reservation is the part that
+   * makes the batch recoverable and it has already happened, so the enqueue can
+   * be left running. A failure is reported through `onWarning`/`onError` and the
+   * items stay reserved: repeating `dispatchMany` with the same IDs finishes it.
+   */
+  awaitEnqueue?: boolean;
+}
+
+/** One attempt whose durable state disagrees with the runtime that ran it. */
+export interface BullMQTaskDrift {
+  executionId: string;
+  itemKey: string;
+  jobId: string;
+  /** What RhinoQ believes: `pending_dispatch`, `dispatched` or `running`. */
+  taskState: string;
+  /** What the runtime says: `completed`, `failed`, or `missing` from the queue. */
+  runtimeState: 'completed' | 'failed' | 'missing';
 }
 
 export type BullMQObservedState = 'waiting' | 'active' | 'completed' | 'failed';
@@ -199,6 +238,21 @@ export interface BullMQTaskBridgeOptions {
    * terminal. Omitting it leaves the Task running instead of falsely failing it.
    */
   isTerminalFailure?: (event: BullMQEvent) => Promise<boolean>;
+  /**
+   * Returns which runtime attempt an `active` event belongs to, for runtimes
+   * that can say so.
+   *
+   * BullMQ cannot, and does not need to: the bridge reads the attempt boundary
+   * from its `delayed` event instead. Do **not** implement this by reading
+   * `Job.attemptsMade` from the queue — that read is asynchronous and races the
+   * job it is asking about, so a fast job reports the next attempt number and
+   * the bridge invents a retry that never happened.
+   *
+   * Return `undefined` when it cannot be determined; the projection then
+   * behaves exactly as it does without this option.
+   */
+  runtimeAttempt?: (event: BullMQEvent) =>
+    Promise<number | undefined> | number | undefined;
   /**
    * Maps a completed BullMQ return value to an application-owned result ref.
    * The reference is recorded on the Execution that produced it, and — in
@@ -355,6 +409,7 @@ export class BullMQTaskBridge {
     'manual' | 'all-succeeded' | 'at-least-one-succeeded';
   private readonly progress: (event: BullMQEvent) => TaskProgress | undefined;
   private readonly isTerminalFailure?: (event: BullMQEvent) => Promise<boolean>;
+  private readonly runtimeAttempt?: BullMQTaskBridgeOptions['runtimeAttempt'];
   private readonly resultReference?: (event: BullMQEvent) => Promise<string | undefined>;
   private readonly failureReason: (event: BullMQEvent) => string | undefined;
   private readonly cancelJob?: BullMQTaskBridgeOptions['cancelJob'];
@@ -376,6 +431,8 @@ export class BullMQTaskBridge {
   private readonly warn: (warning: string) => void;
   private readonly onError?: (error: unknown, event: BullMQEvent) => void;
   private readonly listeners: Array<[QueueEvent, (event: BullMQEvent) => void]>;
+  /** In-flight projection per job id, so one job's events stay ordered. */
+  private readonly projections = new Map<string, Promise<void>>();
   private scopeRegistered = false;
   private subscribed = false;
   private closed = false;
@@ -408,6 +465,7 @@ export class BullMQTaskBridge {
     this.aggregateTerminal = options.aggregate?.terminal ?? 'manual';
     this.progress = options.progress ?? defaultProgress;
     this.isTerminalFailure = options.isTerminalFailure;
+    this.runtimeAttempt = options.runtimeAttempt;
     this.resultReference = options.resultReference;
     this.failureReason = options.failureReason ?? defaultFailureReason;
     this.cancelJob = options.cancelJob;
@@ -429,7 +487,7 @@ export class BullMQTaskBridge {
     }
     this.warnOnDuplicateScope(options);
     this.projectionFailures = options.projectionFailures;
-    this.listeners = (['waiting', 'active', 'progress', 'completed', 'failed'] as const)
+    this.listeners = (['waiting', 'active', 'progress', 'completed', 'failed', 'delayed'] as const)
       .map((name): [QueueEvent, (event: BullMQEvent) => void] => [
         name,
         (event) => this.run(name, event, () => this.project(name, event)),
@@ -718,7 +776,10 @@ export class BullMQTaskBridge {
    * expected item set durable and lets a repeated call recover a partial
    * dispatch without inventing another Task or attempt.
    */
-  async dispatchMany(inputs: BullMQTaskDispatch[]): Promise<TaskSnapshot> {
+  async dispatchMany(
+    inputs: BullMQTaskDispatch[],
+    options: BullMQDispatchManyOptions = {},
+  ): Promise<TaskSnapshot> {
     this.assertDispatchReady();
     if (inputs.length === 0) {
       throw new RangeError('dispatchMany requires at least one item');
@@ -739,12 +800,76 @@ export class BullMQTaskBridge {
     );
     // No Queue job is visible until the complete expected item set is durable.
     // A partial Queue outage remains recoverable by repeating the same IDs.
-    await mapBounded(
+    const enqueue = mapBounded(
       inputs,
       this.dispatchConcurrency,
       (input) => this.dispatchReserved(input),
     );
+    if (options.awaitEnqueue === false) {
+      // The reservation is what makes recovery possible, and it has already
+      // happened; the enqueue is work the caller does not have to hold a
+      // request open for. Detach it, but never silently: a failed enqueue
+      // leaves reserved items that no job will ever run, and the reconciler
+      // needs to have been told.
+      enqueue.catch((error: unknown) => {
+        this.warn(
+          `RhinoQ: background enqueue for Task ${taskId} failed: ` +
+            `${error instanceof Error ? error.message : String(error)}. ` +
+            'The items are reserved and durable; repeat dispatchMany with the same IDs to finish it.',
+        );
+        this.report(error, { jobId: taskId });
+      });
+      return this.ensureTask(taskId, 'queued');
+    }
+    await enqueue;
     return this.ensureTask(taskId, 'queued');
+  }
+
+  /**
+   * Cross-checks every non-terminal attempt against the runtime, and reports
+   * what disagrees without changing anything.
+   *
+   * "The queue says this job finished and RhinoQ still calls it running" is the
+   * one shape a stuck batch takes, and until now the only way to see it was to
+   * write the join by hand. `observe` is application-owned for the same reason
+   * `reconcileTask` requires it: the bridge does not scan or own Redis.
+   *
+   * `reconcileTask` fixes drift; this only names it, so it is safe to run from
+   * a health check or a support script while the projector is live.
+   */
+  async auditTask(
+    taskId: string,
+    observe: (reference: TaskExecutionRuntimeRef) =>
+      Promise<BullMQTaskObservation | undefined>,
+  ): Promise<BullMQTaskDrift[]> {
+    if (!this.client.listTaskExecutionRuntimeRefs) {
+      throw new TypeError(
+        'BullMQTaskBridge.auditTask requires a Task client with listTaskExecutionRuntimeRefs',
+      );
+    }
+    if (typeof observe !== 'function') {
+      throw new TypeError('BullMQTaskBridge.auditTask requires an observation callback');
+    }
+    const refs = await this.client.listTaskExecutionRuntimeRefs(taskId);
+    const drift: BullMQTaskDrift[] = [];
+    for (const reference of latestRuntimeReferences(refs.executions)) {
+      if (reference.runtime !== 'bullmq' || !reference.externalId) continue;
+      if (this.runtimeScope && (reference.runtimeScope ?? '') !== this.runtimeScope) continue;
+      if (isTerminalExecution(reference.state)) continue;
+      const observation = await observe(reference);
+      const runtimeState = observation?.state ?? 'missing';
+      if (runtimeState !== 'completed' && runtimeState !== 'failed' && runtimeState !== 'missing') {
+        continue;
+      }
+      drift.push({
+        executionId: reference.executionId,
+        itemKey: reference.itemKey,
+        jobId: reference.externalId,
+        taskState: reference.state,
+        runtimeState,
+      });
+    }
+    return drift;
   }
 
   private assertDispatchReady(): void {
@@ -981,9 +1106,34 @@ export class BullMQTaskBridge {
     if (task.state !== 'cancel_requested') {
       return task;
     }
+    // Every job gets asked, not just the ones before the first refusal.
+    //
+    // Stopping at the first `cannot_cancel_safely` meant one item that happened
+    // to be running left the other hundred and ninety-nine queued jobs to run
+    // to completion after the user pressed Cancel — the wider the fan-out, the
+    // less cancelling cancelled. Stopping what can be stopped is the useful
+    // behaviour; the outcome then reports the worst thing that happened, so
+    // "the batch is stopped except for the one already in flight" is still
+    // distinguishable from "the batch is stopped".
+    let worst: 'acknowledged' | 'cannot_cancel_safely' | 'failed' = 'acknowledged';
+    let reason: string | undefined;
+    // The jobs that really did stop. Their attempts have to be closed here:
+    // a removed job produces no further events, so an Execution left at
+    // `dispatched` would stay there forever and the batch would never settle —
+    // the cancel itself becoming the reason the Task can never finish.
+    const stopped = new Set<string>();
+    const record = (status: typeof worst, why?: string): void => {
+      if (status === 'acknowledged') return;
+      if (worst === 'acknowledged' || (status === 'failed' && worst !== 'failed')) {
+        worst = status;
+        reason = why;
+      }
+    };
     for (const jobId of new Set(jobIds)) {
       const execution = await this.find(jobId);
       if (!execution || execution.taskId !== taskId) {
+        // Not a runtime condition: the caller passed a job belonging to another
+        // Task. Continuing would cancel work nobody asked about.
         return this.resolveCancellation(
           taskId,
           'failed',
@@ -994,28 +1144,32 @@ export class BullMQTaskBridge {
       try {
         result = await this.cancelJob(jobId, execution);
       } catch {
-        return this.resolveCancellation(taskId, 'failed', `BullMQ cancellation failed for job ${jobId}`);
+        record('failed', `BullMQ cancellation failed for job ${jobId}`);
+        continue;
       }
       if (
         result.status !== 'acknowledged' &&
         result.status !== 'cannot_cancel_safely' &&
         result.status !== 'failed'
       ) {
-        return this.resolveCancellation(
-          taskId,
-          'failed',
-          `BullMQ cancellation returned an invalid status for job ${jobId}`,
-        );
+        record('failed', `BullMQ cancellation returned an invalid status for job ${jobId}`);
+        continue;
       }
-      if (result.status !== 'acknowledged') {
-        return this.resolveCancellation(taskId, result.status, result.reason);
+      if (result.status === 'acknowledged') {
+        stopped.add(jobId);
       }
+      record(result.status, result.status === 'acknowledged' ? undefined : result.reason);
     }
-    const resolved = await this.resolveCancellation(taskId, 'acknowledged');
+    const resolved = await this.resolveCancellation(taskId, worst, reason);
     if (!this.terminalizeOnCancel) {
       return resolved;
     }
-    return this.terminalizeCancellation(taskId, new Set(jobIds));
+    // Close the attempts that stopped, whatever happened to the rest.
+    // `terminalizeCancellation` closes the Task only when nothing is still
+    // open, so a job that could not be stopped keeps the batch at
+    // `cancel_requested` — which is the truth — without stranding the 199 that
+    // were stopped.
+    return this.terminalizeCancellation(taskId, stopped);
   }
 
   /**
@@ -1075,13 +1229,64 @@ export class BullMQTaskBridge {
       case 'waiting':
         return this.queue(observation.jobId);
       case 'active':
-        return this.startJob(observation.jobId, observation.attempt);
+        return this.startJob(observation.jobId, await this.observedAttempt(observation));
       case 'progress':
         return this.reportProgress(observation);
       case 'completed':
         return this.complete(observation);
       case 'failed':
         return this.failIfTerminal(observation);
+      case 'delayed':
+        return this.endAttemptForRetry(observation);
+    }
+  }
+
+  /**
+   * Closes the attempt a `delayed` event just ended.
+   *
+   * BullMQ does not announce a failure it is going to retry. The real sequence
+   * is `active -> delayed -> waiting -> active -> failed`, and only the last
+   * failure produces a `failed` event, so a retried job was projected onto its
+   * first attempt: `attempt` stayed 1 forever, and the per-attempt history —
+   * "attempt 1 failed with a 502, attempt 2 succeeded" — was never true for any
+   * BullMQ integration. `delayed` is the missing boundary, and it needs no
+   * application callback and no second read of the queue.
+   *
+   * A job delayed before it ever ran is an ordinary scheduled job, not a retry.
+   * The two are indistinguishable in the payload but not in RhinoQ's own state:
+   * only an attempt that reached `running` had something to end. That check is
+   * local, so nothing here races the runtime.
+   *
+   * The attempt becomes `stalled`, not `failed`. Nobody has said this item
+   * failed — the runtime intends to run it again — and `stalled` is the one
+   * state the settled signal refuses to count, so a batch cannot be declared
+   * complete in the gap between an attempt ending and its retry starting.
+   */
+  private async endAttemptForRetry(event: BullMQEvent): Promise<void> {
+    if (this.retryProjection === 'ignore') {
+      return;
+    }
+    const execution = await this.find(event.jobId);
+    if (!execution || execution.state !== 'running') {
+      return;
+    }
+    await this.ensureExecution(execution.id, 'stalled');
+  }
+
+  /**
+   * Waits until every event received so far has been written down.
+   *
+   * Projection is deliberately not awaited by the QueueEvents listener — a
+   * listener that blocks stops the whole stream — so on shutdown there is a
+   * window where an event has been delivered and not yet stored. Call this
+   * before `close()` to close it, and in tests to assert on the result of an
+   * event that nobody handed you a promise for.
+   */
+  async drain(): Promise<void> {
+    // A projection can queue another for the same job, so this loops rather
+    // than awaiting one snapshot of the map.
+    while (this.projections.size > 0) {
+      await Promise.allSettled([...this.projections.values()]);
     }
   }
 
@@ -1156,6 +1361,32 @@ export class BullMQTaskBridge {
     }
   }
 
+  /**
+   * Which attempt an `active` event belongs to, when anyone can say.
+   *
+   * The event payload carries it only for runtimes that publish it; BullMQ does
+   * not, which is why `runtimeAttempt` exists. A callback that throws must not
+   * take the projection down with it: without an attempt number the projection
+   * is exactly what it was before the option existed.
+   */
+  private async observedAttempt(event: BullMQEvent): Promise<number | undefined> {
+    if (event.attempt !== undefined) {
+      return event.attempt;
+    }
+    if (!this.runtimeAttempt) {
+      return undefined;
+    }
+    try {
+      return await this.runtimeAttempt(event);
+    } catch (error) {
+      this.warn(
+        `RhinoQ: runtimeAttempt threw for job ${event.jobId}; projecting without an attempt number. ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }
+
   private async startJob(jobId: string, runtimeAttempt?: number): Promise<void> {
     const execution = await this.find(jobId);
     if (!execution) {
@@ -1180,17 +1411,16 @@ export class BullMQTaskBridge {
       ? undefined
       : validateRuntimeAttempt(runtimeAttempt);
     while (
-      current && (isTerminalExecution(current.state) ||
+      current && (isFinishedAttempt(current.state) ||
         (observedAttempt !== undefined && (current.attempt ?? 1) < observedAttempt))
     ) {
-      // If the runtime has already advanced but the failed event was lost,
-      // close the old attempt before opening the one BullMQ is running now.
-      if (!isTerminalExecution(current.state)) {
-        await this.ensureExecution(
-          current.id,
-          'failed',
-          `runtime advanced to attempt ${observedAttempt} before the previous failure was projected`,
-        );
+      // The runtime is on a later attempt than the one recorded, and nothing
+      // ended the earlier one. Close it before opening the one the runtime is
+      // running now. `stalled` rather than `failed`: nobody said this item
+      // failed, and `stalled` is the state the settled signal refuses to count,
+      // so the batch cannot be declared finished inside this gap.
+      if (!isFinishedAttempt(current.state)) {
+        await this.ensureExecution(current.id, 'stalled');
         current = await this.find(execution.externalId ?? '');
         if (!current) return undefined;
         continue;
@@ -1303,8 +1533,19 @@ export class BullMQTaskBridge {
     if (!execution) {
       return;
     }
-    await this.activate(execution);
+    // The attempt is closed before anything Task-scoped is touched.
+    //
+    // This used to call activate() first, which moves the *Task* to running,
+    // and that command fences on the Task version — a version every concurrent
+    // dispatch, bind and completion in the same batch is advancing. During the
+    // enqueue phase of a wide fan-out the read-modify-write could lose its race
+    // repeatedly, the projection threw, and the item stayed non-terminal for
+    // good even though BullMQ had completed it. It was always the earliest
+    // items, because those are the ones whose worker finishes while dispatch is
+    // still writing. The Execution fence is per-attempt and nothing else
+    // contends for it, so closing the attempt first cannot be lost that way.
     await this.ensureExecution(execution.id, 'succeeded');
+    await this.ensureTask(execution.taskId, 'running');
 
     // The reference belongs to the attempt that produced it. Recording it here
     // instead of only on the Task is what lets a fan-out answer "where did item
@@ -1319,8 +1560,16 @@ export class BullMQTaskBridge {
     }
 
     if (this.terminalProjection === 'execution-only') {
-      await this.updateAggregate(execution.taskId);
-      await this.signalSettlement(execution.taskId);
+      // The settled signal is durable and fires exactly once; the aggregate is
+      // derived state the next completion recomputes. Losing the first to a
+      // conflict in the second is how a finished batch stays silent forever, so
+      // the signal runs even when the aggregate write did not survive. The
+      // aggregate error still propagates and is still recorded.
+      try {
+        await this.updateAggregate(execution.taskId);
+      } finally {
+        await this.signalSettlement(execution.taskId);
+      }
       return;
     }
     await this.signalSettlement(execution.taskId);
@@ -1352,14 +1601,20 @@ export class BullMQTaskBridge {
     if (!execution) {
       return;
     }
-    await this.activate(execution);
+    // Attempt first, for the reason spelled out in complete().
     await this.ensureExecution(execution.id, 'failed', this.failureReason(event));
-    if (terminal && this.terminalProjection === 'single-execution') {
-      await this.ensureTask(execution.taskId, 'failed');
-    } else if (terminal) {
-      await this.updateAggregate(execution.taskId);
+    await this.ensureTask(execution.taskId, 'running');
+    if (!terminal) {
+      return;
     }
-    if (terminal) {
+    if (this.terminalProjection === 'single-execution') {
+      await this.ensureTask(execution.taskId, 'failed');
+      await this.signalSettlement(execution.taskId);
+      return;
+    }
+    try {
+      await this.updateAggregate(execution.taskId);
+    } finally {
       await this.signalSettlement(execution.taskId);
     }
   }
@@ -1395,6 +1650,14 @@ export class BullMQTaskBridge {
 
   private async updateAggregate(taskId: string): Promise<void> {
     if (!this.aggregateProgress && this.aggregateTerminal === 'manual') {
+      return;
+    }
+    // The common fan-out shape — progress from terminal items, terminal state
+    // decided by the application — needs no read-modify-write at all. One
+    // statement recomputes progress under the Task row lock, so concurrent
+    // completions wait for each other instead of failing each other.
+    if (this.aggregateProgress && this.aggregateTerminal === 'manual' && this.client.syncTaskItemProgress) {
+      await this.client.syncTaskItemProgress(taskId);
       return;
     }
     await this.converge(async () => {
@@ -1459,7 +1722,7 @@ export class BullMQTaskBridge {
 
   private async ensureExecution(
     executionId: string,
-    target: 'running' | 'succeeded' | 'failed',
+    target: 'running' | 'succeeded' | 'failed' | 'stalled',
     reason?: string,
   ): Promise<void> {
     await this.converge(async () => {
@@ -1467,15 +1730,39 @@ export class BullMQTaskBridge {
       if (execution.state === target) {
         return;
       }
-      if ((target === 'succeeded' || target === 'failed') && execution.state === 'dispatched') {
-        await this.ensureExecution(executionId, 'running');
-        return this.ensureExecution(executionId, target, reason);
+      // `pending_dispatch` is included on purpose. A job whose worker finished
+      // between `Queue.add` and the durable bind produces its whole event
+      // sequence against an attempt that is still `pending_dispatch`, and
+      // dropping those events left the item non-terminal permanently. The
+      // attempt carries the runtime identity from reservation, so the event
+      // belongs to it; the store checks that identity is present.
+      const legal = execution.state === 'pending_dispatch' ||
+        execution.state === 'dispatched' ||
+        (execution.state === 'running' && target !== 'running');
+      if (!legal) {
+        return;
       }
-      if (
-        (execution.state === 'dispatched' && target === 'running') ||
-        (execution.state === 'running' && (target === 'succeeded' || target === 'failed'))
-      ) {
-        await this.client.transitionTaskExecution(execution.id, execution.version, target, reason);
+      try {
+        await this.client.transitionTaskExecution(
+          execution.id,
+          // TaskExecution.version, not TaskSnapshot.entityVersion. The two are
+          // different axes and the store now says so by name.
+          execution.version,
+          target,
+          reason,
+        );
+      } catch (error) {
+        // A store still on Task schema v6 refuses these edges, so a mixed
+        // deploy takes the old two-step rather than stranding the item.
+        if (
+          execution.state === 'running' ||
+          target === 'running' ||
+          !isCode(error, 'RHINOQ_INVALID_EXECUTION_TRANSITION')
+        ) {
+          throw error;
+        }
+        await this.ensureExecution(executionId, 'running');
+        await this.ensureExecution(executionId, target, reason);
       }
     });
   }
@@ -1499,6 +1786,16 @@ export class BullMQTaskBridge {
     });
   }
 
+  /**
+   * Retries a read-modify-write until its fence holds.
+   *
+   * Three immediate attempts were not enough for a wide fan-out. Every
+   * `create_execution` and `bind_execution` advances the *Task* version, so
+   * while `dispatchMany` is enqueueing, anything that fences on the Task loses
+   * its race several times in a row — and the loop gave up while the storm was
+   * still going. The retries now back off, which both outlasts the burst and
+   * stops several projections from re-colliding on the same tick.
+   */
   private async converge<T>(operation: () => Promise<T>): Promise<T> {
     let lastConflict: unknown;
     for (let attempt = 0; attempt < MAX_VERSION_CONVERGENCE_ATTEMPTS; attempt++) {
@@ -1514,13 +1811,43 @@ export class BullMQTaskBridge {
           ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
         });
         lastConflict = error;
+        await delay(backoffMs(attempt));
       }
     }
     throw lastConflict;
   }
 
+  /**
+   * Projects one event, after every earlier event for the same job.
+   *
+   * QueueEvents delivers a job's events in order, and the listener used to
+   * start each projection without waiting for the previous one — so two events
+   * for the same job could be applied in either order. On a fast job the
+   * `active` of a retry and the `failed` of the attempt before it overlap, and
+   * applying them backwards makes the bridge open an attempt the runtime has
+   * already finished with. That attempt then sits `dispatched` forever, waiting
+   * for events that were delivered before it existed, and its batch never
+   * settles. It was one item in a hundred, which is the worst possible rate:
+   * frequent enough to matter, rare enough to look like something else.
+   *
+   * The chain is per job, so different items still project concurrently. The
+   * map entry is deleted when the chain drains, so it holds only in-flight
+   * work rather than every job the process has seen.
+   */
   private run(name: QueueEvent, event: BullMQEvent, operation: () => Promise<void>): void {
-    void operation().catch(async (error: unknown) => {
+    const jobId = event.jobId;
+    const previous = this.projections.get(jobId) ?? Promise.resolve();
+    const chained = previous.then(() => this.project1(name, event, operation));
+    this.projections.set(jobId, chained);
+    void chained.finally(() => {
+      if (this.projections.get(jobId) === chained) {
+        this.projections.delete(jobId);
+      }
+    });
+  }
+
+  private project1(name: QueueEvent, event: BullMQEvent, operation: () => Promise<void>): Promise<void> {
+    return operation().catch(async (error: unknown) => {
       // A listener failure is otherwise invisible unless onError is wired: the
       // promise is not awaited by anyone. Counting it is what makes a bridge
       // that has silently stopped projecting show up on a dashboard.
@@ -1596,6 +1923,13 @@ export class BullMQTaskBridge {
 
 function isTerminalExecution(state: string): boolean {
   return state === 'succeeded' || state === 'failed' || state === 'cancelled';
+}
+
+// An attempt that has stopped, verdict or not. `stalled` is not terminal for
+// the batch — the settled signal deliberately refuses to count it — but it is
+// over as an attempt, and a retry may supersede it.
+function isFinishedAttempt(state: string): boolean {
+  return isTerminalExecution(state) || state === 'stalled';
 }
 
 function releaseScope(scope: string): void {

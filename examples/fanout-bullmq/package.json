@@ -7,6 +7,7 @@
     "migrate": "rhinoq-task",
     "start": "node server.mjs",
     "doctor": "rhinoq doctor",
+    "smoke": "node smoke.mjs",
     "chaos": "node chaos.mjs"
   },
   "dependencies": {

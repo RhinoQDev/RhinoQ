@@ -8,6 +8,7 @@ import pg from 'pg';
 import { Queue, QueueEvents, Worker } from 'bullmq';
 import {
   BullMQTaskBridge,
+  PROJECTION_FAILURE_TABLE_SQL,
   PostgresProjectionFailureSink,
   PostgresProjectorLease,
   TaskMetrics,
@@ -22,6 +23,13 @@ const DATABASE_URL = process.env.RHINOQ_DATABASE_URL
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:56379';
 const QUEUE = 'transcode';
 const SCOPE = 'transcode';
+// The smoke test turns the work down to nothing and the concurrency up. A job
+// that finishes the instant it starts is the worst case for the dispatch
+// window: its `completed` event arrives while dispatchMany is still enqueueing
+// the rest of the batch, which is precisely where projections used to be lost.
+const WORK_MS = Number(process.env.RHINOQ_EXAMPLE_WORK_MS ?? -1);
+const CONCURRENCY = Number(process.env.RHINOQ_EXAMPLE_CONCURRENCY ?? 4);
+const PORT = Number(process.env.PORT ?? 3000);
 
 const pool = new pg.Pool({ connectionString: DATABASE_URL });
 const connection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
@@ -30,6 +38,11 @@ const connection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
 // constructed after it settles — a consumer built in the same tick sees an
 // unusable client, decides RhinoQ is not configured, and disables itself.
 const tasks = await installPostgresTaskProfile(pool);
+
+// The failure table is application-owned and the sink below is useless without
+// it. Skipping this is how a dropped projection becomes completely invisible:
+// nothing throws, nothing logs, and the batch just never finishes.
+await pool.query(PROJECTION_FAILURE_TABLE_SQL);
 
 const queue = new Queue(QUEUE, { connection });
 const events = new QueueEvents(QUEUE, { connection: connection.duplicate() });
@@ -41,14 +54,17 @@ const metrics = new TaskMetrics();
 new Worker(
   QUEUE,
   async (job) => {
-    await new Promise((resolve) => setTimeout(resolve, 200 + Math.random() * 600));
+    const workMs = WORK_MS >= 0 ? WORK_MS : 200 + Math.random() * 600;
+    if (workMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, workMs));
+    }
     // One item in twelve fails, so the console has something real to show.
     if (job.data.index % 12 === 7) {
       throw new Error(`source mirror returned 404 for ${job.data.key}`);
     }
     return { storedAt: `s3://transcoded/${job.data.key}.mp4` };
   },
-  { connection: connection.duplicate(), concurrency: 4 },
+  { connection: connection.duplicate(), concurrency: CONCURRENCY },
 );
 
 // ---------------------------------------------------------------------------
@@ -78,10 +94,17 @@ const bridge = new BullMQTaskBridge({
   // Exactly-once, decided by one SQL statement rather than a counter in this
   // process — so it survives a crash, a redelivered event and several bridges.
   onItemsSettled: async (task) => {
-    const failed = task.executions.filter((execution) => execution.state === 'failed');
-    console.log(
-      `[settled] ${task.id}: ${task.executions.length - failed.length} ok, ${failed.length} failed`,
-    );
+    // The snapshot carries every attempt, retries included, so counting it
+    // directly reports 54 items for a 50-item batch. One item is its latest
+    // attempt; the earlier ones are history.
+    const latest = new Map();
+    for (const execution of task.executions) {
+      const current = latest.get(execution.itemKey);
+      if (!current || execution.attempt > current.attempt) latest.set(execution.itemKey, execution);
+    }
+    const items = [...latest.values()];
+    const failed = items.filter((execution) => execution.state === 'failed');
+    console.log(`[settled] ${task.id}: ${items.length - failed.length} ok, ${failed.length} failed`);
     await tasks.transitionTask(task.id, task.entityVersion, failed.length ? 'failed' : 'succeeded');
   },
 
@@ -101,6 +124,11 @@ const bridge = new BullMQTaskBridge({
     query: (text, values) => pool.query(text, values),
   }),
   onWarning: (warning) => console.warn(warning),
+  // Without this a projection that fails is silent in this process too, and
+  // "the batch is still running" is indistinguishable from "the batch stopped
+  // being written down".
+  onError: (error, event) =>
+    console.error(`[projection] job ${event?.jobId}: ${error?.code ?? ''} ${error?.message ?? error}`),
 });
 
 await bridge.start();   // required whenever a lease is configured
@@ -172,6 +200,12 @@ app.post('/batches', async (request, response) => {
         options: { attempts: 2, backoff: { type: 'fixed', delay: 500 } },
       },
     })),
+    // Return once every item is durably reserved. Waiting for the whole
+    // enqueue as well means a 200-item batch is already part-finished before
+    // the browser has the Task id, and the first progress bar it draws starts
+    // at 40% — which reads as a bug. The reservation is what makes the batch
+    // recoverable, and it has happened.
+    { awaitEnqueue: false },
   );
 
   response.json({ taskId, items: size, watch: `/admin/rhinoq` });
@@ -200,16 +234,19 @@ document.getElementById('go').onclick = async () => {
 </script>`);
 });
 
-const server = app.listen(3000, () => {
-  console.log('example on http://localhost:3000  ·  console on /admin/rhinoq');
+const server = app.listen(PORT, () => {
+  console.log(`example on http://localhost:${PORT}  ·  console on /admin/rhinoq`);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     server.close();
     reconciler.stop();
-    bridge.close();
-    void pool.end();
-    process.exit(0);
+    // Projection is not awaited by the QueueEvents listener — a listener that
+    // blocks stops the whole stream — so on shutdown there is a window where an
+    // event has arrived and is not yet written down. drain() closes it.
+    void bridge.drain()
+      .finally(() => { bridge.close(); return pool.end(); })
+      .finally(() => process.exit(0));
   });
 }

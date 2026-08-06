@@ -121,6 +121,69 @@ jobs:
         working-directory: sdks/node
       - run: npm test
         working-directory: sdks/nest
+      - run: npm test
+        working-directory: sdks/create-rhinoq-app
+
+  fanout-smoke:
+    name: Fan-out settles (gating)
+    runs-on: ubuntu-latest
+    # The example hung on roughly two runs in three and every manual review
+    # passed, including the author's, because a green run proves nothing about
+    # a race. This job is the reason that cannot happen again: real Postgres,
+    # real Redis, real BullMQ, real batches, and a non-zero exit unless every
+    # item reaches a terminal state and the settled signal fires exactly once.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rhinoq
+          POSTGRES_PASSWORD: rhinoq
+          POSTGRES_DB: fanout
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rhinoq -d fanout"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      RHINOQ_DATABASE_URL: postgres://rhinoq:rhinoq@127.0.0.1:5432/fanout
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: sdks/node
+      - run: npm run build
+        working-directory: sdks/node
+      - name: Node PostgreSQL Task contracts
+        run: node --test test/task-conflicts.integration.test.mjs
+        working-directory: sdks/node
+        env:
+          RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@127.0.0.1:5432/fanout
+      - run: npm install
+        working-directory: examples/fanout-bullmq
+      - run: npx rhinoq-task
+        working-directory: examples/fanout-bullmq
+      # Ten batches, not one. A defect that shows up two runs in three survives
+      # any single run; ten make a silent regression a certainty to catch.
+      - name: Fan-out batches settle
+        run: npm run smoke
+        working-directory: examples/fanout-bullmq
+        env:
+          RHINOQ_SMOKE_SIZES: 50,50,50,100,100,200,200
+          RHINOQ_SMOKE_SLOW_SIZES: 50,50,100
 
   benchmark-smoke:
     name: Benchmark smoke (non-gating evidence)

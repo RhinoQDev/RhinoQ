@@ -197,8 +197,31 @@ export interface TaskExecutionCounts {
   cancelled: number;
 }
 
+/**
+ * The same buckets counted once per item instead of once per attempt.
+ *
+ * `executionCounts` counts attempts, so a 200-URL batch with three retries
+ * reads `total: 203` — and that number is what a browser polling the summary
+ * puts on the screen next to the 200 URLs the user pasted in. `itemCounts`
+ * counts the live attempt of each distinct `itemKey`, so `total` is the item
+ * count the user submitted and `retries` carries the difference.
+ *
+ * Show `itemCounts` to users; keep `executionCounts` for operators, where the
+ * attempt is the thing being looked at.
+ */
+export interface TaskItemCounts extends TaskExecutionCounts {
+  /** Superseded attempts: `executionCounts.total - itemCounts.total`. */
+  retries: number;
+}
+
 export type TaskSummary = Omit<TaskSnapshot, 'executions'> & {
+  /** One entry per attempt, retries included. Operator-facing. */
   executionCounts: TaskExecutionCounts;
+  /**
+   * One entry per item. This is the shape to render for an end user.
+   * Absent only when reading from a Gateway older than beta.10.
+   */
+  itemCounts?: TaskItemCounts;
 };
 
 export interface TaskExecutionPage {

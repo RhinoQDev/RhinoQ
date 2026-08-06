@@ -1,0 +1,34 @@
+{
+  "name": "create-rhinoq-app",
+  "version": "0.1.0-beta.9",
+  "description": "One command to a running BullMQ fan-out with progress, cancellation and an operator console",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/madebyduy/RhinoQ.git",
+    "directory": "sdks/create-rhinoq-app"
+  },
+  "homepage": "https://github.com/madebyduy/RhinoQ/blob/main/docs/two-doors.md",
+  "bugs": {
+    "url": "https://github.com/madebyduy/RhinoQ/issues"
+  },
+  "type": "module",
+  "bin": {
+    "create-rhinoq-app": "index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "template",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

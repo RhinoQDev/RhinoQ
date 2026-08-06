@@ -21,6 +21,8 @@ export * from './tasks/watch.js';
 export * from './tasks/store.js';
 export * from './tasks/react.js';
 export * from './integration.js';
+export * from './quickstart.js';
+export * from './verify/verifiers.js';
 export * from './providers/stripe.js';
 export * from './providers/storage.js';
 export * from './providers/object-transfer.js';

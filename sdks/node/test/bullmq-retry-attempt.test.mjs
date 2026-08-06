@@ -53,14 +53,84 @@ test('a failed event followed by active closes the old attempt before retrying',
   }
 });
 
+// QueueEvents delivers a job's events in order; the listener used to start each
+// projection without waiting for the previous one, so two events for the same
+// job could be applied in either order. On a fast job the `active` of a retry
+// and the `failed` before it overlap, and applying them backwards makes the
+// bridge open an attempt the runtime has already finished with — which then
+// waits forever for events that were delivered before it existed. One item in a
+// hundred: frequent enough to hang a batch, rare enough to look like something
+// else entirely.
+test('two events for one job are applied in the order they arrived', async () => {
+  const h = newHarness({ firstState: 'running' });
+  try {
+    const active = h.listeners.get('active');
+    const failed = h.listeners.get('failed');
+
+    // Both fired in one tick, exactly as QueueEvents does it. Neither is awaited
+    // by the caller, which is the whole point.
+    failed({ jobId: 'bull-job-1', failedReason: 'upstream returned 502' });
+    active({ jobId: 'bull-job-1' });
+    await h.bridge.drain();
+
+    assert.equal(h.executions.length, 2, 'the failure landed first, so active opened attempt 2');
+    assert.equal(h.executions[0].state, 'failed');
+    assert.equal(h.executions[0].reason, 'upstream returned 502');
+    assert.equal(h.executions[1].attempt, 2);
+    assert.equal(h.executions[1].state, 'running');
+  } finally {
+    h.bridge.close();
+  }
+});
+
+// The one that mattered in practice. BullMQ never emits a `failed` QueueEvent
+// for an attempt it is going to retry — the sequence is
+// active -> delayed -> waiting -> active -> failed, and only the last failure is
+// announced. Without reading `delayed`, the retried run was projected onto
+// attempt 1: every counter stayed consistent, the batch finished correctly, and
+// the per-attempt history silently claimed each item had run exactly once.
+test('a delayed event ends the attempt so the next active opens a new one', async () => {
+  const h = newHarness({ firstState: 'running' });
+  try {
+    await h.bridge.project('delayed', { jobId: 'bull-job-1' });
+    assert.equal(h.executions[0].state, 'stalled');
+    assert.deepEqual(h.retries, [], 'the replacement waits for the runtime to start it');
+
+    await h.bridge.project('active', { jobId: 'bull-job-1' });
+    assert.equal(h.executions.length, 2);
+    assert.equal(h.executions[1].attempt, 2);
+    assert.equal(h.executions[1].state, 'running');
+  } finally {
+    h.bridge.close();
+  }
+});
+
+// A job scheduled with a delay emits the same event before it has ever run.
+// The payload cannot tell the two apart; RhinoQ's own state can.
+test('a delayed event before the attempt ever ran is not a retry', async () => {
+  const h = newHarness({ firstState: 'dispatched' });
+  try {
+    await h.bridge.project('delayed', { jobId: 'bull-job-1' });
+
+    assert.equal(h.executions.length, 1);
+    assert.equal(h.executions[0].state, 'dispatched');
+    assert.deepEqual(h.retries, []);
+  } finally {
+    h.bridge.close();
+  }
+});
+
 test('an observed runtime attempt repairs a missed failed and active event', async () => {
   const h = newHarness({ firstState: 'running' });
   try {
     await h.bridge.reconcile({ state: 'active', jobId: 'bull-job-1', attempt: 2 });
 
     assert.equal(h.executions.length, 2);
-    assert.equal(h.executions[0].state, 'failed');
-    assert.match(h.executions[0].reason, /runtime advanced to attempt 2/);
+    // `stalled`, not `failed`: nothing said this attempt failed, only that the
+    // runtime moved past it. `stalled` is also the one state the settled signal
+    // refuses to count, so a batch cannot be declared complete in the gap
+    // between an attempt ending and its replacement starting.
+    assert.equal(h.executions[0].state, 'stalled');
     assert.equal(h.executions[1].attempt, 2);
     assert.equal(h.executions[1].state, 'running');
   } finally {
@@ -254,5 +324,5 @@ function newHarness({
     ...(retryExecutionId ? { retryExecutionId } : {}),
     ...(metrics ? { metrics } : {}),
   });
-  return { bridge, task, executions, retries, warnings, metrics };
+  return { bridge, task, executions, retries, warnings, metrics, listeners };
 }

@@ -19,6 +19,24 @@ import type {
  *
  * Both the HTTP Gateway client and the embedded PostgreSQL client implement
  * this interface. Adapters depend on intent, not on a transport or process.
+ *
+ * **Two version axes.** Every command is fenced, and there are two fences:
+ *
+ * - a Task command takes `expectedTaskVersion` — `TaskSnapshot.entityVersion`;
+ * - an Execution command takes `expectedExecutionVersion` — the `version` of
+ *   the `TaskExecution`, which is not the Task's and does not move with it.
+ *
+ * They used to share the name `expectedVersion`, and passing the Task's version
+ * to an Execution command produced `RHINOQ_VERSION_CONFLICT` — the same code a
+ * real race produces, so the natural response is to re-read and retry, which
+ * never terminates. The server now answers that specific mistake with
+ * `RHINOQ_WRONG_VERSION_SCOPE` and a message that names both axes.
+ *
+ * ```ts
+ * const execution = await tasks.getTaskExecution(executionId);
+ * await tasks.transitionTaskExecution(execution.id, execution.version, 'succeeded');
+ * //                                                ^^^^^^^^^^^^^^^^^ not task.entityVersion
+ * ```
  */
 export interface TaskClient {
   createTask(request: TaskCreateRequest): Promise<TaskSnapshot>;
@@ -45,15 +63,17 @@ export interface TaskClient {
    * profile implements it in one bounded query.
    */
   listTaskExecutionRuntimeRefs?(taskId: string): Promise<TaskExecutionRuntimeRefs>;
+  /** Fenced on `TaskExecution.version`, never on `TaskSnapshot.entityVersion`. */
   transitionTaskExecution(
     executionId: string,
-    expectedVersion: number,
+    expectedExecutionVersion: number,
     state: string,
     reason?: string,
   ): Promise<TaskSnapshot>;
+  /** Fenced on `TaskExecution.version`, never on `TaskSnapshot.entityVersion`. */
   attachTaskExecutionResult(
     executionId: string,
-    expectedVersion: number,
+    expectedExecutionVersion: number,
     reference: string,
   ): Promise<TaskSnapshot>;
   getTaskExecutionResults(taskId: string): Promise<TaskExecutionResults>;
@@ -67,7 +87,7 @@ export interface TaskClient {
    */
   retryTaskExecution?(
     executionId: string,
-    expectedVersion: number,
+    expectedExecutionVersion: number,
     nextExecutionId: string,
   ): Promise<TaskSnapshot>;
   /**
@@ -75,23 +95,28 @@ export interface TaskClient {
    * caller that did it. Optional for the same reason as `retryTaskExecution`.
    */
   settleTaskItems?(taskId: string): Promise<boolean>;
+  /**
+   * Recomputes fan-out progress from the items, with no version to supply and
+   * none to lose. Optional for the same reason as `retryTaskExecution`.
+   */
+  syncTaskItemProgress?(taskId: string): Promise<number>;
   transitionTask(
     taskId: string,
-    expectedVersion: number,
+    expectedTaskVersion: number,
     state: Exclude<TaskState, 'pending'>,
   ): Promise<TaskSnapshot>;
   reportTaskProgress(
     taskId: string,
-    expectedVersion: number,
+    expectedTaskVersion: number,
     progress: TaskProgress,
   ): Promise<TaskSnapshot>;
   requestTaskCancellation(
     taskId: string,
-    expectedVersion: number,
+    expectedTaskVersion: number,
   ): Promise<TaskSnapshot>;
   resolveTaskCancellation(
     taskId: string,
-    expectedVersion: number,
+    expectedTaskVersion: number,
     status: Extract<
       TaskCancellationStatus,
       'acknowledged' | 'cannot_cancel_safely' | 'failed'
@@ -100,7 +125,7 @@ export interface TaskClient {
   ): Promise<TaskSnapshot>;
   attachTaskResult(
     taskId: string,
-    expectedVersion: number,
+    expectedTaskVersion: number,
     reference: string,
   ): Promise<TaskResult>;
   getTaskResult(taskId: string): Promise<TaskResult>;

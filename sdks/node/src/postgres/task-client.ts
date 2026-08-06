@@ -45,6 +45,15 @@ interface TaskRow {
   execution_failed: string | number;
   execution_stalled: string | number;
   execution_cancelled: string | number;
+  // Present on a summary read only: the same buckets counted once per item.
+  item_total?: string | number;
+  item_pending_dispatch?: string | number;
+  item_dispatched?: string | number;
+  item_running?: string | number;
+  item_succeeded?: string | number;
+  item_failed?: string | number;
+  item_stalled?: string | number;
+  item_cancelled?: string | number;
 }
 
 interface ExecutionRow {
@@ -66,9 +75,36 @@ interface ExecutionRow {
 
 interface ExecutionCursor { id: string }
 
+// The stored aggregates count attempts, which is what an operator wants and
+// what a user must never be shown: three retries turn a 200-item batch into
+// `total: 203`. Items are the live attempts — `superseded_at IS NULL` leaves
+// exactly one row per itemKey — and the aggregate is bounded by the Task, using
+// executions_task_idx. It is computed rather than stored because supersede
+// moves a row between items and attempts, and a counter maintained across that
+// boundary is a counter that eventually disagrees with the rows.
 const SUMMARY_SQL = `
-SELECT t.*, '[]'::jsonb AS executions
+SELECT t.*, '[]'::jsonb AS executions,
+       items.total AS item_total,
+       items.pending_dispatch AS item_pending_dispatch,
+       items.dispatched AS item_dispatched,
+       items.running AS item_running,
+       items.succeeded AS item_succeeded,
+       items.failed AS item_failed,
+       items.stalled AS item_stalled,
+       items.cancelled AS item_cancelled
 FROM rhinoq_task.tasks AS t
+LEFT JOIN LATERAL (
+  SELECT count(*) AS total,
+         count(*) FILTER (WHERE e.state = 'pending_dispatch') AS pending_dispatch,
+         count(*) FILTER (WHERE e.state = 'dispatched') AS dispatched,
+         count(*) FILTER (WHERE e.state = 'running') AS running,
+         count(*) FILTER (WHERE e.state = 'succeeded') AS succeeded,
+         count(*) FILTER (WHERE e.state = 'failed') AS failed,
+         count(*) FILTER (WHERE e.state = 'stalled') AS stalled,
+         count(*) FILTER (WHERE e.state = 'cancelled') AS cancelled
+  FROM rhinoq_task.executions AS e
+  WHERE e.task_id = t.id AND e.superseded_at IS NULL
+) AS items ON true
 WHERE t.id = $1 AND ($2::text IS NULL OR t.owner_id = $2)`;
 
 const SNAPSHOT_SQL = `
@@ -379,6 +415,28 @@ export class PostgresTaskClient implements TaskClient {
    * Returns false when items are still open, when the Task has no items, and
    * on every call after the first.
    */
+  /**
+   * Recomputes `progress` from the items themselves, under the Task row lock.
+   *
+   * There is no `expectedVersion` because there is nothing for the caller to
+   * decide: completed and total are functions of rows this schema owns. The
+   * read-modify-write this replaces was the largest single source of version
+   * conflicts on a fan-out, and it sat upstream of the settled signal.
+   *
+   * Counts live attempts, so `total` is the number of items, not attempts.
+   * Progress never regresses and a no-change call does not advance the version.
+   */
+  async syncTaskItemProgress(taskId: string): Promise<number> {
+    if (!taskId?.trim()) {
+      throw new TypeError('task id is required');
+    }
+    const result = await this.execute<{ version: string | number | null }>(
+      `SELECT rhinoq_task.sync_item_progress($1) AS version`,
+      [taskId],
+    );
+    return Number(result.rows[0]?.version ?? 0);
+  }
+
   async settleTaskItems(taskId: string): Promise<boolean> {
     if (!taskId?.trim()) {
       throw new TypeError('task id is required');
@@ -442,13 +500,13 @@ export class PostgresTaskClient implements TaskClient {
    */
   async retryTaskExecution(
     executionId: string,
-    expectedVersion: number,
+    expectedExecutionVersion: number,
     nextExecutionId: string,
   ): Promise<TaskSnapshot> {
     const execution = await this.getTaskExecution(executionId);
     await this.execute(
       `SELECT rhinoq_task.retry_execution($1,$2,$3)`,
-      [executionId, expectedVersion, nextExecutionId],
+      [executionId, expectedExecutionVersion, nextExecutionId],
     );
     return this.getTask(execution.taskId);
   }
@@ -465,34 +523,41 @@ export class PostgresTaskClient implements TaskClient {
     return mapExecution(row);
   }
 
+  /**
+   * `expectedExecutionVersion` is `TaskExecution.version`. Passing
+   * `TaskSnapshot.entityVersion` here is the single most common integration
+   * mistake, and the server answers it with `RHINOQ_WRONG_VERSION_SCOPE` rather
+   * than a conflict that looks like contention.
+   */
   async transitionTaskExecution(
     executionId: string,
-    expectedVersion: number,
+    expectedExecutionVersion: number,
     state: string,
     reason?: string,
   ): Promise<TaskSnapshot> {
-    validateVersion(expectedVersion);
+    validateVersion(expectedExecutionVersion, 'expectedExecutionVersion');
     const execution = await this.getTaskExecution(executionId);
     await this.execute(
       `SELECT rhinoq_task.transition_execution($1, $2, $3, $4)`,
-      [executionId, expectedVersion, state, reason ?? null],
+      [executionId, expectedExecutionVersion, state, reason ?? null],
     );
     return this.getTask(execution.taskId);
   }
 
+  /** `expectedExecutionVersion` is `TaskExecution.version`. */
   async attachTaskExecutionResult(
     executionId: string,
-    expectedVersion: number,
+    expectedExecutionVersion: number,
     reference: string,
   ): Promise<TaskSnapshot> {
-    validateVersion(expectedVersion);
+    validateVersion(expectedExecutionVersion, 'expectedExecutionVersion');
     if (!reference?.trim()) {
       throw new TypeError('execution result reference is required');
     }
     const execution = await this.getTaskExecution(executionId);
     await this.execute(
       `SELECT rhinoq_task.attach_execution_result($1, $2, $3)`,
-      [executionId, expectedVersion, reference],
+      [executionId, expectedExecutionVersion, reference],
     );
     return this.getTask(execution.taskId);
   }
@@ -740,17 +805,33 @@ export interface TaskStateQuery {
 
 function mapSummary(row: TaskRow): TaskSummary {
   const { executions: _executions, ...summary } = mapSnapshot(row);
+  const executionCounts = {
+    total: Number(row.execution_total),
+    pendingDispatch: Number(row.execution_pending_dispatch),
+    dispatched: Number(row.execution_dispatched),
+    running: Number(row.execution_running),
+    succeeded: Number(row.execution_succeeded),
+    failed: Number(row.execution_failed),
+    stalled: Number(row.execution_stalled),
+    cancelled: Number(row.execution_cancelled),
+  };
+  if (row.item_total === undefined || row.item_total === null) {
+    return { ...summary, executionCounts };
+  }
+  const itemTotal = Number(row.item_total);
   return {
     ...summary,
-    executionCounts: {
-      total: Number(row.execution_total),
-      pendingDispatch: Number(row.execution_pending_dispatch),
-      dispatched: Number(row.execution_dispatched),
-      running: Number(row.execution_running),
-      succeeded: Number(row.execution_succeeded),
-      failed: Number(row.execution_failed),
-      stalled: Number(row.execution_stalled),
-      cancelled: Number(row.execution_cancelled),
+    executionCounts,
+    itemCounts: {
+      total: itemTotal,
+      pendingDispatch: Number(row.item_pending_dispatch ?? 0),
+      dispatched: Number(row.item_dispatched ?? 0),
+      running: Number(row.item_running ?? 0),
+      succeeded: Number(row.item_succeeded ?? 0),
+      failed: Number(row.item_failed ?? 0),
+      stalled: Number(row.item_stalled ?? 0),
+      cancelled: Number(row.item_cancelled ?? 0),
+      retries: Math.max(0, executionCounts.total - itemTotal),
     },
   };
 }
@@ -876,9 +957,9 @@ function taskError(code: string, detail: string, cause?: unknown): RhinoQError {
   return new RhinoQError(code, detail, false, { status, cause });
 }
 
-function validateVersion(version: number): void {
+function validateVersion(version: number, name = 'expectedTaskVersion'): void {
   if (!Number.isInteger(version) || version <= 0) {
-    throw new RangeError('expectedVersion must be a positive integer');
+    throw new RangeError(`${name} must be a positive integer`);
   }
 }
 

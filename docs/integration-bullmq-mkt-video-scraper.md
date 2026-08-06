@@ -600,6 +600,25 @@ oversight rather than a deliberate contract.
 Severity: medium. Not a correctness break; it is a churn and
 spurious-conflict problem that grows with fan-out width.
 
+> **Re-rated, 2026-08-06.** "Not a correctness break" did not survive contact
+> with a wider fan-out. On a 50-item batch through the embedded Node client the
+> version churn described here was one of three causes of batches that never
+> settled at all: the aggregate write was a read-modify-write on a version every
+> concurrent dispatch was advancing, it lost, and the exactly-once settled
+> signal ran downstream of it. `onItemsSettled` never fired, on roughly two runs
+> in three. See the Unreleased entry in [`CHANGELOG.md`](../CHANGELOG.md).
+>
+> The embedded client no longer does a read-modify-write for fan-out progress at
+> all: `rhinoq_task.sync_item_progress` recomputes it under the Task row lock in
+> one statement, so an identical write advances nothing and a concurrent one
+> waits instead of failing. The Gateway endpoint this section tested still has
+> the behaviour described above.
+>
+> Note also that GAP-4 above is marked **fixed**, and it is — but it proves that
+> `execution-only` does not close a Task on its first finished item. It does not
+> prove the batch closes at all. Two different questions; the second one was
+> broken, and nothing here was testing it.
+
 ## 11. Conclusion
 
 **Conditional value, and the condition is now much better met than in beta.1.**

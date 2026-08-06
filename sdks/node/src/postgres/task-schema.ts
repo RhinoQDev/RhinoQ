@@ -1,7 +1,7 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 6;
-export const TASK_SCHEMA_NAME = '006_transactional_item_effect';
+export const TASK_SCHEMA_VERSION = 7;
+export const TASK_SCHEMA_NAME = '007_actionable_conflicts_and_late_starts';
 
 /**
  * Task-only PostgreSQL profile.
@@ -899,13 +899,610 @@ END;
 $$;
 `;
 
+/**
+ * Errors a reader can act on, and the edge a runtime that never says "started"
+ * needs.
+ *
+ * Three things ship together because they are one integration experience.
+ *
+ * 1. Every version conflict used to raise with `DETAIL = id`, and the client
+ *    maps `detail` onto `Error.message`. The whole message was therefore a bare
+ *    identifier: `RhinoQError: job-be32ecbe`. It named neither the command nor
+ *    either version, so a log line said nothing and the first move was always
+ *    to re-derive by hand what the process had just been doing. A product whose
+ *    argument is "a green status can be lying" cannot answer with an opaque id.
+ *
+ * 2. `expectedVersion` means `TaskSnapshot.entityVersion` on a Task command and
+ *    `TaskExecution.version` on an Execution command. Passing the wrong one
+ *    raised `RHINOQ_VERSION_CONFLICT` — indistinguishable from real contention,
+ *    so the reasonable next step (retry the read-modify-write) never terminates.
+ *    When the supplied number is exactly the parent Task's version, that is not
+ *    contention, it is the wrong axis, and it can be said so: the two versions
+ *    can only be equal here when the number is already correct, so this never
+ *    reclassifies a genuine conflict.
+ *
+ * 3. `dispatched -> succeeded|failed` becomes legal. The lifecycle assumed every
+ *    runtime signals `active` before it finishes. Webhooks, batch callbacks and
+ *    plain out-of-order delivery do not, and such an item was refused with
+ *    `RHINOQ_INVALID_EXECUTION_TRANSITION` and left at `dispatched` forever —
+ *    which also means the batch never settles. `started_at` is not modelled, so
+ *    nothing is lost by allowing the edge.
+ */
+export const TASK_SCHEMA_V7_SQL = String.raw`
+CREATE OR REPLACE FUNCTION rhinoq_task.fail_version(
+  p_operation text,
+  p_id text,
+  p_expected bigint,
+  p_current bigint,
+  p_scope text DEFAULT NULL,
+  p_wrong_scope_hint text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $fn$
+BEGIN
+  IF p_wrong_scope_hint IS NOT NULL THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P0001',
+      MESSAGE = 'RHINOQ_WRONG_VERSION_SCOPE',
+      DETAIL = p_operation || '(' || p_id || '): expected version ' || p_expected ||
+        ' is the current ' || p_wrong_scope_hint || ' version, not the ' ||
+        COALESCE(p_scope, 'entity') || ' version ' || p_current || '. ' ||
+        'An Execution command fences on TaskExecution.version; only a Task command ' ||
+        'fences on TaskSnapshot.entityVersion.';
+  END IF;
+  RAISE EXCEPTION USING
+    ERRCODE = 'P0001',
+    MESSAGE = 'RHINOQ_VERSION_CONFLICT',
+    DETAIL = p_operation || '(' || p_id || '): expected ' || COALESCE(p_scope, 'entity') ||
+      ' version ' || p_expected || ', current version ' || p_current ||
+      '. Re-read the entity and retry the command with the version it returned.';
+END;
+$fn$;
+
+-- Fan-out progress without a read-modify-write.
+--
+-- The bridge used to read the Task, count the terminal items in the process,
+-- and write the result back fenced on the version it had read. On a wide batch
+-- every completion does that at once and most of them lose, so a projection
+-- that had already done its real work failed on the progress counter — and the
+-- exactly-once settled signal was downstream of it. Counting is not a decision
+-- the caller has to make: it is a function of rows this schema already owns, so
+-- it happens under the Task row lock, in one statement, with no fence to lose.
+-- Concurrency becomes a short lock wait instead of an error.
+--
+-- Superseded attempts are excluded, so the total is the item count the user
+-- submitted rather than the attempt count. Progress may not regress: a call
+-- that arrives with a stale view leaves the further-along value alone.
+-- "Every item has finished", counted per item rather than per attempt.
+--
+-- v5 read the stored aggregates, which count every attempt ever written,
+-- superseded ones included. That was fine while a superseded attempt was always
+-- failed, a terminal bucket the check ignores, and wrong the moment one could
+-- be stalled, which is exactly what an attempt ended by a retry now is: the
+-- counter never returned to zero and the batch never settled at all.
+--
+-- Reading the live attempts instead makes the question the one anyone actually
+-- means: is there an item that has not finished? Exactly-once is unchanged; it
+-- comes from items_settled_at IS NULL, not from the counting. The retry
+-- supersede and its replacement row are one transaction, so a concurrent call
+-- sees either the old attempt or the new one and never a gap between them.
+CREATE OR REPLACE FUNCTION rhinoq_task.settle_items(p_id text)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_settled boolean := false;
+BEGIN
+  UPDATE rhinoq_task.tasks AS t
+  SET items_settled_at = clock_timestamp(),
+      updated_at = clock_timestamp()
+  WHERE t.id = p_id
+    AND t.items_settled_at IS NULL
+    AND EXISTS (
+      SELECT 1 FROM rhinoq_task.executions AS e
+      WHERE e.task_id = t.id AND e.superseded_at IS NULL
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM rhinoq_task.executions AS e
+      WHERE e.task_id = t.id AND e.superseded_at IS NULL
+        -- 'stalled' blocks: an attempt that stopped without a verdict is not a
+        -- finished one, and calling the batch complete while one is stuck is
+        -- the failure this replaces.
+        AND e.state NOT IN ('succeeded', 'failed', 'cancelled')
+    )
+  RETURNING true INTO v_settled;
+  RETURN COALESCE(v_settled, false);
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.sync_item_progress(p_id text)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_task rhinoq_task.tasks%ROWTYPE;
+  v_completed bigint;
+  v_total bigint;
+  v_version bigint;
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id);
+  END IF;
+  IF v_task.state NOT IN ('running', 'cancel_requested') THEN
+    RETURN v_task.version;
+  END IF;
+  SELECT count(*) FILTER (WHERE state IN ('succeeded', 'failed', 'cancelled')),
+         count(*)
+    INTO v_completed, v_total
+  FROM rhinoq_task.executions
+  WHERE task_id = p_id AND superseded_at IS NULL;
+  IF v_total = 0
+     OR v_completed < v_task.progress_completed
+     OR (v_task.progress_completed = v_completed
+         AND v_task.progress_total IS NOT DISTINCT FROM v_total) THEN
+    RETURN v_task.version;
+  END IF;
+  UPDATE rhinoq_task.tasks
+  SET progress_completed = v_completed,
+      progress_total = v_total,
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_version;
+  RETURN v_version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.transition_task(
+  p_id text, p_expected_version bigint, p_target text
+)
+RETURNS bigint LANGUAGE plpgsql AS $fn$
+DECLARE v_task rhinoq_task.tasks%ROWTYPE;
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id); END IF;
+  IF v_task.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail_version('transitionTask', p_id, p_expected_version, v_task.version, 'Task');
+  END IF;
+  IF NOT (
+    (v_task.state='pending' AND p_target='queued') OR
+    (v_task.state='queued' AND p_target IN ('running','cancel_requested')) OR
+    (v_task.state='running' AND p_target IN ('uncertain','succeeded','failed','cancel_requested')) OR
+    (v_task.state='uncertain' AND p_target IN ('succeeded','failed')) OR
+    (v_task.state='cancel_requested' AND p_target IN ('uncertain','succeeded','failed','cancelled')) OR
+    (v_task.state IN ('failed','cancelled') AND p_target='queued')
+  ) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_TASK_TRANSITION', v_task.state || ' -> ' || COALESCE(p_target,''));
+  END IF;
+  UPDATE rhinoq_task.tasks SET state=p_target,
+    cancellation_status=CASE
+      WHEN p_target='queued' AND v_task.state IN ('failed','cancelled') THEN 'none'
+      WHEN p_target='cancel_requested' AND cancellation_status='none' THEN 'requested'
+      WHEN v_task.state='cancel_requested' AND p_target='cancelled' THEN 'cancelled'
+      WHEN v_task.state='cancel_requested' AND p_target='succeeded' THEN 'too_late'
+      WHEN v_task.state='cancel_requested' AND p_target='failed' THEN 'failed'
+      ELSE cancellation_status END,
+    cancellation_reason=CASE
+      WHEN p_target='queued' AND v_task.state IN ('failed','cancelled') THEN NULL
+      ELSE cancellation_reason END,
+    version=version+1, updated_at=clock_timestamp()
+  WHERE id=p_id RETURNING version INTO v_task.version;
+  RETURN v_task.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.report_progress(
+  p_id text,
+  p_expected_version bigint,
+  p_completed bigint,
+  p_total bigint,
+  p_has_total boolean,
+  p_message text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_task rhinoq_task.tasks%ROWTYPE;
+  v_total bigint := CASE WHEN p_has_total THEN p_total ELSE NULL END;
+  v_message text := NULLIF(COALESCE(p_message, ''), '');
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id);
+  END IF;
+  IF v_task.state NOT IN ('running', 'cancel_requested') THEN
+    PERFORM rhinoq_task.fail('RHINOQ_PROGRESS_STATE', v_task.state);
+  END IF;
+  IF p_completed < 0 OR (p_has_total AND (p_total < 0 OR p_total < p_completed)) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_PROGRESS');
+  END IF;
+  IF v_task.progress_completed = p_completed
+     AND v_task.progress_total IS NOT DISTINCT FROM v_total
+     AND v_task.progress_message IS NOT DISTINCT FROM v_message THEN
+    RETURN v_task.version;
+  END IF;
+  IF v_task.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail_version('reportTaskProgress', p_id, p_expected_version, v_task.version, 'Task');
+  END IF;
+  IF p_completed < v_task.progress_completed THEN
+    PERFORM rhinoq_task.fail('RHINOQ_PROGRESS_REGRESSION', p_id);
+  END IF;
+  IF v_task.progress_total IS NOT NULL
+     AND v_task.progress_total IS DISTINCT FROM v_total THEN
+    PERFORM rhinoq_task.fail('RHINOQ_PROGRESS_TOTAL_CHANGED', p_id);
+  END IF;
+
+  UPDATE rhinoq_task.tasks
+  SET progress_completed = p_completed,
+      progress_total = v_total,
+      progress_message = v_message,
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_task.version;
+  RETURN v_task.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.request_cancellation(
+  p_id text,
+  p_expected_version bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_task rhinoq_task.tasks%ROWTYPE;
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id);
+  END IF;
+  IF v_task.state = 'cancel_requested' THEN
+    RETURN v_task.version;
+  END IF;
+  IF v_task.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail_version('requestTaskCancellation', p_id, p_expected_version, v_task.version, 'Task');
+  END IF;
+  IF v_task.state NOT IN ('queued', 'running') THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_TASK_TRANSITION', v_task.state);
+  END IF;
+  UPDATE rhinoq_task.tasks
+  SET state = 'cancel_requested',
+      cancellation_status = 'requested',
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_task.version;
+  RETURN v_task.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.resolve_cancellation(
+  p_id text,
+  p_expected_version bigint,
+  p_status text,
+  p_reason text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_task rhinoq_task.tasks%ROWTYPE;
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id);
+  END IF;
+  IF v_task.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail_version('resolveTaskCancellation', p_id, p_expected_version, v_task.version, 'Task');
+  END IF;
+  IF v_task.state <> 'cancel_requested'
+     OR p_status NOT IN ('acknowledged', 'cannot_cancel_safely', 'failed') THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_CANCELLATION', p_status);
+  END IF;
+  UPDATE rhinoq_task.tasks
+  SET cancellation_status = p_status,
+      cancellation_reason = NULLIF(btrim(COALESCE(p_reason, '')), ''),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_task.version;
+  RETURN v_task.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.attach_task_result(
+  p_id text,
+  p_expected_version bigint,
+  p_reference text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_task rhinoq_task.tasks%ROWTYPE;
+  v_reference text := btrim(COALESCE(p_reference, ''));
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id);
+  END IF;
+  IF v_reference = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_RESULT');
+  END IF;
+  IF v_task.result_ref = v_reference THEN
+    RETURN v_task.version;
+  END IF;
+  IF v_task.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail_version('attachTaskResult', p_id, p_expected_version, v_task.version, 'Task');
+  END IF;
+  UPDATE rhinoq_task.tasks
+  SET result_ref = v_reference,
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_task.version;
+  RETURN v_task.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.bind_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_runtime text,
+  p_runtime_scope text,
+  p_external_id text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_version bigint;
+BEGIN
+  SELECT * INTO v_execution
+  FROM rhinoq_task.executions WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'bindTaskExecution', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF v_execution.runtime <> btrim(COALESCE(p_runtime, '')) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_BINDING', p_id);
+  END IF;
+  IF v_execution.external_id IS NOT NULL
+     AND (
+       v_execution.external_id <> btrim(COALESCE(p_external_id, '')) OR
+       v_execution.runtime_scope <> btrim(COALESCE(p_runtime_scope, ''))
+     ) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_BOUND', p_id);
+  END IF;
+  -- The identity being bound is already the one on the row, and the attempt has
+  -- moved on: its first runtime event beat the bind. Binding is what the caller
+  -- asked for and it is already true, so this is a no-op rather than an error
+  -- the caller has to catch, re-read and classify.
+  IF v_execution.state <> 'pending_dispatch' THEN
+    IF v_execution.external_id = btrim(COALESCE(p_external_id, '')) THEN
+      RETURN v_execution.version;
+    END IF;
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_BINDING', p_id);
+  END IF;
+  IF btrim(COALESCE(p_external_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_BINDING', p_id);
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET runtime_scope = btrim(COALESCE(p_runtime_scope, '')),
+      external_id = btrim(p_external_id),
+      state = 'dispatched',
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_execution.version;
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = v_execution.task_id;
+  RETURN v_execution.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.transition_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_target text,
+  p_reason text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_version bigint;
+BEGIN
+  SELECT * INTO v_execution
+  FROM rhinoq_task.executions WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.state = p_target THEN
+    RETURN v_execution.version;
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'transitionTaskExecution', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF NOT (
+    (v_execution.state = 'pending_dispatch' AND p_target = 'cancelled') OR
+    -- A reserved attempt that already carries the runtime identity, and about
+    -- which the runtime has now said something, was dispatched: the event could
+    -- not exist otherwise. Requiring the bind to land first lost every event
+    -- for a job that finished between Queue.add and the bind, which on a
+    -- zero-latency worker is most of the front of the batch. Refusing them left
+    -- those items non-terminal forever, and the batch with them.
+    (v_execution.state = 'pending_dispatch' AND v_execution.external_id IS NOT NULL
+      AND p_target IN ('running', 'succeeded', 'failed', 'stalled')) OR
+    -- 'succeeded'/'failed' direct from 'dispatched': a runtime that reports a
+    -- result without ever reporting a start is not malformed, and refusing it
+    -- strands the item and the batch that contains it.
+    (v_execution.state = 'dispatched' AND p_target IN (
+      'running', 'succeeded', 'failed', 'stalled', 'cancelled'
+    )) OR
+    (v_execution.state = 'running' AND p_target IN (
+      'succeeded', 'failed', 'stalled', 'cancelled'
+    )) OR
+    (v_execution.state = 'stalled' AND p_target IN (
+      'dispatched', 'failed', 'cancelled'
+    ))
+  ) THEN
+    PERFORM rhinoq_task.fail(
+      'RHINOQ_INVALID_EXECUTION_TRANSITION',
+      v_execution.state || ' -> ' || COALESCE(p_target, '')
+    );
+  END IF;
+  UPDATE rhinoq_task.executions
+  SET state = p_target,
+      failure_reason = CASE
+        WHEN p_target = 'failed'
+          THEN left(NULLIF(btrim(COALESCE(p_reason, '')), ''), 512)
+        ELSE failure_reason
+      END,
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_execution.version;
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = v_execution.task_id;
+  RETURN v_execution.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.attach_execution_result(
+  p_id text,
+  p_expected_version bigint,
+  p_reference text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_version bigint;
+  v_reference text := btrim(COALESCE(p_reference, ''));
+BEGIN
+  SELECT * INTO v_execution
+  FROM rhinoq_task.executions WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_reference = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_RESULT');
+  END IF;
+  IF v_execution.result_ref = v_reference THEN
+    RETURN v_execution.version;
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'attachTaskExecutionResult', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  UPDATE rhinoq_task.executions
+  SET result_ref = v_reference,
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_execution.version;
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = v_execution.task_id;
+  RETURN v_execution.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.retry_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_new_id text
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_version bigint;
+  v_attempt integer;
+BEGIN
+  IF btrim(COALESCE(p_new_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION');
+  END IF;
+  SELECT * INTO v_execution FROM rhinoq_task.executions
+  WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.superseded_at IS NOT NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_SUPERSEDED', p_id);
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'retryTaskExecution', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF v_execution.state NOT IN ('succeeded', 'failed', 'stalled', 'cancelled') THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_TRANSITION',
+      v_execution.state || ' -> superseded');
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET superseded_at = clock_timestamp(),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id;
+
+  SELECT COALESCE(MAX(attempt), 0) + 1 INTO v_attempt
+  FROM rhinoq_task.executions
+  WHERE task_id = v_execution.task_id AND item_key = v_execution.item_key;
+
+  INSERT INTO rhinoq_task.executions (
+    id, task_id, item_key, attempt, runtime, runtime_scope, external_id, state
+  ) VALUES (
+    p_new_id, v_execution.task_id, v_execution.item_key, v_attempt,
+    v_execution.runtime, v_execution.runtime_scope, v_execution.external_id,
+    'dispatched'
+  );
+
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = v_execution.task_id;
+  RETURN v_attempt;
+EXCEPTION
+  WHEN unique_violation THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_EXISTS', p_new_id);
+    RETURN 0;
+END;
+$fn$;
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
   { version: 3, name: '003_execution_supersede_expand', sql: TASK_SCHEMA_V3_SQL },
   { version: 4, name: '004_execution_supersede_contract', sql: TASK_SCHEMA_V4_SQL },
   { version: 5, name: '005_items_settled_signal', sql: TASK_SCHEMA_V5_SQL },
-  { version: 6, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V6_SQL },
+  { version: 6, name: '006_transactional_item_effect', sql: TASK_SCHEMA_V6_SQL },
+  { version: 7, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V7_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {
