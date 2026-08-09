@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +45,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   const help = spawnSync(process.execPath, [developerCLI, 'help'], { encoding: 'utf8', env: {} });
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /npx rhinoq init/);
+  assert.match(help.stdout, /npx rhinoq adopt --mode single/);
   const version = spawnSync(process.execPath, [developerCLI, '--version'], { encoding: 'utf8', env: {} });
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), packageVersion);
@@ -308,4 +309,142 @@ test('Node CLI help separates its doctor from the Go runtime doctor', () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /isolated Task profile only/);
   assert.match(result.stdout, /rhinoq doctor/);
+});
+
+test('adopt previews first, generates once and never overwrites', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-adopt-'));
+  try {
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify({
+      dependencies: { pg: '8.22.0', bullmq: '5.0.0' },
+    }));
+    const preview = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'fanout'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /preview only/);
+    assert.match(preview.stdout, /extra process\s+none/);
+    assert.match(preview.stdout, /framework-neutral/);
+    const ambiguous = spawnSync(process.execPath, [developerCLI, 'adopt', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(ambiguous.status, 1);
+    assert.match(ambiguous.stderr, /explicit Task mode/);
+    const apply = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'fanout', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(apply.status, 0, apply.stderr);
+    const generated = readFileSync(join(cwd, 'rhinoq.integration.mjs'), 'utf8');
+    assert.match(generated, /createBullMQIntegration/);
+    assert.match(generated, /mode: 'fanout'/);
+    assert.match(generated, /export async function startRhinoQ/);
+    assert.doesNotMatch(generated, /application-infrastructure/);
+    const syntax = spawnSync(process.execPath, ['--check', join(cwd, 'rhinoq.integration.mjs')], { encoding: 'utf8' });
+    assert.equal(syntax.status, 0, syntax.stderr);
+    writeFileSync(join(cwd, 'rhinoq.integration.mjs'), 'user-owned');
+    const repeat = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'single', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(repeat.status, 0, repeat.stderr);
+    assert.equal(readFileSync(join(cwd, 'rhinoq.integration.mjs'), 'utf8'), 'user-owned');
+    assert.match(repeat.stdout, /no integration file was changed/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('adopt preview explains missing prerequisites without failing', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-adopt-missing-'));
+  try {
+    writeFileSync(join(cwd, 'package.json'), '{"dependencies":{}}');
+    const result = spawnSync(process.execPath, [developerCLI, 'adopt'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /MISSING: install pg/);
+    assert.match(result.stdout, /npm install @rhinoq\/node pg bullmq/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('adopt describes PostgreSQL as new infrastructure and can generate local evaluation compose', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-adopt-postgres-'));
+  try {
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify({ dependencies: { pg: '8.22.0', bullmq: '5.0.0' } }));
+    const preview = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'single'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /required new service/);
+    const apply = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'single', '--local-postgres', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(apply.status, 0, apply.stderr);
+    const compose = readFileSync(join(cwd, 'compose.rhinoq.yml'), 'utf8');
+    assert.match(compose, /127\.0\.0\.1:55432:5432/);
+    assert.match(compose, /healthcheck/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('Nest adoption detects every queue and refuses an ambiguous apply', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-adopt-nest-'));
+  try {
+    mkdirSync(join(cwd, 'src', 'mail'), { recursive: true });
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify({ dependencies: {
+      pg: '8.22.0', bullmq: '5.0.0', '@nestjs/common': '11.0.0', '@nestjs/bullmq': '11.0.0',
+    } }));
+    writeFileSync(join(cwd, 'src', 'app.module.ts'), `import { Module } from '@nestjs/common';\n@Module({ imports: [] })\nexport class AppModule {}\n`);
+    writeFileSync(join(cwd, 'src', 'mail', 'mail.module.ts'), `BullModule.registerQueue({ name: 'mail-queue' });\nBullModule.registerQueue({ name: "audit-queue" });\n`);
+    writeFileSync(join(cwd, 'src', 'mail', 'mail.service.ts'), `export class MailService { constructor(private readonly mailQueue: any) {} send(data: unknown) { return this.mailQueue.add('send', data); } }\n`);
+
+    const preview = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'single'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /audit-queue/);
+    assert.match(preview.stdout, /mail-queue/);
+    assert.match(preview.stdout, /select queues explicitly/i);
+    assert.match(preview.stdout, /mail\.service\.ts:1/);
+
+    const ambiguous = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'single', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(ambiguous.status, 1);
+    assert.match(ambiguous.stderr, /multiple BullMQ queues/i);
+
+    const apply = spawnSync(process.execPath, [developerCLI, 'adopt', '--task', 'mail-queue=mail.send:single', '--owner-property', 'user.id', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(apply.status, 0, apply.stderr);
+    assert.match(readFileSync(join(cwd, 'src', 'rhinoq.module.ts'), 'utf8'), /mail-queue/);
+    assert.match(readFileSync(join(cwd, 'src', 'rhinoq.module.ts'), 'utf8'), /from '@rhinoq\/node'/);
+    assert.match(readFileSync(join(cwd, 'src', 'rhinoq.module.ts'), 'utf8'), /ownerFromNodeRequest/);
+    assert.match(readFileSync(join(cwd, 'src', 'rhinoq.module.ts'), 'utf8'), /forRoutes\('\/tasks'/);
+    assert.match(readFileSync(join(cwd, 'src', 'rhinoq.module.ts'), 'utf8'), /createNodeTaskCenterMiddleware/);
+    assert.match(readFileSync(join(cwd, 'src', 'rhinoq.module.ts'), 'utf8'), /RHINOQ_TASK_MANIFEST/);
+    assert.match(readFileSync(join(cwd, 'src', 'rhinoq.module.ts'), 'utf8'), /"taskType": "mail\.send"/);
+    assert.match(readFileSync(join(cwd, 'src', 'app.module.ts'), 'utf8'), /RhinoQAdoptionModule/);
+    assert.match(apply.stdout, /verified AppModule import/i);
+    assert.match(apply.stdout, /replace raw queue\.add at src[\\/]mail[\\/]mail\.service\.ts:1/);
+
+    const multi = mkdtempSync(join(tmpdir(), 'rhinoq-adopt-nest-multi-'));
+    try {
+      mkdirSync(join(multi, 'src'), { recursive: true });
+      writeFileSync(join(multi, 'package.json'), readFileSync(join(cwd, 'package.json')));
+      writeFileSync(join(multi, 'src', 'app.module.ts'), `import { Module } from '@nestjs/common';\n@Module({ imports: [] })\nexport class AppModule {}\n`);
+      writeFileSync(join(multi, 'src', 'queues.ts'), `BullModule.registerQueue({ name: 'mail-queue' }, { name: 'audit-queue' });`);
+      const result = spawnSync(process.execPath, [developerCLI, 'adopt', '--mode', 'single', '--queue', 'mail-queue', '--queue', 'audit-queue', '--owner-property', 'user.id', '--apply'], { cwd: multi, encoding: 'utf8', env: {} });
+      assert.equal(result.status, 0, result.stderr);
+      const generated = readFileSync(join(multi, 'src', 'rhinoq.module.ts'), 'utf8');
+      assert.match(generated, /mail-queue/); assert.match(generated, /audit-queue/);
+      assert.equal((generated.match(/new Pool\(\)/g) ?? []).length, 1);
+      assert.equal((generated.match(/new QueueEvents/g) ?? []).length, 2);
+      assert.equal((generated.match(/integrationToken: RHINOQ_INTEGRATION_/g) ?? []).length, 2);
+      assert.match(generated, /aggregateRhinoQHealth/);
+      assert.match(generated, /queues: await Promise\.all|const queues = await Promise\.all/);
+    } finally { rmSync(multi, { recursive: true, force: true }); }
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('adopt runtime verification checks health and the mounted Task Center', async () => {
+  const calls = [];
+  const server = createServer((request, response) => {
+    calls.push({ url: request.url, authorization: request.headers.authorization });
+    if (request.url === '/tasks/_health') {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ status: 'ok', database: 'up', projector: 'projecting' }));
+      return;
+    }
+    response.setHeader('content-type', 'text/html');
+    response.end('<title>RhinoQ Task Center</title>');
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  try {
+    const result = await runCLI(['adopt', '--verify-url', `http://127.0.0.1:${address.port}`], {
+      env: { ...process.env, RHINOQ_ADOPT_VERIFY_HEADERS: JSON.stringify({ authorization: 'Bearer test-session' }) },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /PASS application runtime health/);
+    assert.match(result.stdout, /PASS Task Center reachable/);
+    assert.deepEqual(calls.map((call) => call.url), ['/tasks/_health', '/task-center']);
+    assert.ok(calls.every((call) => call.authorization === 'Bearer test-session'));
+  } finally { server.close(); }
 });

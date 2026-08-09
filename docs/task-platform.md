@@ -56,7 +56,9 @@ Task 0:1 VerifiedTaskPolicy            (planned)
 | Result-reference delivery | implemented, integration-tested | separate Go/HTTP/Node read-write API; Snapshot chỉ trả `hasResult` |
 | BullMQ lifecycle bridge | implemented, Node SDK-tested | reserve-before-enqueue dispatch, bounded fan-out, lifecycle projection, application-owned cancellation; no outage-wide discovery |
 | Task Summary and Execution pages | implemented, Go/Node/PostgreSQL tested | stored aggregate counts, default summary polling and stable cursor pages |
-| TaskStore and React adapter | implemented, Node SDK-tested | serialized polling, stale-version rejection, bounded reconnect and zero-added-dependency React binding |
+| TaskStore, owner inbox and React adapters | implemented, Node SDK-tested | serialized polling, stale-version rejection, bounded reconnect, retry/result/history actions and zero-added-dependency React binding |
+| Application routes and Task Center | implemented, Node SDK-tested | owner-scoped list/detail/history/cancel/retry/result/health; headless UI semantics and dependency-free reference UI |
+| BullMQ Task definition/cancellation adapters | implemented, Node SDK-tested | stable declared wiring; queued removal; active cancellation fails closed without durable cooperative acknowledgement |
 | ProviderOperation | implemented, Go/Node/PostgreSQL tested | durable identity, explicit confirmation/retry policy, append-only evidence and `uncertain` fail-closed result |
 | Safe repair | implemented, Go/Gateway/Workbench tested | preview, precondition, four-eyes approval, allowlisted callback and post-apply verification |
 | Finding notifications | implemented, Go/PostgreSQL tested | signed webhook/Slack delivery with durable destination/event deduplication |

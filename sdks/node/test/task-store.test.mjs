@@ -169,6 +169,24 @@ test('TaskStore fails a permanently conflicting cancel after a bounded retry bud
   assert.equal(store.getSnapshot().snapshot.entityVersion, 13);
 });
 
+test('TaskStore retries with command identity and downloads an authorized result', async () => {
+  const calls = [];
+  const client = {
+    async getTask() { return { ...snapshot(4, 'failed'), hasResult: true }; },
+    async cancelTask() { throw new Error('unused'); },
+    async retryTask(id, version, commandId) { calls.push([id, version, commandId]); return snapshot(5, 'queued'); },
+    async getTaskResult() { return { url: 'https://download.test/result', expiresAt: '2026-08-02T00:00:00Z' }; },
+  };
+  const opened = [];
+  const store = new TaskStore(client, 'task-1');
+  await store.refresh();
+
+  assert.equal((await store.retry('retry-command-1')).state, 'queued');
+  assert.deepEqual(calls, [['task-1', 4, 'retry-command-1']]);
+  await store.downloadResult((url) => { opened.push(url); });
+  assert.deepEqual(opened, ['https://download.test/result']);
+});
+
 function snapshot(entityVersion, state) {
   return {
     schemaVersion: 1, entityVersion, id: 'task-1', type: 'report.export', state,

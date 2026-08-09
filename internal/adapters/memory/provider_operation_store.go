@@ -3,7 +3,9 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/provideroperation"
 	"github.com/madebyduy/RhinoQ/internal/ports"
@@ -14,6 +16,34 @@ type ProviderOperationStore struct {
 	byID     map[provideroperation.ID]provideroperation.Record
 	byKey    map[string]provideroperation.ID
 	evidence map[provideroperation.ID][]provideroperation.Evidence
+}
+
+func (s *ProviderOperationStore) ListProviderOperations(_ context.Context, states []provideroperation.State, before time.Time, limit int) ([]provideroperation.Record, error) {
+	if limit < 1 || limit > 500 || before.IsZero() {
+		return nil, fmt.Errorf("provider operation query requires before and limit 1..500")
+	}
+	wanted := make(map[provideroperation.State]bool, len(states))
+	for _, state := range states {
+		wanted[state] = true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]provideroperation.Record, 0, limit)
+	for _, record := range s.byID {
+		if wanted[record.State] && !record.UpdatedAt.After(before) {
+			items = append(items, record)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].UpdatedAt.Before(items[j].UpdatedAt)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }
 
 func NewProviderOperationStore() *ProviderOperationStore {

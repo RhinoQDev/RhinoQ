@@ -1,10 +1,4 @@
-/**
- * NestJS dynamic-module metadata without a runtime dependency on Nest.
- *
- * Nest consumes the returned DynamicModule structurally. Keeping this small
- * adapter free of decorators means applications can use their existing Nest
- * version, while @rhinoq/node remains the only implementation dependency.
- */
+/** Legacy compatibility entry. New applications use @rhinoq/node/nest. */
 export const RHINOQ_OPTIONS = Symbol.for('rhinoq.nest.options');
 export const RHINOQ_INTEGRATION = Symbol.for('rhinoq.nest.integration');
 export const RHINOQ_TASKS = Symbol.for('rhinoq.nest.tasks');
@@ -16,21 +10,9 @@ export class RhinoQModule {
     if (!options || typeof options.useFactory !== 'function') {
       throw new TypeError('RhinoQModule.forRootAsync requires useFactory');
     }
-    const optionsProvider = {
-      provide: RHINOQ_OPTIONS,
-      inject: options.inject ?? [],
-      useFactory: options.useFactory,
-    };
-    const integrationProvider = {
-      provide: RHINOQ_INTEGRATION,
-      inject: [RHINOQ_OPTIONS],
-      useFactory: (resolved) => createIntegration(resolved),
-    };
-    const lifecycleProvider = {
-      provide: RhinoQLifecycle,
-      inject: [RHINOQ_INTEGRATION],
-      useFactory: (integration) => new RhinoQLifecycle(integration),
-    };
+    const optionsProvider = { provide: RHINOQ_OPTIONS, inject: options.inject ?? [], useFactory: options.useFactory };
+    const integrationProvider = { provide: RHINOQ_INTEGRATION, inject: [RHINOQ_OPTIONS], useFactory: (resolved) => createIntegration(resolved) };
+    const lifecycleProvider = { provide: RhinoQLifecycle, inject: [RHINOQ_INTEGRATION], useFactory: (integration) => new RhinoQLifecycle(integration) };
     return {
       module: RhinoQModule,
       imports: options.imports ?? [],
@@ -45,17 +27,9 @@ export class RhinoQModule {
 }
 
 export class RhinoQLifecycle {
-  constructor(integration) {
-    this.integration = integration;
-  }
-
-  async onModuleInit() {
-    await this.integration.start();
-  }
-
-  onModuleDestroy() {
-    this.integration.close();
-  }
+  constructor(integration) { this.integration = integration; }
+  async onModuleInit() { await this.integration.start(); }
+  onModuleDestroy() { this.integration.close(); }
 }
 
 async function createIntegration(options) {

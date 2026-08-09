@@ -18,7 +18,10 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	outboxadapter "github.com/madebyduy/RhinoQ/internal/adapters/outbox"
+	postgresadapter "github.com/madebyduy/RhinoQ/internal/adapters/postgres"
 	"github.com/madebyduy/RhinoQ/internal/interfaces/agent"
+	"github.com/madebyduy/RhinoQ/internal/runtime/scheduler"
 	"github.com/madebyduy/RhinoQ/internal/runtime/shutdown"
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
@@ -67,7 +70,7 @@ Verify
 		return err
 	}
 
-	client, closeStore, err := openClient()
+	client, database, closeStore, err := openClient()
 	if err != nil {
 		return err
 	}
@@ -96,6 +99,10 @@ Verify
 
 	ctx, stop := shutdown.Context(context.Background())
 	defer stop()
+	publisherErrors, err := startOutboxPublisher(ctx, database)
+	if err != nil {
+		return err
+	}
 
 	httpServer := &http.Server{
 		Addr:              address,
@@ -117,6 +124,8 @@ Verify
 			return nil
 		}
 		return err
+	case err := <-publisherErrors:
+		return fmt.Errorf("retry outbox publisher stopped: %w", err)
 	case <-ctx.Done():
 	}
 
@@ -216,16 +225,16 @@ func validateAgentAddress(address string, allowUnauthenticated bool) error {
 // pgx so the documented command works without a custom bootstrap. A custom
 // build may register another database/sql driver and select it through
 // RHINOQ_DATABASE_DRIVER.
-func openClient() (*rhinoq.Client, func(), error) {
+func openClient() (*rhinoq.Client, *sql.DB, func(), error) {
 	url := os.Getenv("RHINOQ_DATABASE_URL")
 	if url == "" {
 		log.Println("rhinoq-agent: RHINOQ_DATABASE_URL is empty, running on the in-memory store (development only, nothing survives a restart)")
-		return rhinoq.NewInMemory(), func() {}, nil
+		return rhinoq.NewInMemory(), nil, func() {}, nil
 	}
 	driver := envOr("RHINOQ_DATABASE_DRIVER", "pgx")
 	db, err := sql.Open(driver, url)
 	if err != nil {
-		return nil, nil, fmt.Errorf(`RHINOQ_DRIVER_NOT_REGISTERED
+		return nil, nil, nil, fmt.Errorf(`RHINOQ_DRIVER_NOT_REGISTERED
 
 What happened
   Opening the database with driver %q failed: %v
@@ -248,9 +257,42 @@ Verify
 	client, err := rhinoq.NewPostgres(db)
 	if err != nil {
 		_ = db.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return client, func() { _ = db.Close() }, nil
+	return client, db, func() { _ = db.Close() }, nil
+}
+
+func startOutboxPublisher(ctx context.Context, db *sql.DB) (<-chan error, error) {
+	url := strings.TrimSpace(os.Getenv("RHINOQ_RETRY_DISPATCH_URL"))
+	if url == "" {
+		return nil, nil
+	}
+	if db == nil {
+		return nil, errors.New("RHINOQ_RETRY_DISPATCH_URL requires RHINOQ_DATABASE_URL; an in-memory outbox cannot recover after restart")
+	}
+	transport, err := outboxadapter.NewHTTPPublisher(outboxadapter.HTTPPublisherConfig{
+		URL: url, Secret: os.Getenv("RHINOQ_RETRY_DISPATCH_SECRET"),
+		Timeout: durationOr("RHINOQ_RETRY_DISPATCH_TIMEOUT", 10*time.Second),
+	})
+	if err != nil {
+		return nil, err
+	}
+	store, err := postgresadapter.NewOutboxStore(db)
+	if err != nil {
+		return nil, err
+	}
+	publisher, err := scheduler.NewOutboxPublisher(scheduler.PublisherConfig{
+		Store: store, Publisher: transport,
+		BatchSize:    intOr("RHINOQ_RETRY_DISPATCH_BATCH_SIZE", 50),
+		Interval:     durationOr("RHINOQ_RETRY_DISPATCH_INTERVAL", time.Second),
+		ReclaimAfter: durationOr("RHINOQ_RETRY_DISPATCH_RECLAIM_AFTER", 5*time.Minute),
+	})
+	if err != nil {
+		return nil, err
+	}
+	errors := make(chan error, 1)
+	go func() { errors <- publisher.Run(ctx) }()
+	return errors, nil
 }
 
 func envOr(key, fallback string) string {

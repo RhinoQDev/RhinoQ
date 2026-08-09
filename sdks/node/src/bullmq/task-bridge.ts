@@ -36,6 +36,7 @@ const activeScopes = new Map<string, number>();
 export interface BullMQQueueEvents {
   on(event: QueueEvent, listener: (event: BullMQEvent) => void): unknown;
   off?(event: QueueEvent, listener: (event: BullMQEvent) => void): unknown;
+  waitUntilReady?(): Promise<unknown>;
 }
 
 /** Structural subset of BullMQ Queue; RhinoQ does not own its Redis client. */
@@ -50,8 +51,8 @@ export interface BullMQQueue {
    * direct property is accepted too so adapters can pass a small structural
    * fake without importing BullMQ's concrete type.
    */
-  defaultJobOptions?: Record<string, unknown>;
-  opts?: { defaultJobOptions?: Record<string, unknown> };
+  defaultJobOptions?: object;
+  opts?: { defaultJobOptions?: object };
 }
 
 export interface BullMQEvent {

@@ -207,8 +207,9 @@ Its current boundaries are:
 - BullMQ integration requires explicit `dispatch()`/`dispatchMany()` or
   `track()`; it does not scan a queue or reconcile unknown jobs;
 - no composed retry command creates a new Execution atomically;
-- the React adapter uses TaskStore polling; no SSE/WebSocket or stream transport
-  exists;
+- owner-scoped Node application routes provide SSE for one Task and the Task
+  inbox; TaskStore/React prefer SSE and use snapshot polling as convergence
+  fallback. The Go Gateway itself remains snapshot-only;
 - `OwnerID` is returned for application authorization and optional owner-scoped
   polling/cancel credentials are available, but organization membership/RBAC
   is not implemented;

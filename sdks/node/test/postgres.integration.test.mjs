@@ -77,7 +77,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
   }
 });
 
-test('Task-only profile uses three tables and serves the embedded Node client', {
+test('Task-only profile uses four tables and serves the embedded Node client', {
   skip: !databaseUrl,
 }, async () => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
@@ -95,7 +95,7 @@ test('Task-only profile uses three tables and serves the embedded Node client', 
     );
     assert.deepEqual(
       tables.rows.map((row) => row.table_name),
-      ['executions', 'migrations', 'tasks'],
+      ['executions', 'migrations', 'tasks', 'waitpoints'],
     );
 
     let task = await tasks.createTask({
@@ -104,6 +104,13 @@ test('Task-only profile uses three tables and serves the embedded Node client', 
       ownerId: 'owner-a',
       definitionVersion: 1,
     });
+    const waiting = await tasks.createTaskWaitpoint(task.id, { id: 'node-wp-review', key: 'review', kind: 'approval', payloadVersion: 1 });
+    assert.equal(waiting.state, 'waiting');
+    const resolved = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } });
+    assert.equal(resolved.state, 'resolved');
+    const replayedResolution = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } });
+    assert.equal(replayedResolution.entityVersion, resolved.entityVersion);
+    task = await tasks.getTask(task.id);
     task = await tasks.transitionTask(task.id, task.entityVersion, 'queued');
     task = await tasks.transitionTask(task.id, task.entityVersion, 'running');
     task = await tasks.reportTaskProgress(task.id, task.entityVersion, {

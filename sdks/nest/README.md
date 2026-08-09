@@ -1,4 +1,7 @@
-# `@rhinoq/nest`
+# `@rhinoq/nest` compatibility package
+
+New applications should import `RhinoQModule` from `@rhinoq/node/nest`. This
+package remains only for existing adopters during the prerelease migration.
 
 NestJS wiring for the embedded Node/BullMQ Task integration. It keeps the
 correctness engine in `@rhinoq/node` and only owns provider/lifecycle setup:

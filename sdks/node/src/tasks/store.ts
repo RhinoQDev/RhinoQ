@@ -1,4 +1,5 @@
 import type { TaskExecutionPage, TaskSnapshot, TaskSummary } from '../gateway/types.js';
+import type { TaskStreamEvent } from './sse.js';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
 const MAX_CANCEL_CONVERGENCE_ATTEMPTS = 3;
@@ -10,12 +11,15 @@ export interface TaskBrowserClient {
 	listTaskExecutions?(taskId: string, cursor?: string, limit?: number): Promise<TaskExecutionPage>;
   cancelTask(taskId: string, expectedVersion: number): Promise<TaskSnapshot>;
   getTaskResult(taskId: string): Promise<unknown>;
+	retryTask?(taskId: string, expectedVersion: number, commandId: string): Promise<TaskSnapshot>;
+	streamTask?(taskId: string, options?: { lastVersion?: number; signal?: AbortSignal }): AsyncIterable<TaskStreamEvent>;
 }
 
 export interface TaskStoreState {
 	snapshot?: TaskSummary | TaskSnapshot;
   status: 'idle' | 'loading' | 'connected' | 'reconnecting' | 'stopped';
   error?: unknown;
+  transport?: 'polling' | 'live' | 'polling_fallback';
 }
 
 export interface TaskStoreOptions {
@@ -28,6 +32,8 @@ export interface TaskStoreOptions {
   pauseWhenHidden?: boolean;
   /** A subscriber error must not stop polling or starve other subscribers. */
   onListenerError?: (error: unknown) => void;
+  /** Prefer SSE when the client supports it. Defaults to true. */
+  preferStream?: boolean;
 }
 
 export type TaskStoreListener = (state: Readonly<TaskStoreState>) => void;
@@ -45,6 +51,7 @@ export class TaskStore {
   private readonly stopOnTerminal: boolean;
   private readonly pauseWhenHidden: boolean;
   private readonly onListenerError?: (error: unknown) => void;
+  private readonly preferStream: boolean;
   private readonly listeners = new Set<TaskStoreListener>();
   private state: TaskStoreState = { status: 'idle' };
   private controller?: AbortController;
@@ -64,6 +71,7 @@ export class TaskStore {
     this.stopOnTerminal = options.stopOnTerminal ?? true;
     this.pauseWhenHidden = options.pauseWhenHidden ?? true;
     this.onListenerError = options.onListenerError;
+    this.preferStream = options.preferStream ?? true;
   }
 
   getSnapshot = (): Readonly<TaskStoreState> => this.state;
@@ -78,7 +86,7 @@ export class TaskStore {
     this.controller = new AbortController();
     const generation = ++this.generation;
     this.setState({ ...this.state, status: this.state.snapshot ? 'connected' : 'loading', error: undefined });
-    void this.poll(generation, this.controller.signal);
+    void this.run(generation, this.controller.signal);
   }
 
   stop(): void {
@@ -115,8 +123,24 @@ export class TaskStore {
     throw conflict;
   }
 
+  async retry(commandId: string): Promise<TaskSnapshot> {
+    if (!this.client.retryTask) throw new TypeError('Task client does not support retry');
+    if (!commandId?.trim()) throw new TypeError('retry commandId is required');
+    const current = this.state.snapshot ?? await this.refresh();
+    const snapshot = await this.client.retryTask(this.taskId, current.entityVersion, commandId);
+    this.accept(snapshot);
+    return snapshot;
+  }
+
   getResult(): Promise<unknown> {
     return this.client.getTaskResult(this.taskId);
+  }
+
+  async downloadResult(open: (url: string) => unknown = defaultOpen): Promise<unknown> {
+    const result = await this.getResult();
+    const url = resultURL(result);
+    if (!url) throw new TypeError('resolved Task result does not contain a download URL');
+    return open(url);
   }
 
 	listExecutions(cursor = '', limit = 100): Promise<TaskExecutionPage> {
@@ -132,6 +156,7 @@ export class TaskStore {
 		const snapshot = await this.readStatus();
         if (signal.aborted || generation !== this.generation) return;
         this.accept(snapshot);
+		this.setState({ ...this.state, transport: this.state.transport === 'polling_fallback' ? 'polling_fallback' : 'polling' });
         failures = 0;
         if (this.stopOnTerminal && TERMINAL.has(snapshot.state)) {
           this.controller = undefined;
@@ -149,6 +174,40 @@ export class TaskStore {
       if (!(await wait(delay, signal))) return;
     }
   }
+
+	private async run(generation: number, signal: AbortSignal): Promise<void> {
+		if (!this.preferStream || !this.client.streamTask) { await this.poll(generation, signal); return; }
+		let failures = 0;
+		while (!signal.aborted && generation === this.generation) {
+			try {
+				const lastVersion = this.state.snapshot?.entityVersion;
+				for await (const event of this.client.streamTask(this.taskId, { lastVersion, signal })) {
+					if (signal.aborted || generation !== this.generation) return;
+					if (event.type === 'task.error') throw new Error(event.code);
+					if (event.type !== 'task.snapshot') continue;
+					this.accept(event.task);
+					this.setState({ ...this.state, status: 'connected', transport: 'live', error: undefined });
+					if (this.stopOnTerminal && TERMINAL.has(event.task.state)) {
+						this.controller = undefined; this.setState({ ...this.state, status: 'stopped', transport: 'live' }); return;
+					}
+				}
+				if (signal.aborted || generation !== this.generation) return;
+				throw new Error('Task event stream ended before the Task became terminal');
+			} catch (error) {
+				if (signal.aborted || generation !== this.generation) return;
+				failures++;
+				this.setState({ ...this.state, status: 'reconnecting', transport: 'polling_fallback', error });
+				try {
+					const snapshot = await this.refresh();
+					this.setState({ ...this.state, transport: 'polling_fallback' });
+					if (this.stopOnTerminal && TERMINAL.has(snapshot.state)) {
+						this.controller = undefined; this.setState({ ...this.state, status: 'stopped', transport: 'polling_fallback' }); return;
+					}
+				} catch { /* next stream retry converges */ }
+				if (!(await wait(Math.min(this.maxBackoffMs, this.pollIntervalMs * 2 ** Math.min(failures - 1, 10)), signal))) return;
+			}
+		}
+	}
 
 	private readStatus(): Promise<TaskSummary | TaskSnapshot> {
 		return this.client.getTaskSummary?.(this.taskId) ?? this.client.getTask(this.taskId);
@@ -176,6 +235,17 @@ export class TaskStore {
       }
     }
   }
+}
+
+function resultURL(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && 'url' in value && typeof value.url === 'string') return value.url;
+  return undefined;
+}
+
+function defaultOpen(url: string): unknown {
+  if (typeof window === 'undefined') return url;
+  return window.location.assign(url);
 }
 
 function isVersionConflict(error: unknown): boolean {

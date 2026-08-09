@@ -75,7 +75,9 @@ PostgreSQL client.**
 BullMQ is a mature Redis-based queue with worker, events, delayed jobs,
 concurrency and operational features. RhinoQ uses it as one runtime reference;
 the lifecycle bridge must not claim queue replacement or feature parity. The
-current bridge observes explicitly tracked jobs only; dispatch, retry, cancel
-and outage-wide reconciliation remain unfinished. See the
+current bridge observes explicitly tracked jobs only. Declared dispatch,
+durable retry, fail-closed cancellation and bounded reconciliation of stored
+runtime references are implemented; RhinoQ intentionally does not scan the
+entire Redis queue. See the
 [BullMQ repository](https://github.com/taskforcesh/bullmq) for the queue
 reference model.

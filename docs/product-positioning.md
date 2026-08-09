@@ -1,6 +1,6 @@
 # Product positioning
 
-Reviewed: 2026-08-01.
+Reviewed: 2026-08-08.
 
 ## One sentence
 
@@ -12,6 +12,20 @@ the business outcome so a green job cannot silently become a false success.
 
 TaskStore, the BullMQ bridge, Gateway and native Go runtime reduce integration
 cost. They support the product; they are not the central product promise.
+
+## The category trigger RhinoQ should own
+
+> The queue says completed. Is the real-world outcome actually true?
+
+RhinoQ should be the first product a team recalls when `completed` is not
+enough evidence: money may not have moved, a resource may not be ready, or an
+output may be absent. The memorable unit is not a queue, workflow or dashboard;
+it is the evidence-backed path from ambiguous completion to a verified outcome.
+
+Every quickstart, demo and integration should therefore reach one visible
+`completed != verified` example before introducing the broader platform. Task
+convenience earns adoption, while outcome evidence and guarded repair provide
+the reason to choose RhinoQ over another status table.
 
 ## First user
 

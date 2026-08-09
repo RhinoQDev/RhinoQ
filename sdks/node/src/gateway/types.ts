@@ -217,6 +217,31 @@ export interface TaskResult {
   updatedAt: string;
 }
 
+export type TaskWaitpointKind = 'input' | 'approval' | 'webhook';
+export type TaskWaitpointState = 'waiting' | 'resolved' | 'expired' | 'cancelled';
+export interface TaskWaitpoint {
+  schemaVersion: 1;
+  entityVersion: number;
+  id: string;
+  taskId: string;
+  key: string;
+  kind: TaskWaitpointKind;
+  state: TaskWaitpointState;
+  payloadVersion: number;
+  deadline?: string;
+  resolution?: unknown;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface TaskWaitpointCreateRequest {
+  id: string; key: string; kind: TaskWaitpointKind; payloadVersion: number; deadline?: string;
+}
+export interface TaskWaitpointResolveRequest {
+  expectedVersion: number; resolutionId: string; actor?: string; resolution: unknown;
+}
+
 export type ProviderConfirmationPolicy = 'on-return' | 'readback' | 'webhook';
 export type ProviderRetryPolicy = 'never' | 'when-not-happened';
 export type ProviderOperationState =
@@ -262,6 +287,13 @@ export interface ProviderOperationEvidence {
   kind: string;
   payload: string;
   createdAt: string;
+}
+
+export interface ProviderOperationAttentionQuery {
+  /** Only operations not updated before this instant are selected. Defaults to now. */
+  before?: string;
+  /** Bounded by the Go API to 1..500. Defaults to 100. */
+  limit?: number;
 }
 
 export interface ProviderOperationOptions<T> extends Omit<ProviderOperationRequest, 'provider' | 'operation'> {

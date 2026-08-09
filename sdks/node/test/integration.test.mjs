@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createRhinoQTaskIntegration } from '../dist/index.js';
+import { createBullMQIntegration, createRhinoQTaskIntegration } from '../dist/index.js';
 
 function pool() {
   return {
@@ -39,6 +39,29 @@ test('the standard integration owns projector lifecycle and reports health', asy
   assert.equal(integration.bridge.ownership, 'projecting');
   integration.close();
   assert.equal(integration.bridge.ownership, 'closed');
+});
+
+test('integration readiness waits for QueueEvents and reports its connection', async () => {
+  let ready = false;
+  const integration = await createRhinoQTaskIntegration({
+    pool: pool(),
+    events: { on() {}, off() {}, async waitUntilReady() { ready = true; } },
+    tasks: {}, runtimeScope: 'reports-ready', terminalProjection: 'execution-only',
+  });
+  await integration.start();
+  assert.equal(ready, true);
+  assert.equal((await integration.health()).queueEvents, 'ready');
+  integration.close();
+  assert.equal((await integration.health()).queueEvents, 'closed');
+
+  const broken = await createRhinoQTaskIntegration({
+    pool: pool(),
+    events: { on() {}, off() {}, async waitUntilReady() { throw new Error('redis unavailable'); } },
+    tasks: {}, runtimeScope: 'reports-down', terminalProjection: 'execution-only',
+  });
+  await assert.rejects(broken.start(), /redis unavailable/);
+  assert.equal((await broken.health()).queueEvents, 'down');
+  broken.close();
 });
 
 test('the standard integration wires a leased reconciliation sweep', async () => {
@@ -102,4 +125,38 @@ test('the integration refuses an unscoped projector', async () => {
     }),
     /runtimeScope/,
   );
+});
+
+test('the BullMQ preset derives safe lifecycle wiring without scanning the queue', async () => {
+  const reads = [];
+  const integration = await createBullMQIntegration({
+    pool: pool(), events: events(), runtimeScope: 'reports', mode: 'fanout',
+    tasks: { async listTasksByState() { return []; } },
+    queue: {
+      name: 'reports',
+      async add() { return { id: 'job-1' }; },
+      async getJob(id) { reads.push(id); return undefined; },
+    },
+  });
+  assert.ok(integration.reconciler, 'reconciliation is enabled by default');
+  assert.equal(await integration.reconciler.sweep(), 0);
+  assert.deepEqual(reads, [], 'an empty RhinoQ candidate set must not scan BullMQ');
+  integration.close();
+});
+
+test('the BullMQ preset requires explicit Task semantics', () => {
+  assert.throws(() => createBullMQIntegration({
+    pool: pool(), events: events(), runtimeScope: 'reports', tasks: {},
+    queue: { name: 'reports', async add() {}, async getJob() {} },
+  }), /mode: 'single' or 'fanout'/);
+});
+
+test('the BullMQ preset derives runtime identity from the Queue name', async () => {
+  const integration = await createBullMQIntegration({
+    pool: pool(), events: events(), mode: 'single', tasks: {},
+    queue: { name: 'exports', async add() {}, async getJob() {} },
+    reconciliation: { enabled: false },
+  });
+  assert.equal(integration.bridge.runtimeScope, 'exports');
+  integration.close();
 });

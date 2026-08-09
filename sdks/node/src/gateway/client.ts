@@ -36,6 +36,7 @@ import {
   type ProviderConfirmation,
   type EffectOptions,
   type ProviderOperationEvidence,
+  type ProviderOperationAttentionQuery,
   type ProviderOperationOptions,
   type ProviderOperationRecord,
   type ProviderOperationRequest,
@@ -371,6 +372,18 @@ export class RhinoQClient {
       'GET', `/v1/provider-operations/${requiredPath(id, 'provider operation id')}/evidence`,
     );
     return result.evidence ?? [];
+  }
+
+  async listProviderOperationsNeedingAttention(
+	query: ProviderOperationAttentionQuery = {},
+  ): Promise<ProviderOperationRecord[]> {
+	if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 500)) {
+	  throw new RangeError('provider operation limit must be an integer from 1 to 500');
+	}
+	const result = await this.send<{ operations: ProviderOperationRecord[] }>(
+	  'GET', `/v1/provider-operations?${queryString({ before: query.before, limit: query.limit })}`,
+	);
+	return result.operations ?? [];
   }
 
   private acceptProviderOperation(id: string, providerId: string, evidence?: string): Promise<ProviderOperationRecord> {

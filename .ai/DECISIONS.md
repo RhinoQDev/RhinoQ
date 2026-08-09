@@ -471,3 +471,127 @@
   synchronous notification/provider APIs, and leave the additive columns
   unused. Existing delivery and ProviderOperation rows remain readable.
 - **Owner:** engine + Node SDK + product
+
+## ADR-0027 — Snapshot-convergent owner Task SSE
+
+- **Status:** accepted
+- **Context:** TaskStore already handled stale versions, reconnect and polling,
+  while adopters still kept hand-written SSE endpoints. No RhinoQ route emitted
+  `text/event-stream`; Node adapters buffered every Fetch response with
+  `response.text()`, which would hang for a stream.
+- **Decision:** the application-owned Node Task surface exposes one owner-scoped
+  item stream and one owner inbox stream. Events carry authoritative Task
+  snapshots and entity versions; SSE is never a second state store. Item
+  reconnect accepts `Last-Event-ID`; inbox reconnect replays the bounded page
+  and clients converge by version. Fetch streaming supports application headers,
+  while the reference page uses same-origin cookies. Stores fall back to a
+  snapshot after loss and retry SSE. Heartbeats, abort cleanup and connection
+  budgets are mandatory.
+- **Alternatives:** native WebSocket state; browser-only EventSource without
+  authorization headers; process-local progress events; or Redis Pub/Sub as the
+  source of truth.
+- **Consequences:** adopters receive live UX without weakening PostgreSQL truth
+  or rewriting their worker. The default stream performs bounded server-side
+  snapshot reads, so deployments must measure connection/database load; shared
+  fan-out may be added later as an optimization with polling retained for
+  convergence. The Go Gateway remains snapshot-only.
+- **Rollback:** disable `stream`, keep the same routes/hooks on polling and leave
+  stored Task data unchanged.
+- **Owner:** Node SDK + product
+
+## ADR-0024 — Application-owned Task vertical slice
+
+- **Status:** accepted
+- **Context:** adopters had Task correctness primitives but still rebuilt an
+  owner inbox, detail/history polling, cancel/retry/result routes and React UI
+  states. Copying those pieces also encouraged retrying an `uncertain` effect
+  or treating a process-local enqueue callback as crash-safe.
+- **Decision:** the Node package provides one owner-authenticated application
+  route surface, framework-neutral list/detail stores and UI semantics, React
+  hook factories, a dependency-free reference Task Center, declared BullMQ
+  Task definitions, fail-closed BullMQ cancellation and owner-aware result URL
+  resolution. A user retry requires a caller-generated command id and an
+  application-owned handler. That handler must commit its command identity,
+  Task transition and enqueue/outbox intent durably; React and the SDK never
+  become the correctness authority.
+- **Alternatives:** ship styled framework components only; put retry state in
+  React or Redis; accept a plain enqueue callback and call it crash-safe; or
+  expose storage references directly to the browser.
+- **Consequences:** Next/Nest applications can mount one route surface and
+  reuse one client/UI contract. Styling and host authentication remain
+  application-owned. List filters currently apply to the fetched owner page;
+  large inboxes should provide server-side filtering. Durable composed retry
+  still requires the adopter's transaction/outbox implementation.
+- **Rollback:** stop mounting the routes or hooks and retain the lower-level
+  Task client/bridge. No database migration or stored state changes.
+- **Owner:** Node SDK + product
+
+## ADR-0025 — Atomic Task retry command and dispatch intent
+
+- **Status:** accepted
+- **Context:** requiring a retry `commandId` at the HTTP boundary did not stop
+  an adopter from dual-writing a Task transition and BullMQ enqueue. A crash
+  between those writes could either lose the retry or enqueue it twice.
+- **Decision:** Go Application exposes a retry command through
+  `TaskRetryStore`. PostgreSQL serializes the command identity and commits the
+  failed/cancelled → queued transition, a new immutable Execution, the command
+  record and `task.retry.dispatch_requested` outbox event in one transaction.
+  A repeated identity resolves to the same Execution and performs no mutation.
+- **Alternatives:** keep an application callback in the Node route; use a
+  process-local identity set; or enqueue directly before/after updating Task.
+- **Consequences:** migration 029 adds one tenant-isolated command table. Outbox
+  publication remains at-least-once, so the runtime publisher must use the
+  event's stable command/execution identity when enqueueing. Unknown external
+  outcomes must still fail closed; this is not an exactly-once claim.
+  The intent contains a fingerprinted queue, job name and JSON payload. The
+  standard transport is HTTPS with an exact-body HMAC; the Node receiver only
+  accepts registered queues and uses the Execution id as BullMQ `jobId`.
+- **Rollback:** stop invoking `Service.Retry`; leave the additive command table
+  unused until its outbox is drained, then remove it only in a later migration.
+- **Owner:** engine + PostgreSQL adapter
+
+## ADR-0026 — Evidence-gated provider reconciliation and capability claims
+
+- **Status:** accepted
+- **Context:** ProviderOperation already reserved identity and failed closed on
+  unknown results, but applications had no bounded public query for an
+  outage-recovery sweep. Documentation could describe the ingredients without
+  proving that a particular effect configured all of them.
+- **Decision:** Go Application exposes an oldest-first bounded query for
+  unresolved ProviderOperations. The Node reconciler accepts only registered
+  read-back verifiers and cannot access the original mutation callback. A pure
+  capability report downgrades an effect unless stable identity,
+  provider-enforced idempotency, independent confirmation and retry only after
+  `not_happened` proof are all present.
+- **Alternatives:** store verifier callbacks in Go; retry every uncertain
+  operation; let Node query tables directly; or claim exactly-once from ledger
+  presence alone.
+- **Consequences:** applications can automate safe confirmation recovery and
+  expose an auditable per-effect guarantee. Provider-specific verifier code and
+  authenticated webhook handling remain application-owned. Multi-replica
+  deployments should elect one scheduler or tolerate duplicate read-only
+  verification; version fencing makes conflicting resolutions safe.
+- **Rollback:** stop the Node reconciler and attention query. Existing ledger
+  rows and state transitions are unchanged.
+- **Owner:** engine + Node SDK + product
+## ADR-0028 — Durable waitpoints are versioned settlement aggregates
+
+- **Status:** accepted
+- **Context:** Async work often pauses for input, approval or a provider
+  webhook. Keeping that pause in worker memory loses it on restart and makes
+  duplicate callbacks capable of applying two different answers.
+- **Decision:** RhinoQ persists a waitpoint with stable `(task_id,key)` identity,
+  explicit payload schema version, deadline and optimistic entity version.
+  Resolution carries a command identity and SHA-256 payload fingerprint.
+  Identical repeats replay the durable result; conflicts and unknown settled
+  states fail closed. Waitpoint changes advance the parent Task version so SSE
+  consumers converge. Application-owned HMAC tokens may grant one scoped
+  read/resolve capability; the signing secret stays outside RhinoQ storage.
+- **Consequences:** A waitpoint provides effectively-once settlement, not
+  exactly-once delivery of a webhook. Large payloads remain artifact
+  references. Go owns the domain rules; the isolated Node profile invokes
+  versioned PostgreSQL functions rather than reproducing transitions in SDK
+  callbacks.
+- **Rollback:** stop exposing waitpoint routes and helpers; leave the additive
+  table unused until a later migration removes it.
+- **Owner:** engine + PostgreSQL adapter + Node SDK + product

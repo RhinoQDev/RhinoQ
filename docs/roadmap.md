@@ -28,8 +28,9 @@ without migrating their queue.
 - [x] version-fenced result-reference read/write through Go, HTTP and Node
 - [x] BullMQ lifecycle bridge for explicitly tracked existing jobs
 - [x] reserve-before-dispatch and bounded known-job reconciliation for BullMQ
+- [x] preview-first adopter generator and BullMQ integration preset
 - [x] fail-closed BullMQ cancellation composition through an application callback
-- [ ] first-class retry command identity and crash-recovery contract for BullMQ
+- [x] first-class retry command identity and crash-recovery contract for BullMQ
 - [x] ProviderOperation domain, PostgreSQL store and Stripe response-loss demo
 - [x] lightweight Task Summary and stable Execution keyset pagination
 
@@ -118,7 +119,7 @@ requiring the application's current queue to be replaced.
 
 - [x] guarded, audited recheck and safe-repair browser actions through Application callbacks
 - [ ] gRPC/Unix-socket gateway transport, only after real polyglot demand
-- [ ] NestJS lifecycle integration after the framework-neutral Node SDK is validated
+- [x] NestJS lifecycle integration through the `@rhinoq/node/nest` subpath
 - [ ] retention and partition sweeper
 - [x] Node SDK and Go domain/memory microbenchmarks plus fixed-seed browser disorder test
 - [x] reproducible PostgreSQL concurrency and Task fan-out snapshot benchmarks

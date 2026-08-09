@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { createNodeTaskCenterMiddleware, rhinoTaskCenterPage } from '../dist/index.js';
+
+test('Task Center page is self-contained and points at the owner API', () => {
+  const page = rhinoTaskCenterPage({ apiPath: '/api/tasks', title: '<My tasks>' });
+  assert.match(page, /\/api\/tasks/);
+  assert.match(page, /&lt;My tasks&gt;/);
+  assert.doesNotMatch(page, /https?:\/\//);
+  assert.match(page, /uncertain/);
+  assert.match(page, /EventSource/);
+  assert.match(page, /_events/);
+  assert.match(page, /Polling fallback/);
+  assert.match(page, /rhinoq-skeleton/);
+  assert.match(page, /Finished/);
+  assert.match(page, /Not finished/);
+  assert.match(page, /aria-live="polite"/);
+  assert.match(page, /aria-busy="true"/);
+  const script = page.match(/<script>([\s\S]*)<\/script>/)?.[1];
+  assert.ok(script);
+  assert.doesNotThrow(() => new Function(script));
+});
+
+test('Task Center middleware serves only its exact GET path', () => {
+  const middleware = createNodeTaskCenterMiddleware({ path: '/my/tasks', apiPath: '/tasks' });
+  const response = { headers: {}, setHeader(name, value) { this.headers[name] = value; }, end(body) { this.body = body; } };
+  middleware({ method: 'GET', url: '/my/tasks', headers: {} }, response);
+  assert.equal(response.statusCode, 200);
+  assert.match(response.body, /<!doctype html>/);
+  let passed = false;
+  middleware({ method: 'POST', url: '/my/tasks', headers: {} }, {}, () => { passed = true; });
+  assert.equal(passed, true);
+});

@@ -53,6 +53,53 @@ func TestCreateBindAndReadTaskSnapshot(t *testing.T) {
 	}
 }
 
+func TestRetryIsAtomicAndCommandIdempotent(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)
+	store := memory.NewTaskStore()
+	service, err := New(store, store, func() time.Time { now = now.Add(time.Second); return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := service.Create(ctx, CreateInput{ID: "task-retry", Type: "report", DefinitionVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := service.Transition(ctx, record.ID, record.Version, task.Queued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := service.Transition(ctx, record.ID, queued.EntityVersion, task.Running)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := service.Transition(ctx, record.ID, running.EntityVersion, task.Failed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := RetryInput{CommandID: "retry-command-1", TaskID: record.ID, ExpectedVersion: failed.EntityVersion, ExecutionID: "exec-retry-1", Runtime: "bullmq", Queue: "reports", JobName: "generate", Payload: []byte(`{"reportId":"task-retry"}`)}
+	first, err := service.Retry(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Retry(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.EntityVersion != second.EntityVersion || first.State != string(task.Queued) || len(first.Executions) != 1 || first.Executions[0].ID != "exec-retry-1" {
+		t.Fatalf("retry was not stable: first=%+v second=%+v", first, second)
+	}
+	if _, err := service.Retry(ctx, RetryInput{CommandID: input.CommandID, TaskID: record.ID, ExpectedVersion: failed.EntityVersion, ExecutionID: "different", Runtime: "bullmq", Queue: input.Queue, JobName: input.JobName, Payload: input.Payload}); !errors.Is(err, ports.ErrAlreadyExists) {
+		t.Fatalf("expected command identity mismatch, got %v", err)
+	}
+	changed := input
+	changed.Payload = []byte(`{"reportId":"different"}`)
+	if _, err := service.Retry(ctx, changed); !errors.Is(err, ports.ErrAlreadyExists) {
+		t.Fatalf("expected changed dispatch payload rejection, got %v", err)
+	}
+}
+
 func TestLifecycleAndProgressCommandsFenceStaleVersions(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 29, 13, 0, 0, 0, time.UTC)

@@ -2,6 +2,7 @@ package rhinoq
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	taskcontract "github.com/madebyduy/RhinoQ/internal/contracts/task"
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	domaintask "github.com/madebyduy/RhinoQ/internal/domain/task"
+	"github.com/madebyduy/RhinoQ/internal/domain/waitpoint"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
@@ -19,7 +21,87 @@ var (
 	ErrTaskAlreadyExists         = ports.ErrAlreadyExists
 	ErrExecutionAlreadyBound     = execution.ErrAlreadyBound
 	ErrExecutionInvalidReference = execution.ErrInvalidReference
+	ErrWaitpointNotFound         = ports.ErrWaitpointNotFound
+	ErrWaitpointConflict         = ports.ErrWaitpointConflict
 )
+
+type TaskWaitpoint struct {
+	SchemaVersion  int             `json:"schemaVersion"`
+	EntityVersion  int64           `json:"entityVersion"`
+	ID             string          `json:"id"`
+	TaskID         string          `json:"taskId"`
+	Key            string          `json:"key"`
+	Kind           string          `json:"kind"`
+	State          string          `json:"state"`
+	PayloadVersion int             `json:"payloadVersion"`
+	Deadline       *time.Time      `json:"deadline,omitempty"`
+	Resolution     json.RawMessage `json:"resolution,omitempty"`
+	ResolvedBy     string          `json:"resolvedBy,omitempty"`
+	ResolvedAt     *time.Time      `json:"resolvedAt,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+}
+
+type TaskWaitpointCreateRequest struct {
+	ID, Key        string
+	Kind           string
+	PayloadVersion int
+	Deadline       time.Time
+}
+
+type TaskWaitpointResolveRequest struct {
+	OwnerID, ResolutionID, Actor string
+	ExpectedVersion              int64
+	Resolution                   json.RawMessage
+}
+
+func (c *Client) CreateTaskWaitpoint(ctx context.Context, taskID string, request TaskWaitpointCreateRequest) (TaskWaitpoint, bool, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskWaitpoint{}, false, err
+	}
+	record, replayed, err := service.CreateWaitpoint(ctx, taskapp.CreateWaitpointInput{ID: request.ID, TaskID: taskID, Key: request.Key, Kind: waitpoint.Kind(request.Kind), SchemaVersion: request.PayloadVersion, Deadline: request.Deadline})
+	return publicTaskWaitpoint(record), replayed, err
+}
+
+func (c *Client) GetTaskWaitpoint(ctx context.Context, id, ownerID string) (TaskWaitpoint, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskWaitpoint{}, err
+	}
+	record, err := service.GetWaitpoint(ctx, waitpoint.ID(id), ownerID)
+	return publicTaskWaitpoint(record), err
+}
+
+func (c *Client) ResolveTaskWaitpoint(ctx context.Context, id string, request TaskWaitpointResolveRequest) (TaskWaitpoint, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return TaskWaitpoint{}, err
+	}
+	record, err := service.ResolveWaitpoint(ctx, taskapp.ResolveWaitpointInput{ID: id, OwnerID: request.OwnerID, ResolutionID: request.ResolutionID, Actor: request.Actor, ExpectedVersion: request.ExpectedVersion, Resolution: request.Resolution})
+	return publicTaskWaitpoint(record), err
+}
+
+func (c *Client) ExpireDueTaskWaitpoints(ctx context.Context, limit int) (int, error) {
+	service, err := c.taskService()
+	if err != nil {
+		return 0, err
+	}
+	return service.ExpireDueWaitpoints(ctx, limit)
+}
+
+func publicTaskWaitpoint(record waitpoint.Record) TaskWaitpoint {
+	result := TaskWaitpoint{SchemaVersion: 1, EntityVersion: record.Version, ID: record.ID.String(), TaskID: record.TaskID, Key: record.Key, Kind: string(record.Kind), State: string(record.State), PayloadVersion: record.SchemaVersion, Resolution: append(json.RawMessage(nil), record.Resolution...), ResolvedBy: record.ResolvedBy, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	if !record.Deadline.IsZero() {
+		deadline := record.Deadline
+		result.Deadline = &deadline
+	}
+	if !record.ResolvedAt.IsZero() {
+		resolvedAt := record.ResolvedAt
+		result.ResolvedAt = &resolvedAt
+	}
+	return result
+}
 
 type TaskState string
 

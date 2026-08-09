@@ -5,9 +5,19 @@ Catch background jobs that succeeded technically but failed in the real world.
 ```bash
 npm install @rhinoq/node pg
 npx rhinoq init
+npx rhinoq adopt --mode single        # preview queues and infrastructure
+npx rhinoq adopt --mode single --queue mail-queue \
+  --owner-property user.id --apply
+# Add --queue repeatedly for multiple queues.
+# Add --local-postgres only for a generated local evaluation service.
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 ```
+
+The owner property is read from the original Nest/Express request after host
+authentication has populated it. It mounts `/tasks`, `/tasks/*` and
+`/task-center`. RhinoQ refuses owner middleware without an explicit resolver;
+it never trusts an owner header by default.
 
 The Node `init` path creates the isolated Task profile. `beta.8` is the first
 release that contains the complete Verified Rule loop; an older tarball answers
@@ -153,30 +163,31 @@ this path.
 
 ### Standard BullMQ integration
 
-For a BullMQ application, `@rhinoq/nest` packages the lifecycle wiring around
-this client: schema readiness, one PostgreSQL projector lease per
-`runtimeScope`, a separate reconciliation lease, health/metrics access and the
-Task providers. The runtime read remains application-owned because RhinoQ must
-not scan or mutate Redis:
-
-The package is included in this source checkout and has not yet been published
-as a separate npm release. From the repository, install it with
-`npm install ./sdks/nest`; use a tagged package only after its release is
-listed in the changelog.
+For a BullMQ application, start with the preset. It installs the Task profile,
+uses `queue.name` as the runtime scope, acquires projector/reconciliation
+leases and reads only jobs already referenced by RhinoQ:
 
 ```ts
-import { RhinoQModule } from '@rhinoq/nest';
+import { createBullMQIntegration } from '@rhinoq/node';
 
-RhinoQModule.forRootAsync({
-  inject: [Pool, BullMQEvents],
-  useFactory: (pool, events) => ({
-    pool,
-    events,
-    runtimeScope: 'reports',
-    terminalProjection: 'execution-only',
-    reconciliation: {
-      observe: async (reference) => readBullMQState(reference),
-    },
+const rhinoq = await createBullMQIntegration({
+  pool, queue, events: queueEvents,
+  mode: 'single', // use 'fanout' when one Task owns several jobs
+});
+await rhinoq.start();
+```
+
+For NestJS, the same package exposes lifecycle wiring through a versioned
+subpath; no separate `@rhinoq/nest` installation is required:
+
+```ts
+import { RhinoQModule } from '@rhinoq/node/nest';
+
+RhinoQModule.forBullMQAsync({
+  inject: [Pool, ReportsQueue, ReportsQueueEvents],
+  useFactory: (pool, queue, events) => ({
+    pool, queue, events,
+    mode: 'fanout',
   }),
 });
 ```
@@ -186,6 +197,46 @@ ready. A process that does not own the projector lease stays unowned and does
 not subscribe to `QueueEvents`; a lost session is reported as degraded. This
 is orchestration, not a second Task state machine: transitions continue to be
 decided by the versioned PostgreSQL commands.
+
+### Complete application and React slice
+
+`createTaskRequestHandler()` mounts owner-scoped list, detail, execution
+history, cancel, command-identified retry, authorized result and health routes.
+Pair it with `signedResult()` so durable storage references become short-lived
+URLs only with authenticated owner context.
+
+`createUseRhinoTasks(React)` provides the inbox. `createUseRhinoTask(React)`
+also exposes `retry`, `downloadResult`, `listAttempts`, `canCancel`, `canRetry`
+and `attentionReason`. `taskUIModel()` is the headless progress/result/cancel
+contract, and `mountRhinoTaskCenter()` is a dependency-free reference UI with
+a notification callback that can map to the host toast system.
+
+`integration.defineTask({ type, jobName, mode })` removes repeated Task,
+Execution, runtime and stable job-id wiring. `bullMQCancellation()` removes
+queued jobs and refuses to claim an active job was cancelled without a durable
+cooperative acknowledgement.
+
+Nest adoption accepts repeated per-queue declarations such as
+`--task mail-queue=mail.send:single`. The generated module exports
+`RHINOQ_TASK_MANIFEST`, uses each queue's cardinality and warns about detected
+queues left uncovered. Preview/apply locates raw `queue.add()` calls by file and
+line. Once the app is running, `rhinoq adopt --verify-url` checks health and the
+Task Center; authenticated applications pass headers through the
+`RHINOQ_ADOPT_VERIFY_HEADERS` JSON environment variable.
+
+The retry route intentionally does not turn `queue.add()` into a durable
+command. Its application callback must atomically persist command identity and
+the Task transition plus an outbox/enqueue intent. Never retry an `uncertain`
+provider effect blindly.
+
+For the Go-owned retry outbox, mount
+`createBullMQRetryDispatchHandler({ secret, queues })` on an internal POST
+route. Pass the raw request bytes to the returned Fetch handler. It verifies
+the HMAC signature, accepts only `task.retry.dispatch_requested`, refuses queue
+names outside the supplied registry, checks for an existing BullMQ job and
+enqueues with the immutable `executionId` as `jobId`. Configure the Go Agent
+with `RHINOQ_RETRY_DISPATCH_URL` and the same
+`RHINOQ_RETRY_DISPATCH_SECRET`.
 
 For large fan-outs, poll `getTaskSummary()` and load attempts with
 `listTaskExecutions(taskId, cursor, limit)`. `TaskStore` selects the summary
@@ -390,6 +441,7 @@ for the authoritative publication state and the trusted-publishing setup.
 | run JavaScript/TypeScript handlers | `RhinoQWorker` | Yes |
 | inspect, pause, cancel, replay or triage | `RhinoQClient` | Yes |
 | create, update or poll a Task snapshot | `PostgresTaskClient` | No |
+| standard existing BullMQ integration | `createBullMQIntegration()` | No |
 | reserve and dispatch a BullMQ job as a Task | `BullMQTaskBridge.dispatch()` | No |
 | reserve a bounded BullMQ fan-out | `BullMQTaskBridge.dispatchMany()` | No |
 | mirror a job through the legacy full platform | `BullMQTaskBridge` + `RhinoQClient` | Yes |

@@ -6,6 +6,7 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
+	"github.com/madebyduy/RhinoQ/internal/domain/waitpoint"
 )
 
 // TaskStore persists the user-facing aggregate with optimistic version checks.
@@ -14,6 +15,42 @@ type TaskStore interface {
 	CreateTask(ctx context.Context, record task.Record) (task.Record, error)
 	GetTask(ctx context.Context, id task.ID) (task.Record, bool, error)
 	UpdateTask(ctx context.Context, record task.Record, expectedVersion int64) (task.Record, error)
+}
+
+// WaitpointStore owns durable pause/resume identity and optimistic settlement.
+// CreateWaitpoint is idempotent only when the existing shape is identical.
+type WaitpointStore interface {
+	CreateWaitpoint(ctx context.Context, record waitpoint.Record) (waitpoint.Record, bool, error)
+	GetWaitpoint(ctx context.Context, id waitpoint.ID) (waitpoint.Record, bool, error)
+	GetTaskWaitpoint(ctx context.Context, taskID, key string) (waitpoint.Record, bool, error)
+	UpdateWaitpoint(ctx context.Context, record waitpoint.Record, expectedVersion int64) (waitpoint.Record, error)
+	ListDueWaitpoints(ctx context.Context, now time.Time, limit int) ([]waitpoint.Record, error)
+}
+
+// TaskRetryStore owns the atomic retry boundary. Implementations must persist
+// the Task transition, the new Execution and its dispatch intent together.
+// Repeating CommandID must resolve to the same Execution without mutating state
+// again; the returned Task may include newer concurrent progress.
+type TaskRetryStore interface {
+	RetryTask(ctx context.Context, input TaskRetryInput) (TaskRetryResult, error)
+}
+
+type TaskRetryInput struct {
+	CommandID       string
+	TaskID          task.ID
+	ExpectedVersion int64
+	ExecutionID     execution.ID
+	Runtime         string
+	Queue           string
+	JobName         string
+	Payload         []byte
+	Now             time.Time
+}
+
+type TaskRetryResult struct {
+	Task      task.Record
+	Execution execution.Record
+	Replayed  bool
 }
 
 // ExecutionStore persists attempts separately from Task so an external runtime

@@ -860,18 +860,17 @@ reproducible.
   that must not move under you.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems.
-- Express, Fastify and NestJS have request adapters (`createNodeTaskMiddleware`,
-  `registerFastifyTaskRoutes`) and a documented async-provider initialisation
-  pattern. A NestJS *module* — `RhinoQModule.forRootAsync()`, injectable
-  providers, lifecycle hooks — is still not shipped; the middleware is wired by
-  hand.
+- Express and Fastify have request adapters (`createNodeTaskMiddleware`,
+  `registerFastifyTaskRoutes`). NestJS lifecycle wiring ships from
+  `@rhinoq/node/nest`; `RhinoQModule.forBullMQAsync()` uses the same preset,
+  injectable providers and lifecycle hooks as the framework-neutral path.
 - Node workers for the native RhinoQ runtime require the HTTP Gateway; embedded
   Task management does not.
 - A BullMQ `runtimeScope` has one projector owner. Duplicate bridges fail fast
   in one process; use `PostgresProjectorLease` for cross-process ownership.
-- `TaskReconciler` is a timer in one process, not a distributed scheduler.
-  Running it in several replicas is safe but wasteful and needs an idempotent
-  callback; electing one owner is a deployment decision.
+- `TaskReconciler` is a timer in one process, not a distributed scheduler. The
+  standard preset gives it a PostgreSQL advisory lease; custom construction
+  must supply equivalent ownership when several replicas share a scope.
 - Gateway multi-tenant isolation and per-job HTTP RBAC are not complete.
 - Async effect confirmation has no built-in webhook authentication or
   confirmation-deadline scheduler yet; the application authenticates evidence
