@@ -1,13 +1,13 @@
 import type { SqlExecutor } from './producer.js';
 
 export const TASK_SCHEMA_VERSION = 7;
-export const TASK_SCHEMA_NAME = '007_actionable_conflicts_and_late_starts';
+export const TASK_SCHEMA_NAME = '007_task_hardening_and_waitpoints';
 
 /**
  * Task-only PostgreSQL profile.
  *
- * It deliberately owns exactly three tables in a dedicated schema:
- * migrations, tasks and executions. Runtime, Effect, Rule and Finding tables
+ * It deliberately owns only its four tables in a dedicated schema:
+ * migrations, tasks, executions and waitpoints. Runtime, Effect, Rule and Finding tables
  * belong to separate opt-in profiles.
  */
 export const TASK_SCHEMA_SQL = String.raw`
@@ -1493,6 +1493,80 @@ EXCEPTION
     RETURN 0;
 END;
 $fn$;
+CREATE TABLE IF NOT EXISTS rhinoq_task.waitpoints (
+  id text PRIMARY KEY CHECK (btrim(id) <> ''),
+  task_id text NOT NULL REFERENCES rhinoq_task.tasks(id) ON DELETE CASCADE,
+  key text NOT NULL CHECK (btrim(key) <> ''),
+  kind text NOT NULL CHECK (kind IN ('input','approval','webhook')),
+  payload_version integer NOT NULL CHECK (payload_version > 0),
+  state text NOT NULL DEFAULT 'waiting' CHECK (state IN ('waiting','resolved','expired','cancelled')),
+  deadline timestamptz,
+  resolution jsonb,
+  resolution_hash text,
+  resolution_id text,
+  resolved_by text,
+  resolved_at timestamptz,
+  version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE(task_id,key),
+  CHECK (deadline IS NULL OR deadline > created_at),
+  CHECK ((state='resolved' AND resolution IS NOT NULL AND resolution_hash IS NOT NULL AND resolution_id IS NOT NULL AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL)
+    OR (state<>'resolved' AND resolution IS NULL AND resolution_hash IS NULL AND resolution_id IS NULL AND resolved_by IS NULL AND resolved_at IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS waitpoints_resolution_id_uq ON rhinoq_task.waitpoints(resolution_id) WHERE resolution_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS waitpoints_due_idx ON rhinoq_task.waitpoints(deadline,id) WHERE state='waiting' AND deadline IS NOT NULL;
+CREATE INDEX IF NOT EXISTS waitpoints_task_idx ON rhinoq_task.waitpoints(task_id,created_at,id);
+
+CREATE OR REPLACE FUNCTION rhinoq_task.create_waitpoint(p_id text,p_task_id text,p_key text,p_kind text,p_payload_version integer,p_deadline timestamptz)
+RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE v rhinoq_task.waitpoints%ROWTYPE;
+BEGIN
+  INSERT INTO rhinoq_task.waitpoints(id,task_id,key,kind,payload_version,deadline)
+  VALUES(p_id,p_task_id,p_key,p_kind,p_payload_version,p_deadline)
+  ON CONFLICT DO NOTHING;
+  IF FOUND THEN
+    UPDATE rhinoq_task.tasks SET version=version+1,updated_at=clock_timestamp() WHERE id=p_task_id;
+    RETURN false;
+  END IF;
+  SELECT * INTO v FROM rhinoq_task.waitpoints WHERE task_id=p_task_id AND key=p_key;
+  IF v.id IS NULL OR v.id<>p_id OR v.kind<>p_kind OR v.payload_version<>p_payload_version OR v.deadline IS DISTINCT FROM p_deadline THEN
+    PERFORM rhinoq_task.fail('RHINOQ_WAITPOINT_CONFLICT',p_id);
+  END IF;
+  RETURN true;
+END; $$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.resolve_waitpoint(p_id text,p_owner_id text,p_expected_version bigint,p_resolution_id text,p_actor text,p_resolution jsonb,p_resolution_hash text)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v rhinoq_task.waitpoints%ROWTYPE;
+BEGIN
+  SELECT w.* INTO v FROM rhinoq_task.waitpoints w JOIN rhinoq_task.tasks t ON t.id=w.task_id
+  WHERE w.id=p_id AND t.owner_id=p_owner_id FOR UPDATE OF w;
+  IF v.id IS NULL THEN PERFORM rhinoq_task.fail('RHINOQ_WAITPOINT_NOT_FOUND',p_id); END IF;
+  IF v.state='resolved' THEN
+    IF v.resolution_id=p_resolution_id AND v.resolution_hash=p_resolution_hash AND v.resolution=p_resolution THEN RETURN; END IF;
+    PERFORM rhinoq_task.fail('RHINOQ_WAITPOINT_CONFLICT',p_id);
+  END IF;
+  IF v.version<>p_expected_version THEN PERFORM rhinoq_task.fail('RHINOQ_VERSION_CONFLICT',p_id); END IF;
+  IF v.state<>'waiting' OR (v.deadline IS NOT NULL AND clock_timestamp()>=v.deadline) THEN PERFORM rhinoq_task.fail('RHINOQ_WAITPOINT_SETTLED',p_id); END IF;
+  UPDATE rhinoq_task.waitpoints SET state='resolved',resolution=p_resolution,resolution_hash=p_resolution_hash,resolution_id=p_resolution_id,
+    resolved_by=p_actor,resolved_at=clock_timestamp(),version=version+1,updated_at=clock_timestamp() WHERE id=p_id;
+  UPDATE rhinoq_task.tasks SET version=version+1,updated_at=clock_timestamp() WHERE id=v.task_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.expire_waitpoints(p_limit integer)
+RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE v_count integer := 0; v record;
+BEGIN
+  IF p_limit<1 OR p_limit>500 THEN PERFORM rhinoq_task.fail('RHINOQ_INVALID_REQUEST','limit'); END IF;
+  FOR v IN SELECT id,task_id FROM rhinoq_task.waitpoints WHERE state='waiting' AND deadline<=clock_timestamp()
+    ORDER BY deadline,id LIMIT p_limit FOR UPDATE SKIP LOCKED LOOP
+    UPDATE rhinoq_task.waitpoints SET state='expired',version=version+1,updated_at=clock_timestamp() WHERE id=v.id;
+    UPDATE rhinoq_task.tasks SET version=version+1,updated_at=clock_timestamp() WHERE id=v.task_id;
+    v_count := v_count + 1;
+  END LOOP;
+  RETURN v_count;
+END; $$;
 `;
 
 const TASK_SCHEMA_MIGRATIONS = [
@@ -1513,7 +1587,7 @@ export interface SqlPool extends SqlExecutor {
   connect(): Promise<SqlConnection>;
 }
 
-/** Applies only the isolated three-table Task profile. */
+/** Applies only the isolated four-table Task profile. */
 export async function migrateTaskSchema(pool: SqlPool): Promise<void> {
   if (!pool || typeof pool.connect !== 'function') {
     throw new TypeError('a PostgreSQL pool with connect() is required');

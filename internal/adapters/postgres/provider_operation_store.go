@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/provideroperation"
 	"github.com/madebyduy/RhinoQ/internal/ports"
@@ -16,6 +19,34 @@ func NewProviderOperationStore(db *sql.DB) (*ProviderOperationStore, error) {
 		return nil, errors.New("postgres database is required")
 	}
 	return &ProviderOperationStore{db: db}, nil
+}
+
+func (s *ProviderOperationStore) ListProviderOperations(ctx context.Context, states []provideroperation.State, before time.Time, limit int) ([]provideroperation.Record, error) {
+	if limit < 1 || limit > 500 || before.IsZero() || len(states) == 0 {
+		return nil, fmt.Errorf("provider operation query requires states, before and limit 1..500")
+	}
+	args := make([]any, 0, len(states)+2)
+	marks := make([]string, len(states))
+	for i, state := range states {
+		args = append(args, state)
+		marks[i] = fmt.Sprintf("$%d", i+1)
+	}
+	args = append(args, before, limit)
+	rows, err := s.db.QueryContext(ctx, providerOperationSelect+` WHERE op.state IN (`+strings.Join(marks, ",")+`)
+		AND op.updated_at <= $`+fmt.Sprint(len(states)+1)+` ORDER BY op.updated_at, op.id LIMIT $`+fmt.Sprint(len(states)+2), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]provideroperation.Record, 0, limit)
+	for rows.Next() {
+		record, scanErr := scanProviderOperation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, record)
+	}
+	return items, rows.Err()
 }
 
 const providerOperationSelect = `SELECT op.id, COALESCE(op.task_id,''), op.provider,

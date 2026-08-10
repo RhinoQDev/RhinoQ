@@ -82,6 +82,22 @@ test('the middleware honours the Express mount path', async () => {
   assert.equal(JSON.parse(item.body).id, 'task-1');
 });
 
+test('Node middleware preserves a Nest or Passport principal attached to the original request', async () => {
+  const { tasks } = newTasks();
+  const middleware = createNodeTaskMiddleware({
+    tasks,
+    ownerFromNodeRequest: (request) => request.user?.id,
+  });
+  const result = await callMiddleware(middleware, {
+    method: 'GET', url: '/tasks', headers: {}, user: { id: 'owner-a' },
+  });
+  assert.equal(result.statusCode, 200);
+});
+
+test('Node middleware refuses construction without an owner boundary', () => {
+  assert.throws(() => createNodeTaskMiddleware({ tasks: newTasks().tasks }), /ownerFrom/);
+});
+
 // express.json() has already drained the stream by the time the middleware
 // runs. Waiting for bytes that will never arrive would hang the request.
 test('the middleware accepts a body a JSON parser has already consumed', async () => {

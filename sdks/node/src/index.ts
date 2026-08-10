@@ -11,6 +11,7 @@ export * from './worker/worker.js';
 export * from './bullmq/task-bridge.js';
 export * from './tasks/client.js';
 export * from './tasks/http.js';
+export * from './tasks/sse.js';
 export * from './tasks/adapters.js';
 export * from './tasks/reconciler.js';
 export * from './tasks/projection-failures.js';
@@ -20,13 +21,29 @@ export * from './notify/sender.js';
 export * from './tasks/watch.js';
 export * from './tasks/store.js';
 export * from './tasks/react.js';
+export * from './tasks/waitpoint-store.js';
+export * from './tasks/waitpoint-token.js';
+export * from './tasks/waitpoint.js';
+export * from './tasks/waitpoint-http.js';
+export * from './tasks/waitpoint-scheduler.js';
+export * from './tasks/group.js';
+export * from './tasks/list-store.js';
+export * from './tasks/ui.js';
+export * from './tasks/result.js';
+export * from './tasks/definition.js';
+export * from './tasks/task-center.js';
+export * from './bullmq/cancellation.js';
+export * from './bullmq/retry-dispatch.js';
 export * from './integration.js';
 export * from './quickstart.js';
 export * from './verify/verifiers.js';
+export * from './nest.js';
 export * from './providers/stripe.js';
 export * from './providers/storage.js';
 export * from './providers/object-transfer.js';
 export * from './providers/http.js';
+export * from './providers/reconciler.js';
+export * from './providers/capability.js';
 
 // Development-preview aliases for the casing used by the original private
 // prototype. New code should use the RhinoQ-prefixed names.

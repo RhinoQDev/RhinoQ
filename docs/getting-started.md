@@ -21,7 +21,7 @@ The Node `init` path creates only the isolated Task profile. Verified Rules use
 the full Go schema and authenticated Gateway. From the RhinoQ checkout, start
 both Go processes with the same database configuration before continuing:
 
-The `beta.8` archive is the first release whose Node package contains the
+The `beta.9` archive is the first release whose Node package contains the
 `verify` commands. An older tarball answers `FAIL verify requires 'add
 <rule-name>'`; if that is what you see, you are on `beta.7` or earlier.
 
@@ -73,13 +73,14 @@ For a Node application keeping its existing queue, prefer the isolated
 Task-only path instead of the full Go migration chain:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.8.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.9.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
-The beta.8 tarball is attached to its GitHub prerelease while npm trusted
-publishing is pending. It creates exactly three tables in `rhinoq_task` and
-reuses the application's `pg.Pool` through `PostgresTaskClient`.
+The beta.9 tarball is attached to its GitHub prerelease while npm trusted
+publishing is pending. It creates the isolated Task tables in `rhinoq_task`,
+including durable waitpoints, and reuses the application's `pg.Pool` through
+`PostgresTaskClient`.
 
 ```bash
 go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest
@@ -206,9 +207,11 @@ Its current boundaries are:
 
 - BullMQ integration requires explicit `dispatch()`/`dispatchMany()` or
   `track()`; it does not scan a queue or reconcile unknown jobs;
-- no composed retry command creates a new Execution atomically;
-- the React adapter uses TaskStore polling; no SSE/WebSocket or stream transport
-  exists;
+- the composed retry command creates a new Execution and durable dispatch intent
+  atomically, but outbox delivery remains at-least-once;
+- owner-scoped Node application routes provide SSE for one Task and the Task
+  inbox; TaskStore/React prefer SSE and use snapshot polling as convergence
+  fallback. The Go Gateway itself remains snapshot-only;
 - `OwnerID` is returned for application authorization and optional owner-scoped
   polling/cancel credentials are available, but organization membership/RBAC
   is not implemented;

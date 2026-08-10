@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -86,6 +87,55 @@ func TestPublicTaskFacadeUsesPostgres(t *testing.T) {
 	if loadedResult.Reference != result.Reference ||
 		loadedResult.EntityVersion != result.EntityVersion {
 		t.Fatalf("result reference did not round-trip through PostgreSQL: %+v", loadedResult)
+	}
+}
+
+func TestPublicWaitpointPersistsIdempotentSettlement(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	client, err := rhinoq.NewPostgres(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	created, err := client.CreateTask(ctx, rhinoq.TaskCreateRequest{ID: "task-waitpoint", Type: "report.review", OwnerID: "owner-1", DefinitionVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := databaseNow(t).Add(time.Hour)
+	wait, replayed, err := client.CreateTaskWaitpoint(ctx, created.ID, rhinoq.TaskWaitpointCreateRequest{ID: "wp-review", Key: "review", Kind: "approval", PayloadVersion: 1, Deadline: deadline})
+	if err != nil || replayed || wait.State != "waiting" {
+		t.Fatalf("create: %+v replay=%v err=%v", wait, replayed, err)
+	}
+	parent, err := client.GetTask(ctx, created.ID)
+	if err != nil || parent.EntityVersion != created.EntityVersion+1 {
+		t.Fatalf("parent version: %+v %v", parent, err)
+	}
+	request := rhinoq.TaskWaitpointResolveRequest{OwnerID: "owner-1", ResolutionID: "submit-1", Actor: "owner-1", ExpectedVersion: wait.EntityVersion, Resolution: []byte(`{"approved":true}`)}
+	resolved, err := client.ResolveTaskWaitpoint(ctx, wait.ID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayedResult, err := client.ResolveTaskWaitpoint(ctx, wait.ID, request)
+	if err != nil || replayedResult.EntityVersion != resolved.EntityVersion {
+		t.Fatalf("replay: %+v %v", replayedResult, err)
+	}
+	parentAfterReplay, err := client.GetTask(ctx, created.ID)
+	if err != nil || parentAfterReplay.EntityVersion != parent.EntityVersion+1 {
+		t.Fatalf("duplicate settlement advanced parent: %+v %v", parentAfterReplay, err)
+	}
+	var resumeEvents int
+	if err = testDB.QueryRowContext(ctx, `SELECT count(*) FROM rhinoq_outbox WHERE event_type='task.waitpoint.resolved' AND aggregate_id=$1`, wait.ID).Scan(&resumeEvents); err != nil || resumeEvents != 1 {
+		t.Fatalf("resume events=%d err=%v", resumeEvents, err)
+	}
+	request.Resolution = []byte(`{"approved":false}`)
+	if _, err = client.ResolveTaskWaitpoint(ctx, wait.ID, request); err == nil {
+		t.Fatal("conflicting resolution was accepted")
+	}
+	if _, err = client.GetTaskWaitpoint(ctx, wait.ID, "other-owner"); !errors.Is(err, rhinoq.ErrWaitpointNotFound) {
+		t.Fatalf("owner isolation: %v", err)
 	}
 }
 
@@ -457,5 +507,83 @@ func TestTaskStoreAllocatesConcurrentAttemptsAtomically(t *testing.T) {
 	}
 	if updatedTask.Version != record.Version+count {
 		t.Fatalf("task version must include every attempt: got=%d want=%d", updatedTask.Version, record.Version+count)
+	}
+}
+
+func TestTaskRetryCommitsOneCommandExecutionAndOutboxUnderConcurrency(t *testing.T) {
+	if testDB == nil {
+		t.Skip("set RHINOQ_TEST_DATABASE_URL to run the PostgreSQL harness")
+	}
+	truncate(t)
+	store, err := postgres.NewTaskStore(testDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now := time.Date(2026, 8, 9, 18, 0, 0, 0, time.UTC)
+	record, err := task.NewRecord(task.Spec{ID: "task-retry-real", Type: "report.generate", DefinitionVersion: 1, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.CreateTask(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []task.State{task.Queued, task.Running, task.Failed} {
+		next, transitionErr := record.Transition(state, now.Add(time.Duration(record.Version)*time.Second))
+		if transitionErr != nil {
+			t.Fatal(transitionErr)
+		}
+		record, err = store.UpdateTask(ctx, next, record.Version)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := ports.TaskRetryInput{CommandID: "retry-real-1", TaskID: record.ID, ExpectedVersion: record.Version,
+		ExecutionID: "exec-retry-real-1", Runtime: "bullmq", Queue: "reports", JobName: "generate",
+		Payload: []byte(`{"reportId":"r-1"}`), Now: now.Add(time.Minute)}
+
+	results := make(chan ports.TaskRetryResult, 2)
+	errorsFound := make(chan error, 2)
+	var group sync.WaitGroup
+	for range 2 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			result, retryErr := store.RetryTask(ctx, input)
+			if retryErr != nil {
+				errorsFound <- retryErr
+				return
+			}
+			results <- result
+		}()
+	}
+	group.Wait()
+	close(results)
+	close(errorsFound)
+	for retryErr := range errorsFound {
+		t.Errorf("concurrent retry: %v", retryErr)
+	}
+	if len(results) != 2 {
+		t.Fatalf("both identical commands must converge, got %d", len(results))
+	}
+
+	var commands, executions, events int
+	if err := testDB.QueryRowContext(ctx, `SELECT
+		(SELECT count(*) FROM rhinoq_task_retry_commands WHERE command_id='retry-real-1'),
+		(SELECT count(*) FROM rhinoq_task_executions WHERE id='exec-retry-real-1'),
+		(SELECT count(*) FROM rhinoq_outbox WHERE event_type='task.retry.dispatch_requested' AND aggregate_id='task-retry-real')`).Scan(&commands, &executions, &events); err != nil {
+		t.Fatal(err)
+	}
+	if commands != 1 || executions != 1 || events != 1 {
+		t.Fatalf("retry forked durable state: commands=%d executions=%d events=%d", commands, executions, events)
+	}
+	var payload string
+	if err := testDB.QueryRowContext(ctx, `SELECT payload::text FROM rhinoq_outbox WHERE aggregate_id='task-retry-real'`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"queue": "reports"`, `"jobName": "generate"`, `"executionId": "exec-retry-real-1"`} {
+		if !strings.Contains(payload, expected) {
+			t.Fatalf("outbox payload missing %s: %s", expected, payload)
+		}
 	}
 }

@@ -10,8 +10,11 @@ import type {
   TaskProgress,
   TaskResult,
   TaskSnapshot,
-	TaskSummary,
+  TaskSummary,
   TaskState,
+	TaskWaitpoint,
+	TaskWaitpointCreateRequest,
+	TaskWaitpointResolveRequest,
 } from '../gateway/types.js';
 
 /**
@@ -129,4 +132,7 @@ export interface TaskClient {
     reference: string,
   ): Promise<TaskResult>;
   getTaskResult(taskId: string): Promise<TaskResult>;
+	createTaskWaitpoint?(taskId: string, request: TaskWaitpointCreateRequest): Promise<TaskWaitpoint>;
+	getTaskWaitpoint?(id: string, ownerId: string): Promise<TaskWaitpoint>;
+	resolveTaskWaitpoint?(id: string, ownerId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint>;
 }

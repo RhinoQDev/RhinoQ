@@ -61,6 +61,37 @@ type CreateExecutionInput struct {
 	Runtime string
 }
 
+type RetryInput struct {
+	CommandID       string
+	TaskID          task.ID
+	ExpectedVersion int64
+	ExecutionID     execution.ID
+	Runtime         string
+	Queue           string
+	JobName         string
+	Payload         []byte
+}
+
+// Retry crosses a transactional store boundary so a crash can never leave a
+// queued Task without a durable dispatch intent. Correctness stays in the Go
+// application/domain and store, not in a producer SDK callback.
+func (s *Service) Retry(ctx context.Context, input RetryInput) (taskcontract.Snapshot, error) {
+	store, ok := s.tasks.(ports.TaskRetryStore)
+	if !ok {
+		return taskcontract.Snapshot{}, errors.New("task store does not support durable retry")
+	}
+	result, err := store.RetryTask(ctx, ports.TaskRetryInput{
+		CommandID: input.CommandID, TaskID: input.TaskID,
+		ExpectedVersion: input.ExpectedVersion, ExecutionID: input.ExecutionID,
+		Runtime: input.Runtime, Queue: input.Queue, JobName: input.JobName,
+		Payload: input.Payload, Now: s.now(),
+	})
+	if err != nil {
+		return taskcontract.Snapshot{}, err
+	}
+	return s.snapshot(ctx, result.Task)
+}
+
 func (s *Service) CreateExecution(ctx context.Context, input CreateExecutionInput) (execution.Record, error) {
 	if _, found, err := s.tasks.GetTask(ctx, input.TaskID); err != nil {
 		return execution.Record{}, err

@@ -57,3 +57,28 @@ application must still provide provider-specific read-back confirmation. These
 adapters adapt transport/SDK results only; they do not contain retry or
 state-machine correctness. The full
 Next.js/BullMQ/PostgreSQL demo is in `examples/nextjs-bullmq-stripe`.
+
+## Bounded confirmation recovery
+
+`GET /v1/provider-operations?before=<rfc3339>&limit=<1..500>` returns only
+unresolved `pending`, `accepted` and `uncertain` operations, oldest first. The
+Node `ProviderOperationReconciler` uses this Application boundary and a
+registry keyed by `provider.operation`:
+
+```ts
+const reconciler = new ProviderOperationReconciler({
+  client: rhinoq,
+  minimumAgeMs: 30_000,
+  verifiers: {
+    'stripe.refund': (operation) => retrieveRefund(operation),
+  },
+});
+reconciler.start();
+```
+
+The reconciler cannot receive or repeat the external mutation callback. An
+operation without a registered verifier is skipped and remains visible for
+operator attention. `effectCapabilityReport()` labels an individual effect as
+`effectively-exactly-once` only when stable identity, provider-enforced
+idempotency, independent confirmation and `when-not-happened` retry gating are
+all declared. This is never a system-wide exactly-once claim.

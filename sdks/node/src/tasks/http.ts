@@ -5,8 +5,13 @@ import type {
   TaskResult,
   TaskSnapshot,
 	TaskSummary,
+	TaskWaitpoint,
+	TaskWaitpointCreateRequest,
+	TaskWaitpointResolveRequest,
 } from '../gateway/types.js';
 import type { PostgresTaskClient } from '../postgres/task-client.js';
+import { parseTaskEventStream, taskEventResponse, taskListEventResponse, type TaskSSEOptions, type TaskStreamEvent } from './sse.js';
+import { failedTaskItems, taskGroupManifest } from './group.js';
 
 
 export interface TaskRequestHandlerOptions {
@@ -22,7 +27,19 @@ export interface TaskRequestHandlerOptions {
   resolveResult?(
     result: TaskResult,
     request: Request,
+    ownerId: string,
   ): Promise<unknown> | unknown;
+  /** Application-owned durable retry composition. commandId is mandatory. */
+  retryTask?(input: {
+    task: TaskSnapshot;
+    ownerId: string;
+    commandId: string;
+    request: Request;
+  }): Promise<TaskSnapshot>;
+  /** Optional health report mounted at `<basePath>/_health`. */
+  health?(): Promise<unknown> | unknown;
+  /** Set false to disable SSE. Snapshots remain authoritative. */
+  stream?: TaskSSEOptions | false;
 }
 
 /**
@@ -39,6 +56,14 @@ export function createTaskRequestHandler(
     throw new TypeError('PostgresTaskClient is required');
   }
   const basePath = normalizeBasePath(options.basePath ?? '/tasks');
+  let activeStreams = 0;
+  const maxStreams = options.stream === false ? 0 : boundedInteger(options.stream?.maxConnections ?? 1_000, 1, 100_000, 'stream maxConnections');
+  const openStream = (create: (closed: () => void) => Response): Response => {
+    if (activeStreams >= maxStreams) return json({ code: 'RHINOQ_STREAM_CAPACITY', retryable: true }, 503);
+    activeStreams++;
+    let closed = false;
+    return create(() => { if (!closed) { closed = true; activeStreams--; } });
+  };
 
   return async (request: Request): Promise<Response> => {
     try {
@@ -57,6 +82,13 @@ export function createTaskRequestHandler(
         const offset = integerQuery(url, 'offset', 0);
         return json({ tasks: await options.tasks.listTasks(ownerId, limit, offset) });
       }
+      if (request.method === 'GET' && relative.length === 1 && relative[0] === '_events') {
+        if (options.stream === false) return json({ code: 'RHINOQ_STREAM_DISABLED' }, 404);
+        return openStream((closed) => taskListEventResponse(options.tasks, request, ownerId, integerQuery(url, 'limit', 50), integerQuery(url, 'offset', 0), options.stream || undefined, closed));
+      }
+      if (request.method === 'GET' && relative.length === 1 && relative[0] === '_health') {
+        return options.health ? json(await options.health()) : json({ status: 'ok' });
+      }
       const taskId = relative[0];
       if (!taskId) {
         return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
@@ -64,10 +96,29 @@ export function createTaskRequestHandler(
       if (request.method === 'GET' && relative.length === 1) {
         return json(await options.tasks.getTaskForOwner(taskId, ownerId));
       }
+	  if (request.method === 'GET' && relative.length === 2 && relative[1] === 'events') {
+		if (options.stream === false) return json({ code: 'RHINOQ_STREAM_DISABLED' }, 404);
+		await options.tasks.getTaskSummaryForOwner(taskId, ownerId);
+		return openStream((closed) => taskEventResponse(options.tasks, request, ownerId, taskId, options.stream || undefined, closed));
+	  }
 	  if (request.method === 'GET' && relative.length === 2 && relative[1] === 'summary') {
 		const summary: TaskSummary = await options.tasks.getTaskSummaryForOwner(taskId, ownerId);
 		return json(summary);
 	  }
+      if (request.method === 'GET' && relative.length === 2 && relative[1] === 'failed-items') {
+        const task = await options.tasks.getTaskForOwner(taskId, ownerId);
+        const format = url.searchParams.get('format') === 'csv' ? 'csv' : 'json';
+        return new Response(failedTaskItems(task, format), { headers: {
+          'content-type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8',
+          'content-disposition': `attachment; filename="${safeFilename(taskId)}-failed.${format}"`,
+          'cache-control': 'private, no-store',
+        } });
+      }
+      if (request.method === 'GET' && relative.length === 2 && relative[1] === 'manifest') {
+        const task = await options.tasks.getTaskForOwner(taskId, ownerId);
+        const results = await options.tasks.getTaskExecutionResultsForOwner(taskId, ownerId);
+        return json(taskGroupManifest(task, results.executions));
+      }
 	  if (request.method === 'GET' && relative.length === 3 && relative[1] === 'executions' && relative[2] === 'page') {
 		const page: TaskExecutionPage = await options.tasks.listTaskExecutionsForOwner(
 			taskId, ownerId, url.searchParams.get('cursor') ?? '', integerQuery(url, 'limit', 100),
@@ -83,15 +134,30 @@ export function createTaskRequestHandler(
           await options.tasks.getTaskExecutionResultsForOwner(taskId, ownerId);
         return json(results);
       }
+      if (request.method === 'POST' && relative.length === 2 && relative[1] === 'waitpoints') {
+        await options.tasks.getTaskSummaryForOwner(taskId, ownerId);
+        const body = await request.json() as TaskWaitpointCreateRequest;
+        return json(await options.tasks.createTaskWaitpoint(taskId, body), 201);
+      }
+      if (relative.length === 3 && relative[1] === 'waitpoints') {
+        const waitpoint = await options.tasks.getTaskWaitpoint(relative[2]!, ownerId);
+        if (waitpoint.taskId !== taskId) return json({ code: 'RHINOQ_WAITPOINT_NOT_FOUND' }, 404);
+        if (request.method === 'GET') return json(waitpoint);
+        if (request.method === 'POST') {
+          const body = await request.json() as TaskWaitpointResolveRequest;
+          return json(await options.tasks.resolveTaskWaitpoint(relative[2]!, ownerId, body));
+        }
+      }
       if (
         request.method === 'GET' &&
         relative.length === 2 &&
         relative[1] === 'result'
       ) {
         const result = await options.tasks.getTaskResultForOwner(taskId, ownerId);
-        return json(options.resolveResult
-          ? await options.resolveResult(result, request)
-          : result);
+        const resolved = options.resolveResult
+          ? await options.resolveResult(result, request, ownerId)
+          : result;
+        return resolved instanceof Response ? resolved : json(resolved);
       }
       if (
         request.method === 'POST' &&
@@ -111,6 +177,22 @@ export function createTaskRequestHandler(
             Number(body.expectedVersion),
           );
         return json(snapshot);
+      }
+      if (request.method === 'POST' && relative.length === 2 && relative[1] === 'retry') {
+        if (!options.retryTask) return json({ code: 'RHINOQ_RETRY_NOT_CONFIGURED' }, 501);
+        const body = await request.json() as { expectedVersion?: unknown; commandId?: unknown };
+        if (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0 ||
+            typeof body.commandId !== 'string' || !body.commandId.trim()) {
+          return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'expectedVersion and commandId are required' }, 400);
+        }
+        const task = await options.tasks.getTaskForOwner(taskId, ownerId);
+        if (task.entityVersion !== Number(body.expectedVersion)) {
+          return json({ code: 'RHINOQ_VERSION_CONFLICT', task }, 409);
+        }
+        if (task.state !== 'failed' && task.state !== 'cancelled') {
+          return json({ code: 'RHINOQ_TASK_NOT_RETRYABLE', task }, 409);
+        }
+        return json(await options.retryTask({ task, ownerId, commandId: body.commandId.trim(), request }));
       }
       return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
     } catch (error) {
@@ -176,6 +258,14 @@ export class ApplicationTaskClient {
     return result.tasks;
   }
 
+  streamTask(taskId: string, options: { lastVersion?: number; signal?: AbortSignal } = {}): AsyncIterable<TaskStreamEvent> {
+    return this.openStream(`/${path(taskId)}/events`, options);
+  }
+
+  streamTasks(limit = 50, offset = 0, options: { signal?: AbortSignal } = {}): AsyncIterable<TaskStreamEvent> {
+    return this.openStream(`/_events?limit=${limit}&offset=${offset}`, options);
+  }
+
   /**
    * Asks for cancellation. `expectedVersion` is optional: on a fan-out the Task
    * version moves several times a second, so a version read by a browser is
@@ -190,12 +280,39 @@ export class ApplicationTaskClient {
     );
   }
 
+  retryTask(taskId: string, expectedVersion: number, commandId: string): Promise<TaskSnapshot> {
+    if (!commandId?.trim()) throw new TypeError('retry commandId is required');
+    return this.send('POST', `/${path(taskId)}/retry`, { expectedVersion, commandId });
+  }
+
+  health(): Promise<unknown> { return this.send('GET', '/_health'); }
+
   getTaskResult(taskId: string): Promise<unknown> {
     return this.send('GET', `/${path(taskId)}/result`);
   }
 
   getTaskExecutionResults(taskId: string): Promise<TaskExecutionResults> {
     return this.send('GET', `/${path(taskId)}/executions`);
+  }
+
+  getTaskGroupManifest(taskId: string): Promise<unknown> { return this.send('GET', `/${path(taskId)}/manifest`); }
+  async downloadFailedTaskItems(taskId: string, format: 'json' | 'csv' = 'json'): Promise<Blob> {
+    const headers = new Headers(await this.getHeaders?.());
+    const response = await this.doFetch(`${this.url}/${path(taskId)}/failed-items?format=${format}`, { headers });
+    if (!response.ok) { const payload = await response.json() as Record<string,unknown>; throw new RhinoQError(String(payload.code ?? 'RHINOQ_HTTP_ERROR'), String(payload.message ?? response.statusText), false, { status: response.status }); }
+    return response.blob();
+  }
+
+  createTaskWaitpoint(taskId: string, request: TaskWaitpointCreateRequest): Promise<TaskWaitpoint> {
+    return this.send('POST', `/${path(taskId)}/waitpoints`, request);
+  }
+
+  getTaskWaitpoint(taskId: string, waitpointId: string): Promise<TaskWaitpoint> {
+    return this.send('GET', `/${path(taskId)}/waitpoints/${path(waitpointId)}`);
+  }
+
+  resolveTaskWaitpoint(taskId: string, waitpointId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint> {
+    return this.send('POST', `/${path(taskId)}/waitpoints/${path(waitpointId)}`, request);
   }
 
   private async send<T>(
@@ -222,6 +339,14 @@ export class ApplicationTaskClient {
       );
     }
     return payload as T;
+  }
+
+  private async *openStream(pathname: string, options: { lastVersion?: number; signal?: AbortSignal }): AsyncGenerator<TaskStreamEvent> {
+    const headers = new Headers(await this.getHeaders?.());
+    headers.set('accept', 'text/event-stream');
+    if (options.lastVersion && options.lastVersion > 0) headers.set('last-event-id', String(options.lastVersion));
+    const response = await this.doFetch(`${this.url}${pathname}`, { method: 'GET', headers, signal: options.signal });
+    yield* parseTaskEventStream(response, options.signal);
   }
 }
 
@@ -294,9 +419,16 @@ function integerQuery(url: URL, name: string, fallback: number): number {
   return Number.isInteger(parsed) ? parsed : fallback;
 }
 
+function boundedInteger(value: number, min: number, max: number, name: string): number {
+  if (!Number.isInteger(value) || value < min || value > max) throw new RangeError(`${name} must be ${min}..${max}`);
+  return value;
+}
+
 function path(value: string): string {
   if (!value?.trim()) {
     throw new TypeError('task id is required');
   }
   return encodeURIComponent(value);
 }
+
+function safeFilename(value: string): string { return value.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'task'; }

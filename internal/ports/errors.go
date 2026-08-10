@@ -18,6 +18,8 @@ var (
 	ErrTaskNotFound                 = errors.New("RHINOQ_TASK_NOT_FOUND")
 	ErrTaskResultNotFound           = errors.New("RHINOQ_TASK_RESULT_NOT_FOUND")
 	ErrExecutionNotFound            = errors.New("RHINOQ_EXECUTION_NOT_FOUND")
+	ErrWaitpointNotFound            = errors.New("RHINOQ_WAITPOINT_NOT_FOUND")
+	ErrWaitpointConflict            = errors.New("RHINOQ_WAITPOINT_CONFLICT")
 	ErrProviderOperationNotFound    = errors.New("RHINOQ_PROVIDER_OPERATION_NOT_FOUND")
 	ErrNotificationDeliveryNotFound = errors.New("RHINOQ_NOTIFICATION_DELIVERY_NOT_FOUND")
 	ErrRepairNotFound               = errors.New("RHINOQ_REPAIR_NOT_FOUND")

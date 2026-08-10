@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { Pool } from 'pg';
 import { installPostgresTaskProfile } from '../postgres/task-client.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
@@ -25,13 +25,16 @@ async function main(): Promise<void> {
   const args = process.argv.slice(3);
   switch (command) {
     case 'init': await init(); break;
+    case 'adopt': await adopt(args); break;
     case 'verify': await verify(args); break;
     case 'doctor': await doctor(); break;
     case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
-    case 'help': case '--help': case '-h': help(); break;
+    case 'help': case '--help': case '-h':
+      console.log('Adopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n');
+      help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
 }
@@ -98,6 +101,350 @@ async function init(): Promise<void> {
   console.log(`PASS created ${root}`);
   console.log(`INFO PostgreSQL client: ${detected.pg ? 'detected' : 'missing'}; BullMQ: ${detected.bullmq ? 'detected' : 'not detected (optional)'}.`);
   console.log('NEXT add a verification: npx rhinoq verify add completed-report-has-output');
+}
+
+async function adopt(args: string[]): Promise<void> {
+  let apply = false;
+  let localPostgres = false;
+  let mode: 'single' | 'fanout' | undefined;
+  let output: string | undefined;
+  const selectedQueues: string[] = [];
+  const declaredTasks = new Map<string, { taskType: string; mode: 'single' | 'fanout' }>();
+  let ownerProperty: string | undefined;
+  let routesPath = '/tasks';
+  let taskCenterPath = '/task-center';
+  let verifyURL: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === '--apply') { apply = true; continue; }
+    if (raw === '--local-postgres') { localPostgres = true; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--mode') {
+      if (value !== 'single' && value !== 'fanout') fail('--mode must be single or fanout', 'Run: npx rhinoq adopt --mode single');
+      mode = value;
+    } else if (key === '--out') output = resolve(requiredOption(key, value));
+    else if (key === '--queue') selectedQueues.push(requiredOption(key, value));
+    else if (key === '--task') {
+      const declaration = taskDeclaration(requiredOption(key, value));
+      if (declaredTasks.has(declaration.queue)) fail(`duplicate --task declaration for ${declaration.queue}`, 'Declare each queue exactly once');
+      declaredTasks.set(declaration.queue, declaration);
+    }
+    else if (key === '--verify-url') verifyURL = requiredOption(key, value);
+    else if (key === '--owner-property') ownerProperty = ownerPropertyPath(requiredOption(key, value));
+    else if (key === '--routes-path') routesPath = routePath(requiredOption(key, value));
+    else if (key === '--task-center-path') taskCenterPath = routePath(requiredOption(key, value));
+    else fail(`unknown adopt option ${JSON.stringify(key)}`, 'Run: npx rhinoq adopt --mode single [--apply]');
+  }
+  if (verifyURL) { await verifyAdoptionRuntime(verifyURL, routesPath, taskCenterPath); return; }
+  const detected = await detectPackages();
+  const database = resolveDatabaseConfig(process.env);
+  const queues = detected.nest ? await detectNestQueues(resolve('src')) : [];
+  const producers = detected.nest ? await detectQueueAdds(resolve('src')) : [];
+  output ??= resolve(detected.nest ? 'src/rhinoq.module.ts' : 'rhinoq.integration.mjs');
+  console.log('RhinoQ adoption plan');
+  console.log(`  PostgreSQL client  ${detected.pg ? 'reuse installed pg' : 'MISSING: install pg'}`);
+  console.log(`  BullMQ             ${detected.bullmq ? 'reuse existing runtime' : 'MISSING: install/use BullMQ first'}`);
+  console.log(`  framework          ${detected.nest ? 'NestJS detected; @rhinoq/node/nest is available' : 'framework-neutral'}`);
+  console.log(`  BullMQ queues      ${queues.length ? queues.join(', ') : 'none detected statically'}`);
+  console.log(`  queue producers    ${producers.length ? producers.map((item) => `${relative(resolve('.'), item.file)}:${item.line}`).join(', ') : 'none detected statically'}`);
+  if (queues.length > 1 && selectedQueues.length === 0 && declaredTasks.size === 0) console.log('  queue selection    MISSING: select queues explicitly with --queue or --task');
+  if (detected.nest) console.log(`  owner routes       ${ownerProperty ? `${routesPath} from request.${ownerProperty}` : 'not mounted; pass --owner-property after upstream authentication'}`);
+  console.log(`  Task semantics     ${mode ?? 'MISSING: choose single or fanout'}`);
+  if (declaredTasks.size) for (const [queue, task] of declaredTasks) console.log(`  Task manifest      ${queue} -> ${task.taskType} (${task.mode})`);
+  console.log(`  datastore          ${database ? `reuse ${database.source}; isolated rhinoq_task schema` : localPostgres ? 'NEW local PostgreSQL service; isolated rhinoq_task schema' : 'MISSING: PostgreSQL is a required new service'}`);
+  console.log('  extra process      none for the Task profile');
+  console.log('  RhinoQ credential  none for the Task profile');
+  console.log(`  generate           ${output}`);
+  const missing = [!detected.pg ? 'pg' : '', !detected.bullmq ? 'bullmq' : ''].filter(Boolean);
+  if (missing.length > 0) console.log(`  install            npm install @rhinoq/node ${missing.join(' ')}`);
+  if (!database && !localPostgres) console.log('  local evaluation   add --local-postgres to generate a non-overwriting Compose service');
+  if (!apply) {
+    console.log('INFO preview only; nothing was written.');
+    console.log(`NEXT ${missing.length > 0 ? `install ${missing.join(' and ')}, then ` : ''}generate without overwriting: npx rhinoq adopt --mode ${mode ?? 'single'} --apply`);
+    return;
+  }
+  if (!mode && (!detected.nest || declaredTasks.size === 0)) fail('adopt --apply requires an explicit Task mode or per-queue --task declarations', 'Choose --mode single, or declare --task mail-queue=mail.send:single');
+  if (missing.length > 0) fail('adoption prerequisites are missing', `Run: npm install @rhinoq/node ${missing.join(' ')}`);
+  if (!database && localPostgres) {
+    const compose = resolve('compose.rhinoq.yml');
+    await writeNew(compose, localPostgresTemplate());
+    console.log(`PASS generated local PostgreSQL evaluation service ${compose}`);
+    console.log('INFO start it with: docker compose -f compose.rhinoq.yml up -d');
+    console.log('INFO then set DATABASE_URL=postgresql://rhinoq:rhinoq@127.0.0.1:55432/rhinoq');
+  }
+  if (queues.length > 1 && selectedQueues.length === 0 && declaredTasks.size === 0) {
+    fail(`multiple BullMQ queues detected: ${queues.join(', ')}`, 'Select each intended queue explicitly with --queue <name>');
+  }
+  const chosen = declaredTasks.size ? [...declaredTasks.keys()] : selectedQueues.length ? [...new Set(selectedQueues)] : queues.slice(0, 1);
+  for (const queue of chosen) if (queues.length && !queues.includes(queue)) fail(`BullMQ queue ${JSON.stringify(queue)} was not detected`, `Choose one of: ${queues.join(', ')}`);
+  const uncovered = queues.filter((queue) => !chosen.includes(queue));
+  if (uncovered.length) console.log(`WARN queues not tracked by RhinoQ: ${uncovered.join(', ')}`);
+  const defaultMode = mode ?? 'single';
+  const taskManifest = chosen.map((queue) => ({ queue, taskType: declaredTasks.get(queue)?.taskType ?? `${queue}.task`, mode: declaredTasks.get(queue)?.mode ?? defaultMode }));
+  const written = await writeNew(output, detected.nest ? nestIntegrationTemplate(taskManifest, ownerProperty, routesPath, taskCenterPath) : integrationTemplate(defaultMode));
+  if (!written) {
+    console.log('INFO no integration file was changed.');
+    return;
+  }
+  if (detected.nest) {
+    const appModule = await findNestAppModule(resolve('src'));
+    if (!appModule) fail('generated RhinoQ Nest module but no AppModule was found', `Import ${relative(resolve('src'), output)} into the application composition root`);
+    await patchNestAppModule(appModule, output);
+    console.log(`PASS generated ${output}`);
+    console.log(`PASS verified AppModule import in ${appModule}`);
+    if (ownerProperty) console.log(`PASS mounted owner Task routes at ${routesPath} and Task Center at ${taskCenterPath} using authenticated request.${ownerProperty}`);
+    else console.log('INFO owner Task routes were not mounted because no authenticated owner property was declared.');
+    console.log('NEXT set DATABASE_URL and start the application; RhinoQ health must be checked at runtime.');
+    for (const producer of producers) console.log(`NEXT replace raw queue.add at ${relative(resolve('.'), producer.file)}:${producer.line} with a declared Task dispatch using stable business identity and authenticated owner identity.`);
+  } else {
+    console.log(`PASS generated ${output}`);
+    console.log('NEXT call startRhinoQ({ pool, queue, queueEvents }) during startup, then run: npx rhinoq doctor');
+  }
+}
+
+function localPostgresTemplate(): string {
+  return `services:
+  rhinoq-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: rhinoq
+      POSTGRES_PASSWORD: rhinoq
+      POSTGRES_DB: rhinoq
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rhinoq -d rhinoq"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - rhinoq-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  rhinoq-postgres-data:
+`;
+}
+
+function integrationTemplate(mode: 'single' | 'fanout'): string {
+  return `import { createBullMQIntegration } from '@rhinoq/node';
+
+// Call once from the application's existing startup/composition root.
+// The returned integration owns no Redis connection and closes only RhinoQ's
+// listeners, timers and PostgreSQL advisory-lease sessions.
+export async function startRhinoQ({ pool, queue, queueEvents }) {
+  const rhinoq = await createBullMQIntegration({
+    pool,
+    queue,
+    events: queueEvents,
+    mode: '${mode}',
+  });
+  await rhinoq.start();
+  return rhinoq;
+}
+`;
+}
+
+type DeclaredTask = { queue: string; taskType: string; mode: 'single' | 'fanout' };
+
+function nestIntegrationTemplate(tasks: DeclaredTask[], ownerProperty?: string, routesPath = '/tasks', taskCenterPath = '/task-center'): string {
+  if (tasks.length === 0) fail('no BullMQ queue was selected or detected', 'Pass --queue <registered-queue-name>');
+  const sections = tasks.map(({ queue, mode }, index) => {
+    const suffix = `${pascal(queue)}${index + 1}`;
+    return `const RHINOQ_QUEUE_EVENTS_${index} = Symbol('RHINOQ_QUEUE_EVENTS_${queue}');
+const RHINOQ_INTEGRATION_${index} = Symbol('RHINOQ_INTEGRATION_${queue}');
+
+@Injectable()
+class RhinoQOwnedQueueEvents${suffix} implements OnModuleDestroy {
+  constructor(@Inject(RHINOQ_QUEUE_EVENTS_${index}) private readonly events: QueueEvents) {}
+  async onModuleDestroy(): Promise<void> { await this.events.close(); }
+}
+
+@Module({
+  imports: [RhinoQSharedInfrastructureModule, BullModule.registerQueue({ name: '${queue}' })],
+  providers: [
+    {
+      provide: RHINOQ_QUEUE_EVENTS_${index},
+      inject: [getQueueToken('${queue}')],
+      useFactory: (queue: Queue) => new QueueEvents(queue.name, { connection: queue.opts.connection }),
+    },
+    RhinoQOwnedQueueEvents${suffix},
+  ],
+  exports: [RHINOQ_POOL, RHINOQ_QUEUE_EVENTS_${index}, BullModule],
+})
+class RhinoQInfrastructure${suffix}Module {}
+
+const RhinoQ${suffix}Module = RhinoQModule.forBullMQAsync({
+  integrationToken: RHINOQ_INTEGRATION_${index},
+  imports: [RhinoQInfrastructure${suffix}Module],
+  inject: [RHINOQ_POOL, getQueueToken('${queue}'), RHINOQ_QUEUE_EVENTS_${index}],
+  useFactory: (pool: Pool, queue: Queue, events: QueueEvents) => ({
+    pool, queue, events, mode: '${mode}',
+  }),
+});`;
+  }).join('\n\n');
+  const moduleNames = tasks.map(({ queue }, index) => `RhinoQ${pascal(queue)}${index + 1}Module`).join(',\n    ');
+  const manifest = JSON.stringify(tasks, null, 2).replace(/^/gm, '  ');
+  const routeImports = ownerProperty ? ', MiddlewareConsumer, NestModule' : '';
+  const integrationImports = ownerProperty ? ', RhinoQTaskIntegration, createNodeTaskCenterMiddleware' : '';
+  const integrations = tasks.map((_, index) => `@Inject(RHINOQ_INTEGRATION_${index}) private readonly rhinoq${index}: RhinoQTaskIntegration`).join(',\n    ');
+  const integrationList = tasks.map((_, index) => `this.rhinoq${index}`).join(', ');
+  const routeImplementation = ownerProperty ? ` implements NestModule {
+  constructor(
+    ${integrations}
+  ) {}
+  configure(consumer: MiddlewareConsumer): void {
+    const middleware = this.rhinoq0.middleware({
+      basePath: '${routesPath}',
+      ownerFromNodeRequest: (request) => readOwner(request, '${ownerProperty}'),
+      health: () => aggregateRhinoQHealth([${integrationList}]),
+    });
+    consumer.apply(middleware).forRoutes('${routesPath}', '${routesPath}/*');
+    consumer.apply(createNodeTaskCenterMiddleware({ path: '${taskCenterPath}', apiPath: '${routesPath}' })).forRoutes('${taskCenterPath}');
+  }
+}` : ' {}';
+  const ownerReader = ownerProperty ? `
+function readOwner(request: unknown, path: string): string | undefined {
+  let value: unknown = request;
+  for (const part of path.split('.')) value = value && typeof value === 'object' ? (value as Record<string, unknown>)[part] : undefined;
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+async function aggregateRhinoQHealth(integrations: RhinoQTaskIntegration[]) {
+  const queues = await Promise.all(integrations.map((integration) => integration.health()));
+  const status = queues.some((item) => item.status === 'down') ? 'down'
+    : queues.some((item) => item.status === 'degraded') ? 'degraded' : 'ok';
+  return { status, queues };
+}
+` : '';
+  return `import { BullModule, getQueueToken } from '@nestjs/bullmq';
+import { Inject, Injectable, Module, OnModuleDestroy${routeImports} } from '@nestjs/common';
+import { Queue, QueueEvents } from 'bullmq';
+import { Pool } from 'pg';
+import { RhinoQModule${integrationImports} } from '@rhinoq/node';
+
+const RHINOQ_POOL = Symbol('RHINOQ_POOL');
+
+export const RHINOQ_TASK_MANIFEST = ${manifest} as const;
+
+@Module({
+  providers: [{ provide: RHINOQ_POOL, useFactory: () => new Pool() }],
+  exports: [RHINOQ_POOL],
+})
+class RhinoQSharedInfrastructureModule {}
+
+${sections}
+
+@Module({
+  imports: [
+    ${moduleNames},
+  ],
+})
+export class RhinoQAdoptionModule${routeImplementation}
+${ownerReader}
+`;
+}
+
+function pascal(value: string): string {
+  const result = value.split(/[^A-Za-z0-9]+/).filter(Boolean).map((part) => part[0]!.toUpperCase() + part.slice(1)).join('');
+  return result || 'Queue';
+}
+
+function ownerPropertyPath(value: string): string {
+  if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(value)) fail('--owner-property must be a dotted request property', 'Example: --owner-property user.id');
+  return value;
+}
+
+function routePath(value: string): string {
+  if (!/^\/[A-Za-z0-9/_-]*[A-Za-z0-9_-]$/.test(value)) fail('--routes-path must be an absolute path without a trailing slash', 'Example: --routes-path /tasks');
+  return value;
+}
+
+function taskDeclaration(value: string): { queue: string; taskType: string; mode: 'single' | 'fanout' } {
+  const match = /^([^=\s]+)=([A-Za-z0-9][A-Za-z0-9._-]*):(single|fanout)$/.exec(value);
+  if (!match) fail('--task must be queue=task.type:single or queue=task.type:fanout', 'Example: --task mail-queue=mail.send:single');
+  return { queue: match[1]!, taskType: match[2]!, mode: match[3]! as 'single' | 'fanout' };
+}
+
+async function verifyAdoptionRuntime(baseURL: string, routesPath: string, taskCenterPath: string): Promise<void> {
+  let base: URL;
+  try { base = new URL(baseURL); } catch { fail('--verify-url must be an absolute application URL', 'Example: --verify-url http://127.0.0.1:3000'); }
+  if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['127.0.0.1', '::1', 'localhost'].includes(base.hostname))) {
+    fail('--verify-url must use HTTPS outside loopback', 'Use the deployed HTTPS application URL');
+  }
+  let headers: Record<string, string> = {};
+  const rawHeaders = process.env.RHINOQ_ADOPT_VERIFY_HEADERS;
+  if (rawHeaders) {
+    try { headers = JSON.parse(rawHeaders); } catch { fail('RHINOQ_ADOPT_VERIFY_HEADERS must be a JSON object', 'Example: {"authorization":"Bearer ..."}'); }
+    if (!headers || typeof headers !== 'object' || Object.values(headers).some((value) => typeof value !== 'string')) fail('RHINOQ_ADOPT_VERIFY_HEADERS values must be strings', 'Provide a JSON object of request headers');
+  }
+  const root = base.toString().replace(/\/$/, '');
+  const healthURL = `${root}${routesPath}/_health`;
+  const centerURL = `${root}${taskCenterPath}`;
+  const health = await fetch(healthURL, { headers });
+  if (!health.ok) fail(`runtime health returned HTTP ${health.status}`, `Fix application auth/runtime wiring, then retry ${healthURL}`);
+  const payload = await health.json() as { status?: unknown; database?: unknown; projector?: unknown };
+  if (payload.status !== 'ok') fail(`runtime health is ${JSON.stringify(payload.status ?? 'unknown')}`, 'Inspect database/projector details and restore ownership before recruiting users');
+  const center = await fetch(centerURL, { headers });
+  const html = await center.text();
+  if (!center.ok || !/RhinoQ|Task Center/i.test(html)) fail(`Task Center verification failed with HTTP ${center.status}`, `Mount the generated Task Center at ${taskCenterPath}`);
+  console.log(`PASS application runtime health at ${healthURL}`);
+  console.log(`PASS Task Center reachable at ${centerURL}`);
+  console.log(`PASS runtime evidence database=${String(payload.database ?? 'reported')} projector=${String(payload.projector ?? 'reported')}`);
+}
+
+async function detectNestQueues(root: string): Promise<string[]> {
+  const files = await sourceFiles(root);
+  const names = new Set<string>();
+  const calls = /BullModule\.registerQueue(?:Async)?\s*\(([\s\S]*?)\)\s*[,;]?/g;
+  const name = /\bname\s*:\s*(['"])([^'"\r\n]+)\1/g;
+  for (const file of files) {
+    const source = await readFile(file, 'utf8');
+    for (const call of source.matchAll(calls)) {
+      for (const match of call[1]!.matchAll(name)) names.add(match[2]!);
+    }
+  }
+  return [...names].sort();
+}
+
+type QueueAddLocation = { file: string; line: number };
+async function detectQueueAdds(root: string): Promise<QueueAddLocation[]> {
+  const found: QueueAddLocation[] = [];
+  for (const file of await sourceFiles(root)) {
+    const source = await readFile(file, 'utf8');
+    const pattern = /\b(?:this\.)?[A-Za-z_$][\w$]*queue[\w$]*\.add\s*\(/gi;
+    for (const match of source.matchAll(pattern)) found.push({ file, line: source.slice(0, match.index).split('\n').length });
+  }
+  return found;
+}
+
+async function sourceFiles(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    const nested = await Promise.all(entries.flatMap((entry) => {
+      const path = resolve(root, entry.name);
+      if (entry.isDirectory()) return [sourceFiles(path)];
+      return entry.isFile() && path.endsWith('.ts') && !path.endsWith('.spec.ts') ? [Promise.resolve([path])] : [];
+    }));
+    return nested.flat();
+  } catch { return []; }
+}
+
+async function findNestAppModule(root: string): Promise<string | undefined> {
+  const files = await sourceFiles(root);
+  for (const file of files) if (/export\s+class\s+AppModule\b/.test(await readFile(file, 'utf8'))) return file;
+  return undefined;
+}
+
+async function patchNestAppModule(appModule: string, generated: string): Promise<void> {
+  let source = await readFile(appModule, 'utf8');
+  if (source.includes('RhinoQAdoptionModule')) return;
+  let specifier = relative(dirname(appModule), generated).replace(/\\/g, '/').replace(/\.ts$/, '');
+  if (!specifier.startsWith('.')) specifier = `./${specifier}`;
+  source = `import { RhinoQAdoptionModule } from '${specifier}';\n${source}`;
+  const replaced = source.replace(/imports\s*:\s*\[/, 'imports: [\n    RhinoQAdoptionModule,');
+  if (replaced === source) fail(`could not safely patch Nest imports in ${appModule}`, `Import RhinoQAdoptionModule from ${specifier} manually`);
+  await writeFile(appModule, replaced);
 }
 
 async function verify(args: string[]): Promise<void> {
@@ -924,11 +1271,11 @@ async function dev(args: string[]): Promise<void> {
   process.once('SIGINT', close); process.once('SIGTERM', close);
 }
 
-async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean }> {
-  try { const pkg = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { dependencies?: Record<string,string>; devDependencies?: Record<string,string> }; const all={...pkg.dependencies,...pkg.devDependencies}; return {pg:Boolean(all.pg),bullmq:Boolean(all.bullmq)}; }
-  catch { return {pg:false,bullmq:false}; }
+async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean; nest: boolean }> {
+  try { const pkg = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { dependencies?: Record<string,string>; devDependencies?: Record<string,string> }; const all={...pkg.dependencies,...pkg.devDependencies}; return {pg:Boolean(all.pg),bullmq:Boolean(all.bullmq),nest:Boolean(all['@nestjs/common'])}; }
+  catch { return {pg:false,bullmq:false,nest:false}; }
 }
-async function writeNew(path: string, content: string): Promise<void> { try { await access(path); console.log(`KEEP ${path} already exists.`); } catch { await writeFile(path, content, { flag:'wx' }); } }
+async function writeNew(path: string, content: string): Promise<boolean> { try { await access(path); console.log(`KEEP ${path} already exists.`); return false; } catch { await writeFile(path, content, { flag:'wx' }); return true; } }
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }

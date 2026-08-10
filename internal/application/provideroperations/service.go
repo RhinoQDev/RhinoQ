@@ -75,6 +75,14 @@ func (s *Service) Evidence(ctx context.Context, id provideroperation.ID) ([]prov
 	}
 	return s.store.ListProviderOperationEvidence(ctx, id)
 }
+
+// Attention returns a bounded, oldest-first batch that is safe for a verifier
+// to inspect. It never authorizes replaying the external mutation.
+func (s *Service) Attention(ctx context.Context, before time.Time, limit int) ([]provideroperation.Record, error) {
+	return s.store.ListProviderOperations(ctx, []provideroperation.State{
+		provideroperation.Pending, provideroperation.Accepted, provideroperation.Uncertain,
+	}, before, limit)
+}
 func (s *Service) mutate(ctx context.Context, current provideroperation.Record, evidenceKind, evidencePayload string, fn func(provideroperation.Record) (provideroperation.Record, error)) (provideroperation.Record, error) {
 	next, err := fn(current)
 	if err != nil {

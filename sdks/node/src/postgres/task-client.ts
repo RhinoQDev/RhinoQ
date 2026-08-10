@@ -15,6 +15,9 @@ import type {
   TaskSnapshot,
 	TaskSummary,
   TaskState,
+	TaskWaitpoint,
+	TaskWaitpointCreateRequest,
+	TaskWaitpointResolveRequest,
 } from '../gateway/types.js';
 import type { TaskClient } from '../tasks/client.js';
 import type { SqlExecutor } from './producer.js';
@@ -71,6 +74,12 @@ interface ExecutionRow {
   version: string | number;
   updated_at: Date | string;
 	created_at: Date | string;
+}
+
+interface WaitpointRow {
+  id: string; task_id: string; key: string; kind: TaskWaitpoint['kind']; state: TaskWaitpoint['state'];
+  payload_version: number; deadline: Date | string | null; resolution: unknown; resolved_by: string | null;
+  resolved_at: Date | string | null; version: string | number; created_at: Date | string; updated_at: Date | string;
 }
 
 interface ExecutionCursor { id: string }
@@ -193,6 +202,43 @@ export class PostgresTaskClient implements TaskClient {
       [request.id, request.type, request.ownerId ?? null, request.definitionVersion],
     );
     return this.getTask(request.id);
+  }
+
+  async createTaskWaitpoint(taskId: string, request: TaskWaitpointCreateRequest): Promise<TaskWaitpoint> {
+    if (!taskId?.trim() || !request?.id?.trim() || !request.key?.trim() ||
+        !['input','approval','webhook'].includes(request.kind) || !Number.isInteger(request.payloadVersion) || request.payloadVersion <= 0) {
+      throw new TypeError('valid task, waitpoint identity, kind and payloadVersion are required');
+    }
+    await this.execute(`SELECT rhinoq_task.create_waitpoint($1,$2,$3,$4,$5,$6)`,
+      [request.id, taskId, request.key, request.kind, request.payloadVersion, request.deadline ?? null]);
+    return this.readWaitpoint(request.id);
+  }
+
+  getTaskWaitpoint(id: string, ownerId: string): Promise<TaskWaitpoint> { return this.readWaitpoint(id, ownerId); }
+
+  async resolveTaskWaitpoint(id: string, ownerId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint> {
+    if (!id?.trim() || !ownerId?.trim() || !Number.isInteger(request?.expectedVersion) || request.expectedVersion <= 0 ||
+        !request.resolutionId?.trim() || request.resolution === undefined) throw new TypeError('valid waitpoint resolution is required');
+    const encoded = JSON.stringify(request.resolution);
+    if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > 65_536) throw new RangeError('waitpoint resolution must be JSON up to 64 KiB');
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(encoded));
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+    await this.execute(`SELECT rhinoq_task.resolve_waitpoint($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+      [id, ownerId, request.expectedVersion, request.resolutionId, request.actor?.trim() || ownerId, encoded, hash]);
+    return this.readWaitpoint(id, ownerId);
+  }
+
+  async expireTaskWaitpoints(limit = 100): Promise<number> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new RangeError('waitpoint expiry limit must be 1..500');
+    const result = await this.execute<{ count: number | string }>(`SELECT rhinoq_task.expire_waitpoints($1) AS count`, [limit]);
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  private async readWaitpoint(id: string, ownerId?: string): Promise<TaskWaitpoint> {
+    const result = await this.execute<WaitpointRow>(`SELECT w.* FROM rhinoq_task.waitpoints w JOIN rhinoq_task.tasks t ON t.id=w.task_id
+      WHERE w.id=$1 AND ($2::text IS NULL OR t.owner_id=$2)`, [id, ownerId ?? null]);
+    const row = result.rows[0]; if (!row) throw new RhinoQError('RHINOQ_WAITPOINT_NOT_FOUND', 'Waitpoint not found', false, { status: 404 });
+    return mapWaitpoint(row);
   }
 
   getTask(taskId: string): Promise<TaskSnapshot> {
@@ -861,6 +907,16 @@ function mapSnapshot(row: TaskRow): TaskSnapshot {
     createdAt: timestamp(row.created_at),
     updatedAt: timestamp(row.updated_at),
   };
+}
+
+function mapWaitpoint(row: WaitpointRow): TaskWaitpoint {
+  return { schemaVersion: 1, entityVersion: Number(row.version), id: row.id, taskId: row.task_id,
+    key: row.key, kind: row.kind, state: row.state, payloadVersion: Number(row.payload_version),
+    ...(row.deadline ? { deadline: timestamp(row.deadline) } : {}),
+    ...(row.resolution === null ? {} : { resolution: row.resolution }),
+    ...(row.resolved_by ? { resolvedBy: row.resolved_by } : {}),
+    ...(row.resolved_at ? { resolvedAt: timestamp(row.resolved_at) } : {}),
+    createdAt: timestamp(row.created_at), updatedAt: timestamp(row.updated_at) };
 }
 
 function mapExecutionSummary(value: unknown): TaskExecutionSummary {

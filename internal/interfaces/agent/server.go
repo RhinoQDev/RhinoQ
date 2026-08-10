@@ -210,6 +210,7 @@ func (s *Server) routes() {
 	// Provider calls execute in the application process; these commands keep
 	// identity, state transitions and retry authority in the Go engine.
 	mux.HandleFunc("POST /v1/provider-operations", s.guard(s.handleBeginProviderOperation))
+	mux.HandleFunc("GET /v1/provider-operations", s.guard(s.handleListProviderOperations))
 	mux.HandleFunc("GET /v1/provider-operations/{id}", s.guard(s.handleGetProviderOperation))
 	mux.HandleFunc("GET /v1/provider-operations/{id}/evidence", s.guard(s.handleProviderOperationEvidence))
 	mux.HandleFunc("POST /v1/provider-operations/{id}/accept", s.guard(s.handleAcceptProviderOperation))
@@ -239,6 +240,33 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /v1/rules/{id}", s.guard(s.handleDeleteRule))
 
 	s.mux = mux
+}
+
+func (s *Server) handleListProviderOperations(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			s.fail(w, errors.New("provider operation limit must be an integer"))
+			return
+		}
+		limit = parsed
+	}
+	before := time.Now().UTC()
+	if raw := r.URL.Query().Get("before"); raw != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			s.fail(w, errors.New("provider operation before must be RFC3339"))
+			return
+		}
+		before = parsed
+	}
+	items, err := s.client.ListProviderOperationsNeedingAttention(r.Context(), rhinoq.ProviderOperationAttentionQuery{Before: before, Limit: limit})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"operations": items})
 }
 
 func (s *Server) handleBeginProviderOperation(w http.ResponseWriter, r *http.Request) {

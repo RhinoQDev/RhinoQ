@@ -28,14 +28,20 @@ without migrating their queue.
 - [x] version-fenced result-reference read/write through Go, HTTP and Node
 - [x] BullMQ lifecycle bridge for explicitly tracked existing jobs
 - [x] reserve-before-dispatch and bounded known-job reconciliation for BullMQ
+- [x] preview-first adopter generator and BullMQ integration preset
 - [x] fail-closed BullMQ cancellation composition through an application callback
-- [ ] first-class retry command identity and crash-recovery contract for BullMQ
+- [x] first-class retry command identity and crash-recovery contract for BullMQ
 - [x] ProviderOperation domain, PostgreSQL store and Stripe response-loss demo
 - [x] lightweight Task Summary and stable Execution keyset pagination
+- [x] snapshot-convergent owner Task and inbox SSE with polling fallback
+- [x] durable input, approval and webhook waitpoints with version-fenced settlement
+- [x] Task Group batch dispatch, failed-item retry, pending cancellation and manifests
+- [x] atomic retry command and at-least-once dispatch intent publication
+- [x] bounded waitpoint expiry scheduler with application-owned escalation hook
 
-Realtime transports, React hooks, streams and Redis fan-out are not part of the
-first persistence slice. They follow only after snapshot convergence semantics
-are tested.
+SSE, React live hooks and streams now exist as delivery layers over authoritative
+snapshots. WebSocket and Redis fan-out remain deferred until measured demand
+justifies their additional operational state.
 
 ## Foundation — COMMIT and RUN
 
@@ -118,7 +124,7 @@ requiring the application's current queue to be replaced.
 
 - [x] guarded, audited recheck and safe-repair browser actions through Application callbacks
 - [ ] gRPC/Unix-socket gateway transport, only after real polyglot demand
-- [ ] NestJS lifecycle integration after the framework-neutral Node SDK is validated
+- [x] NestJS lifecycle integration through the `@rhinoq/node/nest` subpath
 - [ ] retention and partition sweeper
 - [x] Node SDK and Go domain/memory microbenchmarks plus fixed-seed browser disorder test
 - [x] reproducible PostgreSQL concurrency and Task fan-out snapshot benchmarks

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a bounded `WaitpointExpiryScheduler` for the Node Task profile. It runs
+  the database-time expiry command without overlapping sweeps, reports expired
+  counts to an application-owned escalation hook, and fails closed on scheduler
+  errors. It does not invent notification or retry policy.
+
 - **Fixed (correctness): a BullMQ fan-out could hang forever, and usually did.**
   On a 50-item batch the example settled on roughly one run in three. Every
   stuck item had `completed` in BullMQ and a non-terminal Execution in RhinoQ,
@@ -113,6 +118,109 @@
   names the one architectural decision that flips the code-reduction number from
   −37% to +8% and was previously mentioned nowhere; the second is the list an
   adopter had to assemble themselves, one surprise at a time.
+- Added durable Task waitpoints for input, approval and webhook pauses: Go
+  authoritative state machine, memory/PostgreSQL persistence, isolated Node
+  Task schema v7 commands, owner-scoped application routes/client, bounded
+  expiration scheduler, React input store/hook and signed HMAC capability token
+  primitive. Duplicate resolution identity replays the committed answer;
+  mismatched payloads fail closed. Full-profile settlement also appends one
+  `task.waitpoint.resolved` outbox intent atomically for crash-safe resume.
+- Added the first Task Group layer: `dispatchBatch()` with admission bounds,
+  latest-attempt parent/child view, partial-failure counts, bounded
+  `retryFailed()`/`cancelPending()` command composition, failed-item CSV/JSON
+  export and per-item result manifest generation. Per-item retries carry each
+  committed aggregate version forward with stable source/next Execution IDs,
+  avoiding optimistic-lock races between durable child commands. Active work is never selected
+  by `cancelPending()`.
+
+- Added owner-scoped Task SSE for individual Tasks and Task inbox pages. Streams
+  emit versioned authoritative snapshots, honor `Last-Event-ID` for one Task,
+  send heartbeats, clean up on disconnect and enforce a per-handler connection
+  budget.
+- `ApplicationTaskClient`, TaskStore, TaskListStore, React live hook aliases and
+  both Task Center variants now prefer SSE, reject stale versions and fall back
+  to snapshot polling before retrying a lost stream. Node/Nest and Fastify raw
+  adapters pipe response bodies instead of buffering an infinite stream.
+- Task Center now has loading skeletons, action busy states, live/fallback
+  connection status, explicit Finished/Not-finished badges and accessible
+  terminal completion/failure announcements.
+
+- Added bounded, oldest-first ProviderOperation attention queries through the
+  Go Application, memory/PostgreSQL stores, Agent HTTP API and Node client.
+- Added `ProviderOperationReconciler`, which can only run registered read-back
+  verifiers and never receives the provider mutation callback. Missing
+  verifiers fail closed by skipping the operation.
+- Added `effectCapabilityReport()` so applications can claim
+  effectively-exactly-once per declared effect only when stable identity,
+  provider idempotency, confirmation and proof-gated retry are all present.
+
+- Nest adoption now supports a per-queue manifest through repeated
+  `--task queue=task.type:single|fanout`, reports uncovered queues, locates raw
+  `queue.add()` producers by file/line and exports the generated manifest.
+- Added `adopt --verify-url` to distinguish generated/imported code from a live
+  vertical slice. It verifies application health and Task Center reachability;
+  optional authentication headers come from an environment variable.
+- Integration startup now awaits BullMQ `QueueEvents.waitUntilReady()` when
+  available and health reports `ready`, `down`, `unverified` or `closed`.
+- Multi-queue Nest modules now use isolated integration tokens. The generated
+  owner health route aggregates every queue integration instead of silently
+  reporting whichever shared token Nest resolved last.
+- Added narrow `browser`, `react`, `bullmq` and `server` package subpaths with
+  ESM and CommonJS smoke tests. Browser adopters no longer need to import the
+  root surface that also exposes PostgreSQL and Nest lifecycle APIs.
+
+- Added an authoritative durable Task retry boundary in Go/PostgreSQL.
+  Migration 029 atomically persists command identity, the Task transition, a
+  new Execution and a `task.retry.dispatch_requested` outbox event. Duplicate
+  commands resolve to the same Execution; runtime publication remains
+  explicitly at-least-once and must enqueue with that stable identity.
+- Retry dispatch intents now carry and fingerprint queue, job name and JSON
+  data. The Go Agent can recover them through an HTTPS/HMAC outbox publisher,
+  and Node provides a registered-queue BullMQ receiver that converges a lost
+  HTTP response on the immutable Execution `jobId`.
+- Retry-dispatched BullMQ jobs now explicitly disable automatic removal on
+  completion and failure, so a fast job cannot disappear in the interval
+  between enqueue and durable outbox acknowledgement.
+- Added real PostgreSQL/Redis/BullMQ fault evidence: after `Queue.add()` the
+  test drops the HTTP acknowledgement and lets the first Agent stop; a second
+  Agent redelivers the unpublished outbox event and converges on one retained
+  BullMQ job. The PostgreSQL harness also races two identical retry commands.
+
+- Hardened the NestJS adopter after an external pilot: `adopt` now discovers
+  registered queue names, refuses ambiguous multi-queue apply, accepts repeated
+  `--queue`, generates a TypeScript Nest module with one shared PostgreSQL pool
+  and owned `QueueEvents` lifecycles, patches `AppModule`, and verifies the
+  import instead of reporting success for an unused root `.mjs` file.
+- The Nest API is also exported from the package root for older Nest TypeScript
+  projects using legacy Node module resolution. BullMQ's concrete Queue type is
+  now structurally accepted without casts.
+- Adoption no longer calls PostgreSQL "existing" when no connection is
+  configured. `--local-postgres` can generate a loopback-only, non-overwriting
+  Compose service for evaluation.
+- Node/Nest middleware can resolve an authenticated owner from the original
+  framework request such as `request.user.id`. Nest adoption can mount the
+  owner Task API and a self-contained Task Center when `--owner-property` is
+  explicitly supplied; no client-controlled owner header is invented.
+
+- Added an adopter-facing Task vertical slice: owner-scoped list/detail/history,
+  cancel, command-identified retry, authorized result resolution and health
+  routes; `useRhinoTasks()`/expanded `useRhinoTask()` hooks; framework-neutral
+  UI state semantics; and a ready-to-use Task Center.
+- Added declared BullMQ Task definitions, a fail-closed BullMQ cancellation
+  adapter and owner-aware signed result URLs. Retry execution remains an
+  application-owned durable command/outbox boundary; the SDK does not claim
+  crash safety for an arbitrary enqueue callback.
+
+- Added the low-friction `createBullMQIntegration` preset and preview-first
+  `npx rhinoq adopt` generator. The preset reuses the application's PostgreSQL
+  and BullMQ objects, enables bounded known-job reconciliation by default and
+  still requires explicit single-job versus fan-out semantics.
+- Tightened the preset and adopter CLI after an onboarding audit: Queue names
+  now supply the default runtime scope, `adopt --apply` refuses to guess Task
+  semantics, missing dependencies remain a useful preview instead of an early
+  failure, and an existing generated file is reported as unchanged.
+- Added `@rhinoq/node/nest`, so Nest lifecycle wiring ships from the same
+  versioned package instead of requiring a separately installed local package.
 
 - **Breaking (deployment):** migrations 026 and 027 introduce the tenant
   boundary and change what a working connection needs. **Put

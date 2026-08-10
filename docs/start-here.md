@@ -188,8 +188,8 @@ makes the evaluation repeatable.
 npx rhinoq init
 ```
 
-Why: this creates `.rhinoq/config.json`, `.rhinoq/rules/`, and three tables in
-the isolated `rhinoq_task` schema. It detects `pg` and optional BullMQ. Existing
+Why: this creates `.rhinoq/config.json`, `.rhinoq/rules/`, and the isolated Task
+tables in the `rhinoq_task` schema, including durable waitpoints. It detects `pg` and optional BullMQ. Existing
 files are kept rather than overwritten.
 
 If no database variable is set, `init` creates `.env.rhinoq.example`, skips the
@@ -427,26 +427,33 @@ keyboard controls and the same-origin security boundary.
 
 ## Connect an existing BullMQ queue
 
-RhinoQ does not replace the application's Redis connection or worker. Pass the
-existing `Queue` and `QueueEvents` objects to the bridge:
+RhinoQ does not replace the application's Redis connection or worker. Preview
+the wiring before it writes anything:
+
+```bash
+npx rhinoq adopt --mode single
+npx rhinoq adopt --mode single --apply
+```
+
+`single` means one BullMQ job is the whole user-facing Task. Choose `fanout`
+when a Task owns several jobs; the CLI never guesses this because the wrong
+choice can terminate an aggregate on its first completed item. The generated
+module passes the existing `Queue` and `QueueEvents` objects to the preset:
 
 ```ts
 import { Queue, QueueEvents } from 'bullmq';
-import { BullMQTaskBridge, installPostgresTaskProfile } from '@rhinoq/node';
+import { createBullMQIntegration } from '@rhinoq/node';
 
-const tasks = await installPostgresTaskProfile(pool);
 const queue = new Queue('reports', { connection });
 const events = new QueueEvents('reports', { connection });
 
-const bridge = new BullMQTaskBridge({
-  client: tasks,
-  queue,
-  events,
-  runtimeScope: 'reports',
-  terminalProjection: 'single-execution',
+const rhinoq = await createBullMQIntegration({
+  pool, queue, events,
+  mode: 'single',
 });
+await rhinoq.start();
 
-await bridge.dispatch({
+await rhinoq.bridge.dispatch({
   task: {
     id: 'report_42',
     type: 'report.generate',
@@ -470,13 +477,13 @@ second attempt.
 Use `track()` only when the application already enqueued the job. Use
 `dispatchMany()` for fan-out; it reserves the complete expected item set before
 dispatching and bounds concurrent PostgreSQL/Redis operations. For fan-out,
-choose `terminalProjection: 'execution-only'` and select an explicit aggregate
+choose `mode: 'fanout'` and select an explicit aggregate
 policy—RhinoQ cannot guess whether one successful item makes the whole Task
 successful.
 
-BullMQ can emit `failed` before its configured retries are exhausted. Supply
-`isTerminalFailure` or mark a reconciliation observation terminal only after
-checking the BullMQ job/attempt policy. See [Node.js and BullMQ](./nodejs.md)
+The preset checks `attemptsMade` against the job's configured attempts before
+treating a reconciled failure as terminal. Custom runtime observers must make
+the same check. See [Node.js and BullMQ](./nodejs.md)
 for cancellation, progress mapping, partial outage recovery and result refs.
 
 ## Protect an external provider operation

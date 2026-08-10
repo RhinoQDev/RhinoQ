@@ -8,6 +8,13 @@
 > hypothesis. This document is narrower and more uncomfortable: it argues that
 > the contract is no longer what limits adoption, and lists what is.
 
+> Update 2026-08-08: the embedded profile now has a preview-first `adopt`
+> command, a leased `createBullMQIntegration()` preset and canonical NestJS
+> wiring under `@rhinoq/node/nest`. These reduce the candidate integration
+> surface; the measured verdict remains unchanged until the real adopter is
+> rerun and old plumbing is actually deleted.
+
+
 ## The finding
 
 Two adopter probes have now run against a production BullMQ application that

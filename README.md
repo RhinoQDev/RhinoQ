@@ -225,6 +225,8 @@ queue, no worker, no cutover:
 ```bash
 npm install rhinoq pg
 npx rhinoq init
+npx rhinoq adopt --mode single        # preview
+npx rhinoq adopt --mode single --apply
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
 npx rhinoq fixture failure
@@ -258,8 +260,9 @@ export RHINOQ_AGENT_TOKEN="$(openssl rand -hex 32)"
 RHINOQ_AGENT_TOKEN="$RHINOQ_AGENT_TOKEN" ./rhinoq-agent
 ```
 
-For a NestJS/BullMQ application there is an optional `@rhinoq/nest` module. It
-is **not published to npm**: install it from a checkout. Its async module
+For existing prerelease NestJS/BullMQ adopters, the compatibility package
+`@rhinoq/nest` remains available from a checkout. New applications should use
+the `/nest` subpath of `@rhinoq/node`. Its async module
 factory installs the embedded Task profile before injection, acquires a
 PostgreSQL projector lease by default, starts a separately leased reconciliation
 sweep when a runtime observer is provided, and exposes health/metrics wiring.
@@ -271,23 +274,207 @@ npm install @rhinoq/node pg
 # From this checkout only — @rhinoq/nest has no npm release and `npm install
 # @rhinoq/nest` will 404.
 npm install ./sdks/nest
+
+```
+
+For an existing BullMQ application, `adopt` detects prerequisites and generates
+one non-overwriting integration module. In NestJS it lists every statically
+registered queue, requires explicit selection when several exist, writes
+`src/rhinoq.module.ts` and patches `AppModule`:
+
+```bash
+npx rhinoq adopt --mode single \
+  --queue mail-queue --queue notification-queue \
+  --owner-property user.id --apply
+```
+
+Queues may declare different contracts instead of sharing one global mode:
+
+```bash
+npx rhinoq adopt \
+  --task mail-queue=mail.send:single \
+  --task export-queue=report.export:fanout \
+  --owner-property user.id --apply
+```
+
+Preview lists every detected raw `queue.add()` location; apply prints the exact
+file and line that still needs stable business identity and authenticated owner
+identity. After startup, verify the live slice rather than generated source:
+
+```bash
+RHINOQ_ADOPT_VERIFY_HEADERS='{"authorization":"Bearer ..."}' \
+  npx rhinoq adopt --verify-url https://app.example.com
+```
+
+This checks application health, PostgreSQL/projector state, QueueEvents
+readiness and the mounted Task Center.
+
+Generated multi-queue Nest modules use one integration token per queue and
+aggregate every queue's health. A healthy final queue can no longer hide a
+failed QueueEvents connection from another queue.
+
+Frontend bundles can import `@rhinoq/node/browser` or `@rhinoq/node/react`
+without entering the PostgreSQL/Nest lifecycle graph. Server integrations can
+use `@rhinoq/node/server` and BullMQ-only code can use
+`@rhinoq/node/bullmq`; ESM and CommonJS smoke tests cover every subpath.
+
+`--owner-property` points at the principal installed by upstream application
+authentication. It mounts the owner API at `/tasks` and the self-contained Task
+Center at `/task-center`. Without it, both remain deliberately unmounted rather
+than trusting a client-controlled owner header. Override the paths with
+`--routes-path` and `--task-center-path`.
+
+If the application has no PostgreSQL service, add `--local-postgres` to generate
+a loopback-only Compose service for evaluation. Production database ownership,
+credentials and backups remain deployment responsibilities.
+
+`createBullMQIntegration` reuses the
+application's PostgreSQL pool, Queue and QueueEvents, enables bounded known-job
+reconciliation, and requires the application to choose `single` or `fanout`
+semantics explicitly. It never scans or mutates the application's Redis.
+
+For NestJS, the same `@rhinoq/node` package exposes a `/nest` subpath. Its async
+module factory installs the embedded Task
+profile before injection, acquires a PostgreSQL projector lease by default,
+starts a separately leased reconciliation sweep when a runtime observer is
+provided, and exposes health/metrics wiring:
+
+```bash
+npm install @rhinoq/node pg
 ```
 
 ```ts
-RhinoQModule.forRootAsync({
-  inject: [Pool, BullMQEvents],
-  useFactory: (pool, events) => ({
-    pool, events, runtimeScope: 'reports',
-    terminalProjection: 'execution-only',
-    reconciliation: { observe: readBullMQState },
+import { RhinoQModule } from '@rhinoq/node/nest';
+
+RhinoQModule.forBullMQAsync({
+  inject: [Pool, ReportsQueue, ReportsQueueEvents],
+  useFactory: (pool, queue, events) => ({
+    pool, queue, events,
+    mode: 'fanout',
   }),
 });
 ```
 
-This reduces lifecycle glue; it does not claim that an adopter's old status
-routes or SSE code have been deleted. That requires a before/after pilot count.
+The owner-facing slice can now replace old status routes and hand-written SSE
+UI as one unit. `createTaskRequestHandler()` covers list, detail, execution history,
+cancel, command-identified retry, authorized result resolution and health.
+`createUseRhinoTasks()` supplies the React inbox; the expanded
+`createUseRhinoTask()` supplies retry, result download, history and safe action
+state. `mountRhinoTaskCenter()` is a ready-to-use dependency-free reference UI.
+The shared headless model handles progress, partial failure, `uncertain`, cancel
+too late and work that cannot be cancelled safely.
 
-In another shell, apply and run the Rule you edited. `beta.8` is the first
+Task Center renders an accessible loading skeleton, reports `Live` versus
+`Polling fallback`, labels every Task `Finished` or `Not finished` (including
+failed/cancelled outcomes), and announces terminal transitions through an
+`aria-live` region. Actions expose an explicit busy state instead of appearing
+unresponsive while cancel, retry or result resolution is in flight.
+
+The same owner-authenticated surface now exposes `GET /tasks/{id}/events` and
+`GET /tasks/_events` as SSE. `ApplicationTaskClient` uses Fetch streaming, so
+applications may keep their normal cookie or authorization headers. TaskStore,
+TaskListStore and Task Center prefer the stream, reject stale entity versions,
+fall back to authoritative snapshot polling on loss and retry the stream.
+
+```ts
+const client = new ApplicationTaskClient({
+  url: '/api/tasks',
+  headers: () => ({ authorization: `Bearer ${sessionToken}` }),
+});
+const useTask = createUseRhinoTaskLive(React);
+const task = useTask(client, taskId); // task.transport: live | polling_fallback
+```
+
+SSE is delivery, not truth: every event is an owner-scoped Task snapshot from
+PostgreSQL and carries `entityVersion`. `Last-Event-ID` resumes a single Task;
+an inbox reconnect sends its current page again and the client converges by
+version. Streams have heartbeat, abort cleanup and a bounded connection budget.
+The default implementation performs bounded server-side snapshot reads; large
+deployments should measure this load before lowering intervals or adding a
+shared fan-out transport.
+
+### Durable input, approval and webhook waits
+
+RhinoQ Task schema now includes durable waitpoints for work that cannot finish
+until a user or provider responds. The authoritative states are `waiting`,
+`resolved`, `expired` and `cancelled`; every settlement is version-fenced.
+Repeating the same `resolutionId` and JSON answer returns the committed result,
+while changing the answer fails closed.
+
+The application routes expose create/read/resolve under
+`/tasks/{taskId}/waitpoints`, and `ApplicationTaskClient` plus
+`createUseRhinoTaskInput()` remove the corresponding frontend request and UI
+state boilerplate. `createWaitpointTokenSigner()` creates short-lived,
+application-owned HMAC capabilities scoped to one waitpoint, task, owner and
+action. RhinoQ never stores the signing secret. Resolution bodies are bounded
+to 64 KiB; large files belong in result/artifact storage.
+
+`waitForInput()`, `waitForApproval()` and `waitForWebhook()` are durable
+re-entry checkpoints, not promises that keep a worker alive. A first entry
+returns `waiting`; after settlement the same stable id/key returns the typed
+answer. The full Go/PostgreSQL profile writes one
+`task.waitpoint.resolved` outbox event in the settlement transaction so a
+publisher can resume work at-least-once with the waitpoint identity.
+
+For fan-out work, `dispatchBatch()` adds a pre-dispatch size bound while
+retaining reserve-before-enqueue identity. `TaskGroupController` derives the
+latest attempt per item, composes bounded stable child commands for failed
+retry and pending-only cancellation, and never selects active work for blind
+cancellation. The owner routes also provide a failed-item CSV/JSON download
+and a per-item result manifest.
+
+```ts
+import { bullMQCancellation, createTaskRequestHandler, signedResult } from '@rhinoq/node';
+
+const handler = createTaskRequestHandler({
+  tasks: rhinoq.tasks,
+  ownerFromRequest: requireApplicationUser,
+  retryTask: retryThroughYourDurableCommandOutbox,
+  resolveResult: signedResult({
+    resolve: (reference, ownerId) => storage.signedUrl(reference, ownerId),
+  }),
+  health: () => rhinoq.health(),
+});
+
+const cancellation = bullMQCancellation({ queue, cooperativeSignal });
+const reports = rhinoq.defineTask({
+  type: 'report.generate', jobName: 'generate-report', mode: 'single',
+});
+await reports.dispatch({ id: reportId, ownerId: userId, data });
+```
+
+Retry carries the aggregate version and a command id. Its callback must persist
+the command identity, Task transition and enqueue/outbox intent durably; a bare
+`queue.add()` callback is not crash recovery. Authentication, storage policy,
+toast renderer and visual design remain application-owned. A before/after
+adopter pilot is still required before making a code-reduction claim.
+
+The authoritative Go `tasks.Service.Retry` and PostgreSQL `TaskRetryStore` now
+provide that atomic boundary. Migration 029 records the command, creates a new
+immutable Execution and appends `task.retry.dispatch_requested` in the same
+transaction. Delivery is at-least-once: the runtime publisher must enqueue
+with the stable command/execution identity and fail closed for an unknown
+external outcome.
+
+The dispatch intent includes the queue, job name and JSON data and stores a
+fingerprint beside the command identity, so reusing a command id with changed
+work is rejected. To run the recovery publisher in `rhinoq-agent`, configure:
+
+```bash
+export RHINOQ_RETRY_DISPATCH_URL=https://app.example.com/internal/rhinoq/retry-dispatch
+export RHINOQ_RETRY_DISPATCH_SECRET='a-separate-random-secret'
+```
+
+The application endpoint uses `createBullMQRetryDispatchHandler({ secret,
+queues })`. It verifies the exact HMAC-signed body, refuses unregistered queues
+and uses `executionId` as BullMQ `jobId`. Mount this endpoint where the raw
+request body is available; JSON parsing and re-serialization invalidates the
+signature. Retry dispatch explicitly sets `removeOnComplete: false` and
+`removeOnFail: false`, preserving BullMQ's duplicate observation through a lost
+acknowledgement. Apply an operator retention cleanup only after the matching
+outbox event has settled; do not override those flags at enqueue time.
+
+In another shell, apply and run the Rule you edited. `beta.9` is the first
 release whose Node package contains these commands:
 
 ```bash
@@ -376,6 +563,38 @@ await rhinoq.effect({
 
 Reusing one key with a different request fingerprint is rejected. This keeps
 the convenient API from weakening the existing unknown-result contract.
+
+For operations completed asynchronously or left `uncertain`, run the bounded
+read-back reconciler. It receives verifier callbacks only; the original
+mutation callback is deliberately unavailable during a sweep:
+
+```ts
+const reconciliation = new ProviderOperationReconciler({
+  client: rhinoq,
+  verifiers: {
+    'stripe.refund': (operation) => lookupRefundWithoutRepeatingTheMutation(operation),
+  },
+  minimumAgeMs: 30_000,
+});
+reconciliation.start();
+```
+
+Before describing an effect as effectively exactly-once, applications can
+produce a machine-readable capability report:
+
+```ts
+effectCapabilityReport({
+  stableIdentity: true,
+  providerSupportsIdempotency: true,
+  confirmation: 'readback',
+  verifierRegistered: true,
+  retryPolicy: 'when-not-happened',
+}); // level: 'effectively-exactly-once', blockers: []
+```
+
+This label applies to that declared effect, not to arbitrary code in the Task.
+Missing identity, provider idempotency, independent verification or retry proof
+downgrades the report instead of producing a misleading exactly-once claim.
 
 ## Stop duplicate application writes across BullMQ retries
 
@@ -543,7 +762,7 @@ exists but is not the default browser polling shape.
 | Bounded, previewable retention for observation and delivery evidence | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, verifiable checksum bundle, SBOM and non-root image | beta.8 release pipeline verified in CI |
+| Release archives, verifiable checksum bundle, SBOM and non-root image | beta.9 release pipeline verified in CI |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 

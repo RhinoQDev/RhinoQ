@@ -42,3 +42,16 @@ test('the package manifest is reachable through the exports map', () => {
   assert.equal(manifest.name, '@rhinoq/node');
   assert.equal(typeof manifest.version, 'string');
 });
+
+test('a CommonJS Nest application can require the canonical subpath', () => {
+  const { RhinoQModule, RHINOQ_TASKS } = require('@rhinoq/node/nest');
+  assert.equal(typeof RhinoQModule.forBullMQAsync, 'function');
+  assert.equal(typeof RHINOQ_TASKS, 'symbol');
+});
+
+test('CommonJS capability subpaths are independently requireable', () => {
+  assert.equal(typeof require('@rhinoq/node/browser').TaskStore, 'function');
+  assert.equal(typeof require('@rhinoq/node/react').createUseRhinoTask, 'function');
+  assert.equal(typeof require('@rhinoq/node/bullmq').bullMQCancellation, 'function');
+  assert.equal(typeof require('@rhinoq/node/server').createNodeTaskMiddleware, 'function');
+});

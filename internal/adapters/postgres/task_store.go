@@ -2,19 +2,238 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
+	"github.com/madebyduy/RhinoQ/internal/domain/waitpoint"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var (
 	_ ports.TaskStore      = (*TaskStore)(nil)
 	_ ports.ExecutionStore = (*TaskStore)(nil)
+	_ ports.TaskRetryStore = (*TaskStore)(nil)
+	_ ports.WaitpointStore = (*TaskStore)(nil)
 )
+
+func (s *TaskStore) CreateWaitpoint(ctx context.Context, record waitpoint.Record) (waitpoint.Record, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return waitpoint.Record{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `INSERT INTO rhinoq_task_waitpoints
+		(id,task_id,key,kind,schema_version,state,deadline,version,created_at,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`,
+		record.ID, record.TaskID, record.Key, record.Kind, record.SchemaVersion, record.State,
+		waitpointNullableTime(record.Deadline), record.Version, record.CreatedAt, record.UpdatedAt)
+	if err != nil {
+		return waitpoint.Record{}, false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return waitpoint.Record{}, false, err
+	}
+	if rows == 1 {
+		if _, err = tx.ExecContext(ctx, `UPDATE rhinoq_tasks SET version=version+1,updated_at=GREATEST(updated_at,$2) WHERE id=$1`, record.TaskID, record.UpdatedAt); err != nil {
+			return waitpoint.Record{}, false, err
+		}
+		if err = tx.Commit(); err != nil {
+			return waitpoint.Record{}, false, err
+		}
+		return record, false, nil
+	}
+	if err = tx.Rollback(); err != nil {
+		return waitpoint.Record{}, false, err
+	}
+	prior, found, err := s.GetTaskWaitpoint(ctx, record.TaskID, record.Key)
+	if err != nil {
+		return waitpoint.Record{}, false, err
+	}
+	if !found || prior.ID != record.ID || prior.Kind != record.Kind || prior.SchemaVersion != record.SchemaVersion || !prior.Deadline.Equal(record.Deadline) {
+		return waitpoint.Record{}, false, ports.ErrWaitpointConflict
+	}
+	return prior, true, nil
+}
+
+func (s *TaskStore) GetWaitpoint(ctx context.Context, id waitpoint.ID) (waitpoint.Record, bool, error) {
+	r, err := scanWaitpoint(s.db.QueryRowContext(ctx, waitpointSelect+` WHERE id=$1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return waitpoint.Record{}, false, nil
+	}
+	return r, err == nil, err
+}
+
+func (s *TaskStore) GetTaskWaitpoint(ctx context.Context, taskID, key string) (waitpoint.Record, bool, error) {
+	r, err := scanWaitpoint(s.db.QueryRowContext(ctx, waitpointSelect+` WHERE task_id=$1 AND key=$2`, taskID, key))
+	if errors.Is(err, sql.ErrNoRows) {
+		return waitpoint.Record{}, false, nil
+	}
+	return r, err == nil, err
+}
+
+func (s *TaskStore) UpdateWaitpoint(ctx context.Context, record waitpoint.Record, expectedVersion int64) (waitpoint.Record, error) {
+	if expectedVersion <= 0 || (record.Version != expectedVersion && record.Version != expectedVersion+1) {
+		return waitpoint.Record{}, ports.ErrVersionConflict
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return waitpoint.Record{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE rhinoq_task_waitpoints SET state=$2,resolution=$3::jsonb,resolution_hash=$4,
+		resolution_id=$5,resolved_by=$6,resolved_at=$7,version=$8,updated_at=$9 WHERE id=$1 AND version=$10`,
+		record.ID, record.State, waitpointNullableJSON(record.Resolution), nullableString(record.ResolutionHash), nullableString(record.ResolutionID),
+		nullableString(record.ResolvedBy), waitpointNullableTime(record.ResolvedAt), record.Version, record.UpdatedAt, expectedVersion)
+	if err != nil {
+		return waitpoint.Record{}, mapWaitpointConflict(err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return waitpoint.Record{}, err
+	}
+	if rows == 0 {
+		if _, found, getErr := s.GetWaitpoint(ctx, record.ID); getErr != nil {
+			return waitpoint.Record{}, getErr
+		} else if !found {
+			return waitpoint.Record{}, ports.ErrWaitpointNotFound
+		}
+		return waitpoint.Record{}, ports.ErrVersionConflict
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE rhinoq_tasks SET version=version+1,updated_at=GREATEST(updated_at,$2) WHERE id=$1`, record.TaskID, record.UpdatedAt); err != nil {
+		return waitpoint.Record{}, err
+	}
+	if record.State == waitpoint.Resolved {
+		payload, marshalErr := json.Marshal(map[string]any{"schemaVersion": 1, "waitpointId": record.ID, "taskId": record.TaskID, "key": record.Key, "kind": record.Kind, "resolutionId": record.ResolutionID})
+		if marshalErr != nil {
+			return waitpoint.Record{}, marshalErr
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO rhinoq_outbox(aggregate_type,aggregate_id,event_type,payload) VALUES('task_waitpoint',$1,'task.waitpoint.resolved',$2::jsonb)`, record.ID, payload); err != nil {
+			return waitpoint.Record{}, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return waitpoint.Record{}, err
+	}
+	return record, nil
+}
+
+func (s *TaskStore) ListDueWaitpoints(ctx context.Context, now time.Time, limit int) ([]waitpoint.Record, error) {
+	if now.IsZero() || limit <= 0 {
+		return nil, errors.New("time and positive limit are required")
+	}
+	rows, err := s.db.QueryContext(ctx, waitpointSelect+` WHERE state='waiting' AND deadline IS NOT NULL AND deadline <= $1 ORDER BY deadline,id LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]waitpoint.Record, 0, limit)
+	for rows.Next() {
+		r, scanErr := scanWaitpoint(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+func (s *TaskStore) RetryTask(ctx context.Context, input ports.TaskRetryInput) (ports.TaskRetryResult, error) {
+	if strings.TrimSpace(input.CommandID) == "" || input.TaskID == "" || input.ExecutionID == "" ||
+		strings.TrimSpace(input.Runtime) == "" || strings.TrimSpace(input.Queue) == "" ||
+		strings.TrimSpace(input.JobName) == "" || len(input.Payload) == 0 || !json.Valid(input.Payload) ||
+		input.ExpectedVersion <= 0 || input.Now.IsZero() {
+		return ports.TaskRetryResult{}, errors.New("valid retry command, task, execution, runtime, queue, job, JSON payload, version and time are required")
+	}
+	fingerprintBytes := sha256.Sum256([]byte(strings.Join([]string{
+		strings.TrimSpace(input.Runtime), strings.TrimSpace(input.Queue), strings.TrimSpace(input.JobName), string(input.Payload),
+	}, "\x00")))
+	fingerprint := hex.EncodeToString(fingerprintBytes[:])
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Serialize identical identities before the existence check. A concurrent
+	// duplicate then observes the first commit instead of surfacing a transient
+	// unique violation that tempts callers to invent a second command id.
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, input.CommandID); err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+
+	var storedTaskID, storedExecutionID, storedFingerprint string
+	err = tx.QueryRowContext(ctx, `SELECT task_id, execution_id, dispatch_fingerprint FROM rhinoq_task_retry_commands WHERE command_id=$1`, input.CommandID).Scan(&storedTaskID, &storedExecutionID, &storedFingerprint)
+	if err == nil {
+		if storedTaskID != input.TaskID.String() || storedExecutionID != input.ExecutionID.String() || storedFingerprint != fingerprint {
+			return ports.TaskRetryResult{}, fmt.Errorf("%w: retry command identity reused with different input", ports.ErrAlreadyExists)
+		}
+		taskRecord, scanErr := scanTask(tx.QueryRowContext(ctx, taskSelect+` WHERE id=$1`, storedTaskID))
+		if scanErr != nil {
+			return ports.TaskRetryResult{}, scanErr
+		}
+		executionRecord, scanErr := scanExecution(tx.QueryRowContext(ctx, executionSelect+` WHERE id=$1`, storedExecutionID))
+		if scanErr != nil {
+			return ports.TaskRetryResult{}, scanErr
+		}
+		return ports.TaskRetryResult{Task: taskRecord, Execution: executionRecord, Replayed: true}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return ports.TaskRetryResult{}, err
+	}
+
+	current, err := scanTask(tx.QueryRowContext(ctx, taskSelect+` WHERE id=$1 FOR UPDATE`, input.TaskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ports.TaskRetryResult{}, ports.ErrTaskNotFound
+	}
+	if err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	if current.Version != input.ExpectedVersion {
+		return ports.TaskRetryResult{}, ports.ErrVersionConflict
+	}
+	next, err := current.Transition(task.Queued, input.Now)
+	if err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	var attempt int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt),0)+1 FROM rhinoq_task_executions WHERE task_id=$1`, input.TaskID).Scan(&attempt); err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	executionRecord, err := execution.NewRecord(execution.Spec{ID: input.ExecutionID, TaskID: input.TaskID.String(), Attempt: attempt, Runtime: strings.TrimSpace(input.Runtime), Now: input.Now})
+	if err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO rhinoq_task_executions (id,task_id,attempt,runtime,job_id,external_id,state,version,created_at,updated_at) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$6,$7,$8)`, executionRecord.ID, executionRecord.TaskID, executionRecord.Attempt, executionRecord.Runtime, executionRecord.State, executionRecord.Version, executionRecord.CreatedAt, executionRecord.UpdatedAt); err != nil {
+		return ports.TaskRetryResult{}, mapAlreadyExists(err)
+	}
+	next.ExecutionCounts.Total++
+	next.ExecutionCounts.PendingDispatch++
+	if _, err = tx.ExecContext(ctx, `UPDATE rhinoq_tasks SET state=$2,cancellation_status=$3,cancellation_reason=$4,execution_total=$5,execution_pending_dispatch=$6,version=$7,updated_at=$8 WHERE id=$1 AND version=$9`, next.ID, next.State, next.CancellationStatus, nullableString(next.CancellationReason), next.ExecutionCounts.Total, next.ExecutionCounts.PendingDispatch, next.Version, next.UpdatedAt, input.ExpectedVersion); err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO rhinoq_task_retry_commands(command_id,task_id,execution_id,dispatch_fingerprint,expected_version,created_at) VALUES($1,$2,$3,$4,$5,$6)`, input.CommandID, input.TaskID, input.ExecutionID, fingerprint, input.ExpectedVersion, input.Now); err != nil {
+		return ports.TaskRetryResult{}, mapAlreadyExists(err)
+	}
+	payload, err := json.Marshal(map[string]any{"schemaVersion": 1, "commandId": input.CommandID, "taskId": input.TaskID, "executionId": input.ExecutionID, "runtime": executionRecord.Runtime, "queue": strings.TrimSpace(input.Queue), "jobName": strings.TrimSpace(input.JobName), "data": json.RawMessage(input.Payload), "attempt": executionRecord.Attempt})
+	if err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO rhinoq_outbox(aggregate_type,aggregate_id,event_type,payload) VALUES('task',$1,'task.retry.dispatch_requested',$2::jsonb)`, input.TaskID, payload); err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	return ports.TaskRetryResult{Task: next, Execution: executionRecord}, nil
+}
 
 type TaskStore struct{ db *sql.DB }
 
@@ -343,6 +562,51 @@ func scanExecution(row rowScanner) (execution.Record, error) {
 	}
 	record.Reference.Runtime = record.Runtime
 	return record, nil
+}
+
+const waitpointSelect = `SELECT id,task_id,key,kind,schema_version,state,deadline,
+	resolution,resolution_hash,resolution_id,resolved_by,resolved_at,version,created_at,updated_at
+	FROM rhinoq_task_waitpoints`
+
+func scanWaitpoint(row rowScanner) (waitpoint.Record, error) {
+	var r waitpoint.Record
+	var deadline, resolvedAt sql.NullTime
+	var resolution []byte
+	var hash, resolutionID, resolvedBy sql.NullString
+	err := row.Scan(&r.ID, &r.TaskID, &r.Key, &r.Kind, &r.SchemaVersion, &r.State, &deadline,
+		&resolution, &hash, &resolutionID, &resolvedBy, &resolvedAt, &r.Version, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return waitpoint.Record{}, err
+	}
+	if deadline.Valid {
+		r.Deadline = deadline.Time
+	}
+	if resolvedAt.Valid {
+		r.ResolvedAt = resolvedAt.Time
+	}
+	r.Resolution, r.ResolutionHash, r.ResolutionID, r.ResolvedBy = resolution, hash.String, resolutionID.String, resolvedBy.String
+	return r, nil
+}
+
+func waitpointNullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+func waitpointNullableJSON(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return string(value)
+}
+
+func mapWaitpointConflict(err error) error {
+	var state sqlStateError
+	if errors.As(err, &state) && state.SQLState() == "23505" {
+		return fmt.Errorf("%w: %v", ports.ErrWaitpointConflict, err)
+	}
+	return err
 }
 
 func nullableProgressTotal(progress task.Progress) any {

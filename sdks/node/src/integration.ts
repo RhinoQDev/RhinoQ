@@ -3,6 +3,7 @@ import {
   BullMQTaskBridge,
   BullMQProjectorUnownedError,
   type BullMQProjectorLease,
+  type BullMQQueue,
   type BullMQQueueEvents,
   type BullMQTaskBridgeOptions,
   type BullMQTaskObservation,
@@ -27,6 +28,38 @@ import {
 } from './tasks/reconciler.js';
 import type { TaskStateQuery } from './postgres/task-client.js';
 import type { TaskClient } from './tasks/client.js';
+import { BullMQTaskDefinition, type TaskDefinitionOptions } from './tasks/definition.js';
+
+/** Structural BullMQ Job read used by the low-friction preset. */
+export interface BullMQReadableJob {
+  getState(): Promise<string>;
+  attemptsMade?: number;
+  opts?: { attempts?: number };
+  progress?: unknown;
+  returnvalue?: unknown;
+  failedReason?: string;
+}
+
+/** Existing application Queue; RhinoQ reads only explicitly known job IDs. */
+export interface BullMQReadableQueue {
+  /** BullMQ queue name; used as the safe runtime identity scope by default. */
+  name: string;
+  getJob(id: string): Promise<BullMQReadableJob | undefined>;
+}
+
+export interface BullMQIntegrationPresetOptions extends Omit<
+  RhinoQTaskIntegrationOptions,
+  'terminalProjection' | 'reconciliation' | 'queue' | 'runtimeScope'
+> {
+  queue: BullMQReadableQueue & BullMQQueue;
+  /** Defaults to queue.name. Override only when one queue needs a narrower tenant scope. */
+  runtimeScope?: string;
+  /** Required because only the application knows whether one job is the whole Task. */
+  mode: 'single' | 'fanout';
+  reconciliation?: Omit<RhinoQReconciliationOptions, 'observe'> & {
+    enabled?: boolean;
+  };
+}
 
 /** Application-owned read of one BullMQ runtime identity. */
 export type BullMQRuntimeObserver = (
@@ -68,6 +101,7 @@ export interface RhinoQTaskIntegrationOptions extends Omit<
   metrics?: TaskMetrics;
   /** Application auth used by the framework-neutral Task HTTP middleware. */
   ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+  ownerFromNodeRequest?: NodeTaskMiddlewareOptions['ownerFromNodeRequest'];
   reconciliation?: RhinoQReconciliationOptions;
   /** Retry projector ownership in standby replicas. Defaults to 5 seconds. */
   projectorRetryMs?: number;
@@ -77,6 +111,7 @@ export interface RhinoQIntegrationHealth {
   status: 'ok' | 'degraded' | 'down';
   database: EmbeddedHealth;
   projector: 'unowned' | 'projecting' | 'lost' | 'closed';
+  queueEvents: 'ready' | 'unverified' | 'down' | 'closed';
   reconciler: {
     enabled: boolean;
     ownership: 'unowned' | 'owned' | 'closed' | 'disabled';
@@ -139,10 +174,65 @@ export async function createRhinoQTaskIntegration(
     tasks,
     postgresTasks: tasks instanceof PostgresTaskClient ? tasks : undefined,
     bridge,
+    events: options.events,
     reconciler,
     metrics,
     ownerFromRequest: options.ownerFromRequest,
+    ownerFromNodeRequest: options.ownerFromNodeRequest,
     projectorRetryMs: options.projectorRetryMs ?? 5_000,
+  });
+}
+
+/**
+ * Short BullMQ path with safe defaults. It never scans Redis: reconciliation
+ * reads only runtime references already stored by RhinoQ.
+ */
+export function createBullMQIntegration(
+  options: BullMQIntegrationPresetOptions,
+): Promise<RhinoQTaskIntegration> {
+  const { queue, mode, reconciliation, runtimeScope, ...base } = options;
+  if (!queue || typeof queue.getJob !== 'function') {
+    throw new TypeError('createBullMQIntegration requires the application BullMQ Queue');
+  }
+  if (!queue.name?.trim()) {
+    throw new TypeError('createBullMQIntegration requires a named BullMQ Queue');
+  }
+  if (mode !== 'single' && mode !== 'fanout') {
+    throw new TypeError("createBullMQIntegration requires mode: 'single' or 'fanout'");
+  }
+  const { enabled: reconciliationEnabled, ...reconciliationConfig } = reconciliation ?? {};
+  const reconciliationOptions = reconciliationEnabled === false
+    ? undefined
+    : {
+        ...reconciliationConfig,
+        observe: async (reference: TaskExecutionRuntimeRef) => {
+          if (!reference.externalId) return undefined;
+          const externalId = reference.externalId;
+          const job = await queue.getJob(externalId);
+          if (!job) return undefined;
+          const rawState = await job.getState();
+          if (rawState !== 'waiting' && rawState !== 'active' &&
+              rawState !== 'completed' && rawState !== 'failed') return undefined;
+          const state: BullMQTaskObservation['state'] = rawState;
+          const attemptsMade = job.attemptsMade ?? 0;
+          const attemptsAllowed = job.opts?.attempts ?? 1;
+          return {
+            jobId: externalId,
+            state,
+            attempt: Math.max(1, attemptsMade + (state === 'active' ? 1 : 0)),
+            data: job.progress,
+            returnvalue: job.returnvalue,
+            failedReason: job.failedReason,
+            ...(state === 'failed' ? { terminal: attemptsMade >= attemptsAllowed } : {}),
+          };
+        },
+      };
+  return createRhinoQTaskIntegration({
+    ...base,
+    queue,
+    runtimeScope: runtimeScope?.trim() || queue.name.trim(),
+    terminalProjection: mode === 'single' ? 'single-execution' : 'execution-only',
+    ...(reconciliationOptions ? { reconciliation: reconciliationOptions } : {}),
   });
 }
 
@@ -151,9 +241,11 @@ interface RhinoQTaskIntegrationConstructorOptions {
   tasks: TaskClient;
   postgresTasks?: PostgresTaskClient;
   bridge: BullMQTaskBridge;
+  events: BullMQQueueEvents;
   reconciler?: TaskReconciler;
   metrics: TaskMetrics;
   ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+  ownerFromNodeRequest?: NodeTaskMiddlewareOptions['ownerFromNodeRequest'];
   projectorRetryMs: number;
 }
 
@@ -165,7 +257,10 @@ export class RhinoQTaskIntegration {
   readonly reconciler?: TaskReconciler;
   readonly metrics: TaskMetrics;
   private readonly ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+  private readonly ownerFromNodeRequest?: NodeTaskMiddlewareOptions['ownerFromNodeRequest'];
   private readonly projectorRetryMs: number;
+  private readonly events: BullMQQueueEvents;
+  private queueEventsState: RhinoQIntegrationHealth['queueEvents'] = 'unverified';
   private projectorRetryTimer?: ReturnType<typeof setTimeout>;
   private started = false;
   private closed = false;
@@ -175,9 +270,11 @@ export class RhinoQTaskIntegration {
     this.tasks = options.tasks;
     this.postgresTasks = options.postgresTasks;
     this.bridge = options.bridge;
+    this.events = options.events;
     this.reconciler = options.reconciler;
     this.metrics = options.metrics;
     this.ownerFromRequest = options.ownerFromRequest;
+    this.ownerFromNodeRequest = options.ownerFromNodeRequest;
     this.projectorRetryMs = options.projectorRetryMs;
   }
 
@@ -188,6 +285,15 @@ export class RhinoQTaskIntegration {
     }
     if (this.started) {
       return;
+    }
+    if (this.events.waitUntilReady) {
+      try {
+        await this.events.waitUntilReady();
+        this.queueEventsState = 'ready';
+      } catch (error) {
+        this.queueEventsState = 'down';
+        throw error;
+      }
     }
     try {
       await this.bridge.start();
@@ -207,6 +313,7 @@ export class RhinoQTaskIntegration {
       return;
     }
     this.closed = true;
+    this.queueEventsState = 'closed';
     if (this.projectorRetryTimer) {
       clearTimeout(this.projectorRetryTimer);
       this.projectorRetryTimer = undefined;
@@ -217,19 +324,27 @@ export class RhinoQTaskIntegration {
 
   /** Returns a framework-neutral middleware using the host application's auth. */
   middleware(
-    options: Omit<NodeTaskMiddlewareOptions, 'tasks' | 'ownerFromRequest'> = {},
+    options: Omit<NodeTaskMiddlewareOptions, 'tasks'> = {},
   ): ReturnType<typeof createNodeTaskMiddleware> {
-    if (!this.postgresTasks || !this.ownerFromRequest) {
+    const ownerFromRequest = options.ownerFromRequest ?? this.ownerFromRequest;
+    const ownerFromNodeRequest = options.ownerFromNodeRequest ?? this.ownerFromNodeRequest;
+    if (!this.postgresTasks || (!ownerFromRequest && !ownerFromNodeRequest)) {
       throw new Error(
         'RhinoQTaskIntegration.middleware() requires the default PostgreSQL Task client ' +
-          'and ownerFromRequest',
+          'and an owner resolver',
       );
     }
     return createNodeTaskMiddleware({
       ...options,
       tasks: this.postgresTasks,
-      ownerFromRequest: this.ownerFromRequest,
+      ...(ownerFromRequest ? { ownerFromRequest } : {}),
+      ...(ownerFromNodeRequest ? { ownerFromNodeRequest } : {}),
     });
+  }
+
+  /** Defines a reusable Task type while keeping dispatch correctness in the bridge/store. */
+  defineTask(options: TaskDefinitionOptions): BullMQTaskDefinition {
+    return new BullMQTaskDefinition(this.bridge, options);
   }
 
   /**
@@ -250,6 +365,8 @@ export class RhinoQTaskIntegration {
     if (database.detail) details.push(database.detail);
     if (projector === 'unowned') details.push('projector lease is not owned');
     if (projector === 'lost') details.push('projector lease was lost; restart or reacquire ownership');
+    if (this.queueEventsState === 'unverified') details.push('QueueEvents readiness cannot be verified by this adapter');
+    if (this.queueEventsState === 'down') details.push('QueueEvents connection is down');
     if (reconciler?.leaseIsUnavailable) {
       details.push('reconciliation lease is unavailable');
     }
@@ -262,6 +379,7 @@ export class RhinoQTaskIntegration {
       status,
       database,
       projector,
+      queueEvents: this.queueEventsState,
       reconciler: {
         enabled: Boolean(reconciler),
         ownership: reconcilerOwnership,

@@ -1,35 +1,200 @@
 package memory
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
+	"github.com/madebyduy/RhinoQ/internal/domain/waitpoint"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
 var (
 	_ ports.TaskStore      = (*TaskStore)(nil)
 	_ ports.ExecutionStore = (*TaskStore)(nil)
+	_ ports.TaskRetryStore = (*TaskStore)(nil)
+	_ ports.WaitpointStore = (*TaskStore)(nil)
 )
 
 type TaskStore struct {
-	mu         sync.RWMutex
-	tasks      map[task.ID]task.Record
-	executions map[execution.ID]execution.Record
-	attempts   map[string]map[int]execution.ID
+	mu                sync.RWMutex
+	tasks             map[task.ID]task.Record
+	executions        map[execution.ID]execution.Record
+	attempts          map[string]map[int]execution.ID
+	retries           map[string]ports.TaskRetryResult
+	retryFingerprints map[string][32]byte
+	waitpoints        map[waitpoint.ID]waitpoint.Record
+	waitpointKeys     map[string]waitpoint.ID
 }
 
 func NewTaskStore() *TaskStore {
 	return &TaskStore{
-		tasks:      make(map[task.ID]task.Record),
-		executions: make(map[execution.ID]execution.Record),
-		attempts:   make(map[string]map[int]execution.ID),
+		tasks:             make(map[task.ID]task.Record),
+		executions:        make(map[execution.ID]execution.Record),
+		attempts:          make(map[string]map[int]execution.ID),
+		retries:           make(map[string]ports.TaskRetryResult),
+		retryFingerprints: make(map[string][32]byte),
+		waitpoints:        make(map[waitpoint.ID]waitpoint.Record),
+		waitpointKeys:     make(map[string]waitpoint.ID),
 	}
+}
+
+func waitpointKey(taskID, key string) string { return taskID + "\x00" + key }
+
+func (s *TaskStore) CreateWaitpoint(_ context.Context, record waitpoint.Record) (waitpoint.Record, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, found := s.tasks[task.ID(record.TaskID)]; !found {
+		return waitpoint.Record{}, false, ports.ErrTaskNotFound
+	}
+	identity := waitpointKey(record.TaskID, record.Key)
+	if id, found := s.waitpointKeys[identity]; found {
+		prior := s.waitpoints[id]
+		if prior.ID != record.ID || prior.Kind != record.Kind || prior.SchemaVersion != record.SchemaVersion || !prior.Deadline.Equal(record.Deadline) {
+			return waitpoint.Record{}, false, ports.ErrWaitpointConflict
+		}
+		return prior, true, nil
+	}
+	if _, found := s.waitpoints[record.ID]; found {
+		return waitpoint.Record{}, false, ports.ErrAlreadyExists
+	}
+	s.waitpoints[record.ID], s.waitpointKeys[identity] = record, record.ID
+	parent := s.tasks[task.ID(record.TaskID)]
+	parent.Version++
+	if record.UpdatedAt.After(parent.UpdatedAt) {
+		parent.UpdatedAt = record.UpdatedAt
+	}
+	s.tasks[parent.ID] = parent
+	return record, false, nil
+}
+
+func (s *TaskStore) GetWaitpoint(_ context.Context, id waitpoint.ID) (waitpoint.Record, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.waitpoints[id]
+	return r, ok, nil
+}
+
+func (s *TaskStore) GetTaskWaitpoint(_ context.Context, taskID, key string) (waitpoint.Record, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.waitpointKeys[waitpointKey(taskID, key)]
+	if !ok {
+		return waitpoint.Record{}, false, nil
+	}
+	return s.waitpoints[id], true, nil
+}
+
+func (s *TaskStore) UpdateWaitpoint(_ context.Context, record waitpoint.Record, expectedVersion int64) (waitpoint.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.waitpoints[record.ID]
+	if !ok {
+		return waitpoint.Record{}, ports.ErrWaitpointNotFound
+	}
+	// A duplicate resolve returns the unchanged durable record.
+	if record.Version == expectedVersion && current.ID == record.ID && current.State == record.State &&
+		current.ResolutionID == record.ResolutionID && current.ResolutionHash == record.ResolutionHash &&
+		bytes.Equal(current.Resolution, record.Resolution) {
+		return current, nil
+	}
+	if current.Version != expectedVersion || record.Version != expectedVersion+1 {
+		return waitpoint.Record{}, ports.ErrVersionConflict
+	}
+	s.waitpoints[record.ID] = record
+	parent := s.tasks[task.ID(record.TaskID)]
+	parent.Version++
+	if record.UpdatedAt.After(parent.UpdatedAt) {
+		parent.UpdatedAt = record.UpdatedAt
+	}
+	s.tasks[parent.ID] = parent
+	return record, nil
+}
+
+func (s *TaskStore) ListDueWaitpoints(_ context.Context, now time.Time, limit int) ([]waitpoint.Record, error) {
+	if now.IsZero() || limit <= 0 {
+		return nil, errors.New("time and positive limit are required")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]waitpoint.Record, 0, limit)
+	for _, r := range s.waitpoints {
+		if r.State == waitpoint.Waiting && !r.Deadline.IsZero() && !now.Before(r.Deadline) {
+			result = append(result, r)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Deadline.Equal(result[j].Deadline) {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].Deadline.Before(result[j].Deadline)
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+func (s *TaskStore) RetryTask(_ context.Context, input ports.TaskRetryInput) (ports.TaskRetryResult, error) {
+	if input.CommandID == "" || input.TaskID == "" || input.ExecutionID == "" || input.Runtime == "" || input.Queue == "" || input.JobName == "" || len(input.Payload) == 0 || !json.Valid(input.Payload) || input.ExpectedVersion <= 0 || input.Now.IsZero() {
+		return ports.TaskRetryResult{}, errors.New("valid retry input is required")
+	}
+	fingerprint := sha256.Sum256(append([]byte(input.Runtime+"\x00"+input.Queue+"\x00"+input.JobName+"\x00"), input.Payload...))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if prior, ok := s.retries[input.CommandID]; ok {
+		if prior.Task.ID != input.TaskID || prior.Execution.ID != input.ExecutionID || s.retryFingerprints[input.CommandID] != fingerprint {
+			return ports.TaskRetryResult{}, fmt.Errorf("%w: retry command identity reused with different input", ports.ErrAlreadyExists)
+		}
+		prior.Replayed = true
+		return prior, nil
+	}
+	parent, ok := s.tasks[input.TaskID]
+	if !ok {
+		return ports.TaskRetryResult{}, ports.ErrTaskNotFound
+	}
+	if parent.Version != input.ExpectedVersion {
+		return ports.TaskRetryResult{}, ports.ErrVersionConflict
+	}
+	next, err := parent.Transition(task.Queued, input.Now)
+	if err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	if _, exists := s.executions[input.ExecutionID]; exists {
+		return ports.TaskRetryResult{}, ports.ErrAlreadyExists
+	}
+	byAttempt := s.attempts[input.TaskID.String()]
+	if byAttempt == nil {
+		byAttempt = make(map[int]execution.ID)
+		s.attempts[input.TaskID.String()] = byAttempt
+	}
+	attempt := 1
+	for number := range byAttempt {
+		if number >= attempt {
+			attempt = number + 1
+		}
+	}
+	executionRecord, err := execution.NewRecord(execution.Spec{ID: input.ExecutionID, TaskID: input.TaskID.String(), Attempt: attempt, Runtime: input.Runtime, Now: input.Now})
+	if err != nil {
+		return ports.TaskRetryResult{}, err
+	}
+	next.ExecutionCounts.Total++
+	next.ExecutionCounts.PendingDispatch++
+	s.tasks[input.TaskID] = next
+	s.executions[input.ExecutionID] = executionRecord
+	byAttempt[attempt] = input.ExecutionID
+	result := ports.TaskRetryResult{Task: next, Execution: executionRecord}
+	s.retries[input.CommandID] = result
+	s.retryFingerprints[input.CommandID] = fingerprint
+	return result, nil
 }
 
 func (s *TaskStore) CreateTask(_ context.Context, record task.Record) (task.Record, error) {

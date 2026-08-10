@@ -5,7 +5,7 @@ supporting Task/runtime layers from the detect-investigate-repair loop.
 
 | Area | Status | Evidence and remaining work |
 |---|---:|---|
-| TASK | 5/6 | Aggregate-versioned Task Summary, keyset Execution pages, owner-scoped polling/cancel, Node browser store, result references and BullMQ projection are tested; organization/RBAC, first-class BullMQ retry and realtime remain |
+| TASK | 5/6 | Aggregate-versioned Task Summary, keyset Execution pages, owner-scoped polling/cancel, snapshot-convergent SSE, durable waitpoints, Task Group actions, atomic retry dispatch and BullMQ projection are tested; organization/RBAC remains |
 | COMMIT | 4/5 | schema, idempotency, correlation, payload gates and transactional SQL enqueue run in the real PostgreSQL suite; end-to-end business outbox integration remains |
 | RUN | 11/11 | claim, handler-filtered lease, heartbeat, retry/jitter, recovery, delay, bounded workers, graceful shutdown, cancellation, DLQ, rate limit, fencing, poison protection and admission control are implemented |
 | VERIFY | 4/5 | fenced Effect Ledger, HTTP/Stripe/provisioning ProviderOperation adapters with explicit uncertain/read-back, versioned Rules, Explain gate and bounded scheduling exist; provider outcome evidence still needs real design-partner validation |

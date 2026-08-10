@@ -30,7 +30,12 @@ therefore safe to forward without deduplicating them first.
 attempt and its stable native/external runtime identity. Both return the newest
 aggregate Snapshot; they do not dispatch work themselves.
 Callers must pass that version on writes and ignore an older polling response.
-Realtime subscriptions and result-payload proxying are not implemented.
+The owner application surface also exposes snapshot-convergent SSE through
+`ApplicationTaskClient.streamTask()` and `streamTasks()`. Each stream carries
+authoritative snapshots, supports `Last-Event-ID` for one Task, sends
+heartbeats and falls back to snapshot polling after disconnect; SSE is a
+delivery optimization, not a second state store. Result-payload proxying is
+still application-owned.
 
 `beta.2` and later also export `watchTask()`, a framework-neutral async
 iterator for one Task. It performs non-overlapping polls, ignores snapshots at
@@ -38,7 +43,7 @@ or below the highest rendered `entityVersion`, stops on terminal state by
 default and accepts an `AbortSignal`. Network and authorization failures are
 reported to the caller; the helper does not invent an outage retry policy.
 
-The current beta.8 candidate also exports `TaskStore`, a browser external
+The current beta.9 candidate also exports `TaskStore`, a browser external
 store suitable for React `useSyncExternalStore` and equivalent adapters. It
 exposes loading, connected, reconnecting and stopped states, retries transport
 failures with bounded backoff, and never accepts an older `entityVersion`.
@@ -860,18 +865,17 @@ reproducible.
   that must not move under you.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems.
-- Express, Fastify and NestJS have request adapters (`createNodeTaskMiddleware`,
-  `registerFastifyTaskRoutes`) and a documented async-provider initialisation
-  pattern. A NestJS *module* — `RhinoQModule.forRootAsync()`, injectable
-  providers, lifecycle hooks — is still not shipped; the middleware is wired by
-  hand.
+- Express and Fastify have request adapters (`createNodeTaskMiddleware`,
+  `registerFastifyTaskRoutes`). NestJS lifecycle wiring ships from
+  `@rhinoq/node/nest`; `RhinoQModule.forBullMQAsync()` uses the same preset,
+  injectable providers and lifecycle hooks as the framework-neutral path.
 - Node workers for the native RhinoQ runtime require the HTTP Gateway; embedded
   Task management does not.
 - A BullMQ `runtimeScope` has one projector owner. Duplicate bridges fail fast
   in one process; use `PostgresProjectorLease` for cross-process ownership.
-- `TaskReconciler` is a timer in one process, not a distributed scheduler.
-  Running it in several replicas is safe but wasteful and needs an idempotent
-  callback; electing one owner is a deployment decision.
+- `TaskReconciler` is a timer in one process, not a distributed scheduler. The
+  standard preset gives it a PostgreSQL advisory lease; custom construction
+  must supply equivalent ownership when several replicas share a scope.
 - Gateway multi-tenant isolation and per-job HTTP RBAC are not complete.
 - Async effect confirmation has no built-in webhook authentication or
   confirmation-deadline scheduler yet; the application authenticates evidence

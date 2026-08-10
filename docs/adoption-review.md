@@ -1,6 +1,6 @@
 # Adoption and usability review
 
-Reviewed: 2026-07-30. Superseded for priority ordering by
+Reviewed: 2026-08-08. Superseded for priority ordering by
 [the adoption gap](./adoption-gap.md); retained as the broader readiness review.
 
 This review asks whether a team can evaluate RhinoQ as a user-facing Task layer
@@ -13,10 +13,10 @@ intended existing-worker adoption path.
 |---|---|---|
 | Go Task contract | public facade, PostgreSQL store and versioned snapshots | usable for controlled evaluation |
 | Embedded Node Task polling | three-table profile, application `pg.Pool`, owner-scoped handler/browser client | implemented and real-DB tested; adopter remeasurement pending |
-| Existing BullMQ worker | narrow observe/reconcile bridge with explicit fan-out projection | adapter contract exists; code-reduction promise remains unproven |
+| Existing BullMQ worker | preview-first adopter CLI and leased integration preset with explicit single/fan-out semantics | implemented; code-reduction promise remains unproven |
 | Native Go/PostgreSQL runtime | transactional enqueue, worker and operational tooling | usable for repository evaluation |
 | Verified Tasks | Rules, Findings and read-only investigation | optional evaluation path, not the main onboarding path |
-| Frontend experience | no React hook, Task Center, realtime or reconnect test | not ready |
+| Frontend experience | polling TaskStore, React adapter, stale/reconnect tests and local Workbench | implemented building blocks; adopter UI evidence pending |
 | Production evidence | contracts exist; benchmark, fault, retention and auth evidence incomplete | not production-ready |
 
 ## The activation event that matters
@@ -45,8 +45,9 @@ prerequisite for someone who only needs import/export progress.
 
 ### P1 — required for a credible frontend task experience
 
-1. Add a small polling-first React hook or framework-neutral browser contract.
-2. Test reload, delayed response, retry and stale/out-of-order update behavior.
+1. Validate the implemented polling-first React adapter in an adopter UI.
+2. Re-run reload, delayed response, retry and stale/out-of-order behavior in
+   that adopter rather than relying only on the SDK suite.
 3. Add cancellation/retry composition with command identity and crash recovery.
 4. Add result payload delivery only after result-reference authorization is
    defined.

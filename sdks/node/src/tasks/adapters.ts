@@ -1,4 +1,5 @@
 import { createTaskRequestHandler, type TaskRequestHandlerOptions } from './http.js';
+import { rhinoTaskCenterPage, type TaskCenterPageOptions } from './task-center.js';
 
 /**
  * Structural subset of a Node request. Express and NestJS's Express platform
@@ -18,10 +19,33 @@ export interface NodeTaskRequest {
 export interface NodeTaskResponse {
   statusCode: number;
   setHeader(name: string, value: string): unknown;
+  write?(chunk: Uint8Array | string): unknown;
+  on?(event: 'close', listener: () => void): unknown;
   end(chunk?: string): unknown;
 }
 
-export interface NodeTaskMiddlewareOptions extends TaskRequestHandlerOptions {
+/** Serves the zero-dependency Task Center page; Task data stays behind owner API auth. */
+export function createNodeTaskCenterMiddleware(
+  options: TaskCenterPageOptions & { path?: string } = {},
+): (request: NodeTaskRequest, response: NodeTaskResponse, next?: () => void) => void {
+  const path = options.path ?? '/task-center';
+  const page = rhinoTaskCenterPage(options);
+  return (request, response, next) => {
+    const pathname = new URL(request.originalUrl ?? request.url ?? '/', 'http://rhinoq.invalid').pathname;
+    if (request.method !== 'GET' || pathname !== path) { next?.(); return; }
+    response.statusCode = 200;
+    response.setHeader('content-type', 'text/html; charset=utf-8');
+    response.setHeader('cache-control', 'no-store');
+    response.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'");
+    response.end(page);
+  };
+}
+
+export interface NodeTaskMiddlewareOptions extends Omit<TaskRequestHandlerOptions, 'ownerFromRequest'> {
+  /** Use for framework auth such as Nest/Passport where the principal lives on req.user. */
+  ownerFromNodeRequest?(request: NodeTaskRequest): Promise<string | undefined> | string | undefined;
+  /** Use when owner identity is already represented in Fetch-compatible headers/cookies. */
+  ownerFromRequest?: TaskRequestHandlerOptions['ownerFromRequest'];
   /**
    * Origin used to build the absolute URL the Fetch handler needs. Only the
    * pathname and query are read, so the default is fine unless the application
@@ -57,7 +81,12 @@ export function taskRoutePatterns(basePath = '/tasks'): [string, string] {
 export function createNodeTaskMiddleware(
   options: NodeTaskMiddlewareOptions,
 ): (request: NodeTaskRequest, response: NodeTaskResponse, next?: (error?: unknown) => void) => void {
-  const handler = createTaskRequestHandler(options);
+  if (!options.ownerFromRequest && !options.ownerFromNodeRequest) {
+    throw new TypeError('createNodeTaskMiddleware requires ownerFromRequest or ownerFromNodeRequest');
+  }
+  const sharedHandler = options.ownerFromRequest ? createTaskRequestHandler({
+    ...options, ownerFromRequest: options.ownerFromRequest,
+  }) : undefined;
   const origin = (options.origin ?? 'http://rhinoq.invalid').replace(/\/+$/, '');
   const [base] = taskRoutePatterns(options.basePath);
 
@@ -69,6 +98,8 @@ export function createNodeTaskMiddleware(
     }
     void (async () => {
       const fetchRequest = await toFetchRequest(request, origin);
+      const ownerId = options.ownerFromNodeRequest ? await options.ownerFromNodeRequest(request) : undefined;
+      const handler = sharedHandler ?? createTaskRequestHandler({ ...options, ownerFromRequest: () => ownerId });
       const result = await handler(fetchRequest);
       await writeNodeResponse(result, response);
     })().catch((error: unknown) => {
@@ -105,7 +136,8 @@ export interface FastifyRequestLike {
 export interface FastifyReplyLike {
   status(code: number): FastifyReplyLike;
   header(name: string, value: string): FastifyReplyLike;
-  send(payload: string): unknown;
+  send(payload: unknown): unknown;
+  raw?: NodeTaskResponse;
 }
 
 /**
@@ -120,7 +152,8 @@ export function registerFastifyTaskRoutes(
   fastify: FastifyLike,
   options: NodeTaskMiddlewareOptions,
 ): void {
-  const handler = createTaskRequestHandler(options);
+  if (!options.ownerFromRequest) throw new TypeError('Fastify Task routes require ownerFromRequest');
+  const handler = createTaskRequestHandler({ ...options, ownerFromRequest: options.ownerFromRequest });
   const origin = (options.origin ?? 'http://rhinoq.invalid').replace(/\/+$/, '');
 
   const respond = async (request: FastifyRequestLike, reply: FastifyReplyLike): Promise<unknown> => {
@@ -130,6 +163,11 @@ export function registerFastifyTaskRoutes(
       headers: toHeaders(request.headers),
       ...(hasBody ? { body: JSON.stringify(request.body) } : {}),
     }));
+    if (result.headers.get('content-type')?.startsWith('text/event-stream')) {
+      if (!reply.raw?.write) throw new TypeError('Fastify SSE requires reply.raw streaming response');
+      await writeNodeResponse(result, reply.raw);
+      return reply;
+    }
     const text = await result.text();
     reply.status(result.status);
     for (const [name, value] of result.headers) reply.header(name, value);
@@ -183,8 +221,23 @@ function toHeaders(source: Record<string, string | string[] | undefined>): Heade
 }
 
 async function writeNodeResponse(result: Response, response: NodeTaskResponse): Promise<void> {
-  const text = await result.text();
   response.statusCode = result.status;
   for (const [name, value] of result.headers) response.setHeader(name, value);
-  response.end(text);
+  if (!result.body || !result.headers.get('content-type')?.startsWith('text/event-stream')) {
+    response.end(await result.text());
+    return;
+  }
+  if (!response.write) throw new TypeError('Node Task response does not support streaming writes');
+  const reader = result.body.getReader();
+  let closed = false;
+  response.on?.('close', () => { closed = true; void reader.cancel(); });
+  try {
+    while (!closed) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      response.write(value);
+    }
+  } finally {
+    if (!closed) response.end();
+  }
 }

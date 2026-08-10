@@ -84,6 +84,11 @@ type ProviderOperationEvidence struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+type ProviderOperationAttentionQuery struct {
+	Before time.Time
+	Limit  int
+}
+
 type ProviderCall func(context.Context, string) (ProviderAcceptance, error)
 type ProviderReadback func(context.Context, ProviderOperationRecord) (ProviderConfirmation, error)
 
@@ -289,6 +294,30 @@ func (c *IntegrityClient) GetProviderOperation(ctx context.Context, id string) (
 	service, _ := providerapp.New(c.providerOperations, nil)
 	record, err := service.Get(ctx, provideroperation.ID(id))
 	return publicProviderOperation(record), err
+}
+
+// ListProviderOperationsNeedingAttention returns unresolved operations for
+// bounded read-back reconciliation. It does not retry provider mutations.
+func (c *IntegrityClient) ListProviderOperationsNeedingAttention(ctx context.Context, query ProviderOperationAttentionQuery) ([]ProviderOperationRecord, error) {
+	if c == nil || c.providerOperations == nil {
+		return nil, errors.New("rhinoq provider operation store is not configured")
+	}
+	if query.Limit == 0 {
+		query.Limit = 100
+	}
+	if query.Before.IsZero() {
+		query.Before = time.Now().UTC()
+	}
+	service, _ := providerapp.New(c.providerOperations, nil)
+	items, err := service.Attention(ctx, query.Before, query.Limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ProviderOperationRecord, len(items))
+	for i, item := range items {
+		result[i] = publicProviderOperation(item)
+	}
+	return result, nil
 }
 
 // ConfirmProviderOperation records proof delivered later by a provider

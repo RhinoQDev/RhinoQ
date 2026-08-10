@@ -9,7 +9,7 @@ day one than on day four.
 
 | | Where |
 |---|---|
-| The Task/attempt state machine, fenced in SQL | `rhinoq_task` schema, three tables |
+| The Task/attempt/waitpoint state machines, fenced in SQL | `rhinoq_task` schema, isolated Task tables |
 | Per-item attempt history across runtime retries | `retryProjection: 'new-attempt'` |
 | "Every item has finished", delivered exactly once | `settleTaskItems()` / `onItemsSettled` |
 | Fan-out progress, recomputed without a read-modify-write | `sync_item_progress` |
@@ -19,6 +19,8 @@ day one than on day four.
 | An operator console | `app.workbench({ token })` |
 | A record of every projection it could not write down | `PostgresProjectionFailureSink` |
 | A sweep for batches that stopped moving | `TaskReconciler`, on by default via `rhinoq()` |
+| Bounded waitpoint expiry | `WaitpointExpiryScheduler`; escalation policy remains application-owned |
+| Snapshot-convergent live delivery | owner-scoped SSE plus polling fallback |
 | Cancellation as an axis separate from state | `cancellation.status`, including `too_late` |
 | Rules over your own PostgreSQL, gated by `EXPLAIN` before they run | `docs/rules.md` |
 

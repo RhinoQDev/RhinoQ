@@ -22,6 +22,31 @@
       "import": "./dist/index.js",
       "require": "./dist/cjs/index.js"
     },
+    "./nest": {
+      "types": "./dist/nest.d.ts",
+      "import": "./dist/nest.js",
+      "require": "./dist/cjs/nest.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js",
+      "require": "./dist/cjs/browser.js"
+    },
+    "./react": {
+      "types": "./dist/react-entry.d.ts",
+      "import": "./dist/react-entry.js",
+      "require": "./dist/cjs/react-entry.js"
+    },
+    "./bullmq": {
+      "types": "./dist/bullmq-entry.d.ts",
+      "import": "./dist/bullmq-entry.js",
+      "require": "./dist/cjs/bullmq-entry.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "require": "./dist/cjs/server.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {

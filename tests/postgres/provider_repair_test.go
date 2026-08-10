@@ -22,6 +22,17 @@ func TestProviderOperationPersistsUnknownAndDeduplicatesAcrossClients(t *testing
 	if err == nil || first.State != "uncertain" || calls != 1 {
 		t.Fatalf("first=%+v calls=%d err=%v", first, calls, err)
 	}
+	attention, err := client.ListProviderOperationsNeedingAttention(ctx, rhinoq.ProviderOperationAttentionQuery{Before: time.Now().UTC().Add(time.Minute), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range attention {
+		if item.ID == first.ID { found = true }
+	}
+	if !found {
+		t.Fatalf("uncertain operation %s missing from reconciliation query: %+v", first.ID, attention)
+	}
 	secondClient, err := rhinoq.NewPostgres(testDB)
 	if err != nil {
 		t.Fatal(err)

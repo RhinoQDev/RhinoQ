@@ -55,10 +55,30 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
         cancellation: { status: 'requested' },
       };
     },
+    async createTaskWaitpoint(taskId, request) {
+      return { schemaVersion: 1, entityVersion: 1, taskId, state: 'waiting', createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt, ...request };
+    },
+    async getTaskWaitpoint(id, ownerId) {
+      assert.equal(ownerId, 'owner-a');
+      return { schemaVersion: 1, entityVersion: 1, id, taskId: 'task-1', key: 'approve', kind: 'approval', state: 'waiting', payloadVersion: 1, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt };
+    },
+    async resolveTaskWaitpoint(id, ownerId, request) {
+      const current = await this.getTaskWaitpoint(id, ownerId);
+      return { ...current, entityVersion: 2, state: 'resolved', resolution: request.resolution, resolvedBy: ownerId };
+    },
+    async getTaskExecutionResultsForOwner(taskId, ownerId) {
+      await this.getTaskForOwner(taskId, ownerId);
+      return { schemaVersion: 1, entityVersion: 3, taskId, executions: [] };
+    },
   };
   const handler = createTaskRequestHandler({
     tasks,
     ownerFromRequest: (request) => request.headers.get('x-owner') ?? undefined,
+    retryTask: async ({ task, ownerId, commandId }) => {
+      assert.equal(task.id, 'task-1'); assert.equal(ownerId, 'owner-a'); assert.equal(commandId, 'retry-1');
+      return { ...task, entityVersion: 5, state: 'queued' };
+    },
+    health: async () => ({ status: 'ok' }),
   });
   const client = new ApplicationTaskClient({
     url: 'http://app.test/tasks',
@@ -73,6 +93,41 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
   const cancelled = await client.cancelTask('task-1', 3);
   assert.equal(cancelled.state, 'cancel_requested');
   assert.equal(cancelled.cancellation.status, 'requested');
+  assert.equal((await client.health()).status, 'ok');
+  const waitpoint = await client.createTaskWaitpoint('task-1', { id: 'wp-1', key: 'approve', kind: 'approval', payloadVersion: 1 });
+  assert.equal(waitpoint.state, 'waiting');
+  assert.equal((await client.getTaskWaitpoint('task-1', 'wp-1')).taskId, 'task-1');
+  const resolved = await client.resolveTaskWaitpoint('task-1', 'wp-1', { expectedVersion: 1, resolutionId: 'submit-1', resolution: { approved: true } });
+  assert.equal(resolved.state, 'resolved');
+  assert.equal((await client.getTaskGroupManifest('task-1')).taskId, 'task-1');
+  const failedItems = await client.downloadFailedTaskItems('task-1', 'csv');
+  assert.match(await failedItems.text(), /^taskId,itemKey/);
+  assert.throws(() => client.retryTask('task-1', 4, ''), /commandId/i);
+});
+
+test('application Task retry is owner-scoped and command-identified', async () => {
+  const failed = {
+    schemaVersion: 1, entityVersion: 9, id: 'task-9', type: 'export', ownerId: 'owner-a', state: 'failed',
+    cancellation: { status: 'none' }, progress: { completed: 0 }, hasResult: false, executions: [],
+    createdAt: '2026-07-30T00:00:00.000Z', updatedAt: '2026-07-30T00:00:01.000Z',
+  };
+  const seen = [];
+  const handler = createTaskRequestHandler({
+    tasks: { async getTaskForOwner(id, owner) { assert.equal(owner, 'owner-a'); return { ...failed, id }; } },
+    ownerFromRequest: () => 'owner-a',
+    retryTask: async (command) => { seen.push(command); return { ...command.task, entityVersion: 10, state: 'queued' }; },
+  });
+  const client = new ApplicationTaskClient({ url: 'http://app.test/tasks', fetch: (input, init) => handler(new Request(input, init)) });
+
+  const retried = await client.retryTask('task-9', 9, 'retry-command-9');
+  assert.equal(retried.state, 'queued');
+  assert.equal(seen[0].commandId, 'retry-command-9');
+  assert.equal(seen[0].ownerId, 'owner-a');
+
+  const missing = await handler(new Request('http://app.test/tasks/task-9/retry', { method: 'POST', body: JSON.stringify({ expectedVersion: 9 }) }));
+  assert.equal(missing.status, 400);
+  const conflict = await handler(new Request('http://app.test/tasks/task-9/retry', { method: 'POST', body: JSON.stringify({ expectedVersion: 8, commandId: 'retry-command-8' }) }));
+  assert.equal(conflict.status, 409);
 });
 
 test('application Task handler returns non-enumerating owner misses', async () => {
