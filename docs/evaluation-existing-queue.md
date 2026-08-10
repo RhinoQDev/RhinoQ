@@ -35,7 +35,7 @@ Record all four identities in the report:
 
 - RhinoQ Git commit;
 - npm package version or tarball name;
-- installation profile: Task-only schema version 7 (isolated Task tables), or legacy full
+- installation profile: Task-only schema version 8 (isolated Task tables), or legacy full
   migration 017;
 - target application commit.
 

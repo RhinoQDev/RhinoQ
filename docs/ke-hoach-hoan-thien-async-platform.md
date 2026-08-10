@@ -32,7 +32,7 @@
 
 | Capability | Trạng thái | Definition of Done |
 |---|---|---|
-| Durable Waitpoint domain/store | Hoàn thành | Go state machine, memory/PostgreSQL store, isolated Node schema v7, version fence và deadline index |
+| Durable Waitpoint domain/store | Hoàn thành | Go state machine, memory/PostgreSQL store, isolated Node schema v8, version fence và deadline index |
 | `waitForInput()` | Hoàn thành | durable re-entry helper, typed parser, không giữ worker/lease mở và phát outbox resume khi resolve |
 | `waitForApproval()` | Hoàn thành | generic approval helper kiểm tra boolean contract |
 | `waitForWebhook()` | Hoàn thành | webhook helper + capability handler scope token và dùng nonce làm resolution identity |

@@ -1,7 +1,7 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 7;
-export const TASK_SCHEMA_NAME = '007_task_hardening_and_waitpoints';
+export const TASK_SCHEMA_VERSION = 8;
+export const TASK_SCHEMA_NAME = '008_durable_waitpoints';
 
 /**
  * Task-only PostgreSQL profile.
@@ -1493,6 +1493,9 @@ EXCEPTION
     RETURN 0;
 END;
 $fn$;
+`;
+
+const TASK_SCHEMA_V8_SQL = String.raw`
 CREATE TABLE IF NOT EXISTS rhinoq_task.waitpoints (
   id text PRIMARY KEY CHECK (btrim(id) <> ''),
   task_id text NOT NULL REFERENCES rhinoq_task.tasks(id) ON DELETE CASCADE,
@@ -1576,7 +1579,8 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 4, name: '004_execution_supersede_contract', sql: TASK_SCHEMA_V4_SQL },
   { version: 5, name: '005_items_settled_signal', sql: TASK_SCHEMA_V5_SQL },
   { version: 6, name: '006_transactional_item_effect', sql: TASK_SCHEMA_V6_SQL },
-  { version: 7, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V7_SQL },
+  { version: 7, name: '007_actionable_conflicts_and_late_starts', sql: TASK_SCHEMA_V7_SQL },
+  { version: 8, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V8_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {
