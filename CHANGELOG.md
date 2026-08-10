@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added responsive Task Center search, attention/active/finished filters and
+  sorting with bookmarkable URL state. Owner Task detail now makes result
+  availability, cancellation posture and recorded verification uncertainty
+  explicit without claiming that a completed runtime outcome is verified. Long
+  attempt histories can now be loaded incrementally through the owner cursor API.
 - Connected the scaffold's Overview, Task Center and operator Workbench with
   same-tab product navigation, added evidence-based Overview counts, and added
   an owner-facing `/task-center/{taskId}` detail with progress, next action and

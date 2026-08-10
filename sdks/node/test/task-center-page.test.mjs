@@ -20,6 +20,16 @@ test('Task Center page is self-contained and points at the owner API', () => {
   assert.match(page, /Next:/);
   assert.match(page, /function progressText/);
   assert.match(page, /New async work will appear here automatically/);
+  assert.match(page, /Search tasks/);
+  assert.match(page, /Needs attention/);
+  assert.match(page, /Recently updated/);
+  assert.match(page, /function visibleTasks/);
+  assert.match(page, /history\.replaceState/);
+  assert.match(page, /No tasks match this view/);
+  assert.match(page, /No verification issue is recorded/);
+  assert.match(page, /configure secure download/);
+  assert.match(page, /Load more attempts/);
+  assert.match(page, /function attemptRow/);
   const script = page.match(/<script>([\s\S]*)<\/script>/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));

@@ -400,6 +400,15 @@ guidance and an attempt timeline; runtime job identity remains operator-only.
 The default scaffold connects Overview, Tasks and Workbench in one same-tab
 product shell instead of presenting three isolated pages.
 
+The self-contained Task Center includes responsive search, evidence-based views
+for attention/active/finished work, and updated-time or task-name sorting. These
+controls are reflected in the query string, so a filtered view can be bookmarked
+or shared without adding server-side saved-view state. Task detail reports result
+availability, cancellation posture and whether a verification issue is actually
+recorded; it does not equate runtime completion with business verification.
+Long attempt histories remain bounded and can be continued in-place with the
+cursor-backed “Load more attempts” control.
+
 The owner API exposes `GET /tasks/_capabilities`. Task Center renders retry and
 result actions only when the application configured their handlers. Result
 download now fails closed with `RHINOQ_RESULT_NOT_CONFIGURED` when no authorized

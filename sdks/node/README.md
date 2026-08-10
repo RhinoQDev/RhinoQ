@@ -324,6 +324,15 @@ Task detail reads the lightweight Summary plus the first bounded Execution page;
 large histories continue through the existing cursor API rather than loading an
 unbounded Snapshot.
 
+The reference page also provides client-side search, attention/active/finished
+filters and updated-time/task-name sorting over the bounded owner inbox page.
+The selected controls live in `?q=`, `?view=` and `?sort=`, making useful views
+bookmarkable while keeping authorization and Task selection on the server. Task
+detail distinguishes result availability, cancellation posture and recorded
+verification uncertainty; “completed” is never relabelled “verified”.
+Attempt history initially reads 100 rows and continues through the cursor-backed
+“Load more attempts” control instead of asking the owner to call the API manually.
+
 `integration.defineTask({ type, jobName, mode })` removes repeated Task,
 Execution, runtime and stable job-id wiring. `bullMQCancellation()` removes
 queued jobs and refuses to claim an active job was cancelled without a durable

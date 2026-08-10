@@ -29,6 +29,7 @@
 | Task explanation dùng chung | Hoàn thành | `taskUIModel().explanation` trả lời trạng thái, progress, retry safety và next action; Task Center/Workbench cùng dùng và có contract test không lộ runtime jargon |
 | Owner-facing Task detail | Hoàn thành | `/task-center/{taskId}` có summary, progress, next action và attempt timeline; không đưa runtime identity vào owner UI |
 | UI action capability discovery | Hoàn thành | `GET /tasks/_capabilities`; retry/result chỉ hiện khi handler tồn tại, result không resolver fail-closed thay vì lộ reference |
+| Task Center search/filter/sort | Hoàn thành | tìm theo type/ID, lọc attention/active/finished, sắp xếp và lưu view trong URL; hoạt động trên bounded owner inbox page |
 | Signed realtime subscription token | Chưa có | hiện dùng cookie hoặc application auth header qua Fetch streaming; cần khi cross-origin/public EventSource là use case thật |
 | WebSocket | Không ưu tiên | SSE đủ cho server → browser; chỉ mở lại khi có bidirectional/high-frequency demand |
 | Realtime logs có redaction | Chưa có | cần log event contract, retention, payload policy và access control |
