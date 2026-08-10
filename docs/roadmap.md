@@ -9,6 +9,8 @@ without migrating their queue.
 
 - [x] one-mount BullMQ golden path with owner API, Task Center and Workbench
 - [x] scaffold operator sign-in that does not expose its token in page markup
+- [x] connected scaffold Overview/Tasks/Workbench navigation and owner Task detail
+- [x] capability-gated retry/result UI with fail-closed result resolution
 - [ ] publish the tested npm beta and prebuilt CLI artifacts
 - [ ] rerun two Tasks in a real adopter and record code/process/credential delta
 - [ ] wire tenant context through the public HTTP boundary

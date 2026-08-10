@@ -25,13 +25,22 @@ test('Task Center page is self-contained and points at the owner API', () => {
   assert.doesNotThrow(() => new Function(script));
 });
 
-test('Task Center middleware serves only its exact GET path', () => {
-  const middleware = createNodeTaskCenterMiddleware({ path: '/my/tasks', apiPath: '/tasks' });
+test('Task Center middleware serves its list and one owner-facing detail route', () => {
+  const middleware = createNodeTaskCenterMiddleware({ path: '/my/tasks', apiPath: '/tasks', navigation: { overviewPath: '/', workbenchPath: '/admin' } });
   const response = { headers: {}, setHeader(name, value) { this.headers[name] = value; }, end(body) { this.body = body; } };
   middleware({ method: 'GET', url: '/my/tasks', headers: {} }, response);
   assert.equal(response.statusCode, 200);
   assert.match(response.body, /<!doctype html>/);
+  assert.match(response.body, /Overview/);
+  assert.match(response.body, /View details/);
+  const detail = { headers: {}, setHeader(name, value) { this.headers[name] = value; }, end(body) { this.body = body; } };
+  middleware({ method: 'GET', url: '/my/tasks/task-1', headers: {} }, detail);
+  assert.equal(detail.statusCode, 200);
+  assert.match(detail.body, /Attempts/);
   let passed = false;
   middleware({ method: 'POST', url: '/my/tasks', headers: {} }, {}, () => { passed = true; });
   assert.equal(passed, true);
+  let nestedPassed = false;
+  middleware({ method: 'GET', url: '/my/tasks/task-1/unknown', headers: {} }, {}, () => { nestedPassed = true; });
+  assert.equal(nestedPassed, true);
 });

@@ -314,6 +314,16 @@ review-before-retry; only explicit effect evidence should upgrade that answer.
 `mountRhinoTaskCenter()` is a dependency-free reference UI with a notification
 callback that can map to the host toast system.
 
+The self-contained Task Center also serves `/task-center/{taskId}` with the
+owner-facing summary, cancellation guidance and attempt timeline. The owner API
+publishes UI support at `GET /tasks/_capabilities`; retry and result controls
+stay hidden until `retryTask` and `resolveResult` are configured. Without a
+resolver, `GET /tasks/{id}/result` returns
+`RHINOQ_RESULT_NOT_CONFIGURED` instead of exposing the stored reference.
+Task detail reads the lightweight Summary plus the first bounded Execution page;
+large histories continue through the existing cursor API rather than loading an
+unbounded Snapshot.
+
 `integration.defineTask({ type, jobName, mode })` removes repeated Task,
 Execution, runtime and stable job-id wiring. `bullMQCancellation()` removes
 queued jobs and refuses to claim an active job was cancelled without a durable
@@ -1152,11 +1162,14 @@ app.use(createNodeWorkbenchMiddleware({
   tasks,
   requireOperator: (request) => isOperator(request),
   basePath: '/admin/rhinoq',
+  navigation: { overviewPath: '/', tasksPath: '/task-center' },
 }));
 ```
 
 It shows Task counts by state, the list behind each one, and — per Task — every
 item with its attempt number, state, runtime job ID and failure reason.
+Selecting a Task writes `?task={id}` into browser history, so a detail can be
+linked directly and Back/Forward preserves operator context.
 
 ### It is not the owner-scoped API
 

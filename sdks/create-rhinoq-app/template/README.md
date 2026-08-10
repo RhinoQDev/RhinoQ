@@ -11,11 +11,18 @@ the Workbench. The scaffold exchanges it for an HttpOnly, SameSite cookie and
 binds the server to loopback; replace this local login with your application's
 operator authentication before deploying it.
 
+The home page is the Overview. Overview, Tasks and Workbench use same-tab
+navigation, and each Task links to `/task-center/{taskId}` for its owner-facing
+progress, guidance and attempt timeline.
+
 The RhinoQ integration itself is deliberately small:
 
 ```js
 const app = await rhinoq({ pool, queue, events, ownerFromRequest });
-server.use(app.http({ operatorToken: OPERATOR_TOKEN })); // one middleware
+server.use(app.http({
+  operatorToken: OPERATOR_TOKEN,
+  workbenchPath: '/operator-login',
+})); // one middleware
 await app.dispatch(taskId, items);
 ```
 

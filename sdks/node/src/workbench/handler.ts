@@ -10,7 +10,7 @@ import type {
 import type { TaskStateQuery } from '../postgres/task-client.js';
 import { taskFlightRecorder, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
 import { taskUIModel, type TaskUIModel } from '../tasks/ui.js';
-import { WORKBENCH_PAGE } from './page.js';
+import { workbenchPage } from './page.js';
 
 /** The reads the Workbench performs. `PostgresTaskClient` satisfies it. */
 export interface WorkbenchTaskSource {
@@ -51,6 +51,8 @@ export interface WorkbenchHandlerOptions {
    * latency of an update rather than its cost to the browser.
    */
   streamIntervalMs?: number;
+  /** Optional links that connect this operator surface to the host product. */
+  navigation?: { overviewPath?: string; tasksPath?: string };
 }
 
 const DEFAULT_STATES: TaskState[] = [
@@ -142,7 +144,7 @@ export function createWorkbenchHandler(
 
     try {
       if (request.method === 'GET' && relative.length === 0) {
-        return new Response(WORKBENCH_PAGE, {
+        return new Response(workbenchPage(options.navigation), {
           headers: {
             'content-type': 'text/html; charset=utf-8',
             'cache-control': 'no-store',

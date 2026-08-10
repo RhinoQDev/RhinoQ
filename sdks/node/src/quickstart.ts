@@ -17,6 +17,7 @@ import {
   type NodeTaskRequest,
   type NodeTaskResponse,
 } from './tasks/adapters.js';
+import type { TaskRequestHandlerOptions } from './tasks/http.js';
 import { TaskReconciler } from './tasks/reconciler.js';
 import {
   createNodeWorkbenchMiddleware,
@@ -116,6 +117,14 @@ export interface RhinoQHTTPOptions {
   actions?: boolean;
   /** Heading shown in the owner-facing Task Center. */
   taskCenterTitle?: string;
+  /** Application-owned durable retry command. Retry UI is hidden when absent. */
+  retryTask?: TaskRequestHandlerOptions['retryTask'];
+  /** Owner-authorized result resolver. Result UI is hidden when absent. */
+  resolveResult?: TaskRequestHandlerOptions['resolveResult'];
+  /** Product-shell route. Defaults to `/`. */
+  overviewPath?: string;
+  /** Operator entry route. Defaults to `/admin`. */
+  workbenchPath?: string;
 }
 
 export type RhinoQHTTPMiddleware = (
@@ -305,6 +314,10 @@ export class RhinoQApp {
     const taskCenter = createNodeTaskCenterMiddleware({
       path: '/task-center',
       apiPath: '/tasks',
+      navigation: {
+        overviewPath: options.overviewPath ?? '/',
+        workbenchPath: options.workbenchPath ?? '/admin',
+      },
       ...(options.taskCenterTitle ? { title: options.taskCenterTitle } : {}),
     });
     const routes = this.routes({
@@ -313,11 +326,17 @@ export class RhinoQApp {
       // The generic owner API records cancellation intent. The high-level path
       // can also reach the queue, so make its Cancel button stop queued work.
       cancelTask: async ({ task }) => this.cancel(task.id),
+      ...(options.retryTask ? { retryTask: options.retryTask } : {}),
+      ...(options.resolveResult ? { resolveResult: options.resolveResult } : {}),
     });
     const workbench = this.workbench({
       token: options.operatorToken,
       basePath: '/admin',
       actions: options.actions,
+      navigation: {
+        overviewPath: options.overviewPath ?? '/',
+        tasksPath: '/task-center',
+      },
       origin: options.origin,
     });
 

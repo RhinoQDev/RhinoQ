@@ -17,6 +17,8 @@
 | Capability | Trạng thái | Bằng chứng / phần còn thiếu |
 |---|---|---|
 | Golden path một mount | Hoàn thành | `app.http()` nối owner API, Task Center, runtime-aware cancellation và Workbench |
+| Product shell / route continuity | Hoàn thành cho scaffold | Overview, Tasks, Workbench dùng same-tab navigation; `/overview` redirect tương thích về `/`; SDK nhận navigation path từ host app |
+| Overview attention summary | Hoàn thành cho scaffold | Needs attention, In progress, Completed và Recent chỉ được tính từ Task evidence hiện có; Waiting/stuck/verified bucket vẫn chờ summary contract tương ứng |
 | First-run operator access | Hoàn thành cho scaffold | `/operator-login` đổi token thành HttpOnly/SameSite cookie, không nhúng secret trong trang và chỉ bind loopback; production auth vẫn application-owned |
 | Owner-scoped SSE cho một Task | Hoàn thành | `GET /tasks/{id}/events`, auth trước stream, `Last-Event-ID`, heartbeat, capacity và test |
 | Owner Task inbox SSE | Hoàn thành | `GET /tasks/_events`, bounded page reset, version convergence và test |
@@ -25,6 +27,8 @@
 | Polling fallback sau khi SSE mất | Hoàn thành | đọc snapshot authoritative trước khi thử lại stream |
 | Task Center realtime | Hoàn thành | skeleton/aria-busy, Live/Polling fallback, Finished/Not finished, completion aria-live notification và test |
 | Task explanation dùng chung | Hoàn thành | `taskUIModel().explanation` trả lời trạng thái, progress, retry safety và next action; Task Center/Workbench cùng dùng và có contract test không lộ runtime jargon |
+| Owner-facing Task detail | Hoàn thành | `/task-center/{taskId}` có summary, progress, next action và attempt timeline; không đưa runtime identity vào owner UI |
+| UI action capability discovery | Hoàn thành | `GET /tasks/_capabilities`; retry/result chỉ hiện khi handler tồn tại, result không resolver fail-closed thay vì lộ reference |
 | Signed realtime subscription token | Chưa có | hiện dùng cookie hoặc application auth header qua Fetch streaming; cần khi cross-origin/public EventSource là use case thật |
 | WebSocket | Không ưu tiên | SSE đủ cho server → browser; chỉ mở lại khi có bidirectional/high-frequency demand |
 | Realtime logs có redaction | Chưa có | cần log event contract, retention, payload policy và access control |

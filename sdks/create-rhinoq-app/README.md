@@ -11,6 +11,10 @@ retries recorded per attempt, a Task Center and an operator Workbench — plus a
 deletes the output of a job the queue reported as `completed`, so you can watch
 the difference between "the queue says done" and "the work happened".
 
+The generated Overview, Task Center, owner Task detail and Workbench are linked
+as one same-tab journey. Retry and result actions appear only when the host
+application configured the corresponding safe handler.
+
 It brings its own PostgreSQL and Redis through `docker compose`, on ports it
 checks are free first, and applies the schema itself. Nothing needs to exist
 beforehand except Docker and Node 22.

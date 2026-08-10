@@ -5,7 +5,9 @@ export const page = () => `<!doctype html>
 <title>RhinoQ</title>
 <style>
   :root { color-scheme: light dark; --line: color-mix(in srgb, currentColor 15%, transparent); }
-  body { font: 15px/1.55 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1.25rem; }
+  body { font: 15px/1.55 system-ui, sans-serif; max-width: 68rem; margin: 0 auto 3rem; padding: 0 1.25rem; }
+  .shell { display:flex;align-items:center;gap:1.25rem;padding:.9rem 0;border-bottom:1px solid var(--line);margin-bottom:2rem; }
+  .shell strong { margin-right:auto; }.shell a { color:inherit;text-decoration:none; }.shell a[aria-current] { font-weight:700;text-decoration:underline;text-underline-offset:.3rem; }
   h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
   p.sub { margin: 0 0 2rem; opacity: .7; }
   button, .button { font: inherit; padding: .45rem .9rem; border: 1px solid var(--line); border-radius: .4rem;
@@ -22,20 +24,40 @@ export const page = () => `<!doctype html>
   .value { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; }
   .value div { border-left: 3px solid currentColor; padding-left: .75rem; }
   .value strong { display: block; }
+  .overview { display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:.75rem;margin:1rem 0 1.5rem; }
+  .metric { border:1px solid var(--line);border-radius:.6rem;padding:.8rem 1rem; }.metric b { display:block;font-size:1.6rem; }.metric span { opacity:.7; }
+  .attention-item { display:grid;grid-template-columns:minmax(10rem,1fr) minmax(14rem,2fr) auto;gap:.75rem;padding:.75rem 0;border-bottom:1px solid var(--line);align-items:center; }
+  .attention-item:last-child { border-bottom:0; }.attention-item p { margin:0;opacity:.75; }.attention-item a { color:inherit;white-space:nowrap; }
   code { font-size: .9em; }
   pre { white-space: pre-wrap; margin: .5rem 0 0; font-size: .85rem; opacity: .85; }
+  @media (max-width: 620px) { .shell { align-items:flex-start;flex-wrap:wrap; }.shell strong { width:100%; }.attention-item { grid-template-columns:1fr; }.attention-item a { white-space:normal; } }
 </style>
 
-<h1>Async work users can trust</h1>
+<header class="shell"><strong><a href="/">RhinoQ</a></strong><a href="/" aria-current="page">Overview</a><a href="/task-center">Tasks</a><a href="/operator-login">Workbench</a></header>
+
+<h1>Async operations overview</h1>
 <p class="sub">RhinoQ makes background work visible and actionable: users get
 progress and results, developers get one Task contract, and operators get the
 context to understand failures and recover safely.</p>
 
+<section class="overview" aria-label="Task overview">
+  <div class="metric"><b id="attentionCount">0</b><span>Needs attention</span></div>
+  <div class="metric"><b id="runningCount">0</b><span>In progress</span></div>
+  <div class="metric"><b id="completedCount">0</b><span>Completed</span></div>
+  <div class="metric"><b id="recentCount">0</b><span>Recent tasks</span></div>
+</section>
+
+<section class="card">
+  <strong>Needs attention</strong>
+  <p class="sub" style="margin:.35rem 0 .5rem">Failed, uncertain or partially completed work appears here with the safest next step.</p>
+  <div id="attentionList"><p>No tasks need attention.</p></div>
+</section>
+
 <div class="row">
   <button id="start">Start a 50-item batch</button>
   <button id="cancel" disabled>Cancel</button>
-  <a class="button" href="/task-center" target="_blank" rel="noopener">Task Center</a>
-  <a class="button" href="/operator-login" target="_blank" rel="noopener">Operator Workbench →</a>
+  <a class="button" href="/task-center">Task Center</a>
+  <a class="button" href="/operator-login">Operator Workbench →</a>
 </div>
 
 <div class="card">
@@ -77,6 +99,7 @@ const $ = (id) => document.getElementById(id);
 const headers = { 'content-type': 'application/json', 'x-user': 'demo-user' };
 let taskId = null;
 let snapshot = null;
+let lastListAt = 0;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { headers, ...options });
@@ -124,9 +147,11 @@ $('verify').onclick = async () => {
 
 async function poll() {
   try {
-    if (!taskId) {
-      const list = await api('/tasks?limit=1');
-      taskId = list.tasks[0]?.id ?? null;
+    if (Date.now() - lastListAt > 2000) {
+      const list = await api('/tasks?limit=50');
+      renderOverview(list.tasks || []);
+      if (!taskId) taskId = list.tasks[0]?.id ?? null;
+      lastListAt = Date.now();
     }
     if (taskId) {
       snapshot = await api('/tasks/' + taskId + '/summary');
@@ -134,6 +159,52 @@ async function poll() {
     }
   } catch { /* the server is restarting; the next tick will pick it up */ }
   setTimeout(poll, 400);
+}
+
+function renderOverview(tasks) {
+  const attentionTasks = tasks.filter((task) => {
+    const counts = task.itemCounts ?? task.executionCounts ?? {};
+    return task.state === 'failed' || task.state === 'uncertain' ||
+      task.cancellation?.status === 'too_late' ||
+      task.cancellation?.status === 'cannot_cancel_safely' ||
+      ((counts.failed ?? 0) > 0 && (counts.succeeded ?? 0) > 0);
+  });
+  const inProgress = tasks.filter((task) =>
+    ['pending', 'queued', 'running', 'cancel_requested'].includes(task.state)).length;
+  $('attentionCount').textContent = attentionTasks.length;
+  $('runningCount').textContent = inProgress;
+  $('completedCount').textContent = tasks.filter((task) => task.state === 'succeeded').length;
+  $('recentCount').textContent = tasks.length;
+  const attentionList = $('attentionList');
+  if (!attentionTasks.length) {
+    const empty = document.createElement('p');
+    empty.textContent = 'Nothing needs attention. Failed, uncertain or partial work will appear here.';
+    attentionList.replaceChildren(empty);
+    return;
+  }
+  attentionList.replaceChildren(...attentionTasks.slice(0, 5).map((task) => {
+    const guidance = overviewGuidance(task);
+    const row = document.createElement('div');
+    row.className = 'attention-item';
+    const identity = document.createElement('strong');
+    identity.textContent = task.type + ' · ' + task.id;
+    const meaning = document.createElement('p');
+    meaning.textContent = guidance[0] + ' Next: ' + guidance[1];
+    const link = document.createElement('a');
+    link.href = '/task-center/' + encodeURIComponent(task.id);
+    link.textContent = 'View task →';
+    row.append(identity, meaning, link);
+    return row;
+  }));
+}
+
+function overviewGuidance(task) {
+  const counts = task.itemCounts ?? task.executionCounts ?? {};
+  if (task.cancellation?.status === 'cannot_cancel_safely') return ['This work could not be stopped safely.', 'Review completed work.'];
+  if (task.cancellation?.status === 'too_late') return ['The work finished before cancellation.', 'Review the result.'];
+  if (task.state === 'uncertain') return ['The external result still needs confirmation.', 'Check confirmation before repeating it.'];
+  if ((counts.failed ?? 0) > 0 && (counts.succeeded ?? 0) > 0) return [(counts.failed ?? 0) + ' item(s) need attention.', 'Review failed items.'];
+  return ['The task did not finish.', 'Review the failed attempt before retrying.'];
 }
 
 function render(task) {
@@ -173,7 +244,9 @@ export const operatorLoginPage = (invalid = false) => `<!doctype html>
   input { border: 1px solid var(--line); }
   button { margin-top: .75rem; border: 0; background: #2563eb; color: white; cursor: pointer; }
   .error { color: #dc2626; opacity: 1; }
+  nav { display:flex;gap:1rem;margin-bottom:1rem; } nav a { color:inherit; }
 </style>
+<nav aria-label="Product"><a href="/">Overview</a><a href="/task-center">Tasks</a></nav>
 <form method="post" action="/operator-login">
   <h1>RhinoQ operator sign in</h1>
   <p>This local evaluation keeps cross-owner task data behind the operator token.</p>

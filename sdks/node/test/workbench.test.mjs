@@ -88,7 +88,7 @@ test('a requireOperator that throws is a refusal, not a crash', async () => {
 });
 
 test('the page is self-contained: no external origin is referenced', async () => {
-  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true });
+  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true, navigation: { overviewPath: '/', tasksPath: '/task-center' } });
   const response = await get(handler, '/rhinoq');
   const html = await response.text();
 
@@ -104,6 +104,10 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.match(html, /What this means/);
   assert.match(html, /Next action/);
   assert.match(html, /Nothing needs attention/);
+  assert.match(html, /href="\/"/);
+  assert.match(html, /href="\/task-center"/);
+  assert.match(html, /history\.pushState/);
+  assert.match(html, /addEventListener\('popstate'/);
 });
 
 test('the detail view joins runtime job identity from the server-side read', async () => {

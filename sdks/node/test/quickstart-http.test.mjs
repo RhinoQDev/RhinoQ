@@ -80,10 +80,21 @@ test('app.http exposes the complete default user and operator journey from one m
   const center = await invoke(middleware, '/task-center');
   assert.equal(center.status, 200);
   assert.match(center.body, /\/tasks/);
+  assert.match(center.body, /href="\/"/);
+  assert.match(center.body, /href="\/admin"/);
+
+  const detailPage = await invoke(middleware, '/task-center/task-cancel');
+  assert.equal(detailPage.status, 200);
+  assert.match(detailPage.body, /Back to tasks/);
 
   const tasks = await invoke(middleware, '/tasks');
   assert.equal(tasks.status, 200);
   assert.deepEqual(JSON.parse(tasks.body), { tasks: [] });
+
+  const capabilities = await invoke(middleware, '/tasks/_capabilities');
+  assert.deepEqual(JSON.parse(capabilities.body), {
+    schemaVersion: 1, cancel: true, retry: false, result: false, waitpoints: true, stream: true,
+  });
 
   const forbidden = await invoke(middleware, '/admin');
   assert.equal(forbidden.status, 403);
@@ -91,6 +102,7 @@ test('app.http exposes the complete default user and operator journey from one m
   const workbench = await invoke(middleware, '/admin', { 'x-operator-token': 'ops-secret' });
   assert.equal(workbench.status, 200);
   assert.match(workbench.body, /RhinoQ Workbench/);
+  assert.match(workbench.body, /href="\/task-center"/);
 
   const cancelled = await invoke(
     middleware,

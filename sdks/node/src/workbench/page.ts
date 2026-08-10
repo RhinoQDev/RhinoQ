@@ -33,6 +33,9 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
     padding: 14px 20px; border-bottom: 1px solid var(--line);
     display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
   }
+  header nav { display: flex; gap: 12px; align-items: center; }
+  header a { color: inherit; text-decoration: none; }
+  header a:hover { text-decoration: underline; text-underline-offset: 3px; }
   h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   .muted { color: var(--muted); }
   main { padding: 20px; display: grid; gap: 20px; max-width: 1100px; }
@@ -114,7 +117,8 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
 </head>
 <body>
 <header>
-  <h1>RhinoQ Workbench</h1>
+  <h1><a href="__RHINOQ_HOME__">RhinoQ</a></h1>
+  <nav aria-label="Product">__RHINOQ_NAV__<strong aria-current="page">Workbench</strong></nav>
   <span class="muted" id="mode"></span>
   <span class="live muted" id="live" data-state="connecting" style="margin-left:auto">
     <span class="dot"></span><span id="liveText">connecting…</span>
@@ -151,7 +155,7 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
 const base = location.pathname.replace(/\/+$/, '');
 let snap = null;          // last payload the server sent
 let active = 'attention';
-let currentId = null;
+let currentId = new URLSearchParams(location.search).get('task');
 let source = null;
 let pollTimer = null;
 let failures = 0;
@@ -296,6 +300,7 @@ function render() {
 function select(taskId) {
   if (currentId === taskId) return;
   currentId = taskId;
+  history.pushState({ taskId }, '', base + '?task=' + encodeURIComponent(taskId));
   previousItems = new Map();
   $('detailPanel').hidden = false;
   $('flightPanel').hidden = true;
@@ -304,6 +309,18 @@ function select(taskId) {
     '<tr><td><span class="skel w-lg"></span></td><td><span class="skel"></span></td><td><span class="skel"></span></td></tr>';
   connect();   // re-subscribe so the server streams this Task too
 }
+
+addEventListener('popstate', () => {
+  currentId = new URLSearchParams(location.search).get('task');
+  previousItems = new Map();
+  if (!currentId) {
+    $('detailPanel').hidden = true;
+    $('flightPanel').hidden = true;
+    connect();
+    return;
+  }
+  connect();
+});
 
 // Server-sent events. The server watches the store and writes only when
 // something actually changed, so the console updates on its own — no reload,
@@ -404,3 +421,22 @@ connect();
 </script>
 </body>
 </html>`;
+
+export function workbenchPage(
+  navigation: { overviewPath?: string; tasksPath?: string } = {},
+): string {
+  const home = escapeAttribute(navigation.overviewPath ?? navigation.tasksPath ?? '#');
+  const links = [
+    navigation.overviewPath ? `<a href="${escapeAttribute(navigation.overviewPath)}">Overview</a>` : '',
+    navigation.tasksPath ? `<a href="${escapeAttribute(navigation.tasksPath)}">Tasks</a>` : '',
+  ].join('');
+  return WORKBENCH_PAGE
+    .replace('__RHINOQ_HOME__', home)
+    .replace('__RHINOQ_NAV__', links);
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  })[character]!);
+}

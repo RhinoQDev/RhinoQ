@@ -86,6 +86,19 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
     fetch: (input, init) => handler(new Request(input, init)),
   });
 
+  const capabilities = await (await handler(new Request('http://app.test/tasks/_capabilities', {
+    headers: { 'x-owner': 'owner-a' },
+  }))).json();
+  assert.deepEqual(capabilities, {
+    schemaVersion: 1, cancel: true, retry: true, result: false, waitpoints: true, stream: true,
+  });
+  assert.deepEqual(await client.capabilities(), capabilities);
+  const unresolvedResult = await handler(new Request('http://app.test/tasks/task-1/result', {
+    headers: { 'x-owner': 'owner-a' },
+  }));
+  assert.equal(unresolvedResult.status, 501);
+  assert.equal((await unresolvedResult.json()).code, 'RHINOQ_RESULT_NOT_CONFIGURED');
+
   assert.equal((await client.getTask('task-1')).entityVersion, 3);
 	assert.equal((await client.getTaskSummary('task-1')).executions, undefined);
 	assert.equal((await client.listTaskExecutions('task-1', 'next', 2)).nextCursor, 'done');
@@ -103,6 +116,27 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
   const failedItems = await client.downloadFailedTaskItems('task-1', 'csv');
   assert.match(await failedItems.text(), /^taskId,itemKey/);
   assert.throws(() => client.retryTask('task-1', 4, ''), /commandId/i);
+});
+
+test('result download is capability-gated and owner-authorized', async () => {
+  let reads = 0;
+  const handler = createTaskRequestHandler({
+    tasks: {
+      async getTaskResultForOwner(taskId, ownerId) {
+        reads++;
+        assert.equal(taskId, 'task-result');
+        assert.equal(ownerId, 'owner-a');
+        return { schemaVersion: 1, entityVersion: 2, taskId, reference: 'storage://private', updatedAt: '2026-08-10T00:00:00Z' };
+      },
+    },
+    ownerFromRequest: () => 'owner-a',
+    resolveResult: async (result) => ({ url: `/downloads/${result.taskId}` }),
+  });
+  const capabilities = await (await handler(new Request('http://app.test/tasks/_capabilities'))).json();
+  assert.equal(capabilities.result, true);
+  const response = await handler(new Request('http://app.test/tasks/task-result/result'));
+  assert.deepEqual(await response.json(), { url: '/downloads/task-result' });
+  assert.equal(reads, 1);
 });
 
 test('application Task retry is owner-scoped and command-identified', async () => {

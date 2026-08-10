@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const cli = join(import.meta.dirname, '..', 'index.mjs');
 
@@ -35,18 +36,31 @@ test('writes a runnable project, with the files npm cannot publish under their r
     const server = await readFile(join(target, 'server.mjs'), 'utf8');
     const ui = await readFile(join(target, 'ui.mjs'), 'utf8');
     const readme = await readFile(join(target, 'README.md'), 'utf8');
-    assert.match(server, /app\.http\(\{ operatorToken: OPERATOR_TOKEN \}\)/);
+    assert.match(server, /app\.http\(\{/);
+    assert.match(server, /workbenchPath: '\/operator-login'/);
     assert.doesNotMatch(server, /server\.use\('\/tasks', app\.routes\(\)\)/);
-    assert.match(ui, /Async work users can trust/);
+    assert.match(ui, /Async operations overview/);
+    assert.match(ui, /Needs attention/);
+    assert.match(ui, /Recent tasks/);
+    assert.match(ui, /View task/);
+    assert.match(ui, /overviewGuidance/);
     assert.match(ui, /\/task-center/);
     assert.match(ui, /\/operator-login/);
     assert.doesNotMatch(ui, /\$\{operatorToken\}/);
     assert.doesNotMatch(ui, /let-me-in/);
     assert.doesNotMatch(ui, /<a[^>]*><button/);
+    assert.doesNotMatch(ui, /target="_blank"/);
+    assert.match(server, /server\.get\('\/overview'.*redirect\(302, '\/'\)/);
     assert.match(server, /HttpOnly; SameSite=Strict; Path=\/admin/);
     assert.match(server, /listen\(PORT, '127\.0\.0\.1'/);
     assert.match(server, /defaultJobOptions: \{ attempts: 2/);
     assert.match(readme, /one middleware/i);
+    const generatedUI = await import(`${pathToFileURL(join(target, 'ui.mjs')).href}?test=${Date.now()}`);
+    const home = generatedUI.page();
+    const script = home.match(/<script>([\s\S]*)<\/script>/)?.[1];
+    assert.ok(script, 'generated Overview needs its application script');
+    assert.doesNotThrow(() => new Function(script));
+    assert.match(generatedUI.operatorLoginPage(), /href="\/task-center"/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

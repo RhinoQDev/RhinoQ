@@ -102,7 +102,11 @@ server.use((request, _response, next) => {
 // One mount gives the application three connected surfaces: the owner API at
 // /tasks, the owner-facing Task Center at /task-center, and the protected
 // cross-owner Workbench at /admin.
-server.use(app.http({ operatorToken: OPERATOR_TOKEN }));
+server.use(app.http({
+  operatorToken: OPERATOR_TOKEN,
+  overviewPath: '/',
+  workbenchPath: '/operator-login',
+}));
 
 server.post('/batches', async (request, response) => {
   const size = Math.min(Number(request.body?.size ?? 50), 500);
@@ -186,6 +190,7 @@ server.post('/verify/:taskId', async (request, response) => {
   response.json({ items: items.length, checked, findings });
 });
 
+server.get('/overview', (_request, response) => response.redirect(302, '/'));
 server.get('/', (_request, response) => response.type('html').send(page()));
 
 const listening = server.listen(PORT, '127.0.0.1', async () => {

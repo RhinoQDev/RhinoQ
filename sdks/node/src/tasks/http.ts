@@ -52,6 +52,16 @@ export interface TaskRequestHandlerOptions {
   stream?: TaskSSEOptions | false;
 }
 
+/** Capabilities the owner UI may render without discovering support via 501. */
+export interface TaskSurfaceCapabilities {
+  schemaVersion: 1;
+  cancel: true;
+  retry: boolean;
+  result: boolean;
+  waitpoints: true;
+  stream: boolean;
+}
+
 /**
  * Small application-facing HTTP surface using the host application's auth.
  *
@@ -98,6 +108,17 @@ export function createTaskRequestHandler(
       }
       if (request.method === 'GET' && relative.length === 1 && relative[0] === '_health') {
         return options.health ? json(await options.health()) : json({ status: 'ok' });
+      }
+      if (request.method === 'GET' && relative.length === 1 && relative[0] === '_capabilities') {
+        const capabilities: TaskSurfaceCapabilities = {
+          schemaVersion: 1,
+          cancel: true,
+          retry: typeof options.retryTask === 'function',
+          result: typeof options.resolveResult === 'function',
+          waitpoints: true,
+          stream: options.stream !== false,
+        };
+        return json(capabilities);
       }
       const taskId = relative[0];
       if (!taskId) {
@@ -163,10 +184,14 @@ export function createTaskRequestHandler(
         relative.length === 2 &&
         relative[1] === 'result'
       ) {
+        if (!options.resolveResult) {
+          return json({
+            code: 'RHINOQ_RESULT_NOT_CONFIGURED',
+            message: 'Result download is not configured for this application.',
+          }, 501);
+        }
         const result = await options.tasks.getTaskResultForOwner(taskId, ownerId);
-        const resolved = options.resolveResult
-          ? await options.resolveResult(result, request, ownerId)
-          : result;
+        const resolved = await options.resolveResult(result, request, ownerId);
         return resolved instanceof Response ? resolved : json(resolved);
       }
       if (
@@ -304,6 +329,10 @@ export class ApplicationTaskClient {
   }
 
   health(): Promise<unknown> { return this.send('GET', '/_health'); }
+
+  capabilities(): Promise<TaskSurfaceCapabilities> {
+    return this.send('GET', '/_capabilities');
+  }
 
   getTaskResult(taskId: string): Promise<unknown> {
     return this.send('GET', `/${path(taskId)}/result`);

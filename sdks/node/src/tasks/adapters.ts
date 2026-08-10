@@ -29,10 +29,11 @@ export function createNodeTaskCenterMiddleware(
   options: TaskCenterPageOptions & { path?: string } = {},
 ): (request: NodeTaskRequest, response: NodeTaskResponse, next?: () => void) => void {
   const path = options.path ?? '/task-center';
-  const page = rhinoTaskCenterPage(options);
+  const page = rhinoTaskCenterPage({ ...options, basePath: options.basePath ?? path });
   return (request, response, next) => {
     const pathname = new URL(request.originalUrl ?? request.url ?? '/', 'http://rhinoq.invalid').pathname;
-    if (request.method !== 'GET' || pathname !== path) { next?.(); return; }
+    const suffix = pathname.startsWith(`${path}/`) ? pathname.slice(path.length + 1) : '';
+    if (request.method !== 'GET' || (pathname !== path && (!suffix || suffix.includes('/')))) { next?.(); return; }
     response.statusCode = 200;
     response.setHeader('content-type', 'text/html; charset=utf-8');
     response.setHeader('cache-control', 'no-store');

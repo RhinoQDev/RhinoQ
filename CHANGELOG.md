@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Connected the scaffold's Overview, Task Center and operator Workbench with
+  same-tab product navigation, added evidence-based Overview counts, and added
+  an owner-facing `/task-center/{taskId}` detail with progress, next action and
+  an attempt timeline. Runtime job identity remains in Workbench only.
+- Added `GET /tasks/_capabilities` so Task Center does not render retry or result
+  actions whose application handlers are absent. Result reads now fail closed
+  with `RHINOQ_RESULT_NOT_CONFIGURED` when no authorized resolver is configured,
+  instead of returning a durable storage reference to the browser.
+
 - Added one plain-language Task explanation contract across Task Center and the
   Node Workbench: status headline, progress, retry-safety posture and next
   action. Workbench now opens on Needs attention and shows guidance in both the

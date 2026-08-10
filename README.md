@@ -394,7 +394,17 @@ Task Center renders an accessible loading skeleton, reports `Live` versus
 `Polling fallback`, labels every Task `Finished` or `Not finished` (including
 failed/cancelled outcomes), and announces terminal transitions through an
 `aria-live` region. Actions expose an explicit busy state instead of appearing
-unresponsive while cancel, retry or result resolution is in flight.
+unresponsive while cancel, retry or result resolution is in flight. Its list
+links to an owner-facing `/task-center/{taskId}` detail with plain-language
+guidance and an attempt timeline; runtime job identity remains operator-only.
+The default scaffold connects Overview, Tasks and Workbench in one same-tab
+product shell instead of presenting three isolated pages.
+
+The owner API exposes `GET /tasks/_capabilities`. Task Center renders retry and
+result actions only when the application configured their handlers. Result
+download now fails closed with `RHINOQ_RESULT_NOT_CONFIGURED` when no authorized
+resolver exists; RhinoQ never falls back to returning a durable storage
+reference directly to the browser.
 
 The same owner-authenticated surface now exposes `GET /tasks/{id}/events` and
 `GET /tasks/_events` as SSE. `ApplicationTaskClient` uses Fetch streaming, so
