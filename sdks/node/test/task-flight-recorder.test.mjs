@@ -34,7 +34,8 @@ test('Flight Recorder joins task, execution result and partial-failure attention
   assert.equal(recorder.schemaVersion, 1);
   assert.equal(recorder.generatedAt, '2026-08-10T08:03:00.000Z');
   assert.equal(recorder.attention[0].kind, 'partial_failure');
-  assert.equal(recorder.attention[0].safeToRetry, true);
+  assert.equal(recorder.attention[0].safeToRetry, undefined);
+  assert.match(recorder.attention[0].message, /Review failed attempts/);
   assert.ok(recorder.events.some((event) => event.kind === 'execution.result'));
   assert.ok(!JSON.stringify(recorder).includes('storage://hidden'), 'storage references must not enter the operator timeline');
 });
@@ -65,5 +66,5 @@ test('uncertain Tasks are explicitly fail-closed', () => {
   const recorder = taskFlightRecorder({ task: task({ state: 'uncertain', executions: [] }) });
   assert.equal(recorder.attention[0].kind, 'uncertain');
   assert.equal(recorder.attention[0].safeToRetry, false);
-  assert.match(recorder.explanation, /not confirmed/);
+  assert.match(recorder.explanation, /confirmation|cannot yet prove/i);
 });

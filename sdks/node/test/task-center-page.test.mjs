@@ -16,6 +16,10 @@ test('Task Center page is self-contained and points at the owner API', () => {
   assert.match(page, /Not finished/);
   assert.match(page, /aria-live="polite"/);
   assert.match(page, /aria-busy="true"/);
+  assert.match(page, /The result still needs confirmation/);
+  assert.match(page, /Next:/);
+  assert.match(page, /function progressText/);
+  assert.match(page, /New async work will appear here automatically/);
   const script = page.match(/<script>([\s\S]*)<\/script>/)?.[1];
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));

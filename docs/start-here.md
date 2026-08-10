@@ -8,7 +8,8 @@ RhinoQ has two layers that you can adopt separately:
 
 1. **Async Task Platform:** durable state, per-item attempts, progress,
    cancellation, reconciliation, owner API, Task Center and Workbench around
-   the BullMQ worker you already run.
+   work your application already runs. The current scaffold uses BullMQ as its
+   concrete runtime adapter.
 2. **Verified Tasks:** evidence, Rules, Findings and guarded repair when queue
    completion is not enough proof.
 

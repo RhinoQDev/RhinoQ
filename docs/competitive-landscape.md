@@ -1,13 +1,13 @@
 # Competitive landscape
 
-> Last reviewed: 2026-08-01. This document compares product boundaries, not
+> Last reviewed: 2026-08-10. This document compares product boundaries, not
 > benchmark performance. Recheck primary sources before publication.
 
 RhinoQ does not enter an empty category. Queue libraries, durable execution
 runtimes and workflow platforms already solve large parts of reliable
 background execution. RhinoQ's primary hypothesis is narrower:
 
-> A team with an existing queue or worker can add a durable, user-facing Task
+> A team with existing async work can add a durable, user-facing Task
 > contract without rebuilding status/result/UI plumbing or migrating its whole
 > execution model.
 
@@ -26,6 +26,61 @@ the behavior in application code.
 | [Trigger.dev](https://trigger.dev/docs/introduction) and [Inngest](https://www.inngest.com/docs) | managed task/runtime models, retries, observability and frontend/realtime tooling | RhinoQ cannot win on generic task features; it must show lower migration cost for current-worker teams |
 | [Hatchet](https://github.com/hatchet-dev/hatchet), [Temporal](https://docs.temporal.io/), [Restate](https://docs.restate.dev/) and [DBOS](https://docs.dbos.dev/) | durable execution/workflows, state, retries and broad operational systems | use these when durable workflow semantics or their execution model is the central need |
 | transport products | channels, messages and subscriptions | transport does not own Task lifecycle, attempts, history or business authorization |
+
+## Primary-source check: where RhinoQ is behind
+
+This is the comparison an evaluator should see before choosing RhinoQ, not
+after integration:
+
+| Alternative | Documented strength RhinoQ should not imitate or minimize | Honest RhinoQ answer |
+|---|---|---|
+| [BullMQ](https://docs.bullmq.io/guide/flows/) | queue runtime, job schedulers, flow trees, concurrency, rate limits, retries, telemetry and a large operational ecosystem | Keep it. RhinoQ adds a user-safe Task contract and outcome evidence; it is not a better queue. |
+| [Trigger.dev](https://trigger.dev/docs/introduction) | hosted/self-hosted task runtime, dashboard, schedules, waits, retries, queues and [typed Realtime React hooks](https://trigger.dev/docs/realtime/overview) | Trigger.dev has the stronger integrated execution and frontend experience. RhinoQ only wins when retaining the current worker/runtime is more valuable than that integration. |
+| [Inngest](https://www.inngest.com/docs/learn/inngest-functions) | durable step results, event waits, step retries, concurrency controls, dashboard operations and [realtime channels](https://www.inngest.com/docs/examples/realtime) | Inngest has the stronger event-driven workflow product. RhinoQ should compete on no handler migration and explicit post-execution verification. |
+| [Temporal](https://docs.temporal.io/temporal) | a durable-execution runtime with event-history replay; Workflows can recover state and continue after crashes | Choose Temporal when workflow durability is the main problem. RhinoQ does not provide equivalent deterministic workflow replay. |
+| [Restate](https://docs.restate.dev/tour/workflows) | durable steps, promises/signals, timers, parallel execution, retries, sagas and execution traces | Choose Restate when adopting durable services/workflows is acceptable. RhinoQ is the overlay choice for an execution runtime that must remain in place. |
+
+RhinoQ is currently also behind mature products in hosted onboarding, team/RBAC
+administration, polished framework examples, ecosystem breadth and production
+evidence. The repository has strong local correctness tests; that is not the
+same evidence as several teams operating it under real load.
+
+## Where RhinoQ must be materially better
+
+Feature parity is a losing plan. RhinoQ has to be unusually good at these four
+things together:
+
+1. **Adopt without moving execution.** A team keeps its runtime, workers,
+   payload and retry policy. Door 1 should delete more status/progress/cancel/UI
+   plumbing than it adds, with no business-handler rewrite. BullMQ is the
+   adapter currently used to prove this path, not the product definition.
+2. **Give product users a Task, not a queue job.** Ownership, stable item
+   identity, attempts, results, cancellation outcome and snapshot-convergent
+   live delivery must arrive as one contract and one mount.
+3. **Explain uncertainty instead of hiding it.** “The handler returned” must
+   remain separate from “the provider confirmed” and “the business outcome is
+   correct.” Flight Recorder, evidence and Findings should make that difference
+   easier to investigate than logs plus a queue dashboard.
+4. **Make operational safety visible.** Fail-closed cancellation, bounded
+   reconciliation, read-only Rule execution, version fences and guarded repair
+   must be understandable in the UI—not merely correct in internal code.
+
+Today, item 2 is demonstrable in the scaffold and item 4 has substantial local
+test coverage. Items 1 and 3 are still only partially proven: item 1 needs a
+real adopter before/after deletion count, and item 3 still lacks a single
+provider/effect-wide timeline in the Node Workbench.
+
+## Current go-to-market verdict
+
+- **Recommend RhinoQ now:** controlled BullMQ pilot where the current worker
+  must stay and the team wants a reusable owner-facing Task API plus operator
+  investigation.
+- **Do not recommend it yet:** a production-wide task platform requiring hosted
+  operations, uniform tenant RBAC, several runtime adapters, or published
+  deployment/fault evidence.
+- **Recommend an alternative:** Trigger.dev/Inngest for an integrated hosted
+  developer experience; Temporal/Restate for durable workflow execution;
+  BullMQ alone when only queue/runtime primitives are needed.
 
 BullMQ itself has progress, result, retry and cancellation primitives. The gap
 is not “BullMQ cannot model a job.” The application still has to decide task

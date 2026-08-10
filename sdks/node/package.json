@@ -1,7 +1,7 @@
 {
   "name": "@rhinoq/node",
   "version": "0.1.0-beta.9",
-  "description": "A durable task layer for BullMQ: progress, cancellation, recovery and user/operator views",
+  "description": "Make async work visible and recoverable with a user Task Center and operator Workbench",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

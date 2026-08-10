@@ -4,7 +4,7 @@
 // A batch of items goes through BullMQ, each job writes an output file, and
 // RhinoQ answers the question the queue cannot: did the work actually happen,
 // and which item did not?
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import express from 'express';
@@ -19,7 +19,7 @@ import {
   VERIFICATION_TABLE_SQL,
 } from '@rhinoq/node';
 
-import { page } from './ui.mjs';
+import { operatorLoginPage, page } from './ui.mjs';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const OPERATOR_TOKEN = process.env.OPERATOR_TOKEN ?? 'let-me-in';
@@ -30,7 +30,12 @@ const connection = new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: nu
 await mkdir(STORAGE, { recursive: true });
 await pool.query(VERIFICATION_TABLE_SQL);
 
-const queue = new Queue('render', { connection });
+const queue = new Queue('render', {
+  connection,
+  // Retry is an application/runtime policy. Put it on the Queue once so every
+  // dispatch path—including a future one—has the same explicit behavior.
+  defaultJobOptions: { attempts: 2, backoff: { type: 'fixed', delay: 500 } },
+});
 const events = new QueueEvents('render', { connection: connection.duplicate() });
 
 // ---------------------------------------------------------------------------
@@ -67,6 +72,32 @@ const app = await rhinoq({
 // ---------------------------------------------------------------------------
 const server = express();
 server.use(express.json());
+server.use(express.urlencoded({ extended: false }));
+
+// Local evaluation login. The token is exchanged for an HttpOnly, SameSite
+// cookie scoped to /admin, so it is neither embedded in the page nor put in a
+// URL. A real application should use its existing operator session/auth.
+server.get('/operator-login', (_request, response) => {
+  response.type('html').send(operatorLoginPage());
+});
+server.post('/operator-login', (request, response) => {
+  if (!sameSecret(String(request.body?.token ?? ''), OPERATOR_TOKEN)) {
+    response.status(403).type('html').send(operatorLoginPage(true));
+    return;
+  }
+  response.setHeader(
+    'set-cookie',
+    `rhinoq_operator=${encodeURIComponent(OPERATOR_TOKEN)}; HttpOnly; SameSite=Strict; Path=/admin`,
+  );
+  response.redirect(303, '/admin');
+});
+server.use((request, _response, next) => {
+  if ((request.path === '/admin' || request.path.startsWith('/admin/')) &&
+      sameSecret(cookie(request, 'rhinoq_operator'), OPERATOR_TOKEN)) {
+    request.headers['x-operator-token'] = OPERATOR_TOKEN;
+  }
+  next();
+});
 
 // One mount gives the application three connected surfaces: the owner API at
 // /tasks, the owner-facing Task Center at /task-center, and the protected
@@ -81,7 +112,6 @@ server.post('/batches', async (request, response) => {
     data: { index, key: `item-${index}` },
   })), {
     ownerId: 'demo-user',
-    jobOptions: { attempts: 2, backoff: { type: 'fixed', delay: 500 } },
   });
   response.json({ taskId, items: size });
 });
@@ -156,10 +186,10 @@ server.post('/verify/:taskId', async (request, response) => {
   response.json({ items: items.length, checked, findings });
 });
 
-server.get('/', (_request, response) => response.type('html').send(page(OPERATOR_TOKEN)));
+server.get('/', (_request, response) => response.type('html').send(page()));
 
-const listening = server.listen(PORT, async () => {
-  console.log(`app on http://localhost:${PORT}  ·  operator console on /admin`);
+const listening = server.listen(PORT, '127.0.0.1', async () => {
+  console.log(`app on http://localhost:${PORT}  ·  operator sign-in on /operator-login`);
   const seed = Number(process.env.RHINOQ_SEED_BATCH ?? 0);
   if (seed > 0) {
     const taskId = `batch-${randomUUID().slice(0, 8)}`;
@@ -168,11 +198,26 @@ const listening = server.listen(PORT, async () => {
       data: { index, key: `item-${index}` },
     })), {
       ownerId: 'demo-user',
-      jobOptions: { attempts: 2, backoff: { type: 'fixed', delay: 500 } },
     });
     console.log(`seeded a ${seed}-item batch: ${taskId}`);
   }
 });
+
+function cookie(request, name) {
+  for (const part of String(request.headers.cookie ?? '').split(';')) {
+    const [key, ...value] = part.trim().split('=');
+    if (key === name) {
+      try { return decodeURIComponent(value.join('=')); } catch { return ''; }
+    }
+  }
+  return '';
+}
+
+function sameSecret(left, right) {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {

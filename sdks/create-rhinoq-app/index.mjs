@@ -105,7 +105,8 @@ Next:
   npm start
 
 That starts PostgreSQL and Redis, applies the schema, runs a 50-item batch and
-opens http://localhost:3000. The operator console is at /admin.
+opens http://localhost:3000. Task Center is at /task-center; operator sign-in is
+at /operator-login.
 `);
 
 function fail(message) {

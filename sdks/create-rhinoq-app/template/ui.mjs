@@ -1,6 +1,6 @@
 // One page, no build step. It polls the same owner-scoped Task API your own
 // frontend would call — there is no privileged endpoint behind this.
-export const page = (operatorToken) => `<!doctype html>
+export const page = () => `<!doctype html>
 <meta charset="utf-8">
 <title>RhinoQ</title>
 <style>
@@ -8,9 +8,9 @@ export const page = (operatorToken) => `<!doctype html>
   body { font: 15px/1.55 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto; padding: 0 1.25rem; }
   h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
   p.sub { margin: 0 0 2rem; opacity: .7; }
-  button { font: inherit; padding: .45rem .9rem; border: 1px solid var(--line); border-radius: .4rem;
-           background: transparent; color: inherit; cursor: pointer; }
-  button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 8%, transparent); }
+  button, .button { font: inherit; padding: .45rem .9rem; border: 1px solid var(--line); border-radius: .4rem;
+           background: transparent; color: inherit; cursor: pointer; text-decoration: none; }
+  button:hover:not(:disabled), .button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
   button:disabled { opacity: .4; cursor: default; }
   .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1.25rem; }
   .bar { height: .55rem; border-radius: .3rem; background: var(--line); overflow: hidden; margin: .6rem 0; }
@@ -26,16 +26,16 @@ export const page = (operatorToken) => `<!doctype html>
   pre { white-space: pre-wrap; margin: .5rem 0 0; font-size: .85rem; opacity: .85; }
 </style>
 
-<h1>RhinoQ async tasks</h1>
-<p class="sub">Keep the BullMQ worker you already know. RhinoQ adds the durable
-task lifecycle around it: progress, cancellation, retry history, recovery and
-the user and operator surfaces that otherwise become application code.</p>
+<h1>Async work users can trust</h1>
+<p class="sub">RhinoQ makes background work visible and actionable: users get
+progress and results, developers get one Task contract, and operators get the
+context to understand failures and recover safely.</p>
 
 <div class="row">
   <button id="start">Start a 50-item batch</button>
   <button id="cancel" disabled>Cancel</button>
-  <a href="/task-center" target="_blank"><button type="button">Task Center</button></a>
-  <a href="/admin" target="_blank"><button type="button">Operator console →</button></a>
+  <a class="button" href="/task-center" target="_blank" rel="noopener">Task Center</a>
+  <a class="button" href="/operator-login" target="_blank" rel="noopener">Operator Workbench →</a>
 </div>
 
 <div class="card">
@@ -71,8 +71,6 @@ the user and operator surfaces that otherwise become application code.</p>
   </div>
   <pre id="report"></pre>
 </div>
-
-<p class="sub">Operator console header: <code>x-operator-token: ${operatorToken}</code></p>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -159,3 +157,28 @@ function render(task) {
 poll();
 </script>
 `;
+
+export const operatorLoginPage = (invalid = false) => `<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RhinoQ operator sign in</title>
+<style>
+  :root { color-scheme: light dark; --line: color-mix(in srgb, currentColor 18%, transparent); }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 25rem; margin: 12vh auto; padding: 0 1.25rem; }
+  form { border: 1px solid var(--line); border-radius: .7rem; padding: 1.25rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 .35rem; }
+  p { opacity: .72; }
+  label { display: block; margin: 1rem 0 .35rem; }
+  input, button { box-sizing: border-box; width: 100%; font: inherit; padding: .6rem .75rem; border-radius: .4rem; }
+  input { border: 1px solid var(--line); }
+  button { margin-top: .75rem; border: 0; background: #2563eb; color: white; cursor: pointer; }
+  .error { color: #dc2626; opacity: 1; }
+</style>
+<form method="post" action="/operator-login">
+  <h1>RhinoQ operator sign in</h1>
+  <p>This local evaluation keeps cross-owner task data behind the operator token.</p>
+  ${invalid ? '<p class="error">That token is not valid.</p>' : ''}
+  <label for="token">Operator token</label>
+  <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
+  <button type="submit">Open Workbench</button>
+</form>`;

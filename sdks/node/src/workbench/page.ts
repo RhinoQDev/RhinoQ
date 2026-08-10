@@ -99,6 +99,9 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   button.act:disabled { opacity: 0.45; cursor: not-allowed; }
   .err { color: var(--bad); padding: 10px 20px; }
   .head { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
+  .guidance { margin: 12px; padding: 12px 14px; border-radius: 7px; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .guidance p { margin: 4px 0; }.guidance .next { color: var(--accent); font-weight: 600; }
+  .meaning { min-width: 18em; white-space: normal; }.next-action { color: var(--accent); white-space: normal; }
   .attention { margin: 12px; padding: 10px 12px; border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
   .attention.error { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
   .attention p { margin: 0 0 5px; }.attention p:last-child { margin-bottom: 0; }
@@ -130,6 +133,12 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
       <span class="muted" id="detailMeta"></span>
       <button class="act" id="cancelBtn" style="margin-left:auto" hidden>Request cancellation</button>
     </div>
+    <div class="guidance" id="guidance">
+      <strong id="guidanceHeadline">What this means</strong>
+      <p id="guidanceExplanation"></p>
+      <p class="muted" id="guidanceProgress"></p>
+      <p class="next" id="guidanceNext"></p>
+    </div>
     <div class="scroll"><table id="detail"><tbody></tbody></table></div>
   </div>
   <div class="panel" id="flightPanel" hidden>
@@ -141,7 +150,7 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
 <script>
 const base = location.pathname.replace(/\/+$/, '');
 let snap = null;          // last payload the server sent
-let active = 'running';
+let active = 'attention';
 let currentId = null;
 let source = null;
 let pollTimer = null;
@@ -197,21 +206,27 @@ function renderList() {
   const body = $('list').querySelector('tbody');
   if (!tasks.length) {
     previousRows = new Map();
-    body.innerHTML = '<tr><td class="empty">Nothing in ' + esc(active) + '.</td></tr>';
+    const empty = active === 'attention'
+      ? 'Nothing needs attention. Tasks with an unclear outcome or a failed attempt will appear here.'
+      : 'No tasks are currently ' + active.replaceAll('_', ' ') + '.';
+    body.innerHTML = '<tr><td class="empty">' + esc(empty) + '</td></tr>';
     return;
   }
   const next = new Map();
-  body.innerHTML = '<tr><th>Task</th><th>Type</th><th>Items</th><th>Progress</th><th>Idle</th></tr>' +
+  body.innerHTML = '<tr><th>Task</th><th>Type</th><th>What this means</th><th>Next action</th><th>Items</th><th>Idle</th></tr>' +
     tasks.map((task) => {
-      const counts = task.executionCounts || {};
+      const counts = task.itemCounts || task.executionCounts || {};
       const done = (counts.succeeded ?? 0) + (counts.failed ?? 0) + (counts.cancelled ?? 0);
+      const explanation = task.ui?.explanation || {};
       const signature = task.entityVersion + ':' + task.state + ':' + done;
       const changed = previousRows.has(task.id) && previousRows.get(task.id) !== signature;
       next.set(task.id, signature);
       return '<tr data-id="' + esc(task.id) + '"' + (changed ? ' class="changed"' : '') +
-        '><td><code>' + esc(task.id) + '</code></td><td>' + esc(task.type) + '</td><td>' +
-        done + ' / ' + (counts.total ?? 0) + '</td><td>' + (task.progress?.completed ?? 0) +
-        (task.progress?.total ? ' / ' + task.progress.total : '') +
+        '><td><code>' + esc(task.id) + '</code></td><td>' + esc(task.type) + '</td><td class="meaning"><strong>' +
+        esc(explanation.headline || task.state) + '</strong><br><span class="muted">' +
+        esc(explanation.explanation || '') + '</span></td><td class="next-action">' +
+        esc(explanation.recommendedAction?.label || 'Review task details') + '</td><td>' +
+        done + ' / ' + (counts.total ?? 0) +
         '</td><td class="muted">' + ago(task.updatedAt) + '</td></tr>';
     }).join('');
   previousRows = next;
@@ -229,6 +244,11 @@ function renderDetail() {
   $('detailTitle').textContent = detail.task.id;
   $('detailMeta').textContent = detail.task.state + ' · v' + detail.task.entityVersion +
     ' · cancellation ' + (detail.task.cancellation?.status ?? 'none');
+  const explanation = detail.ui?.explanation;
+  $('guidanceHeadline').textContent = explanation?.headline || 'What this means';
+  $('guidanceExplanation').textContent = explanation?.explanation || 'Review the recorded task details.';
+  $('guidanceProgress').textContent = explanation?.progressText || '';
+  $('guidanceNext').textContent = 'Next action: ' + (explanation?.recommendedAction?.label || 'Review task details');
   const cancellable = ['pending', 'queued', 'running'].includes(detail.task.state);
   $('cancelBtn').hidden = !(snap.actions && cancellable);
   const next = new Map();

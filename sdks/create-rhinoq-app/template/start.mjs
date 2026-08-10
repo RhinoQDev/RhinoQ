@@ -2,7 +2,8 @@
 // the only one anybody wanted to run.
 //
 // Brings up PostgreSQL and Redis, waits for them, applies the schema, starts
-// the app and opens a browser at a batch that is already running.
+// the app and opens a browser at a batch that is already running. Task Center
+// and the operator sign-in are linked from that page.
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';

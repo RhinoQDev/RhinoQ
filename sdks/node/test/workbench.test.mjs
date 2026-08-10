@@ -100,6 +100,10 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.ok(!html.includes('<script src'), 'no external script tags');
   assert.match(html, /Async Flight Recorder/);
   assert.match(html, /flightPanel/);
+  assert.match(html, /let active = 'attention'/);
+  assert.match(html, /What this means/);
+  assert.match(html, /Next action/);
+  assert.match(html, /Nothing needs attention/);
 });
 
 test('the detail view joins runtime job identity from the server-side read', async () => {
@@ -112,7 +116,9 @@ test('the detail view joins runtime job identity from the server-side read', asy
   );
   assert.equal(body.items[1].failureReason, 'source returned 404');
   assert.equal(body.flightRecorder.schemaVersion, 1);
-  assert.match(body.flightRecorder.explanation, /failed|running/i);
+  assert.match(body.flightRecorder.explanation, /progress|finished/i);
+  assert.match(body.ui.explanation.headline, /attention|progress/i);
+  assert.ok(body.ui.explanation.recommendedAction.label);
 });
 
 test('the Flight Recorder has a focused endpoint for operator tooling', async () => {
@@ -145,6 +151,7 @@ test('the Workbench exposes a bounded Needs attention bucket', async () => {
   assert.equal(overview.counts.attention, 1);
   const attention = await (await get(handler, '/rhinoq/api/tasks?state=attention')).json();
   assert.equal(attention.tasks[0].id, 'task-1');
+  assert.match(attention.tasks[0].ui.explanation.headline, /attention/i);
 });
 
 test('a store without the runtime-ref read still renders, without job identity', async () => {

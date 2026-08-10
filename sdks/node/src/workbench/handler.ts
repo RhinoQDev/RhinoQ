@@ -9,6 +9,7 @@ import type {
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
 import { taskFlightRecorder, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
+import { taskUIModel, type TaskUIModel } from '../tasks/ui.js';
 import { WORKBENCH_PAGE } from './page.js';
 
 /** The reads the Workbench performs. `PostgresTaskClient` satisfies it. */
@@ -179,7 +180,8 @@ export function createWorkbenchHandler(
       if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'tasks' && relative.length === 2) {
         const requested = url.searchParams.get('state') ?? states[0];
         if (requested === ATTENTION_BUCKET) {
-          return json({ schemaVersion: 1, state: requested, tasks: await listAttentionTasks(options.tasks, limit) });
+          const tasks = await listAttentionTasks(options.tasks, limit);
+          return json({ schemaVersion: 1, state: requested, tasks: tasks.map(withTaskUI) });
         }
         if (!states.includes(requested as TaskState)) {
           return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'unknown state' }, 400);
@@ -188,7 +190,7 @@ export function createWorkbenchHandler(
           states: [requested as TaskState],
           limit,
         });
-        return json({ schemaVersion: 1, state: requested, tasks });
+        return json({ schemaVersion: 1, state: requested, tasks: tasks.map(withTaskUI) });
       }
 
       if (relative[0] === 'api' && relative[1] === 'tasks' && relative.length >= 3) {
@@ -417,13 +419,13 @@ function streamResponse(options: StreamOptions): Response {
 
 async function collect(options: StreamOptions): Promise<Record<string, unknown>> {
   const counts: Record<string, number> = {};
-  const lists: Record<string, TaskSummary[]> = {};
+  const lists: Record<string, WorkbenchTaskRow[]> = {};
   for (const state of options.states) {
     const tasks = await options.tasks.listTasksByState({ states: [state], limit: options.limit });
     counts[state] = tasks.length;
-    lists[state] = tasks;
+    lists[state] = tasks.map(withTaskUI);
   }
-  lists[ATTENTION_BUCKET] = await listAttentionTasks(options.tasks, options.limit);
+  lists[ATTENTION_BUCKET] = (await listAttentionTasks(options.tasks, options.limit)).map(withTaskUI);
   counts[ATTENTION_BUCKET] = lists[ATTENTION_BUCKET].length;
   const detail = options.taskId
     ? await taskDetail(options.tasks, options.taskId).catch(() => undefined)
@@ -451,8 +453,14 @@ async function listAttentionTasks(tasks: WorkbenchTaskSource, limit: number): Pr
 function needsAttention(task: TaskSummary): boolean {
   if (task.state === 'uncertain' || task.state === 'failed') return true;
   if (task.cancellation?.status === 'too_late' || task.cancellation?.status === 'cannot_cancel_safely') return true;
-  const counts = task.executionCounts;
+  const counts = task.itemCounts ?? task.executionCounts;
   return counts.failed > 0 && counts.succeeded > 0;
+}
+
+type WorkbenchTaskRow = TaskSummary & { ui: TaskUIModel };
+
+function withTaskUI(task: TaskSummary): WorkbenchTaskRow {
+  return { ...task, ui: taskUIModel(task) };
 }
 
 /**
@@ -463,7 +471,7 @@ function needsAttention(task: TaskSummary): boolean {
 async function taskDetail(
   tasks: WorkbenchTaskSource,
   taskId: string,
-): Promise<{ task: TaskSnapshot; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder }> {
+): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder }> {
   const task = await tasks.getTask(taskId);
   const [refs, results, waitpoints] = await Promise.all([
     tasks.listTaskExecutionRuntimeRefs?.(taskId).catch(() => undefined),
@@ -499,6 +507,7 @@ async function taskDetail(
   const resolvedWaitpoints = waitpoints ?? [];
   return {
     task,
+    ui: taskUIModel(task),
     items,
     waitpoints: resolvedWaitpoints,
     flightRecorder: taskFlightRecorder({

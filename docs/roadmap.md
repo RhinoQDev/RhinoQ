@@ -5,6 +5,20 @@ optional Verified Tasks capability. Native PostgreSQL remains the first runtime
 backend; it is not the product identity and existing runtimes may integrate
 without migrating their queue.
 
+## Release gates before more surface area
+
+- [x] one-mount BullMQ golden path with owner API, Task Center and Workbench
+- [x] scaffold operator sign-in that does not expose its token in page markup
+- [ ] publish the tested npm beta and prebuilt CLI artifacts
+- [ ] rerun two Tasks in a real adopter and record code/process/credential delta
+- [ ] wire tenant context through the public HTTP boundary
+- [ ] extend Flight Recorder through provider/effect confirmation evidence
+- [ ] run a deployment-shaped fault campaign and end-to-end benchmark
+
+The current competitive review is in
+[`docs/competitive-landscape.md`](./competitive-landscape.md). These gates take
+priority over a DAG engine, another runtime adapter or generic streaming.
+
 ## v0.1 — Task Platform foundation
 
 - [x] product baseline and ADR-0014

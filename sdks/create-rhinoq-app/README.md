@@ -7,7 +7,7 @@ npm start
 ```
 
 One command to a working async-task application: live progress, working cancellation,
-retries recorded per attempt, and an operator console — plus a button that
+retries recorded per attempt, a Task Center and an operator Workbench — plus a button that
 deletes the output of a job the queue reported as `completed`, so you can watch
 the difference between "the queue says done" and "the work happened".
 

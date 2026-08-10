@@ -1,6 +1,6 @@
 # Kế hoạch hoàn thiện RhinoQ Async Platform
 
-> Cập nhật: 09/08/2026. Đây là backlog chuẩn duy nhất để tránh quên hoặc quảng
+> Cập nhật: 10/08/2026. Đây là backlog chuẩn duy nhất để tránh quên hoặc quảng
 > bá một capability chưa có code và test. Mỗi mục chỉ chuyển sang **Hoàn thành**
 > khi public API, UI cần thiết, test và tài liệu cùng tồn tại.
 
@@ -16,12 +16,15 @@
 
 | Capability | Trạng thái | Bằng chứng / phần còn thiếu |
 |---|---|---|
+| Golden path một mount | Hoàn thành | `app.http()` nối owner API, Task Center, runtime-aware cancellation và Workbench |
+| First-run operator access | Hoàn thành cho scaffold | `/operator-login` đổi token thành HttpOnly/SameSite cookie, không nhúng secret trong trang và chỉ bind loopback; production auth vẫn application-owned |
 | Owner-scoped SSE cho một Task | Hoàn thành | `GET /tasks/{id}/events`, auth trước stream, `Last-Event-ID`, heartbeat, capacity và test |
 | Owner Task inbox SSE | Hoàn thành | `GET /tasks/_events`, bounded page reset, version convergence và test |
 | `createUseRhinoTaskLive()` | Hoàn thành | live-first TaskStore, snapshot fallback và reconnect |
 | `createUseRhinoTasksLive()` | Hoàn thành | live-first TaskListStore và bounded inbox convergence |
 | Polling fallback sau khi SSE mất | Hoàn thành | đọc snapshot authoritative trước khi thử lại stream |
 | Task Center realtime | Hoàn thành | skeleton/aria-busy, Live/Polling fallback, Finished/Not finished, completion aria-live notification và test |
+| Task explanation dùng chung | Hoàn thành | `taskUIModel().explanation` trả lời trạng thái, progress, retry safety và next action; Task Center/Workbench cùng dùng và có contract test không lộ runtime jargon |
 | Signed realtime subscription token | Chưa có | hiện dùng cookie hoặc application auth header qua Fetch streaming; cần khi cross-origin/public EventSource là use case thật |
 | WebSocket | Không ưu tiên | SSE đủ cho server → browser; chỉ mở lại khi có bidirectional/high-frequency demand |
 | Realtime logs có redaction | Chưa có | cần log event contract, retention, payload policy và access control |
@@ -92,7 +95,7 @@
 | Compare attempts | Chưa có | diff contract và UI |
 | Latency waterfall | Chưa có | timestamps/clock boundaries và visualization |
 | “Vì sao đang chờ?” | Một phần | Node Task Workbench explains waiting/expired waitpoints; provider/effect decision explanation remains |
-| “Có an toàn để retry?” | Một phần | Flight Recorder exposes a bounded Task-level decision; provider/effect-wide report remains |
+| “Có an toàn để retry?” | Một phần | Task explanation và Flight Recorder fail-closed/review-before-retry ở Task level; chỉ effect/provider evidence mới có thể xác nhận an toàn |
 | Diagnostic bundle export | Chưa có | redaction + bounded archive |
 | OpenTelemetry correlation end-to-end | Một phần | IDs/metrics có; trace propagation chưa hoàn chỉnh |
 
@@ -108,14 +111,24 @@
 | Tenant-wide authorization đồng đều | Chưa có | release gate |
 | Production evidence nhiều adopter | Chưa có | tối thiểu ba design-partner pilots |
 
-## Thứ tự thực hiện khóa
+## Thứ tự thực hiện khóa sau vòng competitive review 10/08/2026
 
-1. Hoàn thiện Task Center realtime UX.
-2. Durable Waitpoint/Input vertical slice.
-3. Task Group/Batch actions.
-4. Artifact v1.
-5. Cost ledger và budget guardrails.
-6. Unified Async Flight Recorder.
+1. **Phát hành đúng artifact đã test:** npm beta hiện tại, prebuilt CLI và
+   installed-package verification. Một README tốt không cứu được tarball cũ.
+2. **Rerun adopter thật:** hai user-visible Tasks, không sửa handler, đo code
+   thêm/xóa và chi phí process/datastore/credential. Đây là release evidence,
+   không thay bằng benchmark trong repository.
+3. **Khép authorization boundary:** nối tenant context tới HTTP surface và đưa
+   production operator auth/RBAC ra khỏi trạng thái application convention.
+4. **Hoàn thiện Flight Recorder xuyên effect/provider:** một timeline trả lời
+   “đã chạy gì, side effect có được xác nhận không, vì sao đang chờ, retry có an
+   toàn không”; sau đó mới làm compare-attempt và diagnostic export.
+5. **Artifact v1:** identity, metadata, checksum, content type, expiry/refresh
+   và lineage. Đây là phần nối async Task với kết quả người dùng thực sự nhận.
+6. **Cost ledger chỉ sau demand:** ưu tiên khi design partner có AI/paid-provider
+   workload; không xây một billing platform theo suy đoán.
 
-Không bắt đầu WebSocket, DAG engine hay provider marketplace trước khi hạng mục
-đang làm đạt Definition of Done và toàn bộ regression pass.
+Không chạy đua DAG, durable workflow replay, generic AI token streaming hay
+hosted dashboard với Temporal, Restate, Inngest và Trigger.dev. Đó là lợi thế
+cốt lõi của họ. RhinoQ phải thắng ở chi phí overlay thấp, Task contract cho
+người dùng và bằng chứng outcome sau khi runtime báo hoàn thành.

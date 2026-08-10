@@ -3,6 +3,7 @@ import type {
   TaskSnapshot,
   TaskWaitpoint,
 } from '../gateway/types.js';
+import { explainTask } from './ui.js';
 
 export type TaskFlightRecorderEventKind =
   | 'task.created'
@@ -137,11 +138,12 @@ export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRe
   ].sort((left, right) => left.observedAt.localeCompare(right.observedAt) || left.id.localeCompare(right.id));
 
   const attention = taskAttention(task, waitpoints);
+  const explanation = explainTask(task);
   return {
     schemaVersion: 1,
     taskId: task.id,
     generatedAt,
-    explanation: explain(task, attention),
+    explanation: `${explanation.headline}. ${explanation.explanation}`,
     attention,
     events,
   };
@@ -184,28 +186,27 @@ function taskAttention(task: TaskSnapshot, waitpoints: TaskWaitpoint[]): TaskFli
       message: task.cancellation.reason ?? 'The active operation cannot be stopped safely.', sourceId: task.id,
     });
   }
-  const failed = task.executions.filter((execution) => execution.state === 'failed').length;
-  const succeeded = task.executions.filter((execution) => execution.state === 'succeeded').length;
+  const latest = new Map<string, TaskSnapshot['executions'][number]>();
+  for (const execution of task.executions) {
+    const key = execution.itemKey ?? execution.id;
+    const current = latest.get(key);
+    if (!current || execution.attempt > current.attempt) latest.set(key, execution);
+  }
+  const executions = [...latest.values()];
+  const failed = executions.filter((execution) => execution.state === 'failed').length;
+  const succeeded = executions.filter((execution) => execution.state === 'succeeded').length;
   if (failed > 0 && succeeded > 0) {
     attention.push({
-      kind: 'partial_failure', severity: 'warning', safeToRetry: true,
-      message: `${failed} execution(s) failed while ${succeeded} succeeded. Retry only failed items.`, sourceId: task.id,
+      kind: 'partial_failure', severity: 'warning',
+      message: `${failed} item(s) failed while ${succeeded} succeeded. Review failed attempts before retrying only those items.`, sourceId: task.id,
     });
   } else if (task.state === 'failed') {
     attention.push({
-      kind: 'failed', severity: 'error', safeToRetry: true,
-      message: 'The Task failed. Review the attempt timeline before retrying.', sourceId: task.id,
+      kind: 'failed', severity: 'error',
+      message: 'The Task failed. Review the attempt timeline and external effect evidence before retrying.', sourceId: task.id,
     });
   }
   return attention;
-}
-
-function explain(task: TaskSnapshot, attention: TaskFlightRecorderAttention[]): string {
-  const first = attention[0];
-  if (first) return first.message;
-  if (task.state === 'succeeded') return 'All recorded work completed successfully.';
-  if (task.state === 'cancelled') return 'The Task was cancelled before all work completed.';
-  return `Task is ${taskStateLabel(task.state).toLowerCase()}.`;
 }
 
 function taskStateLabel(state: string): string {

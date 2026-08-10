@@ -37,8 +37,15 @@ test('writes a runnable project, with the files npm cannot publish under their r
     const readme = await readFile(join(target, 'README.md'), 'utf8');
     assert.match(server, /app\.http\(\{ operatorToken: OPERATOR_TOKEN \}\)/);
     assert.doesNotMatch(server, /server\.use\('\/tasks', app\.routes\(\)\)/);
-    assert.match(ui, /RhinoQ async tasks/);
+    assert.match(ui, /Async work users can trust/);
     assert.match(ui, /\/task-center/);
+    assert.match(ui, /\/operator-login/);
+    assert.doesNotMatch(ui, /\$\{operatorToken\}/);
+    assert.doesNotMatch(ui, /let-me-in/);
+    assert.doesNotMatch(ui, /<a[^>]*><button/);
+    assert.match(server, /HttpOnly; SameSite=Strict; Path=\/admin/);
+    assert.match(server, /listen\(PORT, '127\.0\.0\.1'/);
+    assert.match(server, /defaultJobOptions: \{ attempts: 2/);
     assert.match(readme, /one middleware/i);
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -6,8 +6,10 @@ npm start
 
 Brings up PostgreSQL and Redis, applies the schema, runs a 50-item batch and
 opens <http://localhost:3000>. The user-facing Task Center is at `/task-center`.
-The operator Workbench is at `/admin` and expects the header
-`x-operator-token: let-me-in`.
+Open `/operator-login` and enter the local operator token `let-me-in` to reach
+the Workbench. The scaffold exchanges it for an HttpOnly, SameSite cookie and
+binds the server to loopback; replace this local login with your application's
+operator authentication before deploying it.
 
 The RhinoQ integration itself is deliberately small:
 

@@ -1,10 +1,11 @@
 # RhinoQ
 
-## Ship reliable async tasks without rebuilding the task platform around your queue.
+## Make async work visible, understandable and recoverable.
 
-Your worker should contain business work, not a second application for status,
-progress, retries, cancellation, recovery and support. RhinoQ keeps BullMQ as
-the runtime and supplies that missing task layer as one connected product.
+RhinoQ turns background work into a product experience people can actually use:
+users see progress and results, developers integrate a stable Task contract,
+and operators can understand failures and recover safely. You keep the runtime
+that executes the work; RhinoQ supplies the missing Task layer around it.
 
 ```bash
 npx create-rhinoq-app my-batch && cd my-batch && npm start
@@ -20,6 +21,15 @@ stuck or uncertain tasks in the protected operator Workbench. A storage-drift
 demo then shows the harder case: the queue says `completed`, but the expected
 output is missing.
 
+Task Center and Workbench use the same plain-language Task explanation: what is
+happening, how much finished, whether repeating the work needs review, and the
+next recommended action. Generic failures never claim that retry is safe when
+RhinoQ has no evidence about the external result.
+
+The generated app links directly to Task Center and to a local operator sign-in.
+The operator token is entered into the sign-in form and stored in an HttpOnly,
+SameSite cookie scoped to `/admin`; it is not embedded in the page or URL.
+
 ```js
 const app = await rhinoq({ pool, queue, events, ownerFromRequest });
 server.use(app.http({ operatorToken })); // /tasks + /task-center + /admin
@@ -31,7 +41,7 @@ Those three lines replace the generic plumbing around your business handler:
 | You keep | RhinoQ supplies |
 |---|---|
 | worker handler and payload | durable Task and per-item attempt state |
-| BullMQ retry/backoff policy | retry history and aggregate progress |
+| runtime retry/backoff policy | retry history and aggregate progress |
 | application authentication | owner-scoped API, SSE with polling fallback, and Task Center |
 | business rules for external effects | cancellation, reconciliation and operator Workbench |
 
@@ -71,7 +81,7 @@ That second layer is optional on day one and uses the same operator workflow.
 | If you are… | Read |
 |---|---|
 | starting a new project | `npx create-rhinoq-app`, above |
-| adding this to a BullMQ fan-out you already have | [the two integration doors](./docs/two-doors.md), then [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) for every decision |
+| adding this around async work you already run | [the two integration doors](./docs/two-doors.md); the current production-shaped adapter example uses [`BullMQ`](./examples/fanout-bullmq/) |
 | deciding whether it will save you code | [two doors](./docs/two-doors.md) |
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
 | completely new to all of it | [the beginner guide](./docs/start-here.md) |
@@ -105,7 +115,7 @@ These cost an afternoon each when you find them yourself. The example
 | `rhinoq` (Go CLI) | `go build ./cmd/rhinoq` | Rules, Findings, the Gateway, full migrations |
 
 The Node SDK and the Go engine are two planes, not two versions of one thing.
-Fan-out, Tasks and the Workbench are Node-only and need no Go binary. Rules,
+The current BullMQ adapter, Tasks and the Workbench are Node-only and need no Go binary. Rules,
 Findings and ProviderOperation are the Go engine's, and Node talks to them
 through the Gateway.
 

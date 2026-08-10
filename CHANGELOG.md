@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Added one plain-language Task explanation contract across Task Center and the
+  Node Workbench: status headline, progress, retry-safety posture and next
+  action. Workbench now opens on Needs attention and shows guidance in both the
+  list and detail view. Generic and partial failures no longer claim retry is
+  safe without external-effect evidence; tests cover every Task state and
+  latest-attempt item counting.
+
+- Reframed the product message around the people using async work—end users,
+  developers and operators—rather than the first runtime adapter. BullMQ is now
+  described as the production-shaped adapter available today, not RhinoQ's
+  identity or headline.
+
+- Fixed the generated application's operator journey: the Workbench link now
+  opens a local sign-in form instead of a guaranteed 403. The token is exchanged
+  for an HttpOnly, SameSite cookie scoped to `/admin`, is no longer embedded in
+  page markup, and the evaluation server binds to loopback. Updated the current
+  competitive review and release priorities from official product docs.
+  The generated Queue now declares its retry policy once at construction, so
+  first-run output does not show a misleading missing-retry warning.
+
 - Added `app.http({ operatorToken })`, the default one-mount HTTP journey for
   async tasks: owner-scoped API at `/tasks`, user Task Center at
   `/task-center`, and protected operator Workbench at `/admin`. Updated the

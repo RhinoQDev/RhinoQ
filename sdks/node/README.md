@@ -1,8 +1,11 @@
 # RhinoQ for Node.js
 
-A durable task layer around BullMQ: progress, cancellation, per-attempt
-history, recovery, a user Task Center and an operator Workbench. Your worker
-and retry policy stay yours; the surrounding task platform does not have to.
+A Task experience for async work: progress, cancellation, per-attempt history,
+recovery, a user Task Center and an operator Workbench. Your execution runtime
+and business logic stay yours; the surrounding task platform does not have to.
+
+The production-shaped adapter available today is BullMQ. It is the first
+runtime integration, not RhinoQ's product identity.
 
 ## The short way in
 
@@ -304,8 +307,12 @@ URLs only with authenticated owner context.
 `createUseRhinoTasks(React)` provides the inbox. `createUseRhinoTask(React)`
 also exposes `retry`, `downloadResult`, `listAttempts`, `canCancel`, `canRetry`
 and `attentionReason`. `taskUIModel()` is the headless progress/result/cancel
-contract, and `mountRhinoTaskCenter()` is a dependency-free reference UI with
-a notification callback that can map to the host toast system.
+contract. Its `explanation` gives every UI a plain-language `headline`,
+`explanation`, `progressText`, `retrySafety` (`safe`, `unsafe` or `review`) and
+an optional `recommendedAction`. Generic failure and partial-failure states are
+review-before-retry; only explicit effect evidence should upgrade that answer.
+`mountRhinoTaskCenter()` is a dependency-free reference UI with a notification
+callback that can map to the host toast system.
 
 `integration.defineTask({ type, jobName, mode })` removes repeated Task,
 Execution, runtime and stable job-id wiring. `bullMQCancellation()` removes
