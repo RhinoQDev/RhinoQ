@@ -84,12 +84,29 @@ Also record operational additions:
 - migration/deployment step;
 - browser request added per polling interval.
 
-## Integrate at the narrow boundary
+## Choose the integration door before measuring
 
 Keep the application runtime as source of execution. RhinoQ owns the durable
 user-facing Task snapshot.
 
-For BullMQ:
+For a new product surface or a replaceable frontend contract, use Door 1:
+
+```js
+const app = await rhinoq({ pool, queue, events, ownerFromRequest });
+server.use(app.http({ operatorToken }));
+await app.dispatch(taskId, items);
+```
+
+This path includes the owner API, Task Center, Workbench, dispatch,
+cancellation and the default reconciliation sweep. Measure application code
+that becomes deletable after the frontend moves to RhinoQ's `TaskSummary`.
+
+For an existing public HTTP contract that cannot change, use Door 2: keep its
+routes, map `app.tasks` snapshots onto its wire shape, and count that mapping as
+integration cost. Do not compare Door 2's adapter cost with Door 1's savings.
+
+The lower-level BullMQ bridge remains available when `rhinoq()` cannot fit. In
+that case:
 
 - application still calls `queue.add()`;
 - call `track()` with the stable BullMQ job ID;
@@ -98,7 +115,12 @@ For BullMQ:
 - use `terminalProjection: 'execution-only'` for fan-out, then let application
   business logic terminalize the aggregate Task;
 - persist per-item artifact references on their Execution;
-- do not claim that RhinoQ removes, cancels or retries BullMQ jobs.
+- do not claim the lower-level bridge removes, cancels or retries BullMQ jobs.
+
+With the high-level `rhinoq()` path, `app.dispatch()` performs the durable
+reservation and enqueue, while `app.cancel()` attempts to remove queued jobs
+and reports running work as `cannot_cancel_safely`. BullMQ's retry policy still
+belongs to the application.
 
 For another runtime, map these same observations without copying Task state
 machine rules into the adapter:

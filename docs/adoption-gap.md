@@ -13,6 +13,11 @@
 > wiring under `@rhinoq/node/nest`. These reduce the candidate integration
 > surface; the measured verdict remains unchanged until the real adopter is
 > rerun and old plumbing is actually deleted.
+>
+> Update 2026-08-10: `rhinoq()` now supplies dispatch, cancellation and the
+> reconciler, while `app.http()` mounts the owner API, Task Center and protected
+> Workbench as one golden path. This directly addresses first-run assembly cost;
+> it still does not change the measured adopter verdict without a real rerun.
 
 
 ## The finding
@@ -118,28 +123,27 @@ estimates below are estimates.
    replaces that estimate, "materially less plumbing" is a promise, not a
    claim.
 
-3. **A frontend, however small.** Two tabs, one reload, one Cancel pressed as
-   the job finishes. The strongest value — `entityVersion`, monotonic progress,
-   `too_late`, `cancel_requested` — is concentrated in the browser, and the
-   evaluation had no browser at all. This is the least-tested and most-load-
-   bearing claim in the product.
+3. **Rerun the browser scenario in a real adopter.** The repository now ships
+   Task Center with owner-scoped SSE and polling fallback, plus a scaffold that
+   exercises progress and cancellation. The missing evidence is no longer a
+   frontend artifact; it is two tabs, reload and cancel-during-finish behavior
+   inside an adopter application.
 
 ### P1 — remove friction, do not change the verdict
 
 4. **Publish `rhinoq-agent` as a binary and an image.** Building a Go binary
    from source is a hard stop for a Node team evaluating on a Tuesday
    afternoon.
-5. **Publish `0.1.0-beta.8` and move the `latest` dist-tag.** `terminalProjection`
-   is now required and the wire contract gained per-execution fields, so `main`
-   and the published `0.1.0-beta.2` share a version number but not an API.
-6. **Cancellation needs hands, not just a state machine.** `cancel_requested`,
-   `too_late` and `cannot_cancel_safely` are modelled and tested, but nothing
-   stops a BullMQ job. The adopter still writes the removal and the checkpoint
-   polling themselves.
-7. **Decide about realtime.** Polling with versioned snapshots is defensible
-   and much simpler to reason about. If it stays, say so as a decision rather
-   than leaving "realtime later" in the docs, because adopters read that as
-   incomplete.
+5. **Publish the current beta and move the `latest` dist-tag.** The candidate is
+   now `beta.9`; registry state still has to match the tested contract before a
+   normal install represents the repository.
+6. **Cancellation hands — implemented on the high-level path.** `app.cancel()`
+   attempts every queued BullMQ job, reports `cannot_cancel_safely` for running
+   work and terminalizes only when the durable item state permits it. Handler
+   cooperation for already-running effects remains application-owned.
+7. **Realtime — implemented for the RhinoQ contract.** Task Center uses
+   owner-scoped SSE with snapshot-convergent polling fallback. Door 2 adopters
+   that retain their own HTTP contract also retain its transport.
 
 ### P2 — do not start these yet
 

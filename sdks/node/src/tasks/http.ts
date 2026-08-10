@@ -36,6 +36,16 @@ export interface TaskRequestHandlerOptions {
     commandId: string;
     request: Request;
   }): Promise<TaskSnapshot>;
+  /**
+   * Optional runtime-aware cancellation. Ownership is verified before this is
+   * called. Without it the HTTP API records cancellation intent only.
+   */
+  cancelTask?(input: {
+    task: TaskSnapshot;
+    ownerId: string;
+    expectedVersion?: number;
+    request: Request;
+  }): Promise<TaskSnapshot>;
   /** Optional health report mounted at `<basePath>/_health`. */
   health?(): Promise<unknown> | unknown;
   /** Set false to disable SSE. Snapshots remain authoritative. */
@@ -169,13 +179,21 @@ export function createTaskRequestHandler(
             (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0)) {
           return json({ code: 'RHINOQ_INVALID_REQUEST' }, 400);
         }
-        const snapshot: TaskSnapshot = body.expectedVersion === undefined
-          ? await cancelWithoutFence(options.tasks, taskId, ownerId)
-          : await options.tasks.requestTaskCancellationForOwner(
-            taskId,
-            ownerId,
-            Number(body.expectedVersion),
-          );
+        const expectedVersion = body.expectedVersion === undefined
+          ? undefined
+          : Number(body.expectedVersion);
+        const ownedTask = options.cancelTask
+          ? await options.tasks.getTaskForOwner(taskId, ownerId)
+          : undefined;
+        const snapshot: TaskSnapshot = options.cancelTask && ownedTask
+          ? await options.cancelTask({ task: ownedTask, ownerId, expectedVersion, request })
+          : expectedVersion === undefined
+            ? await cancelWithoutFence(options.tasks, taskId, ownerId)
+            : await options.tasks.requestTaskCancellationForOwner(
+              taskId,
+              ownerId,
+              expectedVersion,
+            );
         return json(snapshot);
       }
       if (request.method === 'POST' && relative.length === 2 && relative[1] === 'retry') {

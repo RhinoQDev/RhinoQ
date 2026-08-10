@@ -19,18 +19,34 @@ export const page = (operatorToken) => `<!doctype html>
   dt { opacity: .6; } dd { margin: 0; font-variant-numeric: tabular-nums; }
   .card { border: 1px solid var(--line); border-radius: .6rem; padding: 1rem 1.25rem; margin-bottom: 1.5rem; }
   .finding { border-color: #d97706; }
+  .value { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; }
+  .value div { border-left: 3px solid currentColor; padding-left: .75rem; }
+  .value strong { display: block; }
   code { font-size: .9em; }
   pre { white-space: pre-wrap; margin: .5rem 0 0; font-size: .85rem; opacity: .85; }
 </style>
 
-<h1>Fan-out on BullMQ</h1>
-<p class="sub">Progress, cancellation, retries and an operator console.
-Everything below is the Task API your own frontend would call.</p>
+<h1>RhinoQ async tasks</h1>
+<p class="sub">Keep the BullMQ worker you already know. RhinoQ adds the durable
+task lifecycle around it: progress, cancellation, retry history, recovery and
+the user and operator surfaces that otherwise become application code.</p>
 
 <div class="row">
   <button id="start">Start a 50-item batch</button>
   <button id="cancel" disabled>Cancel</button>
+  <a href="/task-center" target="_blank"><button type="button">Task Center</button></a>
   <a href="/admin" target="_blank"><button type="button">Operator console →</button></a>
+</div>
+
+<div class="card">
+  <strong>What RhinoQ replaced in this example</strong>
+  <p class="sub" style="margin:.4rem 0 1rem">The integration surface is three objects
+  you already have, one middleware, and one dispatch call.</p>
+  <div class="value">
+    <div><strong>Task lifecycle</strong>Durable state, per-item attempts and aggregate progress.</div>
+    <div><strong>Recovery</strong>Projector fencing, reconciliation and explicit uncertain outcomes.</div>
+    <div><strong>Product surfaces</strong>Owner API + Task Center, and a protected operator Workbench.</div>
+  </div>
 </div>
 
 <div class="card">

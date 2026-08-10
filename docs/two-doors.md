@@ -6,23 +6,23 @@ decision, and until this page existed nothing told you it was there.
 
 ## Door 1 — RhinoQ's Task API is your API
 
-Your frontend polls `GET /tasks/:id/summary`. The response shape is
-`TaskSummary`, which RhinoQ defines. You mount two middlewares and write the
+Your frontend reads `GET /tasks/:id/summary`, with owner-scoped SSE and polling
+fallback for live updates. The response shape is
+`TaskSummary`, which RhinoQ defines. You mount one middleware and write the
 dispatch call.
 
 ```js
 const app = await rhinoq({ pool, queue, events, ownerFromRequest });
 
-server.use('/tasks', app.routes());                          // read + cancel
-server.use(app.workbench({ token, basePath: '/admin' }));    // operator console
+server.use(app.http({ operatorToken })); // API + Task Center + Workbench
 
 await app.dispatch(taskId, items.map((item, index) => ({ key: `item-${index}`, data: item })));
 ```
 
 You do not write: a status endpoint, a progress endpoint, a cancel endpoint, a
-per-item results endpoint, the polling contract, the state machine, the item
+per-item results endpoint, the SSE/polling contract, the state machine, the item
 table, the aggregate counters, the "did the last item just finish" check, or an
-operator console.
+user Task Center, or an operator console.
 
 You give up: control of the wire format. `TaskSummary` is versioned and
 additive, but it is RhinoQ's shape, not yours.
@@ -66,7 +66,7 @@ grep -vcE '^\s*(//|/\*|\*|$)' examples/fanout-bullmq/server.mjs
 | What | Non-comment lines |
 |---|---:|
 | `examples/fanout-bullmq/server.mjs` — Door 1, long form: API, worker, bridge, reconciler, both HTTP surfaces, exactly-once settlement | **164** |
-| `create-rhinoq-app` template `server.mjs` — Door 1 via `rhinoq()`, plus a storage-drift demo the example does not have | **123** |
+| `create-rhinoq-app` template `server.mjs` — Door 1 via `rhinoq()`, plus a storage-drift demo the example does not have | **122** |
 
 An independent evaluation built the same feature set three times — by hand on
 PostgreSQL and BullMQ, with RhinoQ behind a hand-written HTTP contract, and with
@@ -92,3 +92,8 @@ has, "RhinoQ reduces code" is a claim about a benchmark.
 You can also start at Door 1 and add your own endpoints later: `app.tasks` is
 the same client, and nothing stops you serving both shapes from the same data
 while a migration runs.
+
+The fixed golden-path URLs are `/tasks`, `/task-center` and `/admin`. If an
+application needs custom paths or framework-specific registration, compose
+`app.routes()`, `createNodeTaskCenterMiddleware()` and `app.workbench()`
+separately; that is an escape hatch, not the first-run path.

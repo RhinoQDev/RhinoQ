@@ -1,6 +1,10 @@
 # RhinoQ
 
-## A BullMQ fan-out with progress, cancellation, per-attempt history and an operator console — in one command.
+## Ship reliable async tasks without rebuilding the task platform around your queue.
+
+Your worker should contain business work, not a second application for status,
+progress, retries, cancellation, recovery and support. RhinoQ keeps BullMQ as
+the runtime and supplies that missing task layer as one connected product.
 
 ```bash
 npx create-rhinoq-app my-batch && cd my-batch && npm start
@@ -10,29 +14,37 @@ That brings up PostgreSQL and Redis, applies the schema, runs a 50-item batch
 and opens <http://localhost:3000>. Nothing needs to exist first except Docker
 and Node 22.
 
-Inside is a live progress bar, a Cancel button that actually stops the queued
-jobs, retries recorded as separate attempts, an operator console at `/admin` —
-and a button that deletes the output file of a job the queue reported as
-`completed`, so you can watch the gap this whole project is about.
+Inside is the whole user journey: start a batch, watch live progress in the
+owner-scoped Task Center, cancel work, inspect every retry, and investigate
+stuck or uncertain tasks in the protected operator Workbench. A storage-drift
+demo then shows the harder case: the queue says `completed`, but the expected
+output is missing.
 
 ```js
 const app = await rhinoq({ pool, queue, events, ownerFromRequest });
-
-server.use('/tasks', app.routes());                          // read + cancel
-server.use(app.workbench({ token, basePath: '/admin' }));    // operator console
-
+server.use(app.http({ operatorToken })); // /tasks + /task-center + /admin
 await app.dispatch(taskId, urls.map((url, index) => ({ key: `item-${index}`, data: { url } })));
 ```
 
-Measured on the code in this repository, the whole loop — API, worker, bridge,
-reconciler, both HTTP surfaces and an exactly-once "the batch is done" signal —
-is [164 non-comment lines](./examples/fanout-bullmq/server.mjs). Which door you
-come through changes that number a lot, and in both directions:
-[two doors](./docs/two-doors.md).
+Those three lines replace the generic plumbing around your business handler:
 
-**Then, later:** when the queue says `completed` and the object is not in the
-bucket, RhinoQ already knows the difference. That is the second half of the
-product and you do not have to do anything on day one to have it.
+| You keep | RhinoQ supplies |
+|---|---|
+| worker handler and payload | durable Task and per-item attempt state |
+| BullMQ retry/backoff policy | retry history and aggregate progress |
+| application authentication | owner-scoped API, SSE with polling fallback, and Task Center |
+| business rules for external effects | cancellation, reconciliation and operator Workbench |
+
+This is the lowest-cost integration path: adopt RhinoQ's versioned Task API as
+your frontend contract. Existing applications can keep their own HTTP shape and
+map `app.tasks` underneath it, at the cost of retaining that adapter code. The
+trade-off and reproducible local line counts are documented in
+[two doors](./docs/two-doors.md); they are benchmark evidence, not yet a claim
+about savings in real adopter repositories.
+
+Start with async task delivery. Later, add verification Rules when “the worker
+returned successfully” is not enough to prove the real-world effect happened.
+That second layer is optional on day one and uses the same operator workflow.
 
 [![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
 [![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
@@ -59,7 +71,7 @@ product and you do not have to do anything on day one to have it.
 | If you are… | Read |
 |---|---|
 | starting a new project | `npx create-rhinoq-app`, above |
-| adding this to a BullMQ fan-out you already have | [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) — the long form, every decision visible |
+| adding this to a BullMQ fan-out you already have | [the two integration doors](./docs/two-doors.md), then [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) for every decision |
 | deciding whether it will save you code | [two doors](./docs/two-doors.md) |
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
 | completely new to all of it | [the beginner guide](./docs/start-here.md) |
@@ -229,6 +241,7 @@ npx rhinoq adopt --mode single        # preview
 npx rhinoq adopt --mode single --apply
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
+npx rhinoq fixture async
 npx rhinoq fixture failure
 npx rhinoq dev
 ```
@@ -241,10 +254,13 @@ batch finishes.
 Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and BullMQ, previews
 what is missing, refuses to overwrite generated Rules, and prints a next action
 for every failure. Open the Workbench URL printed by `rhinoq dev` to see a
-technically successful Execution whose real-world Task is `uncertain`. The
-Node-only path mounts the same self-contained, read-only Task Workbench used by
-the SDK, including live state buckets and per-attempt detail; it binds to
-loopback and does not enable operator actions.
+technically successful Execution whose real-world Task is `uncertain`. For the
+generic async control-loop demo, use `npx rhinoq fixture async`: it creates a
+completed step, a failed attempt and an expired approval waitpoint so the
+Workbench's Async Flight Recorder has something real to explain. The Node-only
+path mounts the same self-contained, read-only Task Workbench used by the SDK,
+including live state buckets, per-attempt detail and Flight Recorder attention;
+it binds to loopback and does not enable operator actions.
 
 The five-minute path uses the isolated Task profile. To continue into the
 Verified Tasks loop, build the Go CLI and Gateway from the same checkout, apply

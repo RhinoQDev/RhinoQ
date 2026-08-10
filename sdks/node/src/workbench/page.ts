@@ -99,6 +99,14 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   button.act:disabled { opacity: 0.45; cursor: not-allowed; }
   .err { color: var(--bad); padding: 10px 20px; }
   .head { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; }
+  .attention { margin: 12px; padding: 10px 12px; border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  .attention.error { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+  .attention p { margin: 0 0 5px; }.attention p:last-child { margin-bottom: 0; }
+  .timeline { list-style: none; margin: 0; padding: 12px 16px; display: grid; gap: 10px; }
+  .timeline li { display: grid; grid-template-columns: 9em minmax(0,1fr) auto; gap: 10px; align-items: baseline; border-left: 2px solid var(--line); padding-left: 12px; }
+  .timeline .event-state { color: var(--muted); }.timeline .event-time { color: var(--muted); font: 12px ui-monospace, monospace; }
+  .timeline .event-message { grid-column: 2 / -1; color: var(--muted); }
+  @media (max-width: 700px) { .timeline li { grid-template-columns: 1fr; gap: 3px; } .timeline .event-message { grid-column: auto; } }
 </style>
 </head>
 <body>
@@ -123,6 +131,11 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
       <button class="act" id="cancelBtn" style="margin-left:auto" hidden>Request cancellation</button>
     </div>
     <div class="scroll"><table id="detail"><tbody></tbody></table></div>
+  </div>
+  <div class="panel" id="flightPanel" hidden>
+    <div class="head"><strong>Async Flight Recorder</strong><span class="muted" id="flightExplanation"></span></div>
+    <div id="attention" aria-live="polite"></div>
+    <ol class="timeline" id="timeline"></ol>
   </div>
 </main>
 <script>
@@ -160,7 +173,7 @@ function ago(iso) {
 // The first paint must say "loading", not "empty": an operator has to be able
 // to tell a quiet system from one that has not answered yet.
 function skeleton() {
-  $('buckets').innerHTML = Array.from({ length: 6 }, () =>
+  $('buckets').innerHTML = Array.from({ length: 7 }, () =>
     '<div class="bucket" aria-hidden="true"><b><span class="skel"></span></b><br><span class="skel"></span></div>').join('');
   $('list').querySelector('tbody').innerHTML = Array.from({ length: 3 }, () =>
     '<tr><td><span class="skel w-lg"></span></td><td><span class="skel"></span></td><td><span class="skel"></span></td></tr>').join('');
@@ -233,6 +246,23 @@ function renderDetail() {
         '</td></tr>';
     }).join('');
   previousItems = next;
+  renderFlightRecorder(detail.flightRecorder);
+}
+
+function renderFlightRecorder(recorder) {
+  if (!recorder) { $('flightPanel').hidden = true; return; }
+  $('flightPanel').hidden = false;
+  $('flightExplanation').textContent = recorder.explanation || '';
+  $('attention').innerHTML = (recorder.attention || []).map((item) =>
+    '<div class="attention ' + (item.severity === 'error' ? 'error' : '') + '"><p><strong>' +
+    esc(item.kind) + '</strong></p><p>' + esc(item.message) + '</p></div>').join('');
+  const events = recorder.events || [];
+  $('timeline').innerHTML = events.length ? events.map((event) =>
+    '<li><span class="event-time">' + esc(new Date(event.observedAt).toLocaleString()) +
+    '</span><strong>' + esc(event.label) + '</strong><span class="event-state">' +
+    esc(event.state || '') + '</span>' + (event.message ? '<span class="event-message">' +
+    esc(event.message) + '</span>' : '') + '</li>').join('') :
+    '<li><span class="muted">No recorded events.</span></li>';
 }
 
 function render() {
@@ -248,6 +278,8 @@ function select(taskId) {
   currentId = taskId;
   previousItems = new Map();
   $('detailPanel').hidden = false;
+  $('flightPanel').hidden = true;
+  $('timeline').replaceChildren();
   $('detail').querySelector('tbody').innerHTML =
     '<tr><td><span class="skel w-lg"></span></td><td><span class="skel"></span></td><td><span class="skel"></span></td></tr>';
   connect();   // re-subscribe so the server streams this Task too

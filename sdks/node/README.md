@@ -1,7 +1,8 @@
 # RhinoQ for Node.js
 
-A BullMQ fan-out with progress, cancellation, per-attempt history and an
-operator console — and, later, the answer to whether the work actually happened.
+A durable task layer around BullMQ: progress, cancellation, per-attempt
+history, recovery, a user Task Center and an operator Workbench. Your worker
+and retry policy stay yours; the surrounding task platform does not have to.
 
 ## The short way in
 
@@ -20,8 +21,7 @@ const app = await rhinoq({
   ownerFromRequest: (request) => request.headers.get('x-user'),
 });
 
-server.use('/tasks', app.routes());                          // read + cancel
-server.use(app.workbench({ token, basePath: '/admin' }));    // operator console
+server.use(app.http({ operatorToken })); // /tasks + /task-center + /admin
 
 await app.dispatch(taskId, urls.map((url, index) => ({
   key: `item-${index}`,          // the idempotency key: attempts are numbered per key
@@ -49,8 +49,13 @@ is the same feature set with every decision written out.
 | `app.cancel(taskId)` | stop the jobs that can be stopped; say which could not |
 | `app.audit(taskId)` | every attempt whose stored state disagrees with the queue |
 | `app.reconcile(taskId)` | re-read the runtime for one batch and write down what it finds |
+| `app.http({ operatorToken })` | mount owner API, Task Center and Workbench together |
 | `app.routes()` | the owner-scoped read/cancel HTTP surface |
 | `app.workbench({ token })` | the operator console |
+
+`app.http()` is the default product path. Use the separate middleware builders
+when custom paths, custom operator authentication or framework registration
+requires them.
 
 **Items are not attempts.** `TaskSummary.executionCounts` counts attempts, so a
 200-URL batch with three retries reads `total: 203`. Render `itemCounts`, which

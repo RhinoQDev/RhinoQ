@@ -68,11 +68,10 @@ const app = await rhinoq({
 const server = express();
 server.use(express.json());
 
-// The end-user API: owner-scoped, no runtime identity, safe for a browser.
-server.use('/tasks', app.routes());
-// The operator console: reads across owners and shows queue job IDs. Mounted
-// without a path prefix — it matches on the full path and chooses its own.
-server.use(app.workbench({ token: OPERATOR_TOKEN, basePath: '/admin' }));
+// One mount gives the application three connected surfaces: the owner API at
+// /tasks, the owner-facing Task Center at /task-center, and the protected
+// cross-owner Workbench at /admin.
+server.use(app.http({ operatorToken: OPERATOR_TOKEN }));
 
 server.post('/batches', async (request, response) => {
   const size = Math.min(Number(request.body?.size ?? 50), 500);

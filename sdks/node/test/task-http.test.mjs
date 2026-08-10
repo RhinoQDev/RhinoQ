@@ -130,6 +130,41 @@ test('application Task retry is owner-scoped and command-identified', async () =
   assert.equal(conflict.status, 409);
 });
 
+test('runtime-aware cancellation verifies ownership before handing work to the runtime', async () => {
+  const task = {
+    schemaVersion: 1, entityVersion: 7, id: 'task-cancel', type: 'export', ownerId: 'owner-a', state: 'running',
+    cancellation: { status: 'none' }, progress: { completed: 1, total: 2 }, hasResult: false, executions: [],
+    createdAt: '2026-08-10T00:00:00.000Z', updatedAt: '2026-08-10T00:00:01.000Z',
+  };
+  const seen = [];
+  const handler = createTaskRequestHandler({
+    tasks: {
+      async getTaskForOwner(id, ownerId) {
+        seen.push(`authorize:${ownerId}:${id}`);
+        if (ownerId !== 'owner-a') throw new RhinoQError('RHINOQ_TASK_NOT_FOUND', id, false, { status: 404 });
+        return task;
+      },
+    },
+    ownerFromRequest: (request) => request.headers.get('x-owner') ?? undefined,
+    cancelTask: async ({ task: owned, ownerId, expectedVersion }) => {
+      seen.push(`cancel:${ownerId}:${owned.id}:${expectedVersion}`);
+      return { ...owned, entityVersion: 8, state: 'cancel_requested', cancellation: { status: 'requested' } };
+    },
+  });
+
+  const allowed = await handler(new Request('http://app.test/tasks/task-cancel/cancel', {
+    method: 'POST', headers: { 'x-owner': 'owner-a' }, body: JSON.stringify({ expectedVersion: 7 }),
+  }));
+  assert.equal(allowed.status, 200);
+  assert.deepEqual(seen, ['authorize:owner-a:task-cancel', 'cancel:owner-a:task-cancel:7']);
+
+  const denied = await handler(new Request('http://app.test/tasks/task-cancel/cancel', {
+    method: 'POST', headers: { 'x-owner': 'owner-b' }, body: '{}',
+  }));
+  assert.equal(denied.status, 404);
+  assert.equal(seen.some((entry) => entry.startsWith('cancel:owner-b')), false);
+});
+
 test('application Task handler returns non-enumerating owner misses', async () => {
   const handler = createTaskRequestHandler({
     tasks: {

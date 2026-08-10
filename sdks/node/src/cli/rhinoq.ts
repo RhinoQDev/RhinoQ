@@ -19,6 +19,7 @@ import {
 } from '../notify/registry.js';
 import { sendTestNotification } from '../notify/sender.js';
 import { createNodeWorkbenchMiddleware } from '../workbench/handler.js';
+import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -33,7 +34,7 @@ async function main(): Promise<void> {
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Adopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n');
+      console.log('Adopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nGeneric async demo:\n  npx rhinoq fixture async\n  npx rhinoq fixture failure\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
@@ -1224,10 +1225,17 @@ function redactURL(value: string): string {
 }
 
 async function fixture(args: string[]): Promise<void> {
-  if ((args[0] ?? 'failure') !== 'failure') fail('only the `failure` fixture exists', 'Run: npx rhinoq fixture failure');
-  const pool = new Pool(requireDatabase('fixture failure').pool);
+  const name = args[0] ?? 'failure';
+  if (name !== 'failure' && name !== 'async') {
+    fail('unknown fixture', 'Run: npx rhinoq fixture async or npx rhinoq fixture failure');
+  }
+  const pool = new Pool(requireDatabase(`fixture ${name}`).pool);
   try {
     const tasks = await installPostgresTaskProfile(pool);
+    if (name === 'async') {
+      await createAsyncFixture(tasks);
+      return;
+    }
     const id = `demo_${Date.now()}`;
     let task = await tasks.createTask({ id, type: 'report.generate', ownerId: 'demo-user', definitionVersion: 1 });
     task = await tasks.transitionTask(id, task.entityVersion, 'queued');
@@ -1246,11 +1254,62 @@ async function fixture(args: string[]): Promise<void> {
   } finally { await pool.end(); }
 }
 
+/**
+ * Generic RhinoQ onboarding fixture: one completed execution, one failed
+ * execution and one expired approval. It deliberately uses no application
+ * domain, so the Workbench shows the platform's async control loop itself.
+ */
+async function createAsyncFixture(tasks: Awaited<ReturnType<typeof installPostgresTaskProfile>>): Promise<void> {
+  const id = `async_demo_${Date.now()}`;
+  let task = await tasks.createTask({ id, type: 'workflow.process', ownerId: 'demo-user', definitionVersion: 1 });
+  task = await tasks.transitionTask(id, task.entityVersion, 'queued');
+  task = await tasks.transitionTask(id, task.entityVersion, 'running');
+
+  await tasks.createTaskExecution(id, {
+    id: `${id}:approved`, itemKey: 'approved-step', runtime: 'demo', runtimeScope: 'onboarding',
+    externalId: `${id}:approved-job`,
+  });
+  let completed = await tasks.getTaskExecution(`${id}:approved`);
+  await tasks.bindTaskExecution(completed.id, { runtime: 'demo', runtimeScope: 'onboarding', externalId: `${id}:approved-job` });
+  completed = await tasks.getTaskExecution(completed.id);
+  await tasks.transitionTaskExecution(completed.id, completed.version, 'running');
+  completed = await tasks.getTaskExecution(completed.id);
+  await tasks.transitionTaskExecution(completed.id, completed.version, 'succeeded');
+  completed = await tasks.getTaskExecution(completed.id);
+  await tasks.attachTaskExecutionResult(completed.id, completed.version, `demo://result/${id}/approved-step`);
+
+  await tasks.createTaskExecution(id, {
+    id: `${id}:failed`, itemKey: 'provider-step', runtime: 'demo', runtimeScope: 'onboarding',
+    externalId: `${id}:failed-job`,
+  });
+  let failed = await tasks.getTaskExecution(`${id}:failed`);
+  await tasks.bindTaskExecution(failed.id, { runtime: 'demo', runtimeScope: 'onboarding', externalId: `${id}:failed-job` });
+  failed = await tasks.getTaskExecution(failed.id);
+  await tasks.transitionTaskExecution(failed.id, failed.version, 'running');
+  failed = await tasks.getTaskExecution(failed.id);
+  await tasks.transitionTaskExecution(failed.id, failed.version, 'failed', 'demo provider returned a transient 502');
+
+  await tasks.createTaskWaitpoint(id, {
+    id: `${id}:approval`, key: 'operator-approval', kind: 'approval', payloadVersion: 1,
+    deadline: new Date(Date.now() - 60_000).toISOString(),
+  });
+  const expired = await tasks.expireTaskWaitpoints(100);
+  console.log(`PASS created ${id}: one result, one failed attempt, and ${expired} expired approval waitpoint.`);
+  console.log('NEXT open the generic RhinoQ timeline: npx rhinoq dev');
+}
+
 async function dev(args: string[]): Promise<void> {
   const portValue = Number(args.find((item) => item.startsWith('--port='))?.slice(7) ?? 8788);
   if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) fail('port must be 1..65535', 'Example: npx rhinoq dev --port=8788');
   const pool = new Pool(requireDatabase('dev').pool);
   const tasks = await installPostgresTaskProfile(pool);
+  const expiry = new WaitpointExpiryScheduler({
+    tasks,
+    everyMs: 30_000,
+    onExpired: (count) => console.log(`INFO expired ${count} waitpoint(s); inspect Needs attention in the Flight Recorder.`),
+    onError: () => console.error('WARN waitpoint expiry sweep failed; the next bounded sweep will retry.'),
+  });
+  expiry.start();
   const workbench = createNodeWorkbenchMiddleware({
     tasks,
     basePath: '/rhinoq',
@@ -1267,7 +1326,7 @@ async function dev(args: string[]): Promise<void> {
     workbench(request, response);
   });
   server.listen(portValue, '127.0.0.1', () => console.log(`PASS RhinoQ Workbench: http://127.0.0.1:${portValue}/rhinoq\nNEXT press Ctrl+C to stop.`));
-  const close = () => server.close(() => pool.end().finally(() => process.exit(0)));
+  const close = () => { expiry.stop(); server.close(() => pool.end().finally(() => process.exit(0))); };
   process.once('SIGINT', close); process.once('SIGTERM', close);
 }
 

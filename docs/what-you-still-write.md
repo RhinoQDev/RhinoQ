@@ -15,8 +15,7 @@ day one than on day four.
 | Fan-out progress, recomputed without a read-modify-write | `sync_item_progress` |
 | Item counts separate from attempt counts | `TaskSummary.itemCounts` |
 | One projector per runtime scope, released on failover | `PostgresProjectorLease` |
-| An owner-scoped read/cancel HTTP surface | `app.routes()` |
-| An operator console | `app.workbench({ token })` |
+| One-mount owner API, Task Center and operator Workbench | `app.http({ operatorToken })` |
 | A record of every projection it could not write down | `PostgresProjectionFailureSink` |
 | A sweep for batches that stopped moving | `TaskReconciler`, on by default via `rhinoq()` |
 | Bounded waitpoint expiry | `WaitpointExpiryScheduler`; escalation policy remains application-owned |
@@ -30,9 +29,10 @@ day one than on day four.
 what the item is. The URL, the customer, the file name, the metadata: yours.
 `itemKey` is the join.
 
-**The realtime transport, if you are not using `app.routes()`.** There is no
-SSE, no WebSocket and no push. The Task API is polled. Say so out loud before
-someone assumes otherwise: `docs/nodejs.md` line 33.
+**The realtime transport, if you keep your own HTTP contract.** RhinoQ's Task
+API and Task Center use owner-scoped SSE with snapshot-convergent polling as a
+fallback. If you take Door 2 and expose your own endpoints, the transport and
+reconnect behavior for those endpoints remain yours.
 
 **Going and looking, for anything outside PostgreSQL.** A Rule is SQL in a
 `READ ONLY` transaction under a role that is required not to have network or

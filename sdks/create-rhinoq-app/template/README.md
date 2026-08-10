@@ -1,25 +1,39 @@
-# RhinoQ fan-out
+# RhinoQ async tasks
 
 ```bash
 npm start
 ```
 
 Brings up PostgreSQL and Redis, applies the schema, runs a 50-item batch and
-opens <http://localhost:3000>. The operator console is at `/admin` and expects
-the header `x-operator-token: let-me-in`.
+opens <http://localhost:3000>. The user-facing Task Center is at `/task-center`.
+The operator Workbench is at `/admin` and expects the header
+`x-operator-token: let-me-in`.
+
+The RhinoQ integration itself is deliberately small:
+
+```js
+const app = await rhinoq({ pool, queue, events, ownerFromRequest });
+server.use(app.http({ operatorToken: OPERATOR_TOKEN })); // one middleware
+await app.dispatch(taskId, items);
+```
+
+That one middleware connects the owner-scoped API, live Task Center and
+cross-owner Workbench. The worker and business payload remain application code;
+the task state machine, progress, retry attempts, cancellation, reconciliation
+and operator views do not.
 
 ## What is in here
 
 | File | What it is |
 |---|---|
-| `server.mjs` | the whole application: worker, RhinoQ, both HTTP surfaces |
+| `server.mjs` | the whole application: worker, RhinoQ and all HTTP surfaces |
 | `ui.mjs` | one page, no build step, polling the same Task API your frontend would |
 | `verify.mjs` | the verification pass you would put on a schedule |
 | `start.mjs` | the bootstrap `npm start` runs; delete it once you have your own database |
 | `docker-compose.yml` | a disposable PostgreSQL and Redis on ports nothing else was using |
 
-Three tables are created, in a schema called `rhinoq_task`. No queue tables, no
-worker tables, nothing touching your own.
+RhinoQ creates its isolated tables in the `rhinoq_task` schema. It creates no
+queue or worker tables and does not alter application-owned tables.
 
 ## The part that is not a job queue
 

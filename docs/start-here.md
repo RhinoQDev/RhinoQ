@@ -1,11 +1,43 @@
-# Start here: from a green job to a verified outcome
+# Start here: from an async job to a user-visible Task
 
 This is the one-page guide for evaluating and integrating RhinoQ. It starts
-with the failure RhinoQ is designed for, then gives runnable commands, explains
-what each command changes, and shows when another product is a better fit.
+with the async-task experience most applications need, then continues into the
+harder case where a technically green job did not produce the expected outcome.
+
+RhinoQ has two layers that you can adopt separately:
+
+1. **Async Task Platform:** durable state, per-item attempts, progress,
+   cancellation, reconciliation, owner API, Task Center and Workbench around
+   the BullMQ worker you already run.
+2. **Verified Tasks:** evidence, Rules, Findings and guarded repair when queue
+   completion is not enough proof.
 
 > RhinoQ is a prerelease for evaluation and controlled pilots. Pin the exact
 > version shown below. Do not treat this guide as a production-readiness claim.
+
+## First value: one connected async-task loop
+
+```bash
+npx create-rhinoq-app my-batch
+cd my-batch
+npm start
+```
+
+Open the generated page and start a batch. You can watch progress, cancel
+queued work, open the owner-facing Task Center and investigate retry history or
+attention states in the operator Workbench. The application code uses the same
+shape you would put around an existing worker:
+
+```js
+const app = await rhinoq({ pool, queue, events, ownerFromRequest });
+server.use(app.http({ operatorToken }));
+await app.dispatch(taskId, items);
+```
+
+You still write the worker, payload and business retry policy. RhinoQ supplies
+the lifecycle and product surfaces around them. If an existing frontend
+contract cannot change, keep it and map `app.tasks` underneath instead; see
+[the two integration doors](./two-doors.md) before measuring code savings.
 
 ## The incident that a green queue dashboard cannot close
 
@@ -77,10 +109,10 @@ boundaries, not benchmark superiority.
 | [Trigger.dev](https://trigger.dev/docs/how-it-works) | durable background tasks, retries, checkpoints and a hosted run dashboard | preserve the current worker/runtime while adding evidence and guarded repair |
 | [Sentry](https://docs.sentry.io/product/issues/) | application errors, traces and issue triage | detect a green execution whose final business state is wrong, where no exception exists |
 
-The narrow RhinoQ position is:
+The RhinoQ position is:
 
-> Keep the runtime that executes work. Add RhinoQ where you need proof that the
-> external effect and the business outcome became correct.
+> Keep the runtime that executes work. Add the durable Task experience around
+> it now, then add outcome verification where technical completion is not enough.
 
 This is also why the Workbench is not marketed as a better generic queue
 dashboard. BullMQ, Temporal, Restate, Inngest and Trigger.dev already have
@@ -245,9 +277,18 @@ variable and retry `doctor`.
 npx rhinoq fixture failure
 ```
 
-Why: a new project has no real job yet. The fixture creates a Task whose BullMQ-
-shaped Execution is `succeeded` while the real-world Task is `uncertain`. It is
-sample data for learning, not a load generator.
+Why: a new project has no real job yet. The `failure` fixture creates a Task
+whose BullMQ-shaped Execution is `succeeded` while the real-world Task is
+`uncertain`. It is sample data for learning, not a load generator. To see the
+generic async control loop instead, run:
+
+```bash
+npx rhinoq fixture async
+```
+
+That fixture creates one completed step, one failed attempt and an expired
+approval waitpoint. It is intentionally domain-neutral and is designed for the
+Flight Recorder path below.
 
 ### 8. Open the local Task Workbench
 
@@ -256,10 +297,11 @@ npx rhinoq dev
 ```
 
 Open <http://127.0.0.1:8788/rhinoq>. The command mounts the SDK's
-self-contained Workbench: live state buckets, Task detail, item attempts and
-server-side BullMQ runtime references. It binds only to loopback, stays
-read-only and requires no frontend project, account, API token or telemetry
-service.
+self-contained Workbench: live state buckets, Task detail, item attempts,
+server-side runtime references and an Async Flight Recorder that explains
+uncertain, partial-failure and expired-waitpoint states. It binds only to
+loopback, stays read-only and requires no frontend project, account, API token
+or telemetry service.
 
 Use a different port when needed:
 
@@ -269,7 +311,9 @@ npx rhinoq dev --port=8798
 
 Press `Ctrl+C` to stop it. This is the Task-profile Workbench for onboarding;
 the Go `rhinoq workbench` remains the full Verified Tasks Evidence Workbench
-for Rules, Findings, effects and repair actions.
+for Rules, Findings, effects and repair actions. See the [Async Flight Recorder
+guide](./async-flight-recorder.md) for the normalized timeline and its security
+boundary.
 
 ## Run the full Stripe-shaped failure
 
@@ -679,7 +723,7 @@ Read [Production readiness](./production-readiness.md),
 | connection refused | PostgreSQL is stopped, wrong port is used, or Docker is not ready | run `docker ps`, check the port, then `npx rhinoq doctor` |
 | Task schema version mismatch | SDK and database Task profile differ | run the pinned SDK's `npx rhinoq init` |
 | generated Rule fails in PostgreSQL | placeholder table/column names remain | edit the SQL and test it with a restricted read-only role |
-| `npx rhinoq dev` has no rows | no Task exists in this database | run `npx rhinoq fixture failure` or point to the application database |
+| `npx rhinoq dev` has no rows | no Task exists in this database | run `npx rhinoq fixture async` or point to the application database |
 | Workbench cannot open its data source | full migrations are missing or URL is wrong | run `rhinoq migrate status`, `plan`, `apply`, then `doctor` |
 | port already in use | another local service owns the port | use `npx rhinoq dev --port=8798` or `rhinoq workbench --port 0` |
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
@@ -694,7 +738,9 @@ still a prerelease. Tenant-wide RBAC and deployment-shaped
 design-partner/chaos evidence remain open. Durable multi-node notification
 scheduling is implemented, but its deployment-shaped evidence is not yet
 collected.
-Workbench has no remote hosting/authentication and no streaming update model.
+The Node Task Workbench has live SSE with polling fallback, but it is still a
+local developer surface: it has no remote hosting/authentication. Tenant-wide
+RBAC and deployment-shaped design-partner/chaos evidence remain open.
 No throughput, latency or reliability comparison is claimed here.
 
 ## Research basis

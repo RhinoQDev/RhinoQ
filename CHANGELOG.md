@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added `app.http({ operatorToken })`, the default one-mount HTTP journey for
+  async tasks: owner-scoped API at `/tasks`, user Task Center at
+  `/task-center`, and protected operator Workbench at `/admin`. Updated the
+  scaffold and onboarding narrative so first value is one initialization, one
+  middleware and one dispatch call; lower-level composition remains available.
+
+- Added a generic Node Task Workbench Async Flight Recorder. It joins Task,
+  Execution, result and durable waitpoint observations into a versioned,
+  operator-gated timeline with deterministic attention explanations, including
+  fail-closed handling for uncertain results and expired approvals. Added the
+  domain-neutral `npx rhinoq fixture async` onboarding scenario.
+
 - Added a bounded `WaitpointExpiryScheduler` for the Node Task profile. It runs
   the database-time expiry command without overlapping sweeps, reports expired
   counts to an application-owned escalation hook, and fails closed on scheduler

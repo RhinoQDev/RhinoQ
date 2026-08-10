@@ -10,7 +10,13 @@ import { TaskMetrics } from './observe/metrics.js';
 import { PostgresProjectorLease } from './postgres/projector-lease.js';
 import { installPostgresTaskProfile, PostgresTaskClient } from './postgres/task-client.js';
 import type { SqlPool } from './postgres/task-schema.js';
-import { createNodeTaskMiddleware, type NodeTaskMiddlewareOptions } from './tasks/adapters.js';
+import {
+  createNodeTaskCenterMiddleware,
+  createNodeTaskMiddleware,
+  type NodeTaskMiddlewareOptions,
+  type NodeTaskRequest,
+  type NodeTaskResponse,
+} from './tasks/adapters.js';
 import { TaskReconciler } from './tasks/reconciler.js';
 import {
   createNodeWorkbenchMiddleware,
@@ -101,6 +107,23 @@ export interface RhinoQAppOptions {
   onError?: (error: unknown, context?: unknown) => void;
 }
 
+export interface RhinoQHTTPOptions {
+  /** Required because `/admin` can read Tasks across every owner. */
+  operatorToken: string;
+  /** Browser origin used by the owner API adapter. */
+  origin?: string;
+  /** Allow mutating operator actions in Workbench. Defaults to false. */
+  actions?: boolean;
+  /** Heading shown in the owner-facing Task Center. */
+  taskCenterTitle?: string;
+}
+
+export type RhinoQHTTPMiddleware = (
+  request: NodeTaskRequest & { on(event: 'close', listener: () => void): unknown },
+  response: NodeTaskResponse & { write(chunk: Uint8Array | string): unknown },
+  next?: (error?: unknown) => void,
+) => void;
+
 /**
  * Everything a fan-out needs, with the decisions already made.
  *
@@ -113,8 +136,7 @@ export interface RhinoQAppOptions {
  *
  * ```ts
  * const app = await rhinoq({ pool, queue, events, ownerFromRequest });
- * expressApp.use('/tasks', app.routes());
- * expressApp.use('/admin', app.workbench({ token: process.env.OPS_TOKEN }));
+ * expressApp.use(app.http({ operatorToken: process.env.OPS_TOKEN }));
  *
  * const task = await app.dispatch('batch-1', urls.map((url, index) => ({
  *   key: `item-${index}`,
@@ -264,6 +286,56 @@ export class RhinoQApp {
       tasks: this.tasks,
       ownerFromRequest: this.ownerFromRequest,
     });
+  }
+
+  /**
+   * The complete HTTP surface for the default path through RhinoQ.
+   *
+   * Mount once at the application root. It serves the owner API at `/tasks`,
+   * the owner-facing Task Center at `/task-center`, and the operator Workbench
+   * at `/admin`. Use the individual middleware builders when custom paths or
+   * framework-specific composition are required.
+   */
+  http(options: RhinoQHTTPOptions): RhinoQHTTPMiddleware {
+    if (!options?.operatorToken?.trim()) {
+      throw new TypeError(
+        'http({ operatorToken }) is required because /admin reads Tasks across every owner.',
+      );
+    }
+    const taskCenter = createNodeTaskCenterMiddleware({
+      path: '/task-center',
+      apiPath: '/tasks',
+      ...(options.taskCenterTitle ? { title: options.taskCenterTitle } : {}),
+    });
+    const routes = this.routes({
+      basePath: '/tasks',
+      origin: options.origin,
+      // The generic owner API records cancellation intent. The high-level path
+      // can also reach the queue, so make its Cancel button stop queued work.
+      cancelTask: async ({ task }) => this.cancel(task.id),
+    });
+    const workbench = this.workbench({
+      token: options.operatorToken,
+      basePath: '/admin',
+      actions: options.actions,
+      origin: options.origin,
+    });
+
+    return (request, response, next) => {
+      taskCenter(request, response, () => {
+        routes(request, response, (error) => {
+          if (error) {
+            if (next) next(error);
+            else {
+              response.statusCode = 500;
+              response.end('Internal Server Error');
+            }
+            return;
+          }
+          workbench(request, response, () => next?.());
+        });
+      });
+    };
   }
 
   /**

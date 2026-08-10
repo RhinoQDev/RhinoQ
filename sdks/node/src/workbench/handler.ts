@@ -5,8 +5,10 @@ import type {
   TaskSnapshot,
   TaskState,
   TaskSummary,
+  TaskWaitpoint,
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
+import { taskFlightRecorder, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
 import { WORKBENCH_PAGE } from './page.js';
 
 /** The reads the Workbench performs. `PostgresTaskClient` satisfies it. */
@@ -15,6 +17,7 @@ export interface WorkbenchTaskSource {
   getTask(taskId: string): Promise<TaskSnapshot>;
   getTaskExecutionResults(taskId: string): Promise<TaskExecutionResults>;
   listTaskExecutionRuntimeRefs?(taskId: string): Promise<TaskExecutionRuntimeRefs>;
+  listTaskWaitpoints?(taskId: string): Promise<TaskWaitpoint[]>;
   requestTaskCancellation?(taskId: string, expectedVersion: number): Promise<TaskSnapshot>;
 }
 
@@ -56,6 +59,11 @@ const DEFAULT_STATES: TaskState[] = [
   'cancel_requested',
   'uncertain',
   'failed',
+];
+const ATTENTION_BUCKET = 'attention';
+const ATTENTION_STATES: TaskState[] = [
+  'pending', 'queued', 'running', 'uncertain', 'succeeded', 'failed',
+  'cancel_requested', 'cancelled',
 ];
 
 function json(body: unknown, status = 200): Response {
@@ -164,11 +172,15 @@ export function createWorkbenchHandler(
           const tasks = await options.tasks.listTasksByState({ states: [state], limit });
           counts[state] = tasks.length;
         }
-        return json({ schemaVersion: 1, states, counts, actions, limit });
+        counts[ATTENTION_BUCKET] = (await listAttentionTasks(options.tasks, limit)).length;
+        return json({ schemaVersion: 1, states: [...states, ATTENTION_BUCKET], counts, actions, limit });
       }
 
       if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'tasks' && relative.length === 2) {
         const requested = url.searchParams.get('state') ?? states[0];
+        if (requested === ATTENTION_BUCKET) {
+          return json({ schemaVersion: 1, state: requested, tasks: await listAttentionTasks(options.tasks, limit) });
+        }
         if (!states.includes(requested as TaskState)) {
           return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'unknown state' }, 400);
         }
@@ -184,6 +196,11 @@ export function createWorkbenchHandler(
 
         if (request.method === 'GET' && relative.length === 3) {
           return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId)) });
+        }
+
+        if (request.method === 'GET' && relative.length === 4 && relative[3] === 'flight-recorder') {
+          const detail = await taskDetail(options.tasks, taskId);
+          return json(detail.flightRecorder);
         }
 
         if (request.method === 'POST' && relative.length === 4 && relative[3] === 'cancel') {
@@ -406,17 +423,36 @@ async function collect(options: StreamOptions): Promise<Record<string, unknown>>
     counts[state] = tasks.length;
     lists[state] = tasks;
   }
+  lists[ATTENTION_BUCKET] = await listAttentionTasks(options.tasks, options.limit);
+  counts[ATTENTION_BUCKET] = lists[ATTENTION_BUCKET].length;
   const detail = options.taskId
     ? await taskDetail(options.tasks, options.taskId).catch(() => undefined)
     : undefined;
   return {
     schemaVersion: 1,
-    states: options.states,
+    states: [...options.states, ATTENTION_BUCKET],
     actions: options.actions,
     counts,
     lists,
     ...(detail ? { detail } : {}),
   };
+}
+
+async function listAttentionTasks(tasks: WorkbenchTaskSource, limit: number): Promise<TaskSummary[]> {
+  const rows = await tasks.listTasksByState({ states: ATTENTION_STATES, limit });
+  const seen = new Set<string>();
+  return rows.filter((task) => {
+    if (seen.has(task.id) || !needsAttention(task)) return false;
+    seen.add(task.id);
+    return true;
+  });
+}
+
+function needsAttention(task: TaskSummary): boolean {
+  if (task.state === 'uncertain' || task.state === 'failed') return true;
+  if (task.cancellation?.status === 'too_late' || task.cancellation?.status === 'cannot_cancel_safely') return true;
+  const counts = task.executionCounts;
+  return counts.failed > 0 && counts.succeeded > 0;
 }
 
 /**
@@ -427,11 +463,12 @@ async function collect(options: StreamOptions): Promise<Record<string, unknown>>
 async function taskDetail(
   tasks: WorkbenchTaskSource,
   taskId: string,
-): Promise<{ task: TaskSnapshot; items: WorkbenchItem[] }> {
+): Promise<{ task: TaskSnapshot; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder }> {
   const task = await tasks.getTask(taskId);
-  const [refs, results] = await Promise.all([
+  const [refs, results, waitpoints] = await Promise.all([
     tasks.listTaskExecutionRuntimeRefs?.(taskId).catch(() => undefined),
     tasks.getTaskExecutionResults(taskId).catch(() => undefined),
+    tasks.listTaskWaitpoints?.(taskId).catch(() => undefined),
   ]);
 
   const externalIds = new Map<string, string>();
@@ -459,7 +496,17 @@ async function taskDetail(
       : {}),
   }));
 
-  return { task, items };
+  const resolvedWaitpoints = waitpoints ?? [];
+  return {
+    task,
+    items,
+    waitpoints: resolvedWaitpoints,
+    flightRecorder: taskFlightRecorder({
+      task,
+      executionResults: results?.executions,
+      waitpoints: resolvedWaitpoints,
+    }),
+  };
 }
 
 interface WorkbenchItem {

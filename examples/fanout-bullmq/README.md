@@ -39,8 +39,11 @@ worker tables, nothing touching your own.
 reconciler, both HTTP surfaces and an operator console. It uses RhinoQ's own
 Task endpoint as the application's API rather than defining a second one, which
 is the shorter of the [two doors](../../docs/two-doors.md) and the one a new
-project can take. Building the same feature set on Postgres and BullMQ alone
-takes about 500 lines and none of them are interesting.
+project can take. The repository's controlled comparison measured 508
+non-comment lines for the same feature scope without RhinoQ and 322 through
+RhinoQ's Task API. Treat that as a reproducible local benchmark, not adopter
+evidence; the counting method and the custom-contract path are in
+[two doors](../../docs/two-doors.md).
 
 ## Four things this example exists to get right
 

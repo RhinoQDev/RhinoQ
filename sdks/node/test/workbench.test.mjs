@@ -50,6 +50,7 @@ function source(recorder = {}) {
         ],
       };
     },
+    async listTaskWaitpoints() { return []; },
     async requestTaskCancellation(taskId, expectedVersion) {
       recorder.cancelled = { taskId, expectedVersion };
       return snapshot({ state: 'cancel_requested', cancellation: { status: 'requested' } });
@@ -68,7 +69,7 @@ test('mounting without an operator gate is refused at construction', () => {
 
 test('a request that fails the operator gate sees no data at all', async () => {
   const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => false });
-  for (const path of ['/rhinoq', '/rhinoq/api/overview', '/rhinoq/api/tasks', '/rhinoq/api/tasks/task-1']) {
+  for (const path of ['/rhinoq', '/rhinoq/api/overview', '/rhinoq/api/tasks', '/rhinoq/api/tasks/task-1', '/rhinoq/api/tasks/task-1/flight-recorder']) {
     const response = await get(handler, path);
     const body = await response.text();
     assert.equal(response.status, 403, path);
@@ -97,6 +98,8 @@ test('the page is self-contained: no external origin is referenced', async () =>
   // An operator console that cannot load offline is worse than none.
   assert.ok(!/https?:\/\/(?!app\.test)/.test(html), 'the page must not fetch from another origin');
   assert.ok(!html.includes('<script src'), 'no external script tags');
+  assert.match(html, /Async Flight Recorder/);
+  assert.match(html, /flightPanel/);
 });
 
 test('the detail view joins runtime job identity from the server-side read', async () => {
@@ -108,6 +111,40 @@ test('the detail view joins runtime job identity from the server-side read', asy
     [['item-a', 'running', 'bull-job-a'], ['item-b', 'failed', null]],
   );
   assert.equal(body.items[1].failureReason, 'source returned 404');
+  assert.equal(body.flightRecorder.schemaVersion, 1);
+  assert.match(body.flightRecorder.explanation, /failed|running/i);
+});
+
+test('the Flight Recorder has a focused endpoint for operator tooling', async () => {
+  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true });
+  const response = await get(handler, '/rhinoq/api/tasks/task-1/flight-recorder');
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.taskId, 'task-1');
+  assert.ok(Array.isArray(body.events));
+  assert.ok(Array.isArray(body.attention));
+});
+
+test('the Workbench exposes a bounded Needs attention bucket', async () => {
+  const summary = {
+    ...snapshot(),
+    executionCounts: { total: 2, succeeded: 1, failed: 1, running: 0, pendingDispatch: 0, dispatched: 0, stalled: 0, cancelled: 0 },
+  };
+  const handler = createWorkbenchHandler({
+    tasks: {
+      ...source(),
+      async listTasksByState(query) {
+        return query.states.length === 8 ? [summary] : [];
+      },
+    },
+    requireOperator: () => true,
+  });
+  const overview = await (await get(handler, '/rhinoq/api/overview')).json();
+  assert.ok(overview.states.includes('attention'));
+  assert.equal(overview.counts.attention, 1);
+  const attention = await (await get(handler, '/rhinoq/api/tasks?state=attention')).json();
+  assert.equal(attention.tasks[0].id, 'task-1');
 });
 
 test('a store without the runtime-ref read still renders, without job identity', async () => {

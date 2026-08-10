@@ -1,7 +1,7 @@
 {
   "name": "@rhinoq/node",
   "version": "0.1.0-beta.9",
-  "description": "Catch background jobs that succeeded technically but failed in the real world",
+  "description": "A durable task layer for BullMQ: progress, cancellation, recovery and user/operator views",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

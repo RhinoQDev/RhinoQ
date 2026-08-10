@@ -216,6 +216,16 @@ export class PostgresTaskClient implements TaskClient {
 
   getTaskWaitpoint(id: string, ownerId: string): Promise<TaskWaitpoint> { return this.readWaitpoint(id, ownerId); }
 
+  /** Reads every durable human/external waitpoint for one Task in creation order. */
+  async listTaskWaitpoints(taskId: string): Promise<TaskWaitpoint[]> {
+    if (!taskId?.trim()) throw new TypeError('task id is required');
+    const result = await this.execute<WaitpointRow>(
+      `SELECT w.* FROM rhinoq_task.waitpoints w WHERE w.task_id=$1 ORDER BY w.created_at, w.id`,
+      [taskId],
+    );
+    return result.rows.map(mapWaitpoint);
+  }
+
   async resolveTaskWaitpoint(id: string, ownerId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint> {
     if (!id?.trim() || !ownerId?.trim() || !Number.isInteger(request?.expectedVersion) || request.expectedVersion <= 0 ||
         !request.resolutionId?.trim() || request.resolution === undefined) throw new TypeError('valid waitpoint resolution is required');

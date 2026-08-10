@@ -29,6 +29,7 @@ export * from './tasks/waitpoint-scheduler.js';
 export * from './tasks/group.js';
 export * from './tasks/list-store.js';
 export * from './tasks/ui.js';
+export * from './tasks/flight-recorder.js';
 export * from './tasks/result.js';
 export * from './tasks/definition.js';
 export * from './tasks/task-center.js';

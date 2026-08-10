@@ -87,12 +87,12 @@
 | Capability | Trạng thái | Phần còn thiếu |
 |---|---|---|
 | Attempt/effect/outcome/finding/audit data | Hoàn thành | append-only evidence đã có |
-| Workbench Evidence Rail | Hoàn thành | hiện là nhiều lens, chưa phải unified trace |
-| Unified API→Task→queue→effect→result view | Chưa có | normalized timeline projection |
+| Workbench Evidence Rail | Một phần | Go Workbench còn nhiều lens; Node Task Workbench now has the unified Task-profile Flight Recorder |
+| Unified API→Task→queue→effect→result view | Một phần | Node Task-profile Flight Recorder now joins Task, Execution, result and waitpoint observations; full effect/provider trace remains |
 | Compare attempts | Chưa có | diff contract và UI |
 | Latency waterfall | Chưa có | timestamps/clock boundaries và visualization |
-| “Vì sao đang chờ?” | Chưa có | deterministic attention/decision explanation |
-| “Có an toàn để retry?” | Một phần | guardrails có; chưa có public decision report thống nhất |
+| “Vì sao đang chờ?” | Một phần | Node Task Workbench explains waiting/expired waitpoints; provider/effect decision explanation remains |
+| “Có an toàn để retry?” | Một phần | Flight Recorder exposes a bounded Task-level decision; provider/effect-wide report remains |
 | Diagnostic bundle export | Chưa có | redaction + bounded archive |
 | OpenTelemetry correlation end-to-end | Một phần | IDs/metrics có; trace propagation chưa hoàn chỉnh |
 

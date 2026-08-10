@@ -31,6 +31,15 @@ test('writes a runnable project, with the files npm cannot publish under their r
     assert.equal(manifest.name, 'demo');
     assert.ok(manifest.dependencies['@rhinoq/node']);
     assert.equal(manifest.scripts.start, 'node start.mjs');
+
+    const server = await readFile(join(target, 'server.mjs'), 'utf8');
+    const ui = await readFile(join(target, 'ui.mjs'), 'utf8');
+    const readme = await readFile(join(target, 'README.md'), 'utf8');
+    assert.match(server, /app\.http\(\{ operatorToken: OPERATOR_TOKEN \}\)/);
+    assert.doesNotMatch(server, /server\.use\('\/tasks', app\.routes\(\)\)/);
+    assert.match(ui, /RhinoQ async tasks/);
+    assert.match(ui, /\/task-center/);
+    assert.match(readme, /one middleware/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

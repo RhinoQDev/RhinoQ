@@ -60,6 +60,8 @@ justifies their additional operational state.
 - [x] queue-filtered claims for heterogeneous worker processes
 - [x] Node.js producer/worker/operator SDK preview with automated tests
 - [x] embedded loopback developer Workbench with read-only default and opt-in guarded actions
+- [x] generic Async Flight Recorder projection for the Node Task Workbench
+- [x] domain-neutral async onboarding fixture with failed attempt and expired waitpoint
 
 ## Verified Tasks foundation — previously v0.1 Integrity Slice
 
