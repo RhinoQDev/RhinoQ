@@ -333,6 +333,17 @@ verification uncertainty; “completed” is never relabelled “verified”.
 Attempt history initially reads 100 rows and continues through the cursor-backed
 “Load more attempts” control instead of asking the owner to call the API manually.
 
+`GET /tasks/{id}/waitpoints?limit=100` and
+`ApplicationTaskClient.listTaskWaitpoints()` expose a bounded owner-scoped view
+of durable requests. The reference detail page resolves approval waitpoints with
+their `entityVersion` and deterministic `resolutionId`. Generic input remains in
+the host application's typed form, and webhook waits remain external/read-only;
+the reference UI does not guess either payload.
+`GET /tasks/_waitpoints?limit=50` and
+`ApplicationTaskClient.listWaitingTaskWaitpoints()` provide the corresponding
+bounded owner inbox without reading every Task separately. Host UIs can keep
+webhook waits in a separate system-owned view.
+
 `integration.defineTask({ type, jobName, mode })` removes repeated Task,
 Execution, runtime and stable job-id wiring. `bullMQCancellation()` removes
 queued jobs and refuses to claim an active job was cancelled without a durable

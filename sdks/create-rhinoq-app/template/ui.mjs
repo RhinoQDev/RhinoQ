@@ -42,9 +42,16 @@ context to understand failures and recover safely.</p>
 
 <section class="overview" aria-label="Task overview">
   <div class="metric"><b id="attentionCount">0</b><span>Needs attention</span></div>
+  <div class="metric"><b id="waitingCount">0</b><span>Waiting for me</span></div>
   <div class="metric"><b id="runningCount">0</b><span>In progress</span></div>
   <div class="metric"><b id="completedCount">0</b><span>Completed</span></div>
   <div class="metric"><b id="recentCount">0</b><span>Recent tasks</span></div>
+</section>
+
+<section class="card">
+  <strong>Waiting for me</strong>
+  <p class="sub" style="margin:.35rem 0 .5rem">Durable input and approval requests appear here; external webhooks stay out of your action list.</p>
+  <div id="waitingList"><p>No tasks are waiting for you.</p></div>
 </section>
 
 <section class="card">
@@ -148,8 +155,8 @@ $('verify').onclick = async () => {
 async function poll() {
   try {
     if (Date.now() - lastListAt > 2000) {
-      const list = await api('/tasks?limit=50');
-      renderOverview(list.tasks || []);
+      const [list, waits] = await Promise.all([api('/tasks?limit=50'), api('/tasks/_waitpoints?limit=50')]);
+      renderOverview(list.tasks || [], waits.waitpoints || []);
       if (!taskId) taskId = list.tasks[0]?.id ?? null;
       lastListAt = Date.now();
     }
@@ -161,7 +168,7 @@ async function poll() {
   setTimeout(poll, 400);
 }
 
-function renderOverview(tasks) {
+function renderOverview(tasks, waitpoints) {
   const attentionTasks = tasks.filter((task) => {
     const counts = task.itemCounts ?? task.executionCounts ?? {};
     return task.state === 'failed' || task.state === 'uncertain' ||
@@ -171,10 +178,14 @@ function renderOverview(tasks) {
   });
   const inProgress = tasks.filter((task) =>
     ['pending', 'queued', 'running', 'cancel_requested'].includes(task.state)).length;
+  const waitingForMe = waitpoints.filter((waitpoint) =>
+    waitpoint.kind === 'approval' || waitpoint.kind === 'input');
   $('attentionCount').textContent = attentionTasks.length;
+  $('waitingCount').textContent = waitingForMe.length;
   $('runningCount').textContent = inProgress;
   $('completedCount').textContent = tasks.filter((task) => task.state === 'succeeded').length;
   $('recentCount').textContent = tasks.length;
+  renderWaiting(waitingForMe, tasks);
   const attentionList = $('attentionList');
   if (!attentionTasks.length) {
     const empty = document.createElement('p');
@@ -193,6 +204,32 @@ function renderOverview(tasks) {
     const link = document.createElement('a');
     link.href = '/task-center/' + encodeURIComponent(task.id);
     link.textContent = 'View task →';
+    row.append(identity, meaning, link);
+    return row;
+  }));
+}
+
+function renderWaiting(waitpoints, tasks) {
+  const waitingList = $('waitingList');
+  if (!waitpoints.length) {
+    const empty = document.createElement('p');
+    empty.textContent = 'Nothing is waiting for your input or approval.';
+    waitingList.replaceChildren(empty);
+    return;
+  }
+  const taskNames = new Map(tasks.map((task) => [task.id, task.type]));
+  waitingList.replaceChildren(...waitpoints.slice(0, 5).map((waitpoint) => {
+    const row = document.createElement('div');
+    row.className = 'attention-item';
+    const identity = document.createElement('strong');
+    identity.textContent = (taskNames.get(waitpoint.taskId) || 'Task') + ' · ' + waitpoint.key;
+    const meaning = document.createElement('p');
+    meaning.textContent = waitpoint.kind === 'approval'
+      ? 'A decision is required before this work can continue.'
+      : 'The application needs more information before this work can continue.';
+    const link = document.createElement('a');
+    link.href = '/task-center/' + encodeURIComponent(waitpoint.taskId);
+    link.textContent = waitpoint.kind === 'approval' ? 'Review approval →' : 'View request →';
     row.append(identity, meaning, link);
     return row;
   }));

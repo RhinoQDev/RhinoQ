@@ -18,7 +18,7 @@
 |---|---|---|
 | Golden path một mount | Hoàn thành | `app.http()` nối owner API, Task Center, runtime-aware cancellation và Workbench |
 | Product shell / route continuity | Hoàn thành cho scaffold | Overview, Tasks, Workbench dùng same-tab navigation; `/overview` redirect tương thích về `/`; SDK nhận navigation path từ host app |
-| Overview attention summary | Hoàn thành cho scaffold | Needs attention, In progress, Completed và Recent chỉ được tính từ Task evidence hiện có; Waiting/stuck/verified bucket vẫn chờ summary contract tương ứng |
+| Overview attention summary | Hoàn thành cho scaffold | Needs attention, Waiting for me, In progress, Completed và Recent dùng Task/waitpoint evidence thật; stuck/verified bucket vẫn chờ contract tương ứng |
 | First-run operator access | Hoàn thành cho scaffold | `/operator-login` đổi token thành HttpOnly/SameSite cookie, không nhúng secret trong trang và chỉ bind loopback; production auth vẫn application-owned |
 | Owner-scoped SSE cho một Task | Hoàn thành | `GET /tasks/{id}/events`, auth trước stream, `Last-Event-ID`, heartbeat, capacity và test |
 | Owner Task inbox SSE | Hoàn thành | `GET /tasks/_events`, bounded page reset, version convergence và test |
@@ -47,6 +47,7 @@
 | Input idempotency | Hoàn thành | resolution ID + SHA-256 payload; duplicate trả cùng record, mismatch fail-closed |
 | Signed waitpoint token | Hoàn thành phần primitive | HMAC token scope waitpoint/task/owner/action, TTL, nonce; replay settlement do resolution ID/store bảo vệ |
 | `useRhinoTaskInput()` | Hoàn thành | `createUseRhinoTaskInput`, loading/submitting và waiting/resolved/expired/cancelled/error states |
+| Owner waitpoint/approval detail | Hoàn thành | bounded owner route + client; Task detail giải thích input/webhook wait và xử lý approval bằng version fence + resolution ID |
 | Timeout/escalation | Một phần | DB-time deadline, bounded `WaitpointExpiryScheduler` và escalation hook đã có; Needs Attention/notification policy vẫn application-owned |
 
 ## P1 — Batch và Task Group

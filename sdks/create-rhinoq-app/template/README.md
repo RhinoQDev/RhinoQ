@@ -14,6 +14,8 @@ operator authentication before deploying it.
 The home page is the Overview. Overview, Tasks and Workbench use same-tab
 navigation, and each Task links to `/task-center/{taskId}` for its owner-facing
 progress, guidance and attempt timeline.
+Overview reads the bounded owner waitpoint inbox and shows actionable input or
+approval requests under Waiting for me; webhook waits remain system-owned.
 
 The RhinoQ integration itself is deliberately small:
 

@@ -226,6 +226,36 @@ export class PostgresTaskClient implements TaskClient {
     return result.rows.map(mapWaitpoint);
   }
 
+  /** Bounded owner-facing waitpoint read; ownership is part of the SQL predicate. */
+  async listTaskWaitpointsForOwner(taskId: string, ownerId: string, limit = 100): Promise<TaskWaitpoint[]> {
+    if (!taskId?.trim() || !ownerId?.trim()) throw new TypeError('task and owner identity are required');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('waitpoint limit must be 1..100');
+    const result = await this.execute<WaitpointRow>(
+      `SELECT w.* FROM rhinoq_task.waitpoints w
+       JOIN rhinoq_task.tasks t ON t.id=w.task_id
+       WHERE w.task_id=$1 AND t.owner_id=$2
+       ORDER BY w.created_at DESC, w.id
+       LIMIT $3`,
+      [taskId, ownerId, limit],
+    );
+    return result.rows.map(mapWaitpoint);
+  }
+
+  /** Bounded owner inbox of unresolved input, approval and webhook waits. */
+  async listWaitingTaskWaitpointsForOwner(ownerId: string, limit = 50): Promise<TaskWaitpoint[]> {
+    if (!ownerId?.trim()) throw new TypeError('owner identity is required');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('waitpoint limit must be 1..100');
+    const result = await this.execute<WaitpointRow>(
+      `SELECT w.* FROM rhinoq_task.waitpoints w
+       JOIN rhinoq_task.tasks t ON t.id=w.task_id
+       WHERE t.owner_id=$1 AND w.state='waiting'
+       ORDER BY w.deadline ASC NULLS LAST, w.updated_at DESC, w.id
+       LIMIT $2`,
+      [ownerId, limit],
+    );
+    return result.rows.map(mapWaitpoint);
+  }
+
   async resolveTaskWaitpoint(id: string, ownerId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint> {
     if (!id?.trim() || !ownerId?.trim() || !Number.isInteger(request?.expectedVersion) || request.expectedVersion <= 0 ||
         !request.resolutionId?.trim() || request.resolution === undefined) throw new TypeError('valid waitpoint resolution is required');

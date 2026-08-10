@@ -409,6 +409,16 @@ recorded; it does not equate runtime completion with business verification.
 Long attempt histories remain bounded and can be continued in-place with the
 cursor-backed “Load more attempts” control.
 
+Task detail also reads a bounded, owner-scoped durable waitpoint list. Pending
+approvals can be approved or declined in-place using the waitpoint version and
+a deterministic resolution identity; duplicate submissions therefore converge
+on the stored resolution. Input waitpoints direct the user back to the host
+application form, while webhook waitpoints remain read-only instead of offering
+an action RhinoQ cannot complete safely.
+The bounded `GET /tasks/_waitpoints` owner inbox powers a real “Waiting for me”
+bucket on the generated Overview. It includes input and approval requests while
+excluding webhook waits that the user cannot act on.
+
 The owner API exposes `GET /tasks/_capabilities`. Task Center renders retry and
 result actions only when the application configured their handlers. Result
 download now fails closed with `RHINOQ_RESULT_NOT_CONFIGURED` when no authorized

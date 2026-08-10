@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a bounded owner-scoped waitpoint list route and browser client method.
+  Task detail now explains pending input/webhook waits and resolves approval
+  waitpoints in-place with version fencing and deterministic resolution identity.
+  A bounded `GET /tasks/_waitpoints` inbox now powers the scaffold's real
+  “Waiting for me” Overview bucket without per-Task reads.
 - Added responsive Task Center search, attention/active/finished filters and
   sorting with bookmarkable URL state. Owner Task detail now makes result
   availability, cancellation posture and recorded verification uncertainty

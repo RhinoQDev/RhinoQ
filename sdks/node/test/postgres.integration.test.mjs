@@ -106,6 +106,10 @@ test('Task-only profile uses four tables and serves the embedded Node client', {
     });
     const waiting = await tasks.createTaskWaitpoint(task.id, { id: 'node-wp-review', key: 'review', kind: 'approval', payloadVersion: 1 });
     assert.equal(waiting.state, 'waiting');
+    assert.equal((await tasks.listTaskWaitpointsForOwner(task.id, 'owner-a'))[0].id, waiting.id);
+    assert.deepEqual(await tasks.listTaskWaitpointsForOwner(task.id, 'owner-b'), []);
+    assert.equal((await tasks.listWaitingTaskWaitpointsForOwner('owner-a'))[0].id, waiting.id);
+    assert.deepEqual(await tasks.listWaitingTaskWaitpointsForOwner('owner-b'), []);
     const resolved = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } });
     assert.equal(resolved.state, 'resolved');
     const replayedResolution = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } });

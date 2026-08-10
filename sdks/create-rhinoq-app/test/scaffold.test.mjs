@@ -41,6 +41,9 @@ test('writes a runnable project, with the files npm cannot publish under their r
     assert.doesNotMatch(server, /server\.use\('\/tasks', app\.routes\(\)\)/);
     assert.match(ui, /Async operations overview/);
     assert.match(ui, /Needs attention/);
+    assert.match(ui, /Waiting for me/);
+    assert.match(ui, /tasks\/_waitpoints/);
+    assert.match(ui, /renderWaiting/);
     assert.match(ui, /Recent tasks/);
     assert.match(ui, /View task/);
     assert.match(ui, /overviewGuidance/);

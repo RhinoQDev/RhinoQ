@@ -120,6 +120,13 @@ export function createTaskRequestHandler(
         };
         return json(capabilities);
       }
+      if (request.method === 'GET' && relative.length === 1 && relative[0] === '_waitpoints') {
+        const limit = integerQuery(url, 'limit', 50);
+        if (limit < 1 || limit > 100) {
+          return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'waitpoint limit must be 1..100' }, 400);
+        }
+        return json({ waitpoints: await options.tasks.listWaitingTaskWaitpointsForOwner(ownerId, limit) });
+      }
       const taskId = relative[0];
       if (!taskId) {
         return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
@@ -150,6 +157,15 @@ export function createTaskRequestHandler(
         const results = await options.tasks.getTaskExecutionResultsForOwner(taskId, ownerId);
         return json(taskGroupManifest(task, results.executions));
       }
+	  if (request.method === 'GET' && relative.length === 2 && relative[1] === 'waitpoints') {
+		const limit = integerQuery(url, 'limit', 100);
+		if (limit < 1 || limit > 100) {
+		  return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'waitpoint limit must be 1..100' }, 400);
+		}
+		return json({
+		  waitpoints: await options.tasks.listTaskWaitpointsForOwner(taskId, ownerId, limit),
+		});
+	  }
 	  if (request.method === 'GET' && relative.length === 3 && relative[1] === 'executions' && relative[2] === 'page') {
 		const page: TaskExecutionPage = await options.tasks.listTaskExecutionsForOwner(
 			taskId, ownerId, url.searchParams.get('cursor') ?? '', integerQuery(url, 'limit', 100),
@@ -340,6 +356,18 @@ export class ApplicationTaskClient {
 
   getTaskExecutionResults(taskId: string): Promise<TaskExecutionResults> {
     return this.send('GET', `/${path(taskId)}/executions`);
+  }
+
+  async listTaskWaitpoints(taskId: string, limit = 100): Promise<TaskWaitpoint[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('waitpoint limit must be 1..100');
+    const result = await this.send<{ waitpoints: TaskWaitpoint[] }>('GET', `/${path(taskId)}/waitpoints?limit=${limit}`);
+    return result.waitpoints;
+  }
+
+  async listWaitingTaskWaitpoints(limit = 50): Promise<TaskWaitpoint[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('waitpoint limit must be 1..100');
+    const result = await this.send<{ waitpoints: TaskWaitpoint[] }>('GET', `/_waitpoints?limit=${limit}`);
+    return result.waitpoints;
   }
 
   getTaskGroupManifest(taskId: string): Promise<unknown> { return this.send('GET', `/${path(taskId)}/manifest`); }

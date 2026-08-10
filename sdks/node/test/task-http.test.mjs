@@ -62,6 +62,14 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
       assert.equal(ownerId, 'owner-a');
       return { schemaVersion: 1, entityVersion: 1, id, taskId: 'task-1', key: 'approve', kind: 'approval', state: 'waiting', payloadVersion: 1, createdAt: snapshot.createdAt, updatedAt: snapshot.updatedAt };
     },
+    async listTaskWaitpointsForOwner(taskId, ownerId, limit) {
+      assert.equal(taskId, 'task-1'); assert.equal(ownerId, 'owner-a'); assert.equal(limit, 100);
+      return [await this.getTaskWaitpoint('wp-1', ownerId)];
+    },
+    async listWaitingTaskWaitpointsForOwner(ownerId, limit) {
+      assert.equal(ownerId, 'owner-a'); assert.equal(limit, 50);
+      return [await this.getTaskWaitpoint('wp-1', ownerId)];
+    },
     async resolveTaskWaitpoint(id, ownerId, request) {
       const current = await this.getTaskWaitpoint(id, ownerId);
       return { ...current, entityVersion: 2, state: 'resolved', resolution: request.resolution, resolvedBy: ownerId };
@@ -110,6 +118,10 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
   const waitpoint = await client.createTaskWaitpoint('task-1', { id: 'wp-1', key: 'approve', kind: 'approval', payloadVersion: 1 });
   assert.equal(waitpoint.state, 'waiting');
   assert.equal((await client.getTaskWaitpoint('task-1', 'wp-1')).taskId, 'task-1');
+  assert.equal((await client.listTaskWaitpoints('task-1'))[0].kind, 'approval');
+  assert.equal((await client.listWaitingTaskWaitpoints())[0].taskId, 'task-1');
+  const invalidWaitpointPage = await handler(new Request('http://app.test/tasks/task-1/waitpoints?limit=101', { headers: { 'x-owner': 'owner-a' } }));
+  assert.equal(invalidWaitpointPage.status, 400);
   const resolved = await client.resolveTaskWaitpoint('task-1', 'wp-1', { expectedVersion: 1, resolutionId: 'submit-1', resolution: { approved: true } });
   assert.equal(resolved.state, 'resolved');
   assert.equal((await client.getTaskGroupManifest('task-1')).taskId, 'task-1');

@@ -14,6 +14,8 @@ the difference between "the queue says done" and "the work happened".
 The generated Overview, Task Center, owner Task detail and Workbench are linked
 as one same-tab journey. Retry and result actions appear only when the host
 application configured the corresponding safe handler.
+Overview includes owner-scoped Needs attention and Waiting for me buckets; the
+latter is backed by durable input/approval waitpoints rather than inferred state.
 
 It brings its own PostgreSQL and Redis through `docker compose`, on ports it
 checks are free first, and applies the schema itself. Nothing needs to exist

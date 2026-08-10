@@ -51,6 +51,8 @@ priority over a DAG engine, another runtime adapter or generic streaming.
 - [x] lightweight Task Summary and stable Execution keyset pagination
 - [x] snapshot-convergent owner Task and inbox SSE with polling fallback
 - [x] durable input, approval and webhook waitpoints with version-fenced settlement
+- [x] bounded owner waitpoint detail with in-place approval decisions
+- [x] bounded owner waiting inbox and scaffold “Waiting for me” overview
 - [x] Task Group batch dispatch, failed-item retry, pending cancellation and manifests
 - [x] atomic retry command and at-least-once dispatch intent publication
 - [x] bounded waitpoint expiry scheduler with application-owned escalation hook
