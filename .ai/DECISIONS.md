@@ -463,7 +463,7 @@
   (lost on restart); put provider secrets in the delivery table (unsafe); or
   use a process-local cron (duplicate sends across replicas).
 - **Consequences:** migrations 024–025 are additive. A PostgreSQL failure
-  inbox table remains outside the Task-only three-table profile. A scheduler
+  inbox table remains outside the isolated Task-only profile. A scheduler
   can recover work after a process loss, but the application still resolves
   runtime state, notification destinations and secrets. Tenant-wide RBAC and
   deployment-shaped chaos evidence remain separate release gates.
@@ -595,3 +595,23 @@
 - **Rollback:** stop exposing waitpoint routes and helpers; leave the additive
   table unused until a later migration removes it.
 - **Owner:** engine + PostgreSQL adapter + Node SDK + product
+
+## ADR-0029 â€” Task tenant, verification and artifact records stay additive
+
+- **Status:** accepted
+- **Context:** owner identity alone cannot isolate two tenants, runtime success
+  is not business verification, and a bare result reference cannot express
+  integrity, expiry or lineage safely to a browser.
+- **Decision:** Task schema v9 adds a non-empty tenant identity to every Task,
+  append-only verification records, and versioned Artifact metadata. Every
+  Node owner HTTP read carries tenant plus owner into the SQL predicate. The
+  browser sees Artifact metadata only; the application resolves its private
+  reference. Provider/effect evidence remains Go-owned and joins Flight
+  Recorder only through an explicit Task correlation.
+- **Consequences:** existing single-tenant data migrates to the named `default`
+  tenant. Multi-tenant applications must provide `tenantFromRequest` from their
+  authenticated session. Verification and Artifact records advance the Task
+  version so live consumers converge. This does not replace full-profile RLS.
+- **Rollback:** stop exposing the additive routes and leave v9 records unused;
+  do not silently map multi-tenant traffic back to `default`.
+- **Owner:** PostgreSQL adapter + Node SDK + product

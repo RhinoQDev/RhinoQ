@@ -386,6 +386,15 @@ export class RhinoQClient {
 	return result.operations ?? [];
   }
 
+  async listProviderOperationsByTask(taskId: string, limit = 100): Promise<ProviderOperationRecord[]> {
+	if (!taskId?.trim()) throw new TypeError('task id is required');
+	if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new RangeError('provider operation limit must be 1..500');
+	const result = await this.send<{ operations: ProviderOperationRecord[] }>(
+	  'GET', `/v1/provider-operations?${queryString({ taskId, limit })}`,
+	);
+	return result.operations ?? [];
+  }
+
   private acceptProviderOperation(id: string, providerId: string, evidence?: string): Promise<ProviderOperationRecord> {
     return this.send('POST', `/v1/provider-operations/${requiredPath(id, 'provider operation id')}/accept`,
       { providerId, ...(evidence ? { evidence } : {}) });

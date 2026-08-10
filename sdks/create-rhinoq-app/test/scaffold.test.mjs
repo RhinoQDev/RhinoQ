@@ -45,6 +45,10 @@ test('writes a runnable project, with the files npm cannot publish under their r
     assert.match(ui, /tasks\/_waitpoints/);
     assert.match(ui, /renderWaiting/);
     assert.match(ui, /Recent tasks/);
+    assert.match(ui, /Recently verified/);
+    assert.match(ui, /At risk \/ stuck/);
+    assert.match(ui, /tasks\/_risk/);
+    assert.match(server, /recordTaskVerification/);
     assert.match(ui, /View task/);
     assert.match(ui, /overviewGuidance/);
     assert.match(ui, /\/task-center/);

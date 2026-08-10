@@ -1,6 +1,6 @@
 {
   "name": "create-rhinoq-app",
-  "version": "0.1.0-beta.9",
+  "version": "0.1.0-beta.10",
   "description": "One command to a working async-task app with progress, cancellation, recovery and user/operator views",
   "license": "Apache-2.0",
   "repository": {
@@ -29,6 +29,10 @@
     "tag": "next"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
   }
 }

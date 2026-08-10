@@ -15,6 +15,12 @@ import type {
   TaskSnapshot,
 	TaskSummary,
   TaskState,
+	TaskArtifact,
+	TaskArtifactCreateRequest,
+	TaskArtifactRecord,
+	TaskArtifactRefreshRequest,
+	TaskVerificationCreateRequest,
+	TaskVerificationRecord,
 	TaskWaitpoint,
 	TaskWaitpointCreateRequest,
 	TaskWaitpointResolveRequest,
@@ -27,6 +33,7 @@ import type { SqlConnection, SqlPool } from './task-schema.js';
 interface TaskRow {
   id: string;
   type: string;
+  tenant_id: string;
   owner_id: string | null;
   definition_version: number;
   state: TaskState;
@@ -82,6 +89,18 @@ interface WaitpointRow {
   resolved_at: Date | string | null; version: string | number; created_at: Date | string; updated_at: Date | string;
 }
 
+interface VerificationRow {
+  id: string; task_id: string; verifier: string; status: TaskVerificationRecord['status']; summary: string | null;
+  evidence: unknown; finding_rule_id: string | null; finding_subject_type: string | null; finding_subject_id: string | null;
+  finding_invariant_version: number | null; finding_deep_link: string | null; verified_at: Date | string; created_at: Date | string;
+}
+
+interface ArtifactRow {
+  id: string; task_id: string; execution_id: string | null; name: string; content_type: string;
+  size_bytes: string | number; checksum_sha256: string; reference: string; expires_at: Date | string;
+  lineage: unknown; version: string | number; created_at: Date | string; updated_at: Date | string;
+}
+
 interface ExecutionCursor { id: string }
 
 // The stored aggregates count attempts, which is what an operator wants and
@@ -114,7 +133,8 @@ LEFT JOIN LATERAL (
   FROM rhinoq_task.executions AS e
   WHERE e.task_id = t.id AND e.superseded_at IS NULL
 ) AS items ON true
-WHERE t.id = $1 AND ($2::text IS NULL OR t.owner_id = $2)`;
+WHERE t.id = $1 AND ($2::text IS NULL OR t.owner_id = $2)
+  AND ($3::text IS NULL OR t.tenant_id = $3)`;
 
 const SNAPSHOT_SQL = `
 SELECT t.*,
@@ -139,15 +159,16 @@ FROM rhinoq_task.tasks AS t
 LEFT JOIN rhinoq_task.executions AS e ON e.task_id = t.id
 WHERE t.id = $1
   AND ($2::text IS NULL OR t.owner_id = $2)
+  AND ($3::text IS NULL OR t.tenant_id = $3)
 GROUP BY t.id`;
 
 const LIST_SNAPSHOTS_SQL = `
 WITH selected AS (
   SELECT id, updated_at
   FROM rhinoq_task.tasks
-  WHERE owner_id = $1
+  WHERE owner_id = $1 AND tenant_id = $2
   ORDER BY updated_at DESC, id
-  LIMIT $2 OFFSET $3
+  LIMIT $3 OFFSET $4
 )
 SELECT t.*,
        COALESCE(
@@ -198,8 +219,8 @@ export class PostgresTaskClient implements TaskClient {
       throw new RangeError('task definitionVersion must be a positive integer');
     }
     await this.execute(
-      `SELECT rhinoq_task.create_task($1, $2, $3, $4)`,
-      [request.id, request.type, request.ownerId ?? null, request.definitionVersion],
+      `SELECT rhinoq_task.create_task($1, $2, $3, $4, $5)`,
+      [request.id, request.type, request.tenantId?.trim() || 'default', request.ownerId ?? null, request.definitionVersion],
     );
     return this.getTask(request.id);
   }
@@ -214,7 +235,7 @@ export class PostgresTaskClient implements TaskClient {
     return this.readWaitpoint(request.id);
   }
 
-  getTaskWaitpoint(id: string, ownerId: string): Promise<TaskWaitpoint> { return this.readWaitpoint(id, ownerId); }
+  getTaskWaitpoint(id: string, ownerId: string, tenantId = 'default'): Promise<TaskWaitpoint> { return this.readWaitpoint(id, ownerId, tenantId); }
 
   /** Reads every durable human/external waitpoint for one Task in creation order. */
   async listTaskWaitpoints(taskId: string): Promise<TaskWaitpoint[]> {
@@ -227,45 +248,46 @@ export class PostgresTaskClient implements TaskClient {
   }
 
   /** Bounded owner-facing waitpoint read; ownership is part of the SQL predicate. */
-  async listTaskWaitpointsForOwner(taskId: string, ownerId: string, limit = 100): Promise<TaskWaitpoint[]> {
+  async listTaskWaitpointsForOwner(taskId: string, ownerId: string, limit = 100, tenantId = 'default'): Promise<TaskWaitpoint[]> {
     if (!taskId?.trim() || !ownerId?.trim()) throw new TypeError('task and owner identity are required');
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('waitpoint limit must be 1..100');
     const result = await this.execute<WaitpointRow>(
       `SELECT w.* FROM rhinoq_task.waitpoints w
        JOIN rhinoq_task.tasks t ON t.id=w.task_id
-       WHERE w.task_id=$1 AND t.owner_id=$2
+       WHERE w.task_id=$1 AND t.owner_id=$2 AND t.tenant_id=$3
        ORDER BY w.created_at DESC, w.id
-       LIMIT $3`,
-      [taskId, ownerId, limit],
+       LIMIT $4`,
+      [taskId, ownerId, tenantId, limit],
     );
     return result.rows.map(mapWaitpoint);
   }
 
   /** Bounded owner inbox of unresolved input, approval and webhook waits. */
-  async listWaitingTaskWaitpointsForOwner(ownerId: string, limit = 50): Promise<TaskWaitpoint[]> {
+  async listWaitingTaskWaitpointsForOwner(ownerId: string, limit = 50, tenantId = 'default'): Promise<TaskWaitpoint[]> {
     if (!ownerId?.trim()) throw new TypeError('owner identity is required');
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('waitpoint limit must be 1..100');
     const result = await this.execute<WaitpointRow>(
       `SELECT w.* FROM rhinoq_task.waitpoints w
        JOIN rhinoq_task.tasks t ON t.id=w.task_id
-       WHERE t.owner_id=$1 AND w.state='waiting'
+       WHERE t.owner_id=$1 AND t.tenant_id=$2 AND w.state='waiting'
        ORDER BY w.deadline ASC NULLS LAST, w.updated_at DESC, w.id
-       LIMIT $2`,
-      [ownerId, limit],
+       LIMIT $3`,
+      [ownerId, tenantId, limit],
     );
     return result.rows.map(mapWaitpoint);
   }
 
-  async resolveTaskWaitpoint(id: string, ownerId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint> {
+  async resolveTaskWaitpoint(id: string, ownerId: string, request: TaskWaitpointResolveRequest, tenantId = 'default'): Promise<TaskWaitpoint> {
     if (!id?.trim() || !ownerId?.trim() || !Number.isInteger(request?.expectedVersion) || request.expectedVersion <= 0 ||
         !request.resolutionId?.trim() || request.resolution === undefined) throw new TypeError('valid waitpoint resolution is required');
     const encoded = JSON.stringify(request.resolution);
     if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > 65_536) throw new RangeError('waitpoint resolution must be JSON up to 64 KiB');
     const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(encoded));
     const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
+    await this.getTaskWaitpoint(id, ownerId, tenantId);
     await this.execute(`SELECT rhinoq_task.resolve_waitpoint($1,$2,$3,$4,$5,$6::jsonb,$7)`,
       [id, ownerId, request.expectedVersion, request.resolutionId, request.actor?.trim() || ownerId, encoded, hash]);
-    return this.readWaitpoint(id, ownerId);
+    return this.readWaitpoint(id, ownerId, tenantId);
   }
 
   async expireTaskWaitpoints(limit = 100): Promise<number> {
@@ -274,9 +296,9 @@ export class PostgresTaskClient implements TaskClient {
     return Number(result.rows[0]?.count ?? 0);
   }
 
-  private async readWaitpoint(id: string, ownerId?: string): Promise<TaskWaitpoint> {
+  private async readWaitpoint(id: string, ownerId?: string, tenantId?: string): Promise<TaskWaitpoint> {
     const result = await this.execute<WaitpointRow>(`SELECT w.* FROM rhinoq_task.waitpoints w JOIN rhinoq_task.tasks t ON t.id=w.task_id
-      WHERE w.id=$1 AND ($2::text IS NULL OR t.owner_id=$2)`, [id, ownerId ?? null]);
+      WHERE w.id=$1 AND ($2::text IS NULL OR t.owner_id=$2) AND ($3::text IS NULL OR t.tenant_id=$3)`, [id, ownerId ?? null, tenantId ?? null]);
     const row = result.rows[0]; if (!row) throw new RhinoQError('RHINOQ_WAITPOINT_NOT_FOUND', 'Waitpoint not found', false, { status: 404 });
     return mapWaitpoint(row);
   }
@@ -285,16 +307,16 @@ export class PostgresTaskClient implements TaskClient {
     return this.readTask(taskId);
   }
 
-  getTaskForOwner(taskId: string, ownerId: string): Promise<TaskSnapshot> {
-    return this.readTask(taskId, ownerId);
+  getTaskForOwner(taskId: string, ownerId: string, tenantId = 'default'): Promise<TaskSnapshot> {
+    return this.readTask(taskId, ownerId, tenantId);
   }
 
 	getTaskSummary(taskId: string): Promise<TaskSummary> {
 		return this.readTaskSummary(taskId);
 	}
 
-	getTaskSummaryForOwner(taskId: string, ownerId: string): Promise<TaskSummary> {
-		return this.readTaskSummary(taskId, ownerId);
+	getTaskSummaryForOwner(taskId: string, ownerId: string, tenantId = 'default'): Promise<TaskSummary> {
+		return this.readTaskSummary(taskId, ownerId, tenantId);
 	}
 
 	async listTaskExecutions(taskId: string, cursor = '', limit = 100): Promise<TaskExecutionPage> {
@@ -328,12 +350,12 @@ export class PostgresTaskClient implements TaskClient {
 		};
 	}
 
-	async listTaskExecutionsForOwner(taskId: string, ownerId: string, cursor = '', limit = 100): Promise<TaskExecutionPage> {
-		await this.getTaskSummaryForOwner(taskId, ownerId);
+	async listTaskExecutionsForOwner(taskId: string, ownerId: string, cursor = '', limit = 100, tenantId = 'default'): Promise<TaskExecutionPage> {
+		await this.getTaskSummaryForOwner(taskId, ownerId, tenantId);
 		return this.listTaskExecutions(taskId, cursor, limit);
 	}
 
-  async listTasks(ownerId: string, limit = 50, offset = 0): Promise<TaskSnapshot[]> {
+  async listTasks(ownerId: string, limit = 50, offset = 0, tenantId = 'default'): Promise<TaskSnapshot[]> {
     if (!ownerId?.trim()) {
       throw new TypeError('owner id is required');
     }
@@ -343,7 +365,7 @@ export class PostgresTaskClient implements TaskClient {
     }
     const result = await this.execute<TaskRow>(
       LIST_SNAPSHOTS_SQL,
-      [ownerId, limit, offset],
+      [ownerId, tenantId, limit, offset],
     );
     return result.rows.map(mapSnapshot);
   }
@@ -565,9 +587,10 @@ export class PostgresTaskClient implements TaskClient {
          AND t.updated_at <= clock_timestamp() - make_interval(secs => $2::double precision)
          AND ($3::boolean IS NULL OR (t.items_settled_at IS NOT NULL) = $3::boolean)
          AND ($4::text = '' OR t.owner_id = $4)
+         AND ($5::text = '' OR t.tenant_id = $5)
        ORDER BY t.updated_at, t.id
-       LIMIT $5`,
-      [states, idleFor / 1000, query.itemsSettled ?? null, query.ownerId ?? '', limit],
+       LIMIT $6`,
+      [states, idleFor / 1000, query.itemsSettled ?? null, query.ownerId ?? '', query.tenantId ?? '', limit],
     );
     return result.rows.map(mapSummary);
   }
@@ -666,9 +689,109 @@ export class PostgresTaskClient implements TaskClient {
   async getTaskExecutionResultsForOwner(
     taskId: string,
     ownerId: string,
+    tenantId = 'default',
   ): Promise<TaskExecutionResults> {
-    await this.getTaskForOwner(taskId, ownerId);
+    await this.getTaskForOwner(taskId, ownerId, tenantId);
     return this.getTaskExecutionResults(taskId);
+  }
+
+  /** Append-only business-outcome evidence; a repeated ID must be byte-for-byte equivalent. */
+  async recordTaskVerification(taskId: string, request: TaskVerificationCreateRequest): Promise<TaskVerificationRecord> {
+    validateVerification(request);
+    await this.execute(
+      `SELECT rhinoq_task.record_verification($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12)`,
+      [request.id, taskId, request.verifier, request.status, request.summary ?? null,
+        request.evidence === undefined ? null : JSON.stringify(request.evidence),
+        request.finding?.ruleId ?? null, request.finding?.subjectType ?? null,
+        request.finding?.subjectId ?? null, request.finding?.invariantVersion ?? null,
+        request.finding?.deepLink ?? null, request.verifiedAt ?? new Date().toISOString()],
+    );
+    return this.getTaskVerification(request.id);
+  }
+
+  async getTaskVerification(id: string): Promise<TaskVerificationRecord> {
+    const result = await this.execute<VerificationRow>(`SELECT * FROM rhinoq_task.verifications WHERE id=$1`, [id]);
+    const row = result.rows[0];
+    if (!row) throw taskError('RHINOQ_VERIFICATION_NOT_FOUND', id);
+    return mapVerification(row);
+  }
+
+  async listTaskVerificationsForOwner(taskId: string, ownerId: string, limit = 50, tenantId = 'default'): Promise<TaskVerificationRecord[]> {
+    await this.getTaskForOwner(taskId, ownerId, tenantId);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('verification limit must be 1..100');
+    const result = await this.execute<VerificationRow>(
+      `SELECT v.* FROM rhinoq_task.verifications v JOIN rhinoq_task.tasks t ON t.id=v.task_id
+       WHERE v.task_id=$1 AND t.owner_id=$2 AND t.tenant_id=$3
+       ORDER BY v.verified_at DESC,v.id LIMIT $4`, [taskId, ownerId, tenantId, limit]);
+    return result.rows.map(mapVerification);
+  }
+
+  async listTaskVerifications(taskId: string, limit = 50): Promise<TaskVerificationRecord[]> {
+    await this.getTask(taskId);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('verification limit must be 1..100');
+    const result = await this.execute<VerificationRow>(
+      `SELECT * FROM rhinoq_task.verifications WHERE task_id=$1 ORDER BY verified_at DESC,id LIMIT $2`, [taskId, limit]);
+    return result.rows.map(mapVerification);
+  }
+
+  async listRecentlyVerifiedForOwner(ownerId: string, limit = 20, tenantId = 'default'): Promise<TaskVerificationRecord[]> {
+    if (!ownerId?.trim()) throw new TypeError('owner id is required');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('verification limit must be 1..100');
+    const result = await this.execute<VerificationRow>(
+      `SELECT v.* FROM rhinoq_task.verifications v JOIN rhinoq_task.tasks t ON t.id=v.task_id
+       WHERE t.owner_id=$1 AND t.tenant_id=$2 AND v.status='verified'
+       ORDER BY v.verified_at DESC,v.id LIMIT $3`, [ownerId, tenantId, limit]);
+    return result.rows.map(mapVerification);
+  }
+
+  async registerTaskArtifact(taskId: string, request: TaskArtifactCreateRequest): Promise<TaskArtifact> {
+    validateArtifact(request);
+    await this.execute(`SELECT rhinoq_task.register_artifact($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+      [request.id, taskId, request.executionId ?? null, request.name, request.contentType,
+        request.sizeBytes, request.checksumSha256, request.reference, request.expiresAt,
+        JSON.stringify(request.lineage ?? [])]);
+    return withoutArtifactReference(await this.getTaskArtifactRecord(request.id));
+  }
+
+  async refreshTaskArtifact(id: string, request: TaskArtifactRefreshRequest): Promise<TaskArtifact> {
+    validateVersion(request?.expectedVersion, 'expectedArtifactVersion');
+    if (!request.reference?.trim() || !validTimestamp(request.expiresAt)) throw new TypeError('artifact refresh requires reference and expiresAt');
+    await this.execute(`SELECT rhinoq_task.refresh_artifact($1,$2,$3,$4)`, [id, request.expectedVersion, request.reference, request.expiresAt]);
+    return withoutArtifactReference(await this.getTaskArtifactRecord(id));
+  }
+
+  async getTaskArtifactRecord(id: string): Promise<TaskArtifactRecord> {
+    const result = await this.execute<ArtifactRow>(`SELECT * FROM rhinoq_task.artifacts WHERE id=$1`, [id]);
+    const row = result.rows[0];
+    if (!row) throw taskError('RHINOQ_ARTIFACT_NOT_FOUND', id);
+    return mapArtifact(row);
+  }
+
+  async getTaskArtifactForOwner(id: string, ownerId: string, tenantId = 'default'): Promise<TaskArtifactRecord> {
+    const result = await this.execute<ArtifactRow>(
+      `SELECT a.* FROM rhinoq_task.artifacts a JOIN rhinoq_task.tasks t ON t.id=a.task_id
+       WHERE a.id=$1 AND t.owner_id=$2 AND t.tenant_id=$3`, [id, ownerId, tenantId]);
+    const row = result.rows[0];
+    if (!row) throw taskError('RHINOQ_ARTIFACT_NOT_FOUND', id);
+    return mapArtifact(row);
+  }
+
+  async listTaskArtifactsForOwner(taskId: string, ownerId: string, limit = 100, tenantId = 'default'): Promise<TaskArtifact[]> {
+    await this.getTaskForOwner(taskId, ownerId, tenantId);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('artifact limit must be 1..100');
+    const result = await this.execute<ArtifactRow>(
+      `SELECT a.* FROM rhinoq_task.artifacts a JOIN rhinoq_task.tasks t ON t.id=a.task_id
+       WHERE a.task_id=$1 AND t.owner_id=$2 AND t.tenant_id=$3 ORDER BY a.created_at,a.id LIMIT $4`,
+      [taskId, ownerId, tenantId, limit]);
+    return result.rows.map((row) => withoutArtifactReference(mapArtifact(row)));
+  }
+
+  async listTaskArtifacts(taskId: string, limit = 100): Promise<TaskArtifact[]> {
+    await this.getTask(taskId);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('artifact limit must be 1..100');
+    const result = await this.execute<ArtifactRow>(
+      `SELECT * FROM rhinoq_task.artifacts WHERE task_id=$1 ORDER BY created_at,id LIMIT $2`, [taskId, limit]);
+    return result.rows.map((row) => withoutArtifactReference(mapArtifact(row)));
   }
 
   /**
@@ -755,8 +878,9 @@ export class PostgresTaskClient implements TaskClient {
     taskId: string,
     ownerId: string,
     expectedVersion: number,
+    tenantId = 'default',
   ): Promise<TaskSnapshot> {
-    await this.getTaskForOwner(taskId, ownerId);
+    await this.getTaskForOwner(taskId, ownerId, tenantId);
     return this.requestTaskCancellation(taskId, expectedVersion);
   }
 
@@ -819,18 +943,19 @@ export class PostgresTaskClient implements TaskClient {
   async getTaskResultForOwner(
     taskId: string,
     ownerId: string,
+    tenantId = 'default',
   ): Promise<TaskResult> {
-    await this.getTaskForOwner(taskId, ownerId);
+    await this.getTaskForOwner(taskId, ownerId, tenantId);
     return this.getTaskResult(taskId);
   }
 
-  private async readTask(taskId: string, ownerId?: string): Promise<TaskSnapshot> {
+  private async readTask(taskId: string, ownerId?: string, tenantId?: string): Promise<TaskSnapshot> {
     if (!taskId?.trim()) {
       throw new TypeError('task id is required');
     }
     const result = await this.execute<TaskRow>(
       SNAPSHOT_SQL,
-      [taskId, ownerId ?? null],
+      [taskId, ownerId ?? null, tenantId ?? null],
     );
     const row = result.rows[0];
     if (!row) {
@@ -839,9 +964,9 @@ export class PostgresTaskClient implements TaskClient {
     return mapSnapshot(row);
   }
 
-	private async readTaskSummary(taskId: string, ownerId?: string): Promise<TaskSummary> {
+	private async readTaskSummary(taskId: string, ownerId?: string, tenantId?: string): Promise<TaskSummary> {
 		if (!taskId?.trim()) throw new TypeError('task id is required');
-		const result = await this.execute<TaskRow>(SUMMARY_SQL, [taskId, ownerId ?? null]);
+		const result = await this.execute<TaskRow>(SUMMARY_SQL, [taskId, ownerId ?? null, tenantId ?? null]);
 		const row = result.rows[0];
 		if (!row) throw taskError('RHINOQ_TASK_NOT_FOUND', taskId);
 		return mapSummary(row);
@@ -885,6 +1010,8 @@ export interface TaskStateQuery {
   /** Restrict to Tasks whose items have (or have not) all finished. */
   itemsSettled?: boolean;
   ownerId?: string;
+  /** Optional tenant boundary; operator reads omit it intentionally. */
+  tenantId?: string;
   /** Defaults to 100, capped at 500. A reconciler walks pages, not the table. */
   limit?: number;
 }
@@ -957,6 +1084,29 @@ function mapWaitpoint(row: WaitpointRow): TaskWaitpoint {
     ...(row.resolved_by ? { resolvedBy: row.resolved_by } : {}),
     ...(row.resolved_at ? { resolvedAt: timestamp(row.resolved_at) } : {}),
     createdAt: timestamp(row.created_at), updatedAt: timestamp(row.updated_at) };
+}
+
+function mapVerification(row: VerificationRow): TaskVerificationRecord {
+  const hasFinding = row.finding_rule_id && row.finding_subject_type && row.finding_subject_id && row.finding_invariant_version;
+  return { schemaVersion: 1, id: row.id, taskId: row.task_id, verifier: row.verifier, status: row.status,
+    ...(row.summary ? { summary: row.summary } : {}), ...(row.evidence === null ? {} : { evidence: row.evidence }),
+    ...(hasFinding ? { finding: { ruleId: row.finding_rule_id!, subjectType: row.finding_subject_type!,
+      subjectId: row.finding_subject_id!, invariantVersion: Number(row.finding_invariant_version),
+      ...(row.finding_deep_link ? { deepLink: row.finding_deep_link } : {}) } } : {}),
+    verifiedAt: timestamp(row.verified_at), createdAt: timestamp(row.created_at) };
+}
+
+function mapArtifact(row: ArtifactRow): TaskArtifactRecord {
+  const lineage = Array.isArray(row.lineage) ? row.lineage.map(String) : [];
+  return { schemaVersion: 1, entityVersion: Number(row.version), id: row.id, taskId: row.task_id,
+    ...(row.execution_id ? { executionId: row.execution_id } : {}), name: row.name, contentType: row.content_type,
+    sizeBytes: Number(row.size_bytes), checksumSha256: row.checksum_sha256, reference: row.reference,
+    expiresAt: timestamp(row.expires_at), lineage, createdAt: timestamp(row.created_at), updatedAt: timestamp(row.updated_at) };
+}
+
+function withoutArtifactReference(record: TaskArtifactRecord): TaskArtifact {
+  const { reference: _reference, ...metadata } = record;
+  return metadata;
 }
 
 function mapExecutionSummary(value: unknown): TaskExecutionSummary {
@@ -1068,6 +1218,32 @@ function validateProgress(progress: TaskProgress): void {
     throw new RangeError('task progress total must be at least completed');
   }
 }
+
+function validateVerification(request: TaskVerificationCreateRequest): void {
+  if (!request?.id?.trim() || !request.verifier?.trim() || !['verified','mismatch','unverifiable'].includes(request.status)) {
+    throw new TypeError('verification id, verifier and valid status are required');
+  }
+  if ((request.summary?.length ?? 0) > 1024) throw new RangeError('verification summary must be at most 1024 characters');
+  const encoded = request.evidence === undefined ? '' : JSON.stringify(request.evidence);
+  if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > 65_536) throw new RangeError('verification evidence must be JSON up to 64 KiB');
+  if (request.verifiedAt !== undefined && !validTimestamp(request.verifiedAt)) throw new TypeError('verification verifiedAt must be an ISO timestamp');
+  if (request.finding && (!request.finding.ruleId?.trim() || !request.finding.subjectType?.trim() ||
+      !request.finding.subjectId?.trim() || !Number.isInteger(request.finding.invariantVersion) || request.finding.invariantVersion < 1)) {
+    throw new TypeError('verification finding requires a complete Finding key');
+  }
+}
+
+function validateArtifact(request: TaskArtifactCreateRequest): void {
+  if (!request?.id?.trim() || !request.name?.trim() || !request.contentType?.trim() || !request.reference?.trim()) {
+    throw new TypeError('artifact id, name, contentType and reference are required');
+  }
+  if (!Number.isSafeInteger(request.sizeBytes) || request.sizeBytes < 0) throw new RangeError('artifact sizeBytes must be a non-negative safe integer');
+  if (!/^[0-9a-f]{64}$/.test(request.checksumSha256)) throw new TypeError('artifact checksumSha256 must be 64 lowercase hex characters');
+  if (!validTimestamp(request.expiresAt)) throw new TypeError('artifact expiresAt must be an ISO timestamp');
+  if (request.lineage && (request.lineage.length > 100 || request.lineage.some((id) => !id?.trim()))) throw new RangeError('artifact lineage must contain at most 100 non-empty IDs');
+}
+
+function validTimestamp(value: string): boolean { return typeof value === 'string' && Number.isFinite(Date.parse(value)); }
 
 function timestamp(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();

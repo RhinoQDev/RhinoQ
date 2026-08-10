@@ -1,8 +1,8 @@
 # Node.js integration
 
-> Status: development preview. npm `latest` and `next` both carry
-> `0.1.0-beta.9`, which is this source, and the `rhinoq` CLI alias is published
-> at the same version. Pin an exact version and see
+> Status: development preview. npm currently carries `0.1.0-beta.9`; this
+> source is the unreleased `0.1.0-beta.10` candidate. Pin an exact published
+> version and see
 > [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
@@ -37,13 +37,25 @@ heartbeats and falls back to snapshot polling after disconnect; SSE is a
 delivery optimization, not a second state store. Result-payload proxying is
 still application-owned.
 
+The embedded profile also supports a real tenant boundary: put `tenantId` on
+dispatch/create and provide `tenantFromRequest` beside `ownerFromRequest`.
+Owner reads, SSE, waitpoints, verification and artifacts include both tenant
+and owner in their SQL predicates. Omit tenant wiring only in a genuinely
+single-tenant application, where the profile uses `default` explicitly.
+
+Task schema v9 adds append-only business verification records and Artifact v1.
+Artifacts keep checksum, expiry, refresh version and lineage while withholding
+the private storage reference from browsers. Configure `resolveArtifact` to
+issue a short-lived authorized URL. Configure `riskPolicy` to expose At risk
+and Stuck from explicit no-progress thresholds.
+
 `beta.2` and later also export `watchTask()`, a framework-neutral async
 iterator for one Task. It performs non-overlapping polls, ignores snapshots at
 or below the highest rendered `entityVersion`, stops on terminal state by
 default and accepts an `AbortSignal`. Network and authorization failures are
 reported to the caller; the helper does not invent an outage retry policy.
 
-The current beta.9 candidate also exports `TaskStore`, a browser external
+The published beta.9 package and this beta.10 candidate export `TaskStore`, a browser external
 store suitable for React `useSyncExternalStore` and equivalent adapters. It
 exposes loading, connected, reconnecting and stopped states, retries transport
 failures with bounded backoff, and never accepts an older `entityVersion`.
@@ -94,7 +106,7 @@ The onboarding `rhinoq` command also exposes `verify add`, `verify apply` and
 file to the authoritative Go Gateway and leaves it disabled; `run` enables one
 bounded evaluation, prints violations/evidence and disables it again. These
 three commands require the full Rule schema and Gateway, not the isolated
-three-table Task-only profile.
+isolated Task-only profile.
 
 ## Build the package from this repository
 
@@ -118,7 +130,7 @@ Each command has a different purpose:
 | `npm run typecheck` | checks public TypeScript types without emitting JavaScript | none |
 | `npm test` | builds `src/` into `dist/`, then runs the Node test suite | `dist/` |
 | `npm run pack:check` | builds and shows which files would enter the package without creating an archive | `dist/` |
-| `npm run pack` | removes earlier archives, rebuilds and creates the archive | `rhinoq-node-0.1.0-beta.9.tgz` |
+| `npm run pack` | removes earlier archives, rebuilds and creates the archive | `rhinoq-node-0.1.0-beta.10.tgz` |
 | `npm run verify:installed -- <app>` | proves an installed copy was built from this source | none |
 
 Use `npm run pack` rather than bare `npm pack`: it deletes earlier archives
@@ -134,22 +146,21 @@ Install the generated tarball and the PostgreSQL driver in the target Node
 application. Replace the example path with the absolute path on your machine:
 
 ```bash
-npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.9.tgz pg
+npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.10.tgz pg
 ```
 
 Windows PowerShell example:
 
 ```powershell
-npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.9.tgz pg
+npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.10.tgz pg
 ```
 
 Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
 not own or configure the application's connection pool.
 
 This source-install path is the authoritative way to evaluate changes not yet
-published. A stable (non-prerelease) npm package, a `latest` tag that is not
-eight versions behind, and prebuilt `rhinoq` CLI binaries remain release
-blockers.
+published. A stable package, the tagged beta.10 registry/GitHub release, and
+prebuilt `rhinoq` CLI binaries remain release gates.
 
 ### Verify the installed package
 
@@ -168,7 +179,7 @@ true
 ## Preferred Task-only PostgreSQL path
 
 For an application that keeps BullMQ or another runtime, install only the
-three-table Task profile:
+isolated Task profile:
 
 ```bash
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
@@ -859,9 +870,9 @@ reproducible.
 
 ## Current limitations
 
-- Every published version is a prerelease. `latest` resolves to
-  `0.1.0-beta.9`, so a bare `npm install @rhinoq/node` now gets this source,
-  but no beta carries a stability promise — pin an exact version in anything
+- Every published version is a prerelease. At the time this beta.10 candidate
+  was prepared, `latest` still resolved to `0.1.0-beta.9`; use `next` only
+  after the release workflow succeeds, and pin an exact version in anything
   that must not move under you.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems.
@@ -876,7 +887,9 @@ reproducible.
 - `TaskReconciler` is a timer in one process, not a distributed scheduler. The
   standard preset gives it a PostgreSQL advisory lease; custom construction
   must supply equivalent ownership when several replicas share a scope.
-- Gateway multi-tenant isolation and per-job HTTP RBAC are not complete.
+- The full Go profile has PostgreSQL RLS and authorization. The embedded Node
+  Task profile now isolates owner reads by tenant and owner, but intentionally
+  does not duplicate the Go operator-role model.
 - Async effect confirmation has no built-in webhook authentication or
   confirmation-deadline scheduler yet; the application authenticates evidence
   and calls `confirmEffect`.

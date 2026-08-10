@@ -124,6 +124,32 @@ jobs:
       - run: npm test
         working-directory: sdks/create-rhinoq-app
 
+  browser-acceptance:
+    name: Browser acceptance and screenshots
+    # Baselines are intentionally Windows-rendered so font metrics and full-page
+    # height stay deterministic instead of comparing across operating systems.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sdks/create-rhinoq-app/package-lock.json
+      - run: npm ci
+        working-directory: sdks/create-rhinoq-app
+      - run: npx playwright install chromium
+        working-directory: sdks/create-rhinoq-app
+      - run: npm run test:browser
+        working-directory: sdks/create-rhinoq-app
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rhinoq-browser-report
+          path: |
+            sdks/create-rhinoq-app/playwright-report
+            sdks/create-rhinoq-app/test-results
+
   fanout-smoke:
     name: Fan-out settles (gating)
     runs-on: ubuntu-latest

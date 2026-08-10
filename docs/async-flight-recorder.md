@@ -53,6 +53,12 @@ authentication. The Workbench reads across owners and runtime identities, so it
 requires an explicit `requireOperator` gate and should remain loopback/internal
 unless the host application adds its own authentication and authorization.
 
-This is a normalized Task-profile view, not yet the complete API-to-effect-
-provider trace. Full effect evidence, compare-attempt diffs, diagnostic bundles,
-OpenTelemetry propagation and tenant-wide RBAC remain separate roadmap work.
+The Task-profile recorder now accepts Task-correlated ProviderOperations,
+business verification records and Artifact metadata. `RhinoQClient
+.listProviderOperationsByTask(taskId)` reads the Go-owned ledger and
+`providerOperationsByTask` joins it into the Node Workbench without copying the
+provider mutation callback. Unknown provider outcomes and business mismatches
+are explicitly unsafe to retry.
+
+Compare-attempt diffs, diagnostic bundles and OpenTelemetry propagation remain
+separate roadmap work.

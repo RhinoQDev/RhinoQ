@@ -1,7 +1,7 @@
 # create-rhinoq-app
 
 ```bash
-npx create-rhinoq-app my-batch
+npx create-rhinoq-app@next my-batch
 cd my-batch
 npm start
 ```

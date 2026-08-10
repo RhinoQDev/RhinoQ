@@ -1,13 +1,13 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 8;
-export const TASK_SCHEMA_NAME = '008_durable_waitpoints';
+export const TASK_SCHEMA_VERSION = 9;
+export const TASK_SCHEMA_NAME = '009_tenant_verification_artifacts';
 
 /**
  * Task-only PostgreSQL profile.
  *
- * It deliberately owns only its four tables in a dedicated schema:
- * migrations, tasks, executions and waitpoints. Runtime, Effect, Rule and Finding tables
+ * It deliberately owns only its Task-facing tables in a dedicated schema.
+ * Runtime, Effect, Rule and Finding tables
  * belong to separate opt-in profiles.
  */
 export const TASK_SCHEMA_SQL = String.raw`
@@ -1572,6 +1572,138 @@ BEGIN
 END; $$;
 `;
 
+const TASK_SCHEMA_V9_SQL = String.raw`
+ALTER TABLE rhinoq_task.tasks
+  ADD COLUMN IF NOT EXISTS tenant_id text NOT NULL DEFAULT 'default'
+  CHECK (btrim(tenant_id) <> '');
+CREATE INDEX IF NOT EXISTS tasks_tenant_owner_updated_idx
+  ON rhinoq_task.tasks (tenant_id, owner_id, updated_at DESC, id);
+
+CREATE OR REPLACE FUNCTION rhinoq_task.create_task(
+  p_id text, p_type text, p_tenant_id text, p_owner_id text, p_definition_version integer
+) RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE v rhinoq_task.tasks%ROWTYPE;
+BEGIN
+  IF btrim(COALESCE(p_tenant_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_TENANT');
+  END IF;
+  INSERT INTO rhinoq_task.tasks(id,type,tenant_id,owner_id,definition_version,state)
+  VALUES(p_id,p_type,p_tenant_id,p_owner_id,p_definition_version,'pending')
+  ON CONFLICT DO NOTHING;
+  IF FOUND THEN RETURN false; END IF;
+  SELECT * INTO v FROM rhinoq_task.tasks WHERE id=p_id;
+  IF v.type<>p_type OR v.tenant_id<>p_tenant_id OR v.owner_id IS DISTINCT FROM p_owner_id OR v.definition_version<>p_definition_version THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_CONFLICT',p_id);
+  END IF;
+  RETURN true;
+END; $$;
+
+CREATE TABLE IF NOT EXISTS rhinoq_task.verifications (
+  id text PRIMARY KEY CHECK (btrim(id) <> ''),
+  task_id text NOT NULL REFERENCES rhinoq_task.tasks(id) ON DELETE CASCADE,
+  verifier text NOT NULL CHECK (btrim(verifier) <> ''),
+  status text NOT NULL CHECK (status IN ('verified','mismatch','unverifiable')),
+  summary text CHECK (length(COALESCE(summary,'')) <= 1024),
+  evidence jsonb,
+  finding_rule_id text,
+  finding_subject_type text,
+  finding_subject_id text,
+  finding_invariant_version integer,
+  finding_deep_link text,
+  verified_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CHECK (octet_length(COALESCE(evidence::text,'')) <= 65536),
+  CHECK ((finding_rule_id IS NULL AND finding_subject_type IS NULL AND finding_subject_id IS NULL AND finding_invariant_version IS NULL AND finding_deep_link IS NULL)
+    OR (btrim(finding_rule_id)<>'' AND btrim(finding_subject_type)<>'' AND btrim(finding_subject_id)<>'' AND finding_invariant_version>0))
+);
+CREATE INDEX IF NOT EXISTS verifications_task_recent_idx
+  ON rhinoq_task.verifications(task_id,verified_at DESC,id);
+
+CREATE OR REPLACE FUNCTION rhinoq_task.record_verification(
+  p_id text,p_task_id text,p_verifier text,p_status text,p_summary text,p_evidence jsonb,
+  p_finding_rule_id text,p_finding_subject_type text,p_finding_subject_id text,
+  p_finding_invariant_version integer,p_finding_deep_link text,p_verified_at timestamptz
+) RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE v rhinoq_task.verifications%ROWTYPE;
+BEGIN
+  INSERT INTO rhinoq_task.verifications(id,task_id,verifier,status,summary,evidence,
+    finding_rule_id,finding_subject_type,finding_subject_id,finding_invariant_version,finding_deep_link,verified_at)
+  VALUES(p_id,p_task_id,p_verifier,p_status,p_summary,p_evidence,p_finding_rule_id,
+    p_finding_subject_type,p_finding_subject_id,p_finding_invariant_version,p_finding_deep_link,p_verified_at)
+  ON CONFLICT DO NOTHING;
+  IF FOUND THEN
+    UPDATE rhinoq_task.tasks SET version=version+1,updated_at=clock_timestamp() WHERE id=p_task_id;
+    RETURN false;
+  END IF;
+  SELECT * INTO v FROM rhinoq_task.verifications WHERE id=p_id;
+  IF v.task_id<>p_task_id OR v.verifier<>p_verifier OR v.status<>p_status OR
+     v.summary IS DISTINCT FROM p_summary OR v.evidence IS DISTINCT FROM p_evidence OR
+     v.finding_rule_id IS DISTINCT FROM p_finding_rule_id OR
+     v.finding_subject_type IS DISTINCT FROM p_finding_subject_type OR
+     v.finding_subject_id IS DISTINCT FROM p_finding_subject_id OR
+     v.finding_invariant_version IS DISTINCT FROM p_finding_invariant_version OR
+     v.finding_deep_link IS DISTINCT FROM p_finding_deep_link OR v.verified_at<>p_verified_at THEN
+    PERFORM rhinoq_task.fail('RHINOQ_VERIFICATION_CONFLICT',p_id);
+  END IF;
+  RETURN true;
+END; $$;
+
+CREATE TABLE IF NOT EXISTS rhinoq_task.artifacts (
+  id text PRIMARY KEY CHECK (btrim(id) <> ''),
+  task_id text NOT NULL REFERENCES rhinoq_task.tasks(id) ON DELETE CASCADE,
+  execution_id text REFERENCES rhinoq_task.executions(id) ON DELETE SET NULL,
+  name text NOT NULL CHECK (btrim(name) <> '' AND length(name) <= 255),
+  content_type text NOT NULL CHECK (btrim(content_type) <> '' AND length(content_type) <= 255),
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+  checksum_sha256 text NOT NULL CHECK (checksum_sha256 ~ '^[0-9a-f]{64}$'),
+  reference text NOT NULL CHECK (btrim(reference) <> ''),
+  expires_at timestamptz NOT NULL,
+  lineage jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(lineage)='array' AND octet_length(lineage::text)<=65536),
+  version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS artifacts_task_idx ON rhinoq_task.artifacts(task_id,created_at,id);
+CREATE INDEX IF NOT EXISTS artifacts_expiry_idx ON rhinoq_task.artifacts(expires_at,id);
+
+CREATE OR REPLACE FUNCTION rhinoq_task.register_artifact(
+  p_id text,p_task_id text,p_execution_id text,p_name text,p_content_type text,p_size_bytes bigint,
+  p_checksum text,p_reference text,p_expires_at timestamptz,p_lineage jsonb
+) RETURNS boolean LANGUAGE plpgsql AS $$
+DECLARE v rhinoq_task.artifacts%ROWTYPE;
+BEGIN
+  IF p_execution_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM rhinoq_task.executions WHERE id=p_execution_id AND task_id=p_task_id) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_ARTIFACT_EXECUTION_MISMATCH',p_execution_id);
+  END IF;
+  INSERT INTO rhinoq_task.artifacts(id,task_id,execution_id,name,content_type,size_bytes,checksum_sha256,reference,expires_at,lineage)
+  VALUES(p_id,p_task_id,p_execution_id,p_name,p_content_type,p_size_bytes,p_checksum,p_reference,p_expires_at,p_lineage)
+  ON CONFLICT DO NOTHING;
+  IF FOUND THEN
+    UPDATE rhinoq_task.tasks SET version=version+1,updated_at=clock_timestamp() WHERE id=p_task_id;
+    RETURN false;
+  END IF;
+  SELECT * INTO v FROM rhinoq_task.artifacts WHERE id=p_id;
+  IF v.task_id<>p_task_id OR v.execution_id IS DISTINCT FROM p_execution_id OR v.name<>p_name OR
+     v.content_type<>p_content_type OR v.size_bytes<>p_size_bytes OR v.checksum_sha256<>p_checksum OR
+     v.reference<>p_reference OR v.expires_at<>p_expires_at OR v.lineage<>p_lineage THEN
+    PERFORM rhinoq_task.fail('RHINOQ_ARTIFACT_CONFLICT',p_id);
+  END IF;
+  RETURN true;
+END; $$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.refresh_artifact(
+  p_id text,p_expected_version bigint,p_reference text,p_expires_at timestamptz
+) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v rhinoq_task.artifacts%ROWTYPE;
+BEGIN
+  SELECT * INTO v FROM rhinoq_task.artifacts WHERE id=p_id FOR UPDATE;
+  IF v.id IS NULL THEN PERFORM rhinoq_task.fail('RHINOQ_ARTIFACT_NOT_FOUND',p_id); END IF;
+  IF v.version<>p_expected_version THEN PERFORM rhinoq_task.fail('RHINOQ_VERSION_CONFLICT',p_id); END IF;
+  UPDATE rhinoq_task.artifacts SET reference=p_reference,expires_at=p_expires_at,version=version+1,updated_at=clock_timestamp() WHERE id=p_id;
+  UPDATE rhinoq_task.tasks SET version=version+1,updated_at=clock_timestamp() WHERE id=v.task_id;
+END; $$;
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
@@ -1580,7 +1712,8 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 5, name: '005_items_settled_signal', sql: TASK_SCHEMA_V5_SQL },
   { version: 6, name: '006_transactional_item_effect', sql: TASK_SCHEMA_V6_SQL },
   { version: 7, name: '007_actionable_conflicts_and_late_starts', sql: TASK_SCHEMA_V7_SQL },
-  { version: 8, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V8_SQL },
+  { version: 8, name: '008_durable_waitpoints', sql: TASK_SCHEMA_V8_SQL },
+  { version: 9, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V9_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {
@@ -1591,7 +1724,7 @@ export interface SqlPool extends SqlExecutor {
   connect(): Promise<SqlConnection>;
 }
 
-/** Applies only the isolated four-table Task profile. */
+/** Applies only the isolated Task profile; runtime, Rule and Finding schemas stay separate. */
 export async function migrateTaskSchema(pool: SqlPool): Promise<void> {
   if (!pool || typeof pool.connect !== 'function') {
     throw new TypeError('a PostgreSQL pool with connect() is required');

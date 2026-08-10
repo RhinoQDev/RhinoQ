@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = '1.0';
-export const SDK_VERSION = '0.1.0-beta.9';
+export const SDK_VERSION = '0.1.0-beta.10';
 export const MAX_CLAIM_BATCH = 1000;
 
 export const CLIENT_CAPABILITIES = [
@@ -49,6 +49,8 @@ export type TaskState =
 export interface TaskCreateRequest {
   id: string;
   type: string;
+  /** Stable application tenant boundary. Defaults to `default` for single-tenant apps. */
+  tenantId?: string;
   ownerId?: string;
   definitionVersion: number;
 }
@@ -264,6 +266,72 @@ export interface TaskWaitpointCreateRequest {
 export interface TaskWaitpointResolveRequest {
   expectedVersion: number; resolutionId: string; actor?: string; resolution: unknown;
 }
+
+export type TaskVerificationStatus = 'verified' | 'mismatch' | 'unverifiable';
+export interface TaskVerificationFinding {
+  ruleId: string;
+  subjectType: string;
+  subjectId: string;
+  invariantVersion: number;
+  /** Operator-safe URL produced by the application or RhinoQ Workbench. */
+  deepLink?: string;
+}
+export interface TaskVerificationRecord {
+  schemaVersion: 1;
+  id: string;
+  taskId: string;
+  verifier: string;
+  status: TaskVerificationStatus;
+  summary?: string;
+  evidence?: unknown;
+  finding?: TaskVerificationFinding;
+  verifiedAt: string;
+  createdAt: string;
+}
+export interface TaskVerificationCreateRequest {
+  id: string;
+  verifier: string;
+  status: TaskVerificationStatus;
+  summary?: string;
+  evidence?: unknown;
+  finding?: TaskVerificationFinding;
+  verifiedAt?: string;
+}
+
+/** Browser-safe artifact metadata. Storage references are never included. */
+export interface TaskArtifact {
+  schemaVersion: 1;
+  entityVersion: number;
+  id: string;
+  taskId: string;
+  executionId?: string;
+  name: string;
+  contentType: string;
+  sizeBytes: number;
+  checksumSha256: string;
+  expiresAt: string;
+  lineage: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+export interface TaskArtifactCreateRequest {
+  id: string;
+  executionId?: string;
+  name: string;
+  contentType: string;
+  sizeBytes: number;
+  checksumSha256: string;
+  reference: string;
+  expiresAt: string;
+  /** IDs of source artifacts used to produce this artifact. */
+  lineage?: string[];
+}
+export interface TaskArtifactRefreshRequest {
+  expectedVersion: number;
+  reference: string;
+  expiresAt: string;
+}
+export interface TaskArtifactRecord extends TaskArtifact { reference: string; }
 
 export type ProviderConfirmationPolicy = 'on-return' | 'readback' | 'webhook';
 export type ProviderRetryPolicy = 'never' | 'when-not-happened';

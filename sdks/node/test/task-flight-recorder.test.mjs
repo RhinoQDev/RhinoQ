@@ -68,3 +68,18 @@ test('uncertain Tasks are explicitly fail-closed', () => {
   assert.equal(recorder.attention[0].safeToRetry, false);
   assert.match(recorder.explanation, /confirmation|cannot yet prove/i);
 });
+
+test('Flight Recorder joins business verification, provider outcome and artifact lineage', () => {
+  const recorder = taskFlightRecorder({
+    task: task({ executions: [] }),
+    verifications: [{ schemaVersion: 1, id: 'verify-1', taskId: 'task-flight-1', verifier: 'invoice-exists', status: 'mismatch', summary: 'Invoice row is missing', verifiedAt: '2026-08-10T08:03:00.000Z', createdAt: '2026-08-10T08:03:00.000Z' }],
+    providerOperations: [{ id: 'provider-1', taskId: 'task-flight-1', provider: 'billing', operation: 'charge', idempotencyKey: 'charge-1', confirmation: 'readback', retryPolicy: 'when-not-happened', state: 'uncertain', reason: 'timeout after request write', version: 2, createdAt: '2026-08-10T08:01:00.000Z', updatedAt: '2026-08-10T08:02:00.000Z' }],
+    artifacts: [{ schemaVersion: 1, entityVersion: 1, id: 'artifact-1', taskId: 'task-flight-1', name: 'invoice.pdf', contentType: 'application/pdf', sizeBytes: 42, checksumSha256: 'a'.repeat(64), expiresAt: '2026-08-11T08:00:00.000Z', lineage: ['artifact-source'], createdAt: '2026-08-10T08:02:30.000Z', updatedAt: '2026-08-10T08:02:30.000Z' }],
+    now: () => new Date('2026-08-10T08:04:00.000Z'),
+  });
+  assert.ok(recorder.events.some((event) => event.kind === 'verification.outcome'));
+  assert.ok(recorder.events.some((event) => event.kind === 'provider.operation'));
+  assert.ok(recorder.events.some((event) => event.kind === 'artifact.recorded'));
+  assert.ok(recorder.attention.some((item) => item.kind === 'business_mismatch' && item.safeToRetry === false));
+  assert.ok(recorder.attention.some((item) => item.kind === 'provider_uncertain' && item.safeToRetry === false));
+});

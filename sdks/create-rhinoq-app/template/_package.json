@@ -11,7 +11,7 @@
     "db:down": "docker compose down -v"
   },
   "dependencies": {
-    "@rhinoq/node": "0.1.0-beta.9",
+    "@rhinoq/node": "0.1.0-beta.10",
     "bullmq": "^5.81.3",
     "express": "^4.22.2",
     "ioredis": "^5.11.1",

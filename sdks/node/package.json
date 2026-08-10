@@ -1,6 +1,6 @@
 {
   "name": "@rhinoq/node",
-  "version": "0.1.0-beta.9",
+  "version": "0.1.0-beta.10",
   "description": "Make async work visible and recoverable with a user Task Center and operator Workbench",
   "license": "Apache-2.0",
   "repository": {

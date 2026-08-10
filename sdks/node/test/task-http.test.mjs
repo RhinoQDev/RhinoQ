@@ -98,7 +98,8 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
     headers: { 'x-owner': 'owner-a' },
   }))).json();
   assert.deepEqual(capabilities, {
-    schemaVersion: 1, cancel: true, retry: true, result: false, waitpoints: true, stream: true,
+    schemaVersion: 1, cancel: true, retry: true, result: false, waitpoints: true, stream: true, risk: false,
+    tenant: false, verifications: true, artifacts: false,
   });
   assert.deepEqual(await client.capabilities(), capabilities);
   const unresolvedResult = await handler(new Request('http://app.test/tasks/task-1/result', {
@@ -128,6 +129,83 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
   const failedItems = await client.downloadFailedTaskItems('task-1', 'csv');
   assert.match(await failedItems.text(), /^taskId,itemKey/);
   assert.throws(() => client.retryTask('task-1', 4, ''), /commandId/i);
+});
+
+test('risk policy exposes owner-scoped at-risk and stuck tasks with explicit thresholds', async () => {
+  const updatedAt = new Date(Date.now() - 120_000).toISOString();
+  const handler = createTaskRequestHandler({
+    tasks: {
+      async listTasksByState(query) {
+        assert.deepEqual(query.states, ['pending', 'queued', 'running', 'cancel_requested']);
+        assert.equal(query.idleForMs, 30_000);
+        assert.equal(query.ownerId, 'owner-a');
+        assert.equal(query.limit, 25);
+        return [{ schemaVersion: 1, entityVersion: 2, id: 'task-risk', type: 'export', ownerId: 'owner-a', state: 'running', cancellation: { status: 'none' }, progress: { completed: 1, total: 2 }, hasResult: false, createdAt: updatedAt, updatedAt }];
+      },
+    },
+    ownerFromRequest: () => 'owner-a',
+    riskPolicy: { atRiskAfterMs: 30_000, stuckAfterMs: 90_000 },
+  });
+  const capabilities = await (await handler(new Request('http://app.test/tasks/_capabilities'))).json();
+  assert.deepEqual(capabilities.risk, { atRiskAfterMs: 30_000, stuckAfterMs: 90_000 });
+  const response = await handler(new Request('http://app.test/tasks/_risk?limit=25'));
+  const body = await response.json();
+  assert.equal(body.tasks[0].risk, 'stuck');
+  assert.ok(body.tasks[0].idleForMs >= 90_000);
+});
+
+test('risk policy rejects ambiguous thresholds', () => {
+  assert.throws(() => createTaskRequestHandler({
+    tasks: {}, ownerFromRequest: () => 'owner-a',
+    riskPolicy: { atRiskAfterMs: 60_000, stuckAfterMs: 60_000 },
+  }), /stuckAfterMs/);
+});
+
+test('tenant context fences verification and artifact reads through the owner HTTP surface', async () => {
+  const verification = {
+    schemaVersion: 1, id: 'verify-1', taskId: 'task-tenant', verifier: 'output-exists',
+    status: 'verified', verifiedAt: '2026-08-10T00:00:00.000Z', createdAt: '2026-08-10T00:00:00.000Z',
+  };
+  const artifact = {
+    schemaVersion: 1, entityVersion: 1, id: 'artifact-1', taskId: 'task-tenant', name: 'report.csv',
+    contentType: 'text/csv', sizeBytes: 12, checksumSha256: 'a'.repeat(64),
+    expiresAt: '2026-08-11T00:00:00.000Z', lineage: ['source'],
+    createdAt: '2026-08-10T00:00:00.000Z', updatedAt: '2026-08-10T00:00:00.000Z',
+  };
+  const assertScope = (ownerId, tenantId) => {
+    assert.equal(ownerId, 'owner-a');
+    assert.equal(tenantId, 'tenant-a');
+  };
+  const handler = createTaskRequestHandler({
+    tasks: {
+      async listRecentlyVerifiedForOwner(ownerId, limit, tenantId) {
+        assertScope(ownerId, tenantId); assert.equal(limit, 20); return [verification];
+      },
+      async listTaskVerificationsForOwner(taskId, ownerId, limit, tenantId) {
+        assert.equal(taskId, 'task-tenant'); assertScope(ownerId, tenantId); assert.equal(limit, 50); return [verification];
+      },
+      async listTaskArtifactsForOwner(taskId, ownerId, limit, tenantId) {
+        assert.equal(taskId, 'task-tenant'); assertScope(ownerId, tenantId); assert.equal(limit, 100); return [artifact];
+      },
+      async getTaskArtifactForOwner(id, ownerId, tenantId) {
+        assert.equal(id, 'artifact-1'); assertScope(ownerId, tenantId);
+        return { ...artifact, reference: 'storage://private/report.csv' };
+      },
+    },
+    ownerFromRequest: () => 'owner-a',
+    tenantFromRequest: (request) => request.headers.get('x-tenant') ?? undefined,
+    resolveArtifact: async (record, _request, ownerId, tenantId) => {
+      assertScope(ownerId, tenantId);
+      assert.equal(record.reference, 'storage://private/report.csv');
+      return { url: '/downloads/report.csv' };
+    },
+  });
+  const fetch = (path) => handler(new Request(`http://app.test/tasks${path}`, { headers: { 'x-tenant': 'tenant-a' } }));
+  assert.deepEqual((await (await fetch('/_verified')).json()).verifications, [verification]);
+  assert.deepEqual((await (await fetch('/task-tenant/verifications')).json()).verifications, [verification]);
+  assert.equal(JSON.stringify(await (await fetch('/task-tenant/artifacts')).json()).includes('storage://'), false);
+  assert.deepEqual(await (await fetch('/task-tenant/artifacts/artifact-1/download')).json(), { url: '/downloads/report.csv' });
+  assert.equal((await handler(new Request('http://app.test/tasks/_verified'))).status, 401);
 });
 
 test('result download is capability-gated and owner-authorized', async () => {

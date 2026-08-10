@@ -13,4 +13,5 @@ type ProviderOperationStore interface {
 	SaveProviderOperation(context.Context, provideroperation.Record, int64, *provideroperation.Evidence) (provideroperation.Record, error)
 	ListProviderOperationEvidence(context.Context, provideroperation.ID) ([]provideroperation.Evidence, error)
 	ListProviderOperations(context.Context, []provideroperation.State, time.Time, int) ([]provideroperation.Record, error)
+	ListProviderOperationsByTask(context.Context, string, int) ([]provideroperation.Record, error)
 }

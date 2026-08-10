@@ -320,6 +320,27 @@ func (c *IntegrityClient) ListProviderOperationsNeedingAttention(ctx context.Con
 	return result, nil
 }
 
+// ListProviderOperationsByTask joins the provider ledger to an explicit Task
+// correlation for Flight Recorder views; it never infers identity from names.
+func (c *IntegrityClient) ListProviderOperationsByTask(ctx context.Context, taskID string, limit int) ([]ProviderOperationRecord, error) {
+	if c == nil || c.providerOperations == nil {
+		return nil, errors.New("rhinoq provider operation store is not configured")
+	}
+	if limit == 0 {
+		limit = 100
+	}
+	service, _ := providerapp.New(c.providerOperations, nil)
+	items, err := service.ByTask(ctx, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]ProviderOperationRecord, len(items))
+	for i, item := range items {
+		result[i] = publicProviderOperation(item)
+	}
+	return result, nil
+}
+
 // ConfirmProviderOperation records proof delivered later by a provider
 // webhook. Repeating the same confirmation is idempotent.
 func (c *IntegrityClient) ConfirmProviderOperation(ctx context.Context, id, evidence string) (ProviderOperationRecord, error) {

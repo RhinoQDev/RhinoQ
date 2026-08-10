@@ -42,9 +42,11 @@ context to understand failures and recover safely.</p>
 
 <section class="overview" aria-label="Task overview">
   <div class="metric"><b id="attentionCount">0</b><span>Needs attention</span></div>
+  <div class="metric"><b id="riskCount">0</b><span>At risk / stuck</span></div>
   <div class="metric"><b id="waitingCount">0</b><span>Waiting for me</span></div>
   <div class="metric"><b id="runningCount">0</b><span>In progress</span></div>
   <div class="metric"><b id="completedCount">0</b><span>Completed</span></div>
+  <div class="metric"><b id="verifiedCount">0</b><span>Recently verified</span></div>
   <div class="metric"><b id="recentCount">0</b><span>Recent tasks</span></div>
 </section>
 
@@ -155,8 +157,14 @@ $('verify').onclick = async () => {
 async function poll() {
   try {
     if (Date.now() - lastListAt > 2000) {
-      const [list, waits] = await Promise.all([api('/tasks?limit=50'), api('/tasks/_waitpoints?limit=50')]);
-      renderOverview(list.tasks || [], waits.waitpoints || []);
+      const [list, waits, risks, verified] = await Promise.all([
+        api('/tasks?limit=50'),
+        api('/tasks/_waitpoints?limit=50'),
+        api('/tasks/_risk?limit=50'),
+        api('/tasks/_verified?limit=20'),
+      ]);
+      renderOverview(list.tasks || [], waits.waitpoints || [], risks.tasks || []);
+      $('verifiedCount').textContent = (verified.verifications || []).length;
       if (!taskId) taskId = list.tasks[0]?.id ?? null;
       lastListAt = Date.now();
     }
@@ -168,19 +176,21 @@ async function poll() {
   setTimeout(poll, 400);
 }
 
-function renderOverview(tasks, waitpoints) {
+function renderOverview(tasks, waitpoints, riskTasks) {
+  const riskById = new Map(riskTasks.map((task) => [task.id, task]));
   const attentionTasks = tasks.filter((task) => {
     const counts = task.itemCounts ?? task.executionCounts ?? {};
     return task.state === 'failed' || task.state === 'uncertain' ||
       task.cancellation?.status === 'too_late' ||
       task.cancellation?.status === 'cannot_cancel_safely' ||
-      ((counts.failed ?? 0) > 0 && (counts.succeeded ?? 0) > 0);
-  });
+      ((counts.failed ?? 0) > 0 && (counts.succeeded ?? 0) > 0) || riskById.has(task.id);
+  }).map((task) => ({ ...task, derivedRisk: riskById.get(task.id) }));
   const inProgress = tasks.filter((task) =>
     ['pending', 'queued', 'running', 'cancel_requested'].includes(task.state)).length;
   const waitingForMe = waitpoints.filter((waitpoint) =>
     waitpoint.kind === 'approval' || waitpoint.kind === 'input');
   $('attentionCount').textContent = attentionTasks.length;
+  $('riskCount').textContent = riskTasks.length;
   $('waitingCount').textContent = waitingForMe.length;
   $('runningCount').textContent = inProgress;
   $('completedCount').textContent = tasks.filter((task) => task.state === 'succeeded').length;
@@ -237,6 +247,8 @@ function renderWaiting(waitpoints, tasks) {
 
 function overviewGuidance(task) {
   const counts = task.itemCounts ?? task.executionCounts ?? {};
+  if (task.derivedRisk?.risk === 'stuck') return ['No progress has been recorded past the stuck threshold.', 'Check the worker and dependency before retrying.'];
+  if (task.derivedRisk?.risk === 'at_risk') return ['This task has stopped reporting progress.', 'Check the worker before it becomes stuck.'];
   if (task.cancellation?.status === 'cannot_cancel_safely') return ['This work could not be stopped safely.', 'Review completed work.'];
   if (task.cancellation?.status === 'too_late') return ['The work finished before cancellation.', 'Review the result.'];
   if (task.state === 'uncertain') return ['The external result still needs confirmation.', 'Check confirmation before repeating it.'];

@@ -8,7 +8,7 @@ and operators can understand failures and recover safely. You keep the runtime
 that executes the work; RhinoQ supplies the missing Task layer around it.
 
 ```bash
-npx create-rhinoq-app my-batch && cd my-batch && npm start
+npx create-rhinoq-app@next my-batch && cd my-batch && npm start
 ```
 
 That brings up PostgreSQL and Redis, applies the schema, runs a 50-item batch
@@ -63,9 +63,10 @@ That second layer is optional on day one and uses the same operator workflow.
 ![Status](https://img.shields.io/badge/status-prerelease-f59e0b)
 
 > [!WARNING]
-> RhinoQ is a prerelease for evaluation and controlled pilots. The tenant
-> boundary is enforced in PostgreSQL ([`docs/tenancy.md`](docs/tenancy.md)), but
-> the HTTP surface is not yet wired to it; the code-reduction numbers are a
+> RhinoQ is a prerelease for evaluation and controlled pilots. The full Go
+> profile enforces tenant isolation in PostgreSQL, while the embedded Node Task
+> profile now requires tenant context at its HTTP boundary and includes it in
+> every owner-scoped SQL predicate. The code-reduction numbers are a
 > reproducible local benchmark rather than a design-partner count; and chaos
 > evidence is local drills rather than a deployment-shaped campaign. Those still
 > block a production-ready claim.
@@ -80,7 +81,7 @@ That second layer is optional on day one and uses the same operator workflow.
 
 | If you are… | Read |
 |---|---|
-| starting a new project | `npx create-rhinoq-app`, above |
+| starting a new project | `npx create-rhinoq-app@next`, above |
 | adding this around async work you already run | [the two integration doors](./docs/two-doors.md); the current production-shaped adapter example uses [`BullMQ`](./examples/fanout-bullmq/) |
 | deciding whether it will save you code | [two doors](./docs/two-doors.md) |
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
@@ -245,7 +246,7 @@ the Rules half of the product starts from a database you already have — no
 queue, no worker, no cutover:
 
 ```bash
-npm install rhinoq pg
+npm install rhinoq@next pg
 npx rhinoq init
 npx rhinoq adopt --mode single        # preview
 npx rhinoq adopt --mode single --apply
@@ -296,7 +297,7 @@ The application still supplies the BullMQ state reader; RhinoQ never scans or
 mutates the application's Redis:
 
 ```bash
-npm install @rhinoq/node pg
+npm install @rhinoq/node@next pg
 # From this checkout only — @rhinoq/nest has no npm release and `npm install
 # @rhinoq/nest` will 404.
 npm install ./sdks/nest
@@ -366,7 +367,7 @@ starts a separately leased reconciliation sweep when a runtime observer is
 provided, and exposes health/metrics wiring:
 
 ```bash
-npm install @rhinoq/node pg
+npm install @rhinoq/node@next pg
 ```
 
 ```ts
@@ -424,6 +425,27 @@ result actions only when the application configured their handlers. Result
 download now fails closed with `RHINOQ_RESULT_NOT_CONFIGURED` when no authorized
 resolver exists; RhinoQ never falls back to returning a durable storage
 reference directly to the browser.
+
+Applications may supply `tenantFromRequest` beside `ownerFromRequest`. The
+tenant is then carried through list/detail/history/waitpoint/result/SSE reads;
+missing tenant context is refused. Single-tenant applications use the explicit
+`default` tenant. Operator Workbench reads remain deliberately cross-tenant and
+must stay behind `requireOperator`.
+
+An explicit `riskPolicy: { atRiskAfterMs, stuckAfterMs }` enables the bounded
+`GET /tasks/_risk` view. Risk means no Task update crossed a declared threshold;
+it is never inferred from total runtime. The generated Overview puts these
+Tasks in Needs attention with a concrete next action.
+
+Business verification is append-only Task evidence. `GET /tasks/_verified`
+powers Recently verified, while each verification may carry the exact Finding
+key and operator deep link. `recordTaskVerificationChain()` connects a mismatch
+to the Go-owned Finding writer and an application-owned durable notification
+enqueue hook; it fails closed when the Finding writer is missing.
+
+Artifact v1 stores browser-safe metadata, SHA-256 checksum, expiry, refresh
+version and lineage. Private storage references are available only to the
+application's `resolveArtifact` callback and never appear in list/detail JSON.
 
 The same owner-authenticated surface now exposes `GET /tasks/{id}/events` and
 `GET /tasks/_events` as SSE. `ApplicationTaskClient` uses Fetch streaming, so
@@ -809,6 +831,11 @@ exists but is not the default browser polling shape.
 | Rules, Findings and Evidence Workbench | implemented |
 | Recheck and guarded repair workflow | implemented; callback registration is application-owned |
 | Summary polling and cursor-paginated Executions | implemented |
+| Explicit At risk/Stuck policy and owner-scoped view | implemented in Node Task profile |
+| Task verification records and Recently verified | implemented in Node Task profile |
+| Artifact v1 metadata/checksum/expiry/refresh/lineage | implemented in Node Task profile |
+| Task-to-provider Flight Recorder correlation | implemented through explicit `taskId`; Gateway + Workbench tested |
+| Node Task tenant HTTP/SQL boundary | implemented; full-profile PostgreSQL RLS remains the stronger boundary |
 | Signed webhook and Slack notifications with durable dedup | implemented |
 | Failure inbox with claim/replay/retry/ignore states | implemented in Node source checkout; application-owned table |
 | Notification destinations configurable from the CLI, with a delivery probe | implemented |
@@ -817,7 +844,7 @@ exists but is not the default browser polling shape.
 | Bounded, previewable retention for observation and delivery evidence | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, verifiable checksum bundle, SBOM and non-root image | beta.9 release pipeline verified in CI |
+| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.10 pipeline configured; tagged release not yet executed |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 

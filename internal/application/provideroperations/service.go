@@ -83,6 +83,9 @@ func (s *Service) Attention(ctx context.Context, before time.Time, limit int) ([
 		provideroperation.Pending, provideroperation.Accepted, provideroperation.Uncertain,
 	}, before, limit)
 }
+func (s *Service) ByTask(ctx context.Context, taskID string, limit int) ([]provideroperation.Record, error) {
+	return s.store.ListProviderOperationsByTask(ctx, taskID, limit)
+}
 func (s *Service) mutate(ctx context.Context, current provideroperation.Record, evidenceKind, evidencePayload string, fn func(provideroperation.Record) (provideroperation.Record, error)) (provideroperation.Record, error) {
 	next, err := fn(current)
 	if err != nil {

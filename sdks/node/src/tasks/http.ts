@@ -5,6 +5,7 @@ import type {
   TaskResult,
   TaskSnapshot,
 	TaskSummary,
+	TaskArtifactRecord,
 	TaskWaitpoint,
 	TaskWaitpointCreateRequest,
 	TaskWaitpointResolveRequest,
@@ -18,6 +19,8 @@ export interface TaskRequestHandlerOptions {
   tasks: PostgresTaskClient;
   /** Return the authenticated application owner ID; never a RhinoQ token. */
   ownerFromRequest(request: Request): Promise<string | undefined> | string | undefined;
+  /** Resolve a stable tenant from the host session. Omit for a single `default` tenant. */
+  tenantFromRequest?(request: Request): Promise<string | undefined> | string | undefined;
   /** Defaults to /tasks. */
   basePath?: string;
   /**
@@ -28,6 +31,13 @@ export interface TaskRequestHandlerOptions {
     result: TaskResult,
     request: Request,
     ownerId: string,
+  ): Promise<unknown> | unknown;
+  /** Convert a private artifact reference into a short-lived owner-safe response. */
+  resolveArtifact?(
+    artifact: TaskArtifactRecord,
+    request: Request,
+    ownerId: string,
+    tenantId: string,
   ): Promise<unknown> | unknown;
   /** Application-owned durable retry composition. commandId is mandatory. */
   retryTask?(input: {
@@ -48,8 +58,15 @@ export interface TaskRequestHandlerOptions {
   }): Promise<TaskSnapshot>;
   /** Optional health report mounted at `<basePath>/_health`. */
   health?(): Promise<unknown> | unknown;
+  /** Explicit no-progress thresholds. Omit to disable derived risk labels. */
+  riskPolicy?: TaskRiskPolicy;
   /** Set false to disable SSE. Snapshots remain authoritative. */
   stream?: TaskSSEOptions | false;
+}
+
+export interface TaskRiskPolicy {
+  atRiskAfterMs: number;
+  stuckAfterMs: number;
 }
 
 /** Capabilities the owner UI may render without discovering support via 501. */
@@ -60,6 +77,10 @@ export interface TaskSurfaceCapabilities {
   result: boolean;
   waitpoints: true;
   stream: boolean;
+  risk: false | TaskRiskPolicy;
+  tenant: boolean;
+  verifications: true;
+  artifacts: boolean;
 }
 
 /**
@@ -76,6 +97,7 @@ export function createTaskRequestHandler(
     throw new TypeError('PostgresTaskClient is required');
   }
   const basePath = normalizeBasePath(options.basePath ?? '/tasks');
+  const riskPolicy = normalizeRiskPolicy(options.riskPolicy);
   let activeStreams = 0;
   const maxStreams = options.stream === false ? 0 : boundedInteger(options.stream?.maxConnections ?? 1_000, 1, 100_000, 'stream maxConnections');
   const openStream = (create: (closed: () => void) => Response): Response => {
@@ -91,6 +113,8 @@ export function createTaskRequestHandler(
       if (!ownerId?.trim()) {
         return json({ code: 'RHINOQ_UNAUTHORIZED' }, 401);
       }
+      const tenantId = options.tenantFromRequest ? await options.tenantFromRequest(request) : 'default';
+      if (!tenantId?.trim()) return json({ code: 'RHINOQ_UNAUTHORIZED', message: 'tenant context is required' }, 401);
       const url = new URL(request.url);
       const relative = routeParts(url.pathname, basePath);
       if (relative === undefined) {
@@ -100,11 +124,11 @@ export function createTaskRequestHandler(
       if (request.method === 'GET' && relative.length === 0) {
         const limit = integerQuery(url, 'limit', 50);
         const offset = integerQuery(url, 'offset', 0);
-        return json({ tasks: await options.tasks.listTasks(ownerId, limit, offset) });
+        return json({ tasks: await options.tasks.listTasks(ownerId, limit, offset, tenantId) });
       }
       if (request.method === 'GET' && relative.length === 1 && relative[0] === '_events') {
         if (options.stream === false) return json({ code: 'RHINOQ_STREAM_DISABLED' }, 404);
-        return openStream((closed) => taskListEventResponse(options.tasks, request, ownerId, integerQuery(url, 'limit', 50), integerQuery(url, 'offset', 0), options.stream || undefined, closed));
+        return openStream((closed) => taskListEventResponse(options.tasks, request, ownerId, integerQuery(url, 'limit', 50), integerQuery(url, 'offset', 0), options.stream || undefined, closed, tenantId));
       }
       if (request.method === 'GET' && relative.length === 1 && relative[0] === '_health') {
         return options.health ? json(await options.health()) : json({ status: 'ok' });
@@ -117,34 +141,63 @@ export function createTaskRequestHandler(
           result: typeof options.resolveResult === 'function',
           waitpoints: true,
           stream: options.stream !== false,
+          risk: riskPolicy ?? false,
+          tenant: typeof options.tenantFromRequest === 'function',
+          verifications: true,
+          artifacts: typeof options.resolveArtifact === 'function',
         };
         return json(capabilities);
+      }
+      if (request.method === 'GET' && relative.length === 1 && relative[0] === '_risk') {
+        if (!riskPolicy) return json({ code: 'RHINOQ_RISK_POLICY_NOT_CONFIGURED' }, 404);
+        const limit = integerQuery(url, 'limit', 50);
+        if (limit < 1 || limit > 100) return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'risk limit must be 1..100' }, 400);
+        const tasks = await options.tasks.listTasksByState({
+          states: ['pending', 'queued', 'running', 'cancel_requested'],
+          idleForMs: riskPolicy.atRiskAfterMs,
+          ownerId,
+          tenantId,
+          limit,
+        });
+        const now = Date.now();
+        return json({
+          policy: riskPolicy,
+          tasks: tasks.map((task) => {
+            const idleForMs = Math.max(0, now - Date.parse(task.updatedAt));
+            return { ...task, risk: idleForMs >= riskPolicy.stuckAfterMs ? 'stuck' : 'at_risk', idleForMs };
+          }),
+        });
+      }
+      if (request.method === 'GET' && relative.length === 1 && relative[0] === '_verified') {
+        const limit = integerQuery(url, 'limit', 20);
+        if (limit < 1 || limit > 100) return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'verification limit must be 1..100' }, 400);
+        return json({ verifications: await options.tasks.listRecentlyVerifiedForOwner(ownerId, limit, tenantId) });
       }
       if (request.method === 'GET' && relative.length === 1 && relative[0] === '_waitpoints') {
         const limit = integerQuery(url, 'limit', 50);
         if (limit < 1 || limit > 100) {
           return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'waitpoint limit must be 1..100' }, 400);
         }
-        return json({ waitpoints: await options.tasks.listWaitingTaskWaitpointsForOwner(ownerId, limit) });
+        return json({ waitpoints: await options.tasks.listWaitingTaskWaitpointsForOwner(ownerId, limit, tenantId) });
       }
       const taskId = relative[0];
       if (!taskId) {
         return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
       }
       if (request.method === 'GET' && relative.length === 1) {
-        return json(await options.tasks.getTaskForOwner(taskId, ownerId));
+        return json(await options.tasks.getTaskForOwner(taskId, ownerId, tenantId));
       }
 	  if (request.method === 'GET' && relative.length === 2 && relative[1] === 'events') {
 		if (options.stream === false) return json({ code: 'RHINOQ_STREAM_DISABLED' }, 404);
-		await options.tasks.getTaskSummaryForOwner(taskId, ownerId);
-		return openStream((closed) => taskEventResponse(options.tasks, request, ownerId, taskId, options.stream || undefined, closed));
+		await options.tasks.getTaskSummaryForOwner(taskId, ownerId, tenantId);
+		return openStream((closed) => taskEventResponse(options.tasks, request, ownerId, taskId, options.stream || undefined, closed, tenantId));
 	  }
 	  if (request.method === 'GET' && relative.length === 2 && relative[1] === 'summary') {
-		const summary: TaskSummary = await options.tasks.getTaskSummaryForOwner(taskId, ownerId);
+		const summary: TaskSummary = await options.tasks.getTaskSummaryForOwner(taskId, ownerId, tenantId);
 		return json(summary);
 	  }
       if (request.method === 'GET' && relative.length === 2 && relative[1] === 'failed-items') {
-        const task = await options.tasks.getTaskForOwner(taskId, ownerId);
+        const task = await options.tasks.getTaskForOwner(taskId, ownerId, tenantId);
         const format = url.searchParams.get('format') === 'csv' ? 'csv' : 'json';
         return new Response(failedTaskItems(task, format), { headers: {
           'content-type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json; charset=utf-8',
@@ -153,8 +206,8 @@ export function createTaskRequestHandler(
         } });
       }
       if (request.method === 'GET' && relative.length === 2 && relative[1] === 'manifest') {
-        const task = await options.tasks.getTaskForOwner(taskId, ownerId);
-        const results = await options.tasks.getTaskExecutionResultsForOwner(taskId, ownerId);
+        const task = await options.tasks.getTaskForOwner(taskId, ownerId, tenantId);
+        const results = await options.tasks.getTaskExecutionResultsForOwner(taskId, ownerId, tenantId);
         return json(taskGroupManifest(task, results.executions));
       }
 	  if (request.method === 'GET' && relative.length === 2 && relative[1] === 'waitpoints') {
@@ -163,12 +216,12 @@ export function createTaskRequestHandler(
 		  return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'waitpoint limit must be 1..100' }, 400);
 		}
 		return json({
-		  waitpoints: await options.tasks.listTaskWaitpointsForOwner(taskId, ownerId, limit),
+		  waitpoints: await options.tasks.listTaskWaitpointsForOwner(taskId, ownerId, limit, tenantId),
 		});
 	  }
 	  if (request.method === 'GET' && relative.length === 3 && relative[1] === 'executions' && relative[2] === 'page') {
 		const page: TaskExecutionPage = await options.tasks.listTaskExecutionsForOwner(
-			taskId, ownerId, url.searchParams.get('cursor') ?? '', integerQuery(url, 'limit', 100),
+		  taskId, ownerId, url.searchParams.get('cursor') ?? '', integerQuery(url, 'limit', 100), tenantId,
 		);
 		return json(page);
 	  }
@@ -178,22 +231,39 @@ export function createTaskRequestHandler(
         relative[1] === 'executions'
       ) {
         const results: TaskExecutionResults =
-          await options.tasks.getTaskExecutionResultsForOwner(taskId, ownerId);
+          await options.tasks.getTaskExecutionResultsForOwner(taskId, ownerId, tenantId);
         return json(results);
       }
       if (request.method === 'POST' && relative.length === 2 && relative[1] === 'waitpoints') {
-        await options.tasks.getTaskSummaryForOwner(taskId, ownerId);
+        await options.tasks.getTaskSummaryForOwner(taskId, ownerId, tenantId);
         const body = await request.json() as TaskWaitpointCreateRequest;
         return json(await options.tasks.createTaskWaitpoint(taskId, body), 201);
       }
       if (relative.length === 3 && relative[1] === 'waitpoints') {
-        const waitpoint = await options.tasks.getTaskWaitpoint(relative[2]!, ownerId);
+        const waitpoint = await options.tasks.getTaskWaitpoint(relative[2]!, ownerId, tenantId);
         if (waitpoint.taskId !== taskId) return json({ code: 'RHINOQ_WAITPOINT_NOT_FOUND' }, 404);
         if (request.method === 'GET') return json(waitpoint);
         if (request.method === 'POST') {
           const body = await request.json() as TaskWaitpointResolveRequest;
-          return json(await options.tasks.resolveTaskWaitpoint(relative[2]!, ownerId, body));
+          return json(await options.tasks.resolveTaskWaitpoint(relative[2]!, ownerId, body, tenantId));
         }
+      }
+      if (request.method === 'GET' && relative.length === 2 && relative[1] === 'verifications') {
+        const limit = integerQuery(url, 'limit', 50);
+        if (limit < 1 || limit > 100) return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'verification limit must be 1..100' }, 400);
+        return json({ verifications: await options.tasks.listTaskVerificationsForOwner(taskId, ownerId, limit, tenantId) });
+      }
+      if (request.method === 'GET' && relative.length === 2 && relative[1] === 'artifacts') {
+        const limit = integerQuery(url, 'limit', 100);
+        if (limit < 1 || limit > 100) return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'artifact limit must be 1..100' }, 400);
+        return json({ artifacts: await options.tasks.listTaskArtifactsForOwner(taskId, ownerId, limit, tenantId) });
+      }
+      if (request.method === 'GET' && relative.length === 4 && relative[1] === 'artifacts' && relative[3] === 'download') {
+        if (!options.resolveArtifact) return json({ code: 'RHINOQ_ARTIFACT_DOWNLOAD_NOT_CONFIGURED' }, 501);
+        const artifact = await options.tasks.getTaskArtifactForOwner(relative[2]!, ownerId, tenantId);
+        if (artifact.taskId !== taskId) return json({ code: 'RHINOQ_ARTIFACT_NOT_FOUND' }, 404);
+        const resolved = await options.resolveArtifact(artifact, request, ownerId, tenantId);
+        return resolved instanceof Response ? resolved : json(resolved);
       }
       if (
         request.method === 'GET' &&
@@ -206,7 +276,7 @@ export function createTaskRequestHandler(
             message: 'Result download is not configured for this application.',
           }, 501);
         }
-        const result = await options.tasks.getTaskResultForOwner(taskId, ownerId);
+        const result = await options.tasks.getTaskResultForOwner(taskId, ownerId, tenantId);
         const resolved = await options.resolveResult(result, request, ownerId);
         return resolved instanceof Response ? resolved : json(resolved);
       }
@@ -224,16 +294,17 @@ export function createTaskRequestHandler(
           ? undefined
           : Number(body.expectedVersion);
         const ownedTask = options.cancelTask
-          ? await options.tasks.getTaskForOwner(taskId, ownerId)
+          ? await options.tasks.getTaskForOwner(taskId, ownerId, tenantId)
           : undefined;
         const snapshot: TaskSnapshot = options.cancelTask && ownedTask
           ? await options.cancelTask({ task: ownedTask, ownerId, expectedVersion, request })
           : expectedVersion === undefined
-            ? await cancelWithoutFence(options.tasks, taskId, ownerId)
+            ? await cancelWithoutFence(options.tasks, taskId, ownerId, tenantId)
             : await options.tasks.requestTaskCancellationForOwner(
               taskId,
               ownerId,
               expectedVersion,
+              tenantId,
             );
         return json(snapshot);
       }
@@ -244,7 +315,7 @@ export function createTaskRequestHandler(
             typeof body.commandId !== 'string' || !body.commandId.trim()) {
           return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'expectedVersion and commandId are required' }, 400);
         }
-        const task = await options.tasks.getTaskForOwner(taskId, ownerId);
+        const task = await options.tasks.getTaskForOwner(taskId, ownerId, tenantId);
         if (task.entityVersion !== Number(body.expectedVersion)) {
           return json({ code: 'RHINOQ_VERSION_CONFLICT', task }, 409);
         }
@@ -370,6 +441,36 @@ export class ApplicationTaskClient {
     return result.waitpoints;
   }
 
+  async listRecentlyVerified(limit = 20) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('verification limit must be 1..100');
+    const result = await this.send<{ verifications: import('../gateway/types.js').TaskVerificationRecord[] }>('GET', `/_verified?limit=${limit}`);
+    return result.verifications;
+  }
+
+  async listTaskVerifications(taskId: string, limit = 50) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('verification limit must be 1..100');
+    const result = await this.send<{ verifications: import('../gateway/types.js').TaskVerificationRecord[] }>('GET', `/${path(taskId)}/verifications?limit=${limit}`);
+    return result.verifications;
+  }
+
+  async listTaskArtifacts(taskId: string, limit = 100) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('artifact limit must be 1..100');
+    const result = await this.send<{ artifacts: import('../gateway/types.js').TaskArtifact[] }>('GET', `/${path(taskId)}/artifacts?limit=${limit}`);
+    return result.artifacts;
+  }
+
+  getTaskArtifactDownload(taskId: string, artifactId: string): Promise<unknown> {
+    return this.send('GET', `/${path(taskId)}/artifacts/${path(artifactId)}/download`);
+  }
+
+  listAtRiskTasks(limit = 50): Promise<{
+    policy: TaskRiskPolicy;
+    tasks: Array<TaskSummary & { risk: 'at_risk' | 'stuck'; idleForMs: number }>;
+  }> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('risk limit must be 1..100');
+    return this.send('GET', `/_risk?limit=${limit}`);
+  }
+
   getTaskGroupManifest(taskId: string): Promise<unknown> { return this.send('GET', `/${path(taskId)}/manifest`); }
   async downloadFailedTaskItems(taskId: string, format: 'json' | 'csv' = 'json'): Promise<Blob> {
     const headers = new Headers(await this.getHeaders?.());
@@ -445,17 +546,18 @@ async function cancelWithoutFence(
   tasks: PostgresTaskClient,
   taskId: string,
   ownerId: string,
+  tenantId: string,
 ): Promise<TaskSnapshot> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const current = await tasks.getTaskForOwner(taskId, ownerId);
+    const current = await tasks.getTaskForOwner(taskId, ownerId, tenantId);
     // A terminal Task answers a late request with `too_late` rather than an
     // error, and re-requesting an in-flight cancellation is a no-op.
     if (current.state === 'cancel_requested') {
       return current;
     }
     try {
-      return await tasks.requestTaskCancellationForOwner(taskId, ownerId, current.entityVersion);
+      return await tasks.requestTaskCancellationForOwner(taskId, ownerId, current.entityVersion, tenantId);
     } catch (error) {
       if (!(error instanceof RhinoQError) || error.code !== 'RHINOQ_VERSION_CONFLICT') {
         throw error;
@@ -497,6 +599,15 @@ function integerQuery(url: URL, name: string, fallback: number): number {
 function boundedInteger(value: number, min: number, max: number, name: string): number {
   if (!Number.isInteger(value) || value < min || value > max) throw new RangeError(`${name} must be ${min}..${max}`);
   return value;
+}
+
+function normalizeRiskPolicy(policy?: TaskRiskPolicy): TaskRiskPolicy | undefined {
+  if (!policy) return undefined;
+  if (!Number.isFinite(policy.atRiskAfterMs) || policy.atRiskAfterMs < 1_000 ||
+      !Number.isFinite(policy.stuckAfterMs) || policy.stuckAfterMs <= policy.atRiskAfterMs) {
+    throw new RangeError('riskPolicy requires stuckAfterMs > atRiskAfterMs >= 1000');
+  }
+  return { atRiskAfterMs: Math.floor(policy.atRiskAfterMs), stuckAfterMs: Math.floor(policy.stuckAfterMs) };
 }
 
 function path(value: string): string {

@@ -12,7 +12,7 @@ intended existing-worker adoption path.
 | Journey | Current state | Verdict |
 |---|---|---|
 | Go Task contract | public facade, PostgreSQL store and versioned snapshots | usable for controlled evaluation |
-| Embedded Node Task polling | three-table profile, application `pg.Pool`, owner-scoped handler/browser client | implemented and real-DB tested; adopter remeasurement pending |
+| Embedded Node Task polling | isolated profile, application `pg.Pool`, tenant-and-owner-scoped handler/browser client | implemented and real-DB tested; adopter remeasurement pending |
 | Existing BullMQ worker | preview-first adopter CLI and leased integration preset with explicit single/fan-out semantics | implemented; code-reduction promise remains unproven |
 | Native Go/PostgreSQL runtime | transactional enqueue, worker and operational tooling | usable for repository evaluation |
 | Verified Tasks | Rules, Findings and read-only investigation | optional evaluation path, not the main onboarding path |

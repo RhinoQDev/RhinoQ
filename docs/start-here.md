@@ -19,7 +19,7 @@ RhinoQ has two layers that you can adopt separately:
 ## First value: one connected async-task loop
 
 ```bash
-npx create-rhinoq-app my-batch
+npx create-rhinoq-app@next my-batch
 cd my-batch
 npm start
 ```
@@ -207,7 +207,7 @@ source files. Prefer `RHINOQ_DATABASE_URL` when the application already uses
 ### 3. Install the pinned SDK
 
 ```bash
-npm install rhinoq pg
+npm install rhinoq@0.1.0-beta.10 pg
 ```
 
 Why: `pg` is a peer dependency and lets RhinoQ reuse the application's pool.
@@ -730,7 +730,7 @@ Read [Production readiness](./production-readiness.md),
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
 | repair is unavailable | Workbench is read-only or handler is not registered | supply the callback allowlist and start with `--actions` |
 | repair becomes `stale` | the business object changed after preview | investigate again and create a new plan; do not bypass the precondition |
-| npm installs an unexpected version | every published version is a prerelease and `latest` moves with each one | pin an exact version, for example `@rhinoq/node@0.1.0-beta.9` |
+| npm installs an unexpected version | prereleases use `next` and `latest` is not moved by the beta.10 workflow | pin an exact version, for example `@rhinoq/node@0.1.0-beta.10` after the release succeeds |
 
 ## Honest current limits
 

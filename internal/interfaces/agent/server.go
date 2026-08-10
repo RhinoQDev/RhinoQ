@@ -252,6 +252,15 @@ func (s *Server) handleListProviderOperations(w http.ResponseWriter, r *http.Req
 		}
 		limit = parsed
 	}
+	if taskID := strings.TrimSpace(r.URL.Query().Get("taskId")); taskID != "" {
+		items, err := s.client.ListProviderOperationsByTask(r.Context(), taskID, limit)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"operations": items})
+		return
+	}
 	before := time.Now().UTC()
 	if raw := r.URL.Query().Get("before"); raw != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, raw)

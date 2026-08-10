@@ -49,6 +49,26 @@ func (s *ProviderOperationStore) ListProviderOperations(ctx context.Context, sta
 	return items, rows.Err()
 }
 
+func (s *ProviderOperationStore) ListProviderOperationsByTask(ctx context.Context, taskID string, limit int) ([]provideroperation.Record, error) {
+	if strings.TrimSpace(taskID) == "" || limit < 1 || limit > 500 {
+		return nil, fmt.Errorf("provider operation task query requires task id and limit 1..500")
+	}
+	rows, err := s.db.QueryContext(ctx, providerOperationSelect+` WHERE op.task_id=$1 ORDER BY op.created_at,op.id LIMIT $2`, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]provideroperation.Record, 0, limit)
+	for rows.Next() {
+		record, scanErr := scanProviderOperation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, record)
+	}
+	return items, rows.Err()
+}
+
 const providerOperationSelect = `SELECT op.id, COALESCE(op.task_id,''), op.provider,
 	op.operation, op.idempotency_key, COALESCE(op.request_fingerprint,''), op.confirmation_policy, op.retry_policy,
 	op.state, COALESCE(op.provider_id,''),

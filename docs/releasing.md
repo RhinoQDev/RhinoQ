@@ -1,55 +1,43 @@
 # Releasing RhinoQ
 
-RhinoQ has published npm evaluation prereleases through
-`@rhinoq/node@0.1.0-beta.2`. GitHub prerelease `v0.1.0-beta.5` successfully
-published `rhinoq`/`rhinoq-agent` archives, checksums, keyless signature bundle,
-per-archive SBOMs and an attested GHCR image. Its npm job failed closed because
-the package does not yet grant this workflow trusted-publisher permission.
-`0.1.0-beta.6` fixes npm 12 CLI-bin normalization and also attaches the
-installable Node tarball to the GitHub release. Validation then found that the
-legacy Cosign flags produced only a raw signature named `.bundle`; `beta.7` uses
-Cosign's actual `.sigstore.json` bundle and verifies its GitHub workflow
-identity and OIDC issuer before the release job can pass.
+RhinoQ releases one version across three npm packages and the matching GitHub
+tag/release:
 
-`0.1.0-beta.9` is the current release candidate whose Node tarball contains the `verify`
-onboarding commands. Everything the last three review rounds fixed is invisible
-to anyone outside this repository until it ships, because the `beta.7` tarball
-on the GitHub release predates `verify apply`: a reader who follows the README
-today still gets `FAIL verify requires 'add <rule-name>'`. Cutting this tag is
-what makes the fixes exist for other people.
+- `@rhinoq/node` — authoritative Node SDK and CLIs;
+- `rhinoq` — unscoped compatibility alias;
+- `create-rhinoq-app` — one-command evaluation app.
 
-## Published evaluation release
+`0.1.0-beta.10` is the current source candidate. It is not published merely
+because the manifests contain that version. The release is complete only when
+the tag workflow has published all three packages, registry smoke has passed,
+the GitHub prerelease contains the Node/Go artifacts, and provenance/signature
+verification has passed.
 
-- `@rhinoq/node@0.1.0-beta.1` is the current npm `latest`.
-- `@rhinoq/node@0.1.0-beta.2` is the current npm `next`.
-- `v0.1.0-beta.5` is a public GitHub prerelease with Go archives and image, but
-  it is not an npm registry version.
-- `v0.1.0-beta.7` is a public GitHub prerelease whose Node tarball predates the
-  `verify` commands; do not point a new reader at it.
-- `0.1.0-beta.9` is the current release candidate. It publishes both the
-  scoped `@rhinoq/node` package and the unscoped `rhinoq` compatibility alias.
-- No prerelease implies production readiness.
-
-Registry tags are not stability claims. Consumers may pin an explicit
-prerelease, while the beta.9 workflow moves `latest` to the verified preview so
-that `npm install rhinoq` and `npm install @rhinoq/node` resolve to an
-installable package.
+Prereleases publish to `next`; stable versions publish to `latest`. A dist-tag
+is an installation pointer, not a stability claim.
 
 ## One-time npm owner setup
 
-1. In npm package settings, configure **trusted publishing** for the GitHub
-   repository `madebyduy/RhinoQ` and workflow `.github/workflows/release.yml`
-   for both packages: `@rhinoq/node` and `rhinoq`.
-2. Do not add a long-lived `NPM_TOKEN` to repository secrets. The tag workflow
-   requests an OIDC identity and publishes with `--provenance`.
-3. Protect the `v*` tag rule in GitHub so a reviewed maintainer creates tags.
+In npm package settings, configure trusted publishing for repository
+`madebyduy/RhinoQ` and workflow `.github/workflows/release.yml` for all three
+package names. Do not add a long-lived `NPM_TOKEN`: the workflow requests a
+GitHub OIDC identity and every `npm publish` uses `--provenance`.
 
-These are external account actions; the repository cannot safely perform them.
+The first publication of `create-rhinoq-app` is the one exception: npm requires
+a package to exist before trusted publishing can be configured. Create an
+expiring granular token with publish permission and store it temporarily as
+`NPM_CREATE_APP_BOOTSTRAP_TOKEN`. The GitHub-hosted job still publishes with
+`--provenance`. Immediately after the first successful release, configure the
+trusted publisher for `create-rhinoq-app`, delete the secret and revoke the
+token. Future releases authenticate with OIDC like the other two packages.
+
+Protect the `v*` tag rule so a reviewed maintainer creates release tags.
 
 ## Cut a prerelease
 
-1. Set `sdks/node/package.json` and its lockfile to the exact release version,
-   for example `0.1.0-beta.9`.
+1. Set the exact version in the scoped SDK, its lockfile, the alias, the
+   scaffolder and the generated template dependency. Add the same heading to
+   `CHANGELOG.md`.
 2. Run from a clean checkout:
 
    ```bash
@@ -58,46 +46,58 @@ These are external account actions; the repository cannot safely perform them.
    npm ci
    npm test
    npm run pack:check
-   npm run release:check -- v0.1.0-beta.9
+   cd ../create-rhinoq-app
+   npm ci
+   npm test
+   cd ../..
+   node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.10
    ```
 
-3. Commit the version/docs/changelog change, then create and push the matching
-   annotated tag: `v0.1.0-beta.9`.
-4. The Release workflow checks the archive and matching version, then publishes
-   both Node packages to `latest` and builds archives containing the `rhinoq`
-   CLI and optional `rhinoq-agent` HTTP Gateway. It also verifies the checksum bundle;
-   users can repeat that verification with:
+3. Commit the candidate, then create and push the matching annotated tag:
+   `v0.1.0-beta.10`.
+4. The Release workflow fails closed in this order:
+
+   ```text
+   verify matrix and archives
+     -> publish @rhinoq/node
+     -> publish rhinoq
+     -> publish create-rhinoq-app
+     -> install exact versions from npm and smoke ESM/CJS/CLI/scaffold/signatures
+     -> publish GitHub assets, Go binaries and container
+   ```
+
+5. Verify the resulting state independently:
+
+   ```bash
+   npm view @rhinoq/node@0.1.0-beta.10 version dist.integrity dist.attestations
+   npm view rhinoq@0.1.0-beta.10 version dist.integrity dist.attestations
+   npm view create-rhinoq-app@0.1.0-beta.10 version dist.integrity dist.attestations
+   npm dist-tag ls @rhinoq/node
+   npm dist-tag ls rhinoq
+   npm dist-tag ls create-rhinoq-app
+   gh release view v0.1.0-beta.10
+   ```
+
+   For a prerelease, each package must map `next` to the exact candidate;
+   `latest` must not be moved by this workflow.
+
+6. Verify the keyless checksum bundle:
 
    ```bash
    cosign verify-blob checksums.txt \
      --bundle checksums.txt.sigstore.json \
-      --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.9" \
+     --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.10" \
      --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
    ```
-5. Independently verify the published artifact in a clean sample application:
 
-   ```bash
-   npm install @rhinoq/node@0.1.0-beta.9 pg
-   node --input-type=module -e "import('@rhinoq/node').then(() => console.log('ok'))"
-   npm install rhinoq@0.1.0-beta.9 pg
-   npx rhinoq --version
-   ```
+If trusted publishing, provenance, registry smoke or signature verification
+fails, the release is incomplete. Do not manually move a dist-tag to hide a
+failed workflow.
 
-6. After that verification succeeds, verify the default tags:
+## Do not release if
 
-   ```bash
-   npm dist-tag ls @rhinoq/node
-   npm dist-tag ls rhinoq
-   ```
-
-If trusted publishing is not configured, the workflow must fail rather than
-fall back to a token-based release.
-
-## Do not release yet if
-
-- the package/tag versions disagree;
-- Node or Go tests fail;
-- the changelog advertises unsupported BullMQ dispatch, retry/cancel or
-  reconciliation behavior;
+- package, template, changelog and tag versions disagree;
+- Node, Go, scaffold or browser acceptance fails;
+- the changelog advertises behavior without code and tests;
 - a security release blocker is unresolved;
-- the release would be presented as production-ready.
+- the prerelease would be presented as production-ready.

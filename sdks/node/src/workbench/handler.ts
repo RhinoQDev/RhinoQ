@@ -6,6 +6,9 @@ import type {
   TaskState,
   TaskSummary,
   TaskWaitpoint,
+  TaskVerificationRecord,
+  TaskArtifact,
+  ProviderOperationRecord,
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
 import { taskFlightRecorder, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
@@ -19,6 +22,10 @@ export interface WorkbenchTaskSource {
   getTaskExecutionResults(taskId: string): Promise<TaskExecutionResults>;
   listTaskExecutionRuntimeRefs?(taskId: string): Promise<TaskExecutionRuntimeRefs>;
   listTaskWaitpoints?(taskId: string): Promise<TaskWaitpoint[]>;
+  listTaskVerifications?(taskId: string): Promise<TaskVerificationRecord[]>;
+  listTaskArtifacts?(taskId: string): Promise<TaskArtifact[]>;
+  /** Join the Go-owned provider ledger by its explicit taskId correlation. */
+  listProviderOperationsByTask?(taskId: string): Promise<ProviderOperationRecord[]>;
   requestTaskCancellation?(taskId: string, expectedVersion: number): Promise<TaskSnapshot>;
 }
 
@@ -53,6 +60,8 @@ export interface WorkbenchHandlerOptions {
   streamIntervalMs?: number;
   /** Optional links that connect this operator surface to the host product. */
   navigation?: { overviewPath?: string; tasksPath?: string };
+  /** Optional Go Gateway join that completes Task -> provider Flight Recorder. */
+  providerOperationsByTask?(taskId: string): Promise<ProviderOperationRecord[]>;
 }
 
 const DEFAULT_STATES: TaskState[] = [
@@ -99,7 +108,7 @@ function routeParts(pathname: string, basePath: string): string[] | undefined {
  * application's own HTTP surface.
  *
  * The Go Workbench needs the full engine schema and its own process. An
- * application on the three-table Task profile had neither, which meant the
+ * application on the isolated Task profile had neither, which meant the
  * quickest path to adopting RhinoQ was also the one with nothing to look at.
  * This is Fetch-compatible, so the same adapters that mount
  * `createTaskRequestHandler` mount it.
@@ -166,6 +175,7 @@ export function createWorkbenchHandler(
           taskId: url.searchParams.get('task') ?? undefined,
           intervalMs: options.streamIntervalMs ?? 1_000,
           signal: request.signal,
+          providerOperationsByTask: options.providerOperationsByTask,
         });
       }
 
@@ -199,11 +209,11 @@ export function createWorkbenchHandler(
         const taskId = decodeURIComponent(relative[2] as string);
 
         if (request.method === 'GET' && relative.length === 3) {
-          return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId)) });
+          return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId, options.providerOperationsByTask)) });
         }
 
         if (request.method === 'GET' && relative.length === 4 && relative[3] === 'flight-recorder') {
-          const detail = await taskDetail(options.tasks, taskId);
+          const detail = await taskDetail(options.tasks, taskId, options.providerOperationsByTask);
           return json(detail.flightRecorder);
         }
 
@@ -330,6 +340,7 @@ interface StreamOptions {
   taskId?: string;
   intervalMs: number;
   signal: AbortSignal;
+  providerOperationsByTask?: WorkbenchHandlerOptions['providerOperationsByTask'];
 }
 
 /**
@@ -430,7 +441,7 @@ async function collect(options: StreamOptions): Promise<Record<string, unknown>>
   lists[ATTENTION_BUCKET] = (await listAttentionTasks(options.tasks, options.limit)).map(withTaskUI);
   counts[ATTENTION_BUCKET] = lists[ATTENTION_BUCKET].length;
   const detail = options.taskId
-    ? await taskDetail(options.tasks, options.taskId).catch(() => undefined)
+    ? await taskDetail(options.tasks, options.taskId, options.providerOperationsByTask).catch(() => undefined)
     : undefined;
   return {
     schemaVersion: 1,
@@ -473,12 +484,16 @@ function withTaskUI(task: TaskSummary): WorkbenchTaskRow {
 async function taskDetail(
   tasks: WorkbenchTaskSource,
   taskId: string,
+  providerOperationsByTask?: (taskId: string) => Promise<ProviderOperationRecord[]>,
 ): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder }> {
   const task = await tasks.getTask(taskId);
-  const [refs, results, waitpoints] = await Promise.all([
+  const [refs, results, waitpoints, verifications, artifacts, providerOperations] = await Promise.all([
     tasks.listTaskExecutionRuntimeRefs?.(taskId).catch(() => undefined),
     tasks.getTaskExecutionResults(taskId).catch(() => undefined),
     tasks.listTaskWaitpoints?.(taskId).catch(() => undefined),
+    tasks.listTaskVerifications?.(taskId).catch(() => undefined),
+    tasks.listTaskArtifacts?.(taskId).catch(() => undefined),
+    (providerOperationsByTask ?? tasks.listProviderOperationsByTask?.bind(tasks))?.(taskId).catch(() => undefined),
   ]);
 
   const externalIds = new Map<string, string>();
@@ -516,6 +531,9 @@ async function taskDetail(
       task,
       executionResults: results?.executions,
       waitpoints: resolvedWaitpoints,
+      verifications: verifications ?? [],
+      artifacts: artifacts ?? [],
+      providerOperations: providerOperations ?? [],
     }),
   };
 }

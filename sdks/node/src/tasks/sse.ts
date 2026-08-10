@@ -8,12 +8,12 @@ export type TaskStreamEvent =
   | { type: 'task.error'; code: string };
 
 export interface TaskSSESource {
-  getTaskSummaryForOwner(taskId: string, ownerId: string): Promise<TaskSummary>;
-  listTasks(ownerId: string, limit: number, offset: number): Promise<TaskSnapshot[]>;
+  getTaskSummaryForOwner(taskId: string, ownerId: string, tenantId?: string): Promise<TaskSummary>;
+  listTasks(ownerId: string, limit: number, offset: number, tenantId?: string): Promise<TaskSnapshot[]>;
 }
 export interface TaskSSEOptions { pollIntervalMs?: number; heartbeatMs?: number; maxConnections?: number; }
 
-export function taskEventResponse(source: TaskSSESource, request: Request, ownerId: string, taskId: string, options: TaskSSEOptions = {}, onClose?: () => void): Response {
+export function taskEventResponse(source: TaskSSESource, request: Request, ownerId: string, taskId: string, options: TaskSSEOptions = {}, onClose?: () => void, tenantId = 'default'): Response {
   const lastVersion = parseLastVersion(request.headers.get('last-event-id'));
   return sseResponse(request, async (send, signal) => {
     let version = lastVersion;
@@ -21,7 +21,7 @@ export function taskEventResponse(source: TaskSSESource, request: Request, owner
     const heartbeatMs = bounded(options.heartbeatMs ?? 15_000, 1_000, 120_000, 'stream heartbeat');
     let heartbeatAt = Date.now() + heartbeatMs;
     while (!signal.aborted) {
-      const task = await source.getTaskSummaryForOwner(taskId, ownerId);
+      const task = await source.getTaskSummaryForOwner(taskId, ownerId, tenantId);
       if (task.entityVersion > version) { version = task.entityVersion; send('task.snapshot', task, String(version)); }
       if (Date.now() >= heartbeatAt) { send('task.heartbeat', { serverTime: new Date().toISOString() }); heartbeatAt = Date.now() + heartbeatMs; }
       if (isTerminal(task.state) || !(await wait(pollMs, signal))) return;
@@ -29,7 +29,7 @@ export function taskEventResponse(source: TaskSSESource, request: Request, owner
   }, onClose);
 }
 
-export function taskListEventResponse(source: TaskSSESource, request: Request, ownerId: string, limit: number, offset: number, options: TaskSSEOptions = {}, onClose?: () => void): Response {
+export function taskListEventResponse(source: TaskSSESource, request: Request, ownerId: string, limit: number, offset: number, options: TaskSSEOptions = {}, onClose?: () => void, tenantId = 'default'): Response {
   return sseResponse(request, async (send, signal) => {
     const versions = new Map<string, number>();
     let pageFingerprint = '';
@@ -37,7 +37,7 @@ export function taskListEventResponse(source: TaskSSESource, request: Request, o
     const heartbeatMs = bounded(options.heartbeatMs ?? 15_000, 1_000, 120_000, 'stream heartbeat');
     let heartbeatAt = Date.now() + heartbeatMs;
     while (!signal.aborted) {
-      const tasks = await source.listTasks(ownerId, limit, offset);
+      const tasks = await source.listTasks(ownerId, limit, offset, tenantId);
       const fingerprint = tasks.map((task) => `${task.id}:${task.entityVersion}`).join('|');
       if (fingerprint !== pageFingerprint) { pageFingerprint = fingerprint; send('task.page', { tasks }); }
       for (const task of tasks) {

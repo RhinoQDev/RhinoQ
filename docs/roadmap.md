@@ -12,9 +12,12 @@ without migrating their queue.
 - [x] connected scaffold Overview/Tasks/Workbench navigation and owner Task detail
 - [x] capability-gated retry/result UI with fail-closed result resolution
 - [ ] publish the tested npm beta and prebuilt CLI artifacts
-- [ ] rerun two Tasks in a real adopter and record code/process/credential delta
-- [ ] wire tenant context through the public HTTP boundary
-- [ ] extend Flight Recorder through provider/effect confirmation evidence
+- [ ] rerun two Tasks in a real adopter and record code/route/process/credential delta
+  ([readiness audit](./evidence/adopter-pilot-readiness-2026-08-10.md): no valid beta.10 before/after refs yet)
+- [x] wire tenant context through the public HTTP boundary
+- [x] extend Flight Recorder through provider/effect confirmation evidence
+- [x] explicit At risk/Stuck thresholds, Task verification records and Artifact v1
+- [x] browser acceptance with desktop/mobile screenshot artifacts in CI
 - [ ] run a deployment-shaped fault campaign and end-to-end benchmark
 
 The current competitive review is in

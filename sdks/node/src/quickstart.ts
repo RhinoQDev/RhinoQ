@@ -68,6 +68,8 @@ export interface RhinoQDispatchOptions {
   type?: string;
   /** The application user this batch belongs to; required for the read API. */
   ownerId?: string;
+  /** Stable tenant boundary. Omit only for a single-tenant application. */
+  tenantId?: string;
   /** Applied to every item that does not set its own. */
   jobOptions?: Record<string, unknown>;
   /**
@@ -78,7 +80,7 @@ export interface RhinoQDispatchOptions {
 }
 
 export interface RhinoQAppOptions {
-  /** A `pg.Pool`. RhinoQ installs its three-table profile into it. */
+  /** A `pg.Pool`. RhinoQ installs its isolated Task profile into it. */
   pool: SqlPool;
   /** The application's own BullMQ Queue. RhinoQ never creates one. */
   queue: BullMQQueueForQuickstart;
@@ -95,6 +97,8 @@ export interface RhinoQAppOptions {
    * a safe default.
    */
   ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+  /** Resolve the tenant from the authenticated host request. */
+  tenantFromRequest?: NodeTaskMiddlewareOptions['tenantFromRequest'];
   /**
    * Called once, by the one caller that closed the last item of a batch. The
    * Task has already been moved to `succeeded`/`failed` before this runs.
@@ -121,6 +125,12 @@ export interface RhinoQHTTPOptions {
   retryTask?: TaskRequestHandlerOptions['retryTask'];
   /** Owner-authorized result resolver. Result UI is hidden when absent. */
   resolveResult?: TaskRequestHandlerOptions['resolveResult'];
+  /** Owner-authorized conversion from an Artifact reference to a short-lived response. */
+  resolveArtifact?: TaskRequestHandlerOptions['resolveArtifact'];
+  /** Go Gateway task correlation used by the operator Flight Recorder. */
+  providerOperationsByTask?: WorkbenchHandlerOptions['providerOperationsByTask'];
+  /** Explicit no-progress thresholds for At risk/Stuck UI. */
+  riskPolicy?: TaskRequestHandlerOptions['riskPolicy'];
   /** Product-shell route. Defaults to `/`. */
   overviewPath?: string;
   /** Operator entry route. Defaults to `/admin`. */
@@ -163,6 +173,7 @@ export class RhinoQApp {
   private readonly observe: (reference: { externalId?: string }) =>
     Promise<BullMQTaskObservation | undefined>;
   private readonly ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+  private readonly tenantFromRequest?: NodeTaskMiddlewareOptions['tenantFromRequest'];
   private closed = false;
 
   /** @internal Use `rhinoq()`; construction is async because migration is. */
@@ -175,6 +186,7 @@ export class RhinoQApp {
     queue: BullMQQueueForQuickstart;
     observe: (reference: { externalId?: string }) => Promise<BullMQTaskObservation | undefined>;
     ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+    tenantFromRequest?: NodeTaskMiddlewareOptions['tenantFromRequest'];
   }) {
     this.tasks = parts.tasks;
     this.bridge = parts.bridge;
@@ -184,6 +196,7 @@ export class RhinoQApp {
     this.queue = parts.queue;
     this.observe = parts.observe;
     this.ownerFromRequest = parts.ownerFromRequest;
+    this.tenantFromRequest = parts.tenantFromRequest;
   }
 
   /**
@@ -207,6 +220,7 @@ export class RhinoQApp {
       id: taskId,
       type,
       definitionVersion: 1,
+      ...(options.tenantId ? { tenantId: options.tenantId } : {}),
       ...(options.ownerId ? { ownerId: options.ownerId } : {}),
     };
     const inputs: BullMQTaskDispatch[] = items.map((item, index) => {
@@ -294,6 +308,7 @@ export class RhinoQApp {
       ...options,
       tasks: this.tasks,
       ownerFromRequest: this.ownerFromRequest,
+      ...(this.tenantFromRequest ? { tenantFromRequest: this.tenantFromRequest } : {}),
     });
   }
 
@@ -328,6 +343,8 @@ export class RhinoQApp {
       cancelTask: async ({ task }) => this.cancel(task.id),
       ...(options.retryTask ? { retryTask: options.retryTask } : {}),
       ...(options.resolveResult ? { resolveResult: options.resolveResult } : {}),
+      ...(options.resolveArtifact ? { resolveArtifact: options.resolveArtifact } : {}),
+      ...(options.riskPolicy ? { riskPolicy: options.riskPolicy } : {}),
     });
     const workbench = this.workbench({
       token: options.operatorToken,
@@ -338,6 +355,7 @@ export class RhinoQApp {
         tasksPath: '/task-center',
       },
       origin: options.origin,
+      ...(options.providerOperationsByTask ? { providerOperationsByTask: options.providerOperationsByTask } : {}),
     });
 
     return (request, response, next) => {
@@ -531,6 +549,7 @@ export async function rhinoq(options: RhinoQAppOptions): Promise<RhinoQApp> {
     reconciler,
     observe,
     ...(options.ownerFromRequest ? { ownerFromRequest: options.ownerFromRequest } : {}),
+    ...(options.tenantFromRequest ? { tenantFromRequest: options.tenantFromRequest } : {}),
   });
 
   await bridge.start();

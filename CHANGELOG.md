@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.1.0-beta.10
+
+- Release candidate for the connected Async Operations Hub, including the
+  owner waiting inbox, Task discovery/detail polish and the three-package npm
+  release matrix. Prerelease packages publish under `next`; `latest` is not
+  moved until a stable release decision.
+- Added explicit owner-scoped At risk/Stuck policy, append-only Task
+  verification records and Recently verified, tenant-aware Node HTTP/SQL
+  reads, and Artifact v1 metadata with checksum, expiry, versioned refresh and
+  lineage. Private artifact references remain application-only.
+- Connected Task-correlated ProviderOperations to the Flight Recorder and
+  added a fail-closed verification-to-Finding-to-durable-notification helper
+  with operator deep links.
+- Added desktop/mobile browser acceptance with screenshots captured as CI
+  artifacts, plus the complete three-package prerelease publish and registry
+  smoke pipeline for `@rhinoq/node`, `rhinoq` and `create-rhinoq-app`.
+
 - Added a bounded owner-scoped waitpoint list route and browser client method.
   Task detail now explains pending input/webhook waits and resolves approval
   waitpoints in-place with version fencing and deterministic resolution identity.

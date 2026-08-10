@@ -77,7 +77,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
   }
 });
 
-test('Task-only profile uses four tables and serves the embedded Node client', {
+test('Task-only profile enforces tenant reads and stores verification and artifact records', {
   skip: !databaseUrl,
 }, async () => {
   const pool = new pg.Pool({ connectionString: databaseUrl });
@@ -95,7 +95,7 @@ test('Task-only profile uses four tables and serves the embedded Node client', {
     );
     assert.deepEqual(
       tables.rows.map((row) => row.table_name),
-      ['executions', 'migrations', 'tasks', 'waitpoints'],
+      ['artifacts', 'executions', 'migrations', 'tasks', 'verifications', 'waitpoints'],
     );
 
     let task = await tasks.createTask({
@@ -104,6 +104,17 @@ test('Task-only profile uses four tables and serves the embedded Node client', {
       ownerId: 'owner-a',
       definitionVersion: 1,
     });
+    await tasks.createTask({ id: 'tenant-b-task', type: 'bulk-download', tenantId: 'tenant-b', ownerId: 'owner-a', definitionVersion: 1 });
+    assert.deepEqual(await tasks.listTasks('owner-a', 50, 0, 'tenant-b').then((items) => items.map((item) => item.id)), ['tenant-b-task']);
+    await assert.rejects(tasks.getTaskForOwner('tenant-b-task', 'owner-a'), (error) => error.code === 'RHINOQ_TASK_NOT_FOUND');
+    assert.equal((await tasks.getTaskForOwner('tenant-b-task', 'owner-a', 'tenant-b')).id, 'tenant-b-task');
+    const verified = await tasks.recordTaskVerification(task.id, {
+      id: 'verification-pass-1', verifier: 'output-exists', status: 'verified', summary: 'output exists',
+      evidence: { key: 'item-a' }, verifiedAt: '2026-08-10T08:00:00.000Z',
+    });
+    assert.equal(verified.status, 'verified');
+    assert.equal((await tasks.listRecentlyVerifiedForOwner('owner-a'))[0].id, verified.id);
+    assert.deepEqual(await tasks.listRecentlyVerifiedForOwner('owner-b'), []);
     const waiting = await tasks.createTaskWaitpoint(task.id, { id: 'node-wp-review', key: 'review', kind: 'approval', payloadVersion: 1 });
     assert.equal(waiting.state, 'waiting');
     assert.equal((await tasks.listTaskWaitpointsForOwner(task.id, 'owner-a'))[0].id, waiting.id);
@@ -148,6 +159,23 @@ test('Task-only profile uses four tables and serves the embedded Node client', {
       runtimeScope: 'queue-a',
       externalId: 'job-1',
     });
+    const artifact = await tasks.registerTaskArtifact(task.id, {
+      id: 'artifact-a', executionId: 'node-task-item-a-attempt-1', name: 'report.csv', contentType: 'text/csv',
+      sizeBytes: 12, checksumSha256: 'a'.repeat(64), reference: 'storage://private/report.csv',
+      expiresAt: '2026-08-11T08:00:00.000Z', lineage: ['source-upload'],
+    });
+    assert.equal(artifact.checksumSha256, 'a'.repeat(64));
+    assert.equal(JSON.stringify(artifact).includes('storage://private'), false);
+    assert.equal((await tasks.listTaskArtifactsForOwner(task.id, 'owner-a'))[0].id, artifact.id);
+    await assert.rejects(
+      tasks.listTaskArtifactsForOwner(task.id, 'owner-b'),
+      (error) => error.code === 'RHINOQ_TASK_NOT_FOUND',
+    );
+    const refreshed = await tasks.refreshTaskArtifact(artifact.id, {
+      expectedVersion: artifact.entityVersion, reference: 'storage://private/report-v2.csv', expiresAt: '2026-08-12T08:00:00.000Z',
+    });
+    assert.equal(refreshed.entityVersion, artifact.entityVersion + 1);
+    assert.equal((await tasks.getTaskArtifactRecord(artifact.id)).reference, 'storage://private/report-v2.csv');
     task = await tasks.createTaskExecution(task.id, {
       id: 'node-task-item-b-attempt-1',
       itemKey: 'item-b',

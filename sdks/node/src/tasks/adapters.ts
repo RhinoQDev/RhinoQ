@@ -45,6 +45,8 @@ export function createNodeTaskCenterMiddleware(
 export interface NodeTaskMiddlewareOptions extends Omit<TaskRequestHandlerOptions, 'ownerFromRequest'> {
   /** Use for framework auth such as Nest/Passport where the principal lives on req.user. */
   ownerFromNodeRequest?(request: NodeTaskRequest): Promise<string | undefined> | string | undefined;
+  /** Framework-native tenant resolver, paired with ownerFromNodeRequest. */
+  tenantFromNodeRequest?(request: NodeTaskRequest): Promise<string | undefined> | string | undefined;
   /** Use when owner identity is already represented in Fetch-compatible headers/cookies. */
   ownerFromRequest?: TaskRequestHandlerOptions['ownerFromRequest'];
   /**
@@ -85,7 +87,7 @@ export function createNodeTaskMiddleware(
   if (!options.ownerFromRequest && !options.ownerFromNodeRequest) {
     throw new TypeError('createNodeTaskMiddleware requires ownerFromRequest or ownerFromNodeRequest');
   }
-  const sharedHandler = options.ownerFromRequest ? createTaskRequestHandler({
+  const sharedHandler = options.ownerFromRequest && !options.tenantFromNodeRequest ? createTaskRequestHandler({
     ...options, ownerFromRequest: options.ownerFromRequest,
   }) : undefined;
   const origin = (options.origin ?? 'http://rhinoq.invalid').replace(/\/+$/, '');
@@ -100,7 +102,12 @@ export function createNodeTaskMiddleware(
     void (async () => {
       const fetchRequest = await toFetchRequest(request, origin);
       const ownerId = options.ownerFromNodeRequest ? await options.ownerFromNodeRequest(request) : undefined;
-      const handler = sharedHandler ?? createTaskRequestHandler({ ...options, ownerFromRequest: () => ownerId });
+      const tenantId = options.tenantFromNodeRequest ? await options.tenantFromNodeRequest(request) : undefined;
+      const handler = sharedHandler ?? createTaskRequestHandler({
+        ...options,
+        ownerFromRequest: options.ownerFromRequest ?? (() => ownerId),
+        ...(options.tenantFromNodeRequest ? { tenantFromRequest: () => tenantId } : {}),
+      });
       const result = await handler(fetchRequest);
       await writeNodeResponse(result, response);
     })().catch((error: unknown) => {

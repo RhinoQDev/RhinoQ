@@ -51,7 +51,7 @@ join its transaction.
 
 At the time of the probe, a Node application could not manage **Tasks** without
 the Gateway. The Go client could. The current `beta.7` candidate closes that
-asymmetry with `PostgresTaskClient` and the isolated three-table Task profile.
+asymmetry with `PostgresTaskClient` and the isolated Task profile.
 The paragraph below remains the measured reason for that change, not a claim
 that the new economics have already passed re-evaluation.
 
@@ -110,7 +110,7 @@ estimates below are estimates.
    adversarial contract suite.
 
    `PostgresTaskClient` now calls versioned `rhinoq_task.*` commands and the
-   Task-only migration creates three isolated tables. This removes the Gateway
+   Task-only migration creates an isolated profile. This removes the Gateway
    from the candidate architecture; it does **not** change the adopter verdict
    until the same real application deletes the old Gateway/client plumbing and
    produces a new LOC/process/credential count.
@@ -134,9 +134,10 @@ estimates below are estimates.
 4. **Publish `rhinoq-agent` as a binary and an image.** Building a Go binary
    from source is a hard stop for a Node team evaluating on a Tuesday
    afternoon.
-5. **Publish the current beta and move the `latest` dist-tag.** The candidate is
-   now `beta.9`; registry state still has to match the tested contract before a
-   normal install represents the repository.
+5. **Publish the current beta without moving stable `latest`.** The candidate
+   is now `beta.10`; all three package versions, provenance, `next` dist-tags,
+   GitHub release and registry smoke must agree before the normal prerelease
+   path represents the repository.
 6. **Cancellation hands — implemented on the high-level path.** `app.cancel()`
    attempts every queued BullMQ job, reports `cannot_cancel_safely` for running
    work and terminalizes only when the durable item state permits it. Handler

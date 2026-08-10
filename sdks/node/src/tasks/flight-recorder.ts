@@ -2,6 +2,9 @@ import type {
   TaskExecutionResult,
   TaskSnapshot,
   TaskWaitpoint,
+  TaskVerificationRecord,
+  TaskArtifact,
+  ProviderOperationRecord,
 } from '../gateway/types.js';
 import { explainTask } from './ui.js';
 
@@ -10,7 +13,10 @@ export type TaskFlightRecorderEventKind =
   | 'task.state'
   | 'execution.state'
   | 'execution.result'
-  | 'waitpoint.state';
+  | 'waitpoint.state'
+  | 'verification.outcome'
+  | 'provider.operation'
+  | 'artifact.recorded';
 
 export type TaskFlightAttentionKind =
   | 'uncertain'
@@ -19,7 +25,10 @@ export type TaskFlightAttentionKind =
   | 'failed'
   | 'partial_failure'
   | 'cancel_too_late'
-  | 'cannot_cancel_safely';
+  | 'cannot_cancel_safely'
+  | 'business_mismatch'
+  | 'provider_uncertain';
+
 
 export interface TaskFlightRecorderEvent {
   id: string;
@@ -33,6 +42,8 @@ export interface TaskFlightRecorderEvent {
   itemKey?: string;
   attempt?: number;
   hasResult?: boolean;
+  provider?: string;
+  artifactId?: string;
 }
 
 export interface TaskFlightRecorderAttention {
@@ -56,6 +67,9 @@ export interface TaskFlightRecorderInput {
   task: TaskSnapshot;
   executionResults?: TaskExecutionResult[];
   waitpoints?: TaskWaitpoint[];
+  verifications?: TaskVerificationRecord[];
+  providerOperations?: ProviderOperationRecord[];
+  artifacts?: TaskArtifact[];
   now?: () => Date;
 }
 
@@ -67,7 +81,7 @@ export interface TaskFlightRecorderInput {
  * richer attempt/effect audit records when those records are available.
  */
 export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRecorder {
-  const { task, executionResults = [], waitpoints = [] } = input;
+  const { task, executionResults = [], waitpoints = [], verifications = [], providerOperations = [], artifacts = [] } = input;
   const generatedAt = (input.now ?? (() => new Date()))().toISOString();
   const resultByExecution = new Map(executionResults.map((result) => [result.executionId, result]));
   const events: TaskFlightRecorderEvent[] = [
@@ -135,9 +149,24 @@ export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRe
           : undefined,
       },
     ]),
+    ...verifications.map((verification) => ({
+      id: verification.id, observedAt: verification.verifiedAt, kind: 'verification.outcome' as const,
+      label: verification.status === 'verified' ? 'Business outcome verified' : verification.status === 'mismatch' ? 'Business outcome mismatch' : 'Verification inconclusive',
+      state: verification.status, message: verification.summary,
+    })),
+    ...providerOperations.map((operation) => ({
+      id: operation.id, observedAt: operation.updatedAt, kind: 'provider.operation' as const,
+      label: `${operation.provider}.${operation.operation}`, state: operation.state,
+      message: operation.reason ?? operation.evidence, provider: operation.provider,
+    })),
+    ...artifacts.map((artifact) => ({
+      id: artifact.id, observedAt: artifact.createdAt, kind: 'artifact.recorded' as const,
+      label: `Artifact recorded: ${artifact.name}`, state: Date.parse(artifact.expiresAt) <= Date.now() ? 'expired' : 'available',
+      message: `SHA-256 ${artifact.checksumSha256}`, artifactId: artifact.id,
+    })),
   ].sort((left, right) => left.observedAt.localeCompare(right.observedAt) || left.id.localeCompare(right.id));
 
-  const attention = taskAttention(task, waitpoints);
+  const attention = taskAttention(task, waitpoints, verifications, providerOperations);
   const explanation = explainTask(task);
   return {
     schemaVersion: 1,
@@ -149,8 +178,16 @@ export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRe
   };
 }
 
-function taskAttention(task: TaskSnapshot, waitpoints: TaskWaitpoint[]): TaskFlightRecorderAttention[] {
+function taskAttention(task: TaskSnapshot, waitpoints: TaskWaitpoint[], verifications: TaskVerificationRecord[], providerOperations: ProviderOperationRecord[]): TaskFlightRecorderAttention[] {
   const attention: TaskFlightRecorderAttention[] = [];
+  for (const verification of verifications.filter((item) => item.status === 'mismatch')) {
+    attention.push({ kind: 'business_mismatch', severity: 'error', safeToRetry: false,
+      message: verification.summary ?? 'Independent verification found a business outcome mismatch.', sourceId: verification.id });
+  }
+  for (const operation of providerOperations.filter((item) => item.state === 'uncertain')) {
+    attention.push({ kind: 'provider_uncertain', severity: 'error', safeToRetry: false,
+      message: `${operation.provider}.${operation.operation} has an unknown external result. Reconcile with the provider before retrying.`, sourceId: operation.id });
+  }
   if (task.state === 'uncertain') {
     attention.push({
       kind: 'uncertain', severity: 'error', safeToRetry: false,

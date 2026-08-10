@@ -5,7 +5,7 @@
 With Node.js 22 and PostgreSQL available:
 
 ```bash
-npm install rhinoq pg
+npm install rhinoq@0.1.0-beta.10 pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -73,14 +73,14 @@ For a Node application keeping its existing queue, prefer the isolated
 Task-only path instead of the full Go migration chain:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.9.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.10.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
-The beta.9 tarball is attached to its GitHub prerelease while npm trusted
-publishing is pending. It creates the isolated Task tables in `rhinoq_task`,
-including durable waitpoints, and reuses the application's `pg.Pool` through
-`PostgresTaskClient`.
+Pack the beta.10 candidate from this checkout until its tag workflow succeeds.
+It creates the isolated Task tables in `rhinoq_task`, including durable
+waitpoints, tenant-scoped owner reads, verification records and Artifact v1,
+and reuses the application's `pg.Pool` through `PostgresTaskClient`.
 
 ```bash
 go install github.com/madebyduy/RhinoQ/cmd/rhinoq@latest

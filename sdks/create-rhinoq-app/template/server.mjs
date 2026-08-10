@@ -106,6 +106,12 @@ server.use(app.http({
   operatorToken: OPERATOR_TOKEN,
   overviewPath: '/',
   workbenchPath: '/operator-login',
+  // Risk is derived from a lack of Task updates, not guessed from queue state.
+  // Keep these thresholds explicit and tune them to the workload's SLO.
+  riskPolicy: {
+    atRiskAfterMs: Number(process.env.RHINOQ_AT_RISK_AFTER_MS ?? 60_000),
+    stuckAfterMs: Number(process.env.RHINOQ_STUCK_AFTER_MS ?? 300_000),
+  },
 }));
 
 server.post('/batches', async (request, response) => {
@@ -187,7 +193,17 @@ server.post('/verify/:taskId', async (request, response) => {
     checked += 1;
     if (outcome.status !== 'present') findings.push({ item: execution.itemKey, ...outcome });
   }
-  response.json({ items: items.length, checked, findings });
+  const verificationId = `verification-${randomUUID()}`;
+  const verification = await app.tasks.recordTaskVerification(request.params.taskId, {
+      id: verificationId,
+      verifier: 'output-file-exists',
+      status: findings.length ? 'mismatch' : 'verified',
+      summary: findings.length
+        ? `${findings.length} finished item(s) have no output file`
+        : `${checked} finished item(s) have their output file`,
+      evidence: { checked, missingItems: findings.map((finding) => finding.item) },
+  });
+  response.json({ items: items.length, checked, findings, verification });
 });
 
 server.get('/overview', (_request, response) => response.redirect(302, '/'));

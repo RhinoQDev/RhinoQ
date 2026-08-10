@@ -46,6 +46,30 @@ func (s *ProviderOperationStore) ListProviderOperations(_ context.Context, state
 	return items, nil
 }
 
+func (s *ProviderOperationStore) ListProviderOperationsByTask(_ context.Context, taskID string, limit int) ([]provideroperation.Record, error) {
+	if taskID == "" || limit < 1 || limit > 500 {
+		return nil, fmt.Errorf("provider operation task query requires task id and limit 1..500")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]provideroperation.Record, 0, limit)
+	for _, record := range s.byID {
+		if record.TaskID == taskID {
+			items = append(items, record)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func NewProviderOperationStore() *ProviderOperationStore {
 	return &ProviderOperationStore{byID: map[provideroperation.ID]provideroperation.Record{}, byKey: map[string]provideroperation.ID{}, evidence: map[provideroperation.ID][]provideroperation.Evidence{}}
 }

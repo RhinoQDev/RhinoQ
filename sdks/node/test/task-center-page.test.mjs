@@ -26,7 +26,12 @@ test('Task Center page is self-contained and points at the owner API', () => {
   assert.match(page, /function visibleTasks/);
   assert.match(page, /history\.replaceState/);
   assert.match(page, /No tasks match this view/);
-  assert.match(page, /No verification issue is recorded/);
+  assert.match(page, /Not independently verified yet/);
+  assert.match(page, /function artifactSection/);
+  assert.match(page, /verifications\?limit=20/);
+  assert.match(page, /artifacts\?limit=100/);
+  assert.match(page, /artifactSection\(task\)/);
+  assert.match(page, /Open artifact/);
   assert.match(page, /configure secure download/);
   assert.match(page, /Load more attempts/);
   assert.match(page, /function attemptRow/);
