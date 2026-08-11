@@ -48,6 +48,13 @@ code and the boundary between browser reads and explicit CLI writes.
 
 ## What developers see
 
+Node applications that mount `rhinoqApp.http()` get a smaller embedded Task
+Workbench at `/admin`. When BullMQ exposes its read methods, that page adds a
+Runtime health overview with queue counts, pause state, worker visibility and
+optional safe links to an application-owned queue inspector. This is evidence,
+not a second control plane: provider failures are redacted and queue mutation
+controls are deliberately absent.
+
 - **Execution worktable:** a dense, sticky-header table for job state, queue,
   correlation, stage, attempts, priority and age.
 - **Flow Lens:** COMMIT, RUN, VERIFY and RECOVER stay visible as separate

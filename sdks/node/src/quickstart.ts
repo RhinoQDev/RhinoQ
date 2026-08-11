@@ -7,6 +7,8 @@ import {
   type BullMQTaskObservation,
 } from './bullmq/task-bridge.js';
 import { TaskMetrics } from './observe/metrics.js';
+import type { RuntimeHealthReader, RuntimeJobLink } from './observe/runtime-health.js';
+import { BullMQRuntimeInspector, type BullMQInspectableQueue } from './bullmq/runtime-inspector.js';
 import { PostgresProjectorLease } from './postgres/projector-lease.js';
 import { installPostgresTaskProfile, PostgresTaskClient } from './postgres/task-client.js';
 import type { SqlPool } from './postgres/task-schema.js';
@@ -44,6 +46,10 @@ export interface BullMQJobView {
 export interface BullMQQueueForQuickstart extends BullMQQueue {
   name?: string;
   getJob?(jobId: string): Promise<BullMQJobView | undefined | null>;
+  getJobCounts?(...types: string[]): Promise<Record<string, number>>;
+  isPaused?(): Promise<boolean>;
+  getWorkers?(): Promise<unknown[]>;
+  opts?: { defaultJobOptions?: Record<string, unknown> };
 }
 
 export interface RhinoQItem {
@@ -135,6 +141,10 @@ export interface RhinoQHTTPOptions {
   overviewPath?: string;
   /** Operator entry route. Defaults to `/admin`. */
   workbenchPath?: string;
+  /** Operator-only link builder for a BullMQ job inspector such as bull-board. */
+  runtimeJobLink?: RuntimeJobLink;
+  /** Optional queue overview URL shown in Runtime Health. */
+  runtimeDashboardURL?: string;
 }
 
 export type RhinoQHTTPMiddleware = (
@@ -174,6 +184,7 @@ export class RhinoQApp {
     Promise<BullMQTaskObservation | undefined>;
   private readonly ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
   private readonly tenantFromRequest?: NodeTaskMiddlewareOptions['tenantFromRequest'];
+  private readonly runtimeHealth: readonly RuntimeHealthReader[];
   private closed = false;
 
   /** @internal Use `rhinoq()`; construction is async because migration is. */
@@ -187,6 +198,7 @@ export class RhinoQApp {
     observe: (reference: { externalId?: string }) => Promise<BullMQTaskObservation | undefined>;
     ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
     tenantFromRequest?: NodeTaskMiddlewareOptions['tenantFromRequest'];
+    runtimeHealth?: readonly RuntimeHealthReader[];
   }) {
     this.tasks = parts.tasks;
     this.bridge = parts.bridge;
@@ -197,6 +209,7 @@ export class RhinoQApp {
     this.observe = parts.observe;
     this.ownerFromRequest = parts.ownerFromRequest;
     this.tenantFromRequest = parts.tenantFromRequest;
+    this.runtimeHealth = parts.runtimeHealth ?? [];
   }
 
   /**
@@ -356,6 +369,10 @@ export class RhinoQApp {
       },
       origin: options.origin,
       ...(options.providerOperationsByTask ? { providerOperationsByTask: options.providerOperationsByTask } : {}),
+      runtimeHealth: options.runtimeDashboardURL && typeof this.queue.getJobCounts === 'function'
+        ? [new BullMQRuntimeInspector({ queue: this.queue as BullMQInspectableQueue, scope: this.scope, dashboardURL: options.runtimeDashboardURL })]
+        : this.runtimeHealth,
+      ...(options.runtimeJobLink ? { runtimeJobLink: options.runtimeJobLink } : {}),
     });
 
     return (request, response, next) => {
@@ -443,6 +460,9 @@ export async function rhinoq(options: RhinoQAppOptions): Promise<RhinoQApp> {
   const metrics = new TaskMetrics();
   const queue = options.queue;
   const observe = bullMQObserver(queue);
+  const runtimeHealth: readonly RuntimeHealthReader[] = typeof queue.getJobCounts === 'function'
+    ? [new BullMQRuntimeInspector({ queue: queue as BullMQInspectableQueue, scope })]
+    : [];
 
   const bridge = new BullMQTaskBridge({
       client: tasks,
@@ -548,6 +568,7 @@ export async function rhinoq(options: RhinoQAppOptions): Promise<RhinoQApp> {
     bridge,
     reconciler,
     observe,
+    runtimeHealth,
     ...(options.ownerFromRequest ? { ownerFromRequest: options.ownerFromRequest } : {}),
     ...(options.tenantFromRequest ? { tenantFromRequest: options.tenantFromRequest } : {}),
   });

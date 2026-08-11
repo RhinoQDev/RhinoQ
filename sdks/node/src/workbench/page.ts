@@ -40,6 +40,13 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   .muted { color: var(--muted); }
   main { padding: 20px; display: grid; gap: 20px; max-width: 1100px; }
   .buckets { display: flex; gap: 8px; flex-wrap: wrap; }
+  .runtime-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;padding:12px; }
+  .runtime-card { border:1px solid var(--line);border-radius:7px;padding:11px;display:grid;gap:8px; }
+  .runtime-card .top { display:flex;justify-content:space-between;gap:8px; }
+  .runtime-counts { display:grid;grid-template-columns:repeat(3,1fr);gap:6px; }
+  .runtime-counts span { color:var(--muted);font-size:12px; }.runtime-counts b { display:block;color:var(--ink);font-size:16px; }
+  .health-healthy { color:var(--accent); }.health-degraded,.health-unknown { color:var(--warn); }.health-unavailable { color:var(--bad); }
+  a.runtime-link { color:var(--accent);text-decoration:none; } a.runtime-link:hover { text-decoration:underline; }
   .bucket {
     border: 1px solid var(--line); background: var(--panel); border-radius: 8px;
     padding: 10px 14px; cursor: pointer; min-width: 108px; text-align: left;
@@ -126,6 +133,10 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
 </header>
 <div class="err" id="err" hidden></div>
 <main>
+  <section class="panel" id="runtimePanel" hidden>
+    <div class="head"><strong>Runtime health</strong><span class="muted">read-only evidence from the connected job runtime</span></div>
+    <div class="runtime-grid" id="runtimeHealth"></div>
+  </section>
   <div class="buckets" id="buckets"></div>
   <div class="panel">
     <div class="head"><strong id="listTitle">Tasks</strong><span class="muted" id="listNote"></span></div>
@@ -161,6 +172,7 @@ let pollTimer = null;
 let failures = 0;
 let previousRows = new Map();
 let previousItems = new Map();
+let runtimeScopes = [];
 
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -201,6 +213,25 @@ function renderBuckets() {
   for (const button of document.querySelectorAll('.bucket[data-state]')) {
     button.onclick = () => { active = button.dataset.state; renderBuckets(); renderList(); };
   }
+}
+
+function renderRuntimeHealth() {
+  $('runtimePanel').hidden = runtimeScopes.length === 0;
+  $('runtimeHealth').innerHTML = runtimeScopes.map((scope) => {
+    const reason = scope.reason === 'waiting_without_workers' ? 'Work is waiting but no worker is connected.' : scope.reason === 'worker_visibility_unavailable' ? 'Worker visibility is unavailable; health is not assumed.' : scope.reason === 'runtime_unreachable' ? 'The queue could not be inspected.' : 'Queue inspection succeeded.';
+    const workers = scope.workers.observable ? String(scope.workers.connected ?? 0) : 'unknown';
+    const title = scope.dashboardURL ? '<a class="runtime-link" href="' + esc(scope.dashboardURL) + '">' + esc(scope.scope) + ' ↗</a>' : '<strong>' + esc(scope.scope) + '</strong>';
+    return '<article class="runtime-card"><div class="top">' + title + '<span class="health-' + esc(scope.status) + '">' + esc(scope.status) + '</span></div><div class="runtime-counts"><span><b>' + scope.queue.waiting + '</b>waiting</span><span><b>' + scope.queue.active + '</b>active</span><span><b>' + workers + '</b>workers</span><span><b>' + scope.queue.delayed + '</b>delayed</span><span><b>' + scope.queue.failed + '</b>failed</span><span><b>' + (scope.queue.paused ? 'yes' : 'no') + '</b>paused</span></div><span class="muted">' + esc(reason) + '</span></article>';
+  }).join('');
+}
+
+async function refreshRuntimeHealth() {
+  try {
+    const response = await fetch(base + '/api/runtime-health', { headers: { accept: 'application/json' } });
+    if (!response.ok) return;
+    runtimeScopes = (await response.json()).scopes || [];
+    renderRuntimeHealth();
+  } catch { /* Optional runtime evidence must not hide durable Tasks. */ }
 }
 
 function renderList() {
@@ -265,8 +296,8 @@ function renderDetail() {
       next.set(key, signature);
       return '<tr' + (changed ? ' class="changed"' : '') + '><td><code>' + esc(item.itemKey) +
         '</code></td><td>' + item.attempt + '</td><td class="s-' + esc(item.state) + '">' +
-        esc(item.state) + '</td><td><code class="muted">' + esc(item.externalId ?? '—') +
-        '</code></td><td>' + esc(item.failureReason ?? (item.hasResult ? 'result recorded' : '')) +
+        esc(item.state) + '</td><td>' + (item.runtimeURL ? '<a class="runtime-link" href="' + esc(item.runtimeURL) + '"><code>' + esc(item.externalId) + '</code> ↗</a>' : '<code class="muted">' + esc(item.externalId ?? '—') + '</code>') +
+        '</td><td>' + esc(item.failureReason ?? (item.hasResult ? 'result recorded' : '')) +
         '</td></tr>';
     }).join('');
   previousItems = next;
@@ -415,6 +446,8 @@ $('cancelBtn').onclick = async () => {
 
 // Idle labels drift on their own; refresh them without re-reading the store.
 setInterval(() => { if (snap) renderList(); }, 10000);
+void refreshRuntimeHealth();
+setInterval(refreshRuntimeHealth, 10000);
 
 skeleton();
 connect();

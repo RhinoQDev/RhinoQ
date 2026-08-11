@@ -615,3 +615,25 @@
 - **Rollback:** stop exposing the additive routes and leave v9 records unused;
   do not silently map multi-tenant traffic back to `default`.
 - **Owner:** PostgreSQL adapter + Node SDK + product
+
+## ADR-0030 — Runtime inspection is read-only evidence, not queue ownership
+
+- **Status:** accepted
+- **Context:** Operators need to distinguish a stuck Task from a paused queue,
+  absent workers or an unreachable runtime. Generic queue dashboards already
+  provide detailed provider controls, and duplicating those controls would
+  blur RhinoQ's Task/evidence boundary.
+- **Decision:** Application-facing runtime health is a pure-data contract.
+  BullMQ implements it through a bounded adapter that may read counts, pause
+  state, workers and default policy. The operator Workbench may show that
+  evidence and safe application-relative or HTTP(S) links after its existing
+  authorization gate. It does not expose payloads, raw provider errors or
+  pause/retry/empty/delete operations. Unobservable worker state is `unknown`;
+  it is never inferred as zero.
+- **Consequences:** RhinoQ gives an operator enough context to choose the next
+  tool without becoming a second queue control plane. Adopters may link an
+  existing inspector such as bull-board while keeping authorization and queue
+  mutation application-owned.
+- **Rollback:** stop supplying the inspector and link callbacks; Task storage,
+  projection and owner APIs are unchanged.
+- **Owner:** Node SDK + product

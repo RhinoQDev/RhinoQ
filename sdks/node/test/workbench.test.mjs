@@ -69,7 +69,7 @@ test('mounting without an operator gate is refused at construction', () => {
 
 test('a request that fails the operator gate sees no data at all', async () => {
   const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => false });
-  for (const path of ['/rhinoq', '/rhinoq/api/overview', '/rhinoq/api/tasks', '/rhinoq/api/tasks/task-1', '/rhinoq/api/tasks/task-1/flight-recorder']) {
+  for (const path of ['/rhinoq', '/rhinoq/api/overview', '/rhinoq/api/runtime-health', '/rhinoq/api/tasks', '/rhinoq/api/tasks/task-1', '/rhinoq/api/tasks/task-1/flight-recorder']) {
     const response = await get(handler, path);
     const body = await response.text();
     assert.equal(response.status, 403, path);
@@ -99,6 +99,7 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.ok(!/https?:\/\/(?!app\.test)/.test(html), 'the page must not fetch from another origin');
   assert.ok(!html.includes('<script src'), 'no external script tags');
   assert.match(html, /Async Flight Recorder/);
+  assert.match(html, /Runtime health/);
   assert.match(html, /flightPanel/);
   assert.match(html, /let active = 'attention'/);
   assert.match(html, /What this means/);
@@ -108,6 +109,29 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.match(html, /href="\/task-center"/);
   assert.match(html, /history\.pushState/);
   assert.match(html, /addEventListener\('popstate'/);
+});
+
+test('runtime health is operator-only, bounded and strips unsafe dashboard URLs', async () => {
+  let calls = 0;
+  const readers = Array.from({ length: 55 }, (_, index) => ({ async inspect() {
+    calls += 1;
+    return { schemaVersion: 1, runtime: 'bullmq', scope: `queue-${index}`, status: 'healthy', observedAt: new Date().toISOString(), queue: { waiting: 0, active: 0, delayed: 0, failed: 0, completed: 1, paused: false }, workers: { observable: true, connected: 1 }, dashboardURL: 'javascript:alert(1)' };
+  } }));
+  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true, runtimeHealth: readers });
+  const body = await (await get(handler, '/rhinoq/api/runtime-health')).json();
+  assert.equal(calls, 50);
+  assert.equal(body.scopes.length, 50);
+  assert.equal(body.scopes[0].dashboardURL, undefined);
+});
+
+test('runtime job links accept only relative and HTTP(S) destinations', async () => {
+  const safe = createWorkbenchHandler({ tasks: source(), requireOperator: () => true, runtimeJobLink: ({ externalId }) => `/ops/jobs/${externalId}` });
+  const safeBody = await (await get(safe, '/rhinoq/api/tasks/task-1')).json();
+  assert.equal(safeBody.items[0].runtimeURL, '/ops/jobs/bull-job-a');
+
+  const unsafe = createWorkbenchHandler({ tasks: source(), requireOperator: () => true, runtimeJobLink: () => 'javascript:alert(document.cookie)' });
+  const unsafeBody = await (await get(unsafe, '/rhinoq/api/tasks/task-1')).json();
+  assert.equal(unsafeBody.items[0].runtimeURL, undefined);
 });
 
 test('the detail view joins runtime job identity from the server-side read', async () => {

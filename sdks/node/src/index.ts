@@ -16,6 +16,8 @@ export * from './tasks/adapters.js';
 export * from './tasks/reconciler.js';
 export * from './tasks/projection-failures.js';
 export * from './observe/metrics.js';
+export * from './observe/runtime-health.js';
+export * from './bullmq/runtime-inspector.js';
 export * from './notify/registry.js';
 export * from './notify/sender.js';
 export * from './tasks/watch.js';

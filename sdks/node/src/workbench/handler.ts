@@ -13,6 +13,7 @@ import type {
 import type { TaskStateQuery } from '../postgres/task-client.js';
 import { taskFlightRecorder, taskFlightRecorderDiagnostic, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
 import { taskUIModel, type TaskUIModel } from '../tasks/ui.js';
+import { safeOperatorURL, type RuntimeHealthReader, type RuntimeJobLink } from '../observe/runtime-health.js';
 import { workbenchPage } from './page.js';
 
 /** The reads the Workbench performs. `PostgresTaskClient` satisfies it. */
@@ -62,6 +63,10 @@ export interface WorkbenchHandlerOptions {
   navigation?: { overviewPath?: string; tasksPath?: string };
   /** Optional Go Gateway join that completes Task -> provider Flight Recorder. */
   providerOperationsByTask?(taskId: string): Promise<ProviderOperationRecord[]>;
+  /** Read-only runtime evidence. The route remains behind requireOperator. */
+  runtimeHealth?: readonly RuntimeHealthReader[];
+  /** Optional operator-only link to the corresponding provider job. */
+  runtimeJobLink?: RuntimeJobLink;
 }
 
 const DEFAULT_STATES: TaskState[] = [
@@ -176,6 +181,7 @@ export function createWorkbenchHandler(
           intervalMs: options.streamIntervalMs ?? 1_000,
           signal: request.signal,
           providerOperationsByTask: options.providerOperationsByTask,
+          runtimeJobLink: options.runtimeJobLink,
         });
       }
 
@@ -187,6 +193,11 @@ export function createWorkbenchHandler(
         }
         counts[ATTENTION_BUCKET] = (await listAttentionTasks(options.tasks, limit)).length;
         return json({ schemaVersion: 1, states: [...states, ATTENTION_BUCKET], counts, actions, limit });
+      }
+
+      if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'runtime-health') {
+        const scopes = await Promise.all((options.runtimeHealth ?? []).slice(0, 50).map((reader) => reader.inspect()));
+        return json({ schemaVersion: 1, scopes: scopes.map(sanitizeRuntimeHealth) });
       }
 
       if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'tasks' && relative.length === 2) {
@@ -209,7 +220,7 @@ export function createWorkbenchHandler(
         const taskId = decodeURIComponent(relative[2] as string);
 
         if (request.method === 'GET' && relative.length === 3) {
-          return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId, options.providerOperationsByTask)) });
+          return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId, options.providerOperationsByTask, options.runtimeJobLink)) });
         }
 
         if (request.method === 'GET' && relative.length === 4 && relative[3] === 'flight-recorder') {
@@ -349,6 +360,7 @@ interface StreamOptions {
   intervalMs: number;
   signal: AbortSignal;
   providerOperationsByTask?: WorkbenchHandlerOptions['providerOperationsByTask'];
+  runtimeJobLink?: RuntimeJobLink;
 }
 
 /**
@@ -449,7 +461,7 @@ async function collect(options: StreamOptions): Promise<Record<string, unknown>>
   lists[ATTENTION_BUCKET] = (await listAttentionTasks(options.tasks, options.limit)).map(withTaskUI);
   counts[ATTENTION_BUCKET] = lists[ATTENTION_BUCKET].length;
   const detail = options.taskId
-    ? await taskDetail(options.tasks, options.taskId, options.providerOperationsByTask).catch(() => undefined)
+    ? await taskDetail(options.tasks, options.taskId, options.providerOperationsByTask, options.runtimeJobLink).catch(() => undefined)
     : undefined;
   return {
     schemaVersion: 1,
@@ -497,6 +509,7 @@ async function taskDetail(
   tasks: WorkbenchTaskSource,
   taskId: string,
   providerOperationsByTask?: (taskId: string) => Promise<ProviderOperationRecord[]>,
+  runtimeJobLink?: RuntimeJobLink,
 ): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder }> {
   const task = await tasks.getTask(taskId);
   const [refs, results, waitpoints, verifications, artifacts, providerOperations] = await Promise.all([
@@ -508,10 +521,14 @@ async function taskDetail(
     (providerOperationsByTask ?? tasks.listProviderOperationsByTask?.bind(tasks))?.(taskId).catch(() => undefined),
   ]);
 
-  const externalIds = new Map<string, string>();
+  const runtimeRefs = new Map<string, { externalId: string; runtime: string; runtimeScope?: string }>();
   for (const ref of refs?.executions ?? []) {
     if (ref.externalId) {
-      externalIds.set(ref.executionId, ref.externalId);
+      runtimeRefs.set(ref.executionId, {
+        externalId: ref.externalId,
+        runtime: ref.runtime,
+        ...(ref.runtimeScope ? { runtimeScope: ref.runtimeScope } : {}),
+      });
     }
   }
   const reasons = new Map<string, string>();
@@ -521,17 +538,23 @@ async function taskDetail(
     }
   }
 
-  const items = task.executions.map((execution) => ({
-    executionId: execution.id,
-    itemKey: execution.itemKey ?? 'default',
-    attempt: execution.attempt,
-    state: execution.state,
-    hasResult: execution.hasResult === true,
-    ...(externalIds.has(execution.id) ? { externalId: externalIds.get(execution.id) } : {}),
-    ...(execution.failureReason ?? reasons.get(execution.id)
-      ? { failureReason: execution.failureReason ?? reasons.get(execution.id) }
-      : {}),
-  }));
+  const items = task.executions.map((execution) => {
+    const runtimeRef = runtimeRefs.get(execution.id);
+    return {
+      executionId: execution.id,
+      itemKey: execution.itemKey ?? 'default',
+      attempt: execution.attempt,
+      state: execution.state,
+      hasResult: execution.hasResult === true,
+      ...(runtimeRef ? { externalId: runtimeRef.externalId } : {}),
+      ...(runtimeRef && runtimeJobLink
+        ? safeRuntimeLink(runtimeJobLink, runtimeRef.externalId, runtimeRef.runtime, runtimeRef.runtimeScope)
+        : {}),
+      ...(execution.failureReason ?? reasons.get(execution.id)
+        ? { failureReason: execution.failureReason ?? reasons.get(execution.id) }
+        : {}),
+    };
+  });
 
   const resolvedWaitpoints = waitpoints ?? [];
   return {
@@ -557,5 +580,18 @@ interface WorkbenchItem {
   state: string;
   hasResult: boolean;
   externalId?: string;
+  runtimeURL?: string;
   failureReason?: string;
+}
+
+function safeRuntimeLink(link: RuntimeJobLink, externalId: string, runtime?: string, scope?: string): { runtimeURL?: string } {
+  try {
+    const runtimeURL = safeOperatorURL(link({ runtime: runtime ?? 'unknown', scope: scope ?? '', externalId }));
+    return runtimeURL ? { runtimeURL } : {};
+  } catch { return {}; }
+}
+
+function sanitizeRuntimeHealth<T extends { dashboardURL?: string }>(health: T): T {
+  const dashboardURL = safeOperatorURL(health.dashboardURL);
+  return { ...health, ...(dashboardURL ? { dashboardURL } : { dashboardURL: undefined }) };
 }

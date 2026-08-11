@@ -405,6 +405,25 @@ guidance and an attempt timeline; runtime job identity remains operator-only.
 The default integration connects Overview, Tasks and Workbench in one same-tab
 product shell instead of presenting three isolated pages.
 
+The embedded Node Workbench also shows a read-only **Runtime health** card when
+the supplied BullMQ Queue supports `getJobCounts()`. It reports bounded queue
+counts, pause state and connected-worker evidence; a waiting queue with no
+workers is degraded, while unavailable worker visibility is explicitly
+unknown. It never exposes Redis errors, credentials or job payloads. Optional
+operator links can connect a Task attempt to an existing runtime inspector:
+
+```ts
+server.use(app.http({
+  operatorToken,
+  runtimeDashboardURL: '/admin/queues/reports',
+  runtimeJobLink: ({ externalId }) => `/admin/queues/reports/${encodeURIComponent(externalId)}`,
+}));
+```
+
+Links are operator-only and restricted to application-relative or HTTP(S)
+destinations. RhinoQ does not add pause, retry, empty or delete controls; queue
+mutation remains with the application and its existing runtime tooling.
+
 The self-contained Task Center includes responsive search, evidence-based views
 for attention/active/finished work, and updated-time or task-name sorting. These
 controls are reflected in the query string, so a filtered view can be bookmarked
