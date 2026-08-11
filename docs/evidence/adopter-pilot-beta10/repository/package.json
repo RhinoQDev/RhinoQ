@@ -1,0 +1,8 @@
+{
+  "name": "rhinoq-beta10-pilot-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
