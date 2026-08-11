@@ -9,7 +9,7 @@ import type { SqlPool, SqlConnection } from './task-schema.js';
 export class PostgresProjectorLease {
   private readonly pool: SqlPool;
   private readonly scope: string;
-  private connection?: SqlConnection;
+  private session?: LeaseSession;
 
   constructor(pool: SqlPool, runtimeScope: string) {
     if (!pool || typeof pool.connect !== 'function') {
@@ -41,67 +41,97 @@ export class PostgresProjectorLease {
    * establishes.
    */
   async verify(): Promise<boolean> {
-    const connection = this.connection;
-    if (!connection) {
+    const session = this.session;
+    if (!session) {
       return false;
     }
     try {
-      await connection.query('SELECT 1', []);
+      await session.connection.query('SELECT 1', []);
       return true;
     } catch {
       // The session is gone; so is the lock. Drop the connection rather than
       // returning it to the pool, and let acquire() start over honestly.
-      this.connection = undefined;
-      try {
-        connection.release();
-      } catch {
-        // A broken connection may refuse release. Ownership is already lost.
-      }
+      this.discard(session);
       return false;
     }
   }
 
   async acquire(): Promise<boolean> {
-    if (this.connection) {
+    if (this.session) {
       return true;
     }
-    const connection = await this.pool.connect();
+    const connection = await this.pool.connect() as ObservableSqlConnection;
+    const session: LeaseSession = {
+      connection,
+      discarded: false,
+      onError: () => this.discard(session),
+    };
+    connection.on?.('error', session.onError);
+    // Install the session before the first round trip: PostgreSQL may emit the
+    // client error event just before the query promise rejects.
+    this.session = session;
     try {
       const result = await connection.query<{ acquired: boolean }>(
         `SELECT pg_try_advisory_lock(hashtextextended($1, $2)) AS acquired`,
         [`rhinoq:bullmq:projector:${this.scope}`, 7_246_466_201],
       );
       if (result.rows[0]?.acquired !== true) {
+        if (this.session === session) this.session = undefined;
+        connection.removeListener?.('error', session.onError);
         connection.release();
         return false;
       }
-      this.connection = connection;
+      if (session.discarded || this.session !== session) return false;
       return true;
     } catch (error) {
-      connection.release();
+      this.discard(session);
       throw error;
     }
   }
 
   async release(): Promise<void> {
-    const connection = this.connection;
-    if (!connection) {
+    const session = this.session;
+    if (!session) {
       return;
     }
-    this.connection = undefined;
+    this.session = undefined;
     let failure: unknown;
     try {
-      await connection.query(
+      await session.connection.query(
         `SELECT pg_advisory_unlock(hashtextextended($1, $2))`,
         [`rhinoq:bullmq:projector:${this.scope}`, 7_246_466_201],
       );
     } catch (error) {
       failure = error;
     } finally {
-      connection.release();
+      session.connection.removeListener?.('error', session.onError);
+      if (!session.discarded) {
+        session.discarded = true;
+        session.connection.release(failure ? true : undefined);
+      }
     }
     if (failure) {
       throw failure;
     }
   }
+
+  /** Consume pg's checked-out-client error event and destroy the dead session. */
+  private discard(session: LeaseSession): void {
+    if (this.session === session) this.session = undefined;
+    if (session.discarded) return;
+    session.discarded = true;
+    try { session.connection.release(true); } catch { /* ownership is already gone */ }
+  }
+}
+
+interface ObservableSqlConnection extends SqlConnection {
+  on?(event: 'error', listener: (error: unknown) => void): unknown;
+  removeListener?(event: 'error', listener: (error: unknown) => void): unknown;
+  release(error?: boolean): void;
+}
+
+interface LeaseSession {
+  connection: ObservableSqlConnection;
+  onError: (error: unknown) => void;
+  discarded: boolean;
 }

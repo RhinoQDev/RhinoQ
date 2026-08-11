@@ -98,6 +98,30 @@ test('a dead session is reported as a lost lease, not as ownership', async () =>
   assert.equal(await lease.verify(), false, 'and it stays lost');
 });
 
+test('a checked-out pg client error is consumed and immediately invalidates the lease', async () => {
+  const listeners = new Set();
+  const releases = [];
+  const connection = {
+    async query(sql) {
+      if (sql.includes('pg_try_advisory_lock')) return { rows: [{ acquired: true }] };
+      return { rows: [{ ok: 1 }] };
+    },
+    on(event, listener) { if (event === 'error') listeners.add(listener); },
+    removeListener(event, listener) { if (event === 'error') listeners.delete(listener); },
+    release(destroy) { releases.push(destroy); },
+  };
+  const lease = new PostgresProjectorLease({ async connect() { return connection; } }, 'reports');
+
+  assert.equal(await lease.acquire(), true);
+  assert.equal(listeners.size, 1, 'the checked-out client has an error listener');
+  for (const listener of listeners) listener(Object.assign(new Error('terminated'), { code: '57P01' }));
+
+  assert.equal(await lease.verify(), false, 'the asynchronous client error invalidates ownership');
+  assert.deepEqual(releases, [true], 'the broken session is destroyed, not returned to the pool');
+  await lease.release();
+  assert.deepEqual(releases, [true], 'cleanup is idempotent after the error event');
+});
+
 test('a bridge stops projecting when it loses the lease', async () => {
   const listeners = new Set();
   let held = true;

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed `PostgresProjectorLease` handling for an asynchronously terminated
+  checked-out `pg` client. The lease now consumes the client `error` event,
+  invalidates ownership immediately and destroys the broken session instead
+  of allowing PostgreSQL `57P01` to escape as an uncaught exception.
 - Added a provider-neutral Runtime Health contract, a bounded read-only BullMQ
   inspector, and an operator-only Workbench overview for queue counts, pause
   state and worker visibility. Added safe optional queue/job deep links while
