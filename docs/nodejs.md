@@ -1,8 +1,8 @@
 # Node.js integration
 
-> Status: development preview. This checkout is the `0.1.0-beta.10` candidate.
+> Status: development preview. This checkout is the `0.1.0-beta.11` candidate.
 > Pin the exact published version after the release workflow succeeds; until
-> then, build the beta.10 tarball from this checkout. See
+> then, build the beta.11 tarball from this checkout. See
 > [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
@@ -55,7 +55,7 @@ or below the highest rendered `entityVersion`, stops on terminal state by
 default and accepts an `AbortSignal`. Network and authorization failures are
 reported to the caller; the helper does not invent an outage retry policy.
 
-The beta.10 candidate exports `TaskStore`, a browser external
+The beta.11 candidate exports `TaskStore`, a browser external
 store suitable for React `useSyncExternalStore` and equivalent adapters. It
 exposes loading, connected, reconnecting and stopped states, retries transport
 failures with bounded backoff, and never accepts an older `entityVersion`.
@@ -130,7 +130,7 @@ Each command has a different purpose:
 | `npm run typecheck` | checks public TypeScript types without emitting JavaScript | none |
 | `npm test` | builds `src/` into `dist/`, then runs the Node test suite | `dist/` |
 | `npm run pack:check` | builds and shows which files would enter the package without creating an archive | `dist/` |
-| `npm run pack` | removes earlier archives, rebuilds and creates the archive | `rhinoq-node-0.1.0-beta.10.tgz` |
+| `npm run pack` | removes earlier archives, rebuilds and creates the archive | `rhinoq-node-0.1.0-beta.11.tgz` |
 | `npm run verify:installed -- <app>` | proves an installed copy was built from this source | none |
 
 Use `npm run pack` rather than bare `npm pack`: it deletes earlier archives
@@ -146,20 +146,20 @@ Install the generated tarball and the PostgreSQL driver in the target Node
 application. Replace the example path with the absolute path on your machine:
 
 ```bash
-npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.10.tgz pg
+npm install /path/to/rhinoq/sdks/node/rhinoq-node-0.1.0-beta.11.tgz pg
 ```
 
 Windows PowerShell example:
 
 ```powershell
-npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.10.tgz pg
+npm install C:\src\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.11.tgz pg
 ```
 
 Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
 not own or configure the application's connection pool.
 
 This source-install path is the authoritative way to evaluate changes not yet
-published. The tagged beta.10 candidate is not yet a verified registry/GitHub
+published. The tagged beta.11 candidate is not yet a verified registry/GitHub
 release; beta.8 remains the latest verified release with prebuilt `rhinoq` CLI
 binaries.
 
@@ -876,7 +876,7 @@ reproducible.
 
 ## Current limitations
 
-- Every published version is a prerelease. The beta.10 release workflow uses
+- Every published version is a prerelease. The beta.11 release workflow uses
   `next`; `latest` may remain on an older release. Use `next` only after the
   workflow succeeds, and pin an exact version in anything that must not move
   under you.

@@ -210,12 +210,12 @@ source files. Prefer `RHINOQ_DATABASE_URL` when the application already uses
 ### 3. Install the pinned SDK
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.10 pg
+npm install @rhinoq/node@0.1.0-beta.11 pg
 ```
 
 Why: `pg` is a peer dependency and lets RhinoQ reuse the application's pool.
-Pin the exact beta.10 package after the release workflow succeeds; before that,
-install the beta.10 tarball built from this checkout as described in
+Pin the exact beta.11 package after the release workflow succeeds; before that,
+install the beta.11 tarball built from this checkout as described in
 [`docs/nodejs.md`](./nodejs.md). Older prerelease tags do not contain this
 contract.
 
@@ -734,7 +734,7 @@ Read [Production readiness](./production-readiness.md),
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
 | repair is unavailable | Workbench is read-only or handler is not registered | supply the callback allowlist and start with `--actions` |
 | repair becomes `stale` | the business object changed after preview | investigate again and create a new plan; do not bypass the precondition |
-| npm installs an unexpected version | prereleases use `next` and `latest` is not moved by the beta.10 workflow | pin an exact version, for example `@rhinoq/node@0.1.0-beta.10` after the release succeeds |
+| npm installs an unexpected version | prereleases use `next` and `latest` is not moved by the prerelease workflow | pin an exact version, for example `@rhinoq/node@0.1.0-beta.11` after the release succeeds |
 
 ## Honest current limits
 

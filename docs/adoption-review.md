@@ -41,7 +41,7 @@ prerequisite for someone who only needs import/export progress.
    compared with hand-built task plumbing.
 3. Run browser reload, delayed-response, duplicate-event and cancellation-race
    tests against the real application.
-4. Grant npm trusted-publisher access, publish the verified `beta.10` packages,
+4. Publish the verified `beta.11` packages through npm trusted publishing,
    and confirm the Git tag, GitHub Release, provenance attestations and `next`
    dist-tag agree before recruiting a design partner.
 

@@ -5,7 +5,7 @@
 With Node.js 22 and PostgreSQL available:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.10 pg
+npm install @rhinoq/node@0.1.0-beta.11 pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -21,9 +21,9 @@ The Node `init` path creates only the isolated Task profile. Verified Rules use
 the full Go schema and authenticated Gateway. From the RhinoQ checkout, start
 both Go processes with the same database configuration before continuing:
 
-The beta.10 package contains the current `verify` commands. An older tarball
+The beta.11 package contains the current `verify` commands. An older tarball
 answers `FAIL verify requires 'add <rule-name>'`; if that is what you see,
-install the exact beta.10 package or tarball.
+install the exact beta.11 package or tarball.
 
 ```bash
 go build -o rhinoq ./cmd/rhinoq
@@ -73,11 +73,11 @@ For a Node application keeping its existing queue, prefer the isolated
 Task-only path instead of the full Go migration chain:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.10.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.11.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
-Pack the beta.10 candidate from this checkout until its tag workflow succeeds.
+Pack the beta.11 candidate from this checkout until its tag workflow succeeds.
 It creates the isolated Task tables in `rhinoq_task`, including durable
 waitpoints, tenant-scoped owner reads, verification records and Artifact v1,
 and reuses the application's `pg.Pool` through `PostgresTaskClient`.

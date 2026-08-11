@@ -65,7 +65,7 @@ command is:
 go install github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.8
 ```
 
-The beta.10 tag is a newer source candidate, but its release workflow is not
+The beta.11 tag is the current source candidate, but its release workflow is not
 complete. Do not put `@latest` into production automation while RhinoQ remains
 in prerelease.
 

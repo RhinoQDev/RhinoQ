@@ -6,8 +6,9 @@ tag/release:
 - `@rhinoq/node` — authoritative Node SDK and CLIs;
 - `rhinoq` — unscoped compatibility alias.
 
-`0.1.0-beta.10` is the current source candidate. Its tag exists, but the
-publish workflow is incomplete, so it is not yet a verified public release.
+`0.1.0-beta.11` is the current source candidate. `0.1.0-beta.10` was partially
+published before a fan-out progress race was fixed, so it is superseded and is
+not a verified public release.
 `0.1.0-beta.8` is the latest verified public release. A candidate is complete
 only when the tag workflow has published both packages, registry smoke has
 passed, the GitHub prerelease contains the Node/Go artifacts, and
@@ -41,11 +42,11 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    npm test
    npm run pack:check
    cd ../..
-   node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.10
+   node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.11
    ```
 
 3. Commit the candidate, then create and push the matching annotated tag:
-   `v0.1.0-beta.10`.
+   `v0.1.0-beta.11`.
 4. The Release workflow fails closed in this order:
 
    ```text
@@ -59,11 +60,11 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
 5. Verify the resulting state independently:
 
    ```bash
-   npm view @rhinoq/node@0.1.0-beta.10 version dist.integrity dist.attestations
-   npm view rhinoq@0.1.0-beta.10 version dist.integrity dist.attestations
+   npm view @rhinoq/node@0.1.0-beta.11 version dist.integrity dist.attestations
+   npm view rhinoq@0.1.0-beta.11 version dist.integrity dist.attestations
    npm dist-tag ls @rhinoq/node
    npm dist-tag ls rhinoq
-   gh release view v0.1.0-beta.10
+   gh release view v0.1.0-beta.11
    ```
 
    For a prerelease, each package must map `next` to the exact candidate;
@@ -74,7 +75,7 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    ```bash
    cosign verify-blob checksums.txt \
      --bundle checksums.txt.sigstore.json \
-     --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.10" \
+     --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.11" \
      --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
    ```
 

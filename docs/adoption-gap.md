@@ -135,7 +135,7 @@ estimates below are estimates.
    from source is a hard stop for a Node team evaluating on a Tuesday
    afternoon.
 5. **Publish the current beta without moving stable `latest`.** The candidate
-   is now `beta.10`; all three package versions, provenance, `next` dist-tags,
+   is now `beta.11`; both package versions, provenance, `next` dist-tags,
    GitHub release and registry smoke must agree before the normal prerelease
    path represents the repository.
 6. **Cancellation hands — implemented on the high-level path.** `app.cancel()`

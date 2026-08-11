@@ -56,12 +56,12 @@ That second layer is optional on day one and uses the same operator workflow.
 
 RhinoQ is currently in public beta.
 
-- Latest source candidate: `v0.1.0-beta.10`.
+- Latest source candidate: `v0.1.0-beta.11`.
 - Latest verified public release: `v0.1.0-beta.8`.
 
 Use RhinoQ for evaluation and controlled pilots. Production use is not yet
-recommended. The beta.10 tag exists, but its npm/GitHub release is incomplete
-until the publish workflow and registry smoke test pass.
+recommended. The beta.10 release was superseded after its partial npm publish;
+beta.11 is complete only after both packages and the registry smoke test pass.
 
 > [!WARNING]
 > RhinoQ is a prerelease for evaluation and controlled pilots. The full Go
@@ -863,7 +863,7 @@ exists but is not the default browser polling shape.
 | Bounded, previewable retention for observation and delivery evidence | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.10 candidate pipeline configured; beta.8 is the latest verified public release |
+| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.11 candidate pipeline configured; beta.8 is the latest verified public release |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 

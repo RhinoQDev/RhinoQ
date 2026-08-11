@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-beta.11
+
 - Fixed a fan-out settlement race where a progress synchronization could retain
   a pre-terminal PostgreSQL snapshot (for example `49/50`) and the settlement
   callback could then close the Task before progress converged to `50/50`.
