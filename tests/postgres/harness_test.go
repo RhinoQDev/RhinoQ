@@ -203,12 +203,49 @@ func assertPoliciesApply(ctx context.Context, db *sql.DB) error {
 // time. Doing it here rather than with a SET statement after connecting means
 // there is no window in which a pooled connection is live without a tenant,
 // and no way for a query to run before the SET.
-func withTenantOption(url, tenant string) string {
-	separator := "?"
-	if strings.Contains(url, "?") {
-		separator = "&"
+//
+// PostgreSQL connection URLs accept one `options` value. Replacing the old
+// string concatenation avoids silently discarding an existing option when the
+// CI URL already announces tnt_system.
+func withTenantOption(rawURL, tenant string) string {
+	return withPostgresOption(rawURL, "-c rhinoq.tenant_id="+tenant)
+}
+
+func withPostgresOption(rawURL, option string) string {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		// The caller already validates the database URL before opening a pool.
+		// Preserve the old value here so a malformed URL still produces the
+		// useful connection error rather than hiding it behind this helper.
+		return rawURL
 	}
-	return url + separator + "options=" + neturl.QueryEscape("-c rhinoq.tenant_id="+tenant)
+	query := parsed.Query()
+	options := strings.TrimSpace(query.Get("options"))
+	if options == "" {
+		options = option
+	} else {
+		options += " " + option
+	}
+	query.Set("options", options)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func TestWithPostgresOptionPreservesExistingOptions(t *testing.T) {
+	rawURL := "postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable&options=-c%20rhinoq.tenant_id%3Dtnt_system"
+	got := withPostgresOption(rawURL, "-c rhinoq.maintenance=on")
+
+	parsed, err := neturl.Parse(got)
+	if err != nil {
+		t.Fatalf("parse rewritten URL: %v", err)
+	}
+	if options := parsed.Query().Get("options"); options !=
+		"-c rhinoq.tenant_id=tnt_system -c rhinoq.maintenance=on" {
+		t.Fatalf("options = %q", options)
+	}
+	if sslmode := parsed.Query().Get("sslmode"); sslmode != "disable" {
+		t.Fatalf("sslmode = %q", sslmode)
+	}
 }
 
 type queryRower interface {

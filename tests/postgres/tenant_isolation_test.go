@@ -51,13 +51,8 @@ func tenantDB(t *testing.T, tenant string) *sql.DB {
 // session must not be able to perform.
 func maintenanceDB(t *testing.T) *sql.DB {
 	t.Helper()
-	url := appURL(t)
-	separator := "?"
-	if strings.Contains(url, "?") {
-		separator = "&"
-	}
-	db, err := sql.Open("pgx", url+separator+"options="+
-		"-c%20rhinoq.maintenance%3Don")
+	url := withPostgresOption(appURL(t), "-c rhinoq.maintenance=on")
+	db, err := sql.Open("pgx", url)
 	if err != nil {
 		t.Fatalf("open maintenance pool: %v", err)
 	}
