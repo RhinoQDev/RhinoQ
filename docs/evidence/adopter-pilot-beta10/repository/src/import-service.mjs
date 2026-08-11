@@ -1,45 +1,23 @@
-const imports = new Map();
-
-export function createImportTask({ ownerId, total }) {
-  const id = `import_${imports.size + 1}`;
-  const task = {
+export async function createImportTask(tasks, { id, ownerId, tenantId, total }) {
+  let task = await tasks.createTask({
     id,
+    type: 'media.import',
     ownerId,
-    state: 'queued',
-    completed: 0,
+    tenantId,
+    definitionVersion: 1,
+  });
+  task = await tasks.transitionTask(task.id, task.entityVersion, 'queued');
+  return tasks.transitionTask(task.id, task.entityVersion, 'running');
+}
+
+export async function updateImportProgress(tasks, task, completed, total = task.progress.total) {
+  return tasks.reportTaskProgress(task.id, task.entityVersion, {
+    completed,
     total,
-    result: null,
-    cancelled: false,
-  };
-  imports.set(id, task);
-  return structuredClone(task);
+    message: completed >= (total ?? 0) ? 'Import complete' : 'Importing media',
+  });
 }
 
-export function readImportTask(id, ownerId) {
-  const task = imports.get(id);
-  if (!task || task.ownerId !== ownerId) return null;
-  return structuredClone(task);
-}
-
-export function updateImportProgress(id, ownerId, completed) {
-  const task = imports.get(id);
-  if (!task || task.ownerId !== ownerId) return null;
-  task.state = completed >= task.total ? 'succeeded' : 'running';
-  task.completed = Math.min(completed, task.total);
-  return structuredClone(task);
-}
-
-export function cancelImportTask(id, ownerId) {
-  const task = imports.get(id);
-  if (!task || task.ownerId !== ownerId) return null;
-  task.cancelled = true;
-  task.state = 'cancelled';
-  return structuredClone(task);
-}
-
-export function attachImportResult(id, ownerId, result) {
-  const task = imports.get(id);
-  if (!task || task.ownerId !== ownerId) return null;
-  task.result = result;
-  return structuredClone(task);
+export async function cancelImportTask(tasks, task) {
+  return tasks.requestTaskCancellation(task.id, task.entityVersion);
 }

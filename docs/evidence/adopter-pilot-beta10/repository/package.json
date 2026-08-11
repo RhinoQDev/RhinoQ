@@ -3,6 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:pilot": "node --test test/task.test.mjs"
+  },
+  "dependencies": {
+    "@rhinoq/node": "file:../../../../sdks/node",
+    "pg": "^8.15.0"
   }
 }
