@@ -7,13 +7,9 @@ and business logic stay yours; the surrounding task platform does not have to.
 The production-shaped adapter available today is BullMQ. It is the first
 runtime integration, not RhinoQ's product identity.
 
-## The short way in
+## The supported way in
 
-```bash
-npx create-rhinoq-app my-batch && cd my-batch && npm start
-```
-
-Or, in an application that already has a `pg.Pool`, a BullMQ `Queue` and its
+In an application that already has a `pg.Pool`, a BullMQ `Queue` and its
 `QueueEvents`:
 
 ```ts

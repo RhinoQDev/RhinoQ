@@ -65,8 +65,8 @@ things together:
    reconciliation, read-only Rule execution, version fences and guarded repair
    must be understandable in the UI—not merely correct in internal code.
 
-Today, item 2 is demonstrable in the scaffold and item 4 has substantial local
-test coverage. Items 1 and 3 are still only partially proven: item 1 needs a
+Today, item 2 is demonstrable in the BullMQ integration example and item 4 has
+substantial local test coverage. Items 1 and 3 are still only partially proven: item 1 needs a
 real adopter before/after deletion count, and item 3 still lacks a single
 provider/effect-wide timeline in the Node Workbench.
 

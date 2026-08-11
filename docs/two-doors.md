@@ -66,7 +66,6 @@ grep -vcE '^\s*(//|/\*|\*|$)' examples/fanout-bullmq/server.mjs
 | What | Non-comment lines |
 |---|---:|
 | `examples/fanout-bullmq/server.mjs` — Door 1, long form: API, worker, bridge, reconciler, both HTTP surfaces, exactly-once settlement | **164** |
-| `create-rhinoq-app` template `server.mjs` — Door 1 via `rhinoq()`, plus a storage-drift demo the example does not have | **122** |
 
 An independent evaluation built the same feature set three times — by hand on
 PostgreSQL and BullMQ, with RhinoQ behind a hand-written HTTP contract, and with

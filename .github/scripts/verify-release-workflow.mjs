@@ -20,7 +20,6 @@ const requireJob = (name) => {
 
 const nodePublish = requireJob('node-publish');
 const aliasPublish = requireJob('node-publish-alias');
-const createAppPublish = requireJob('create-app-publish');
 
 for (const [name, job] of [
   ['node-publish', nodePublish],
@@ -35,19 +34,6 @@ for (const [name, job] of [
   if (!job.includes('npm publish --access public --tag "$tag"')) {
     throw new Error(`${name} must publish through the OIDC path`);
   }
-}
-
-if (!createAppPublish.includes('NPM_CREATE_APP_BOOTSTRAP_TOKEN')) {
-  throw new Error('create-app-publish must isolate its first-publication token');
-}
-if (!createAppPublish.includes('npm view create-rhinoq-app name')) {
-  throw new Error('create-app-publish must use OIDC after the package exists');
-}
-if (!createAppPublish.includes('npm publish --provenance --access public --tag "$tag"')) {
-  throw new Error('create-app-publish must preserve provenance for bootstrap publication');
-}
-if (!createAppPublish.includes('NPM_CREATE_APP_BOOTSTRAP_TOKEN:-')) {
-  throw new Error('create-app-publish must fail clearly when first-publication auth is missing');
 }
 
 console.log('PASS release workflow npm authentication contract');

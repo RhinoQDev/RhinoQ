@@ -1,16 +1,15 @@
 # Releasing RhinoQ
 
-RhinoQ releases one version across three npm packages and the matching GitHub
+RhinoQ releases one version across two npm packages and the matching GitHub
 tag/release:
 
 - `@rhinoq/node` — authoritative Node SDK and CLIs;
-- `rhinoq` — unscoped compatibility alias;
-- `create-rhinoq-app` — one-command evaluation app.
+- `rhinoq` — unscoped compatibility alias.
 
 `0.1.0-beta.10` is the current source candidate. Its tag exists, but the
 publish workflow is incomplete, so it is not yet a verified public release.
 `0.1.0-beta.8` is the latest verified public release. A candidate is complete
-only when the tag workflow has published all three packages, registry smoke has
+only when the tag workflow has published both packages, registry smoke has
 passed, the GitHub prerelease contains the Node/Go artifacts, and
 provenance/signature verification has passed.
 
@@ -27,22 +26,12 @@ npm generates provenance automatically for trusted publishes. Remove the
 granular token without 2FA bypass cannot work in a non-interactive runner: npm
 will stop with `EOTP` and wait for a one-time password.
 
-The first publication of `create-rhinoq-app` is the one exception: npm requires
-a package to exist before trusted publishing can be configured. Create an
-expiring granular write token with **2FA bypass enabled** and store it
-temporarily as `NPM_CREATE_APP_BOOTSTRAP_TOKEN`. The workflow uses it only if
-the package does not exist yet. Immediately after the first successful
-publication, configure the trusted publisher for `create-rhinoq-app`, delete
-the secret and revoke the token. If the package already exists, the workflow
-always uses OIDC and ignores that secret.
-
 Protect the `v*` tag rule so a reviewed maintainer creates release tags.
 
 ## Cut a prerelease
 
-1. Set the exact version in the scoped SDK, its lockfile, the alias, the
-   scaffolder and the generated template dependency. Add the same heading to
-   `CHANGELOG.md`.
+1. Set the exact version in the scoped SDK, its lockfile and the alias. Add the
+   same heading to `CHANGELOG.md`.
 2. Run from a clean checkout:
 
    ```bash
@@ -51,9 +40,6 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    npm ci
    npm test
    npm run pack:check
-   cd ../create-rhinoq-app
-   npm ci
-   npm test
    cd ../..
    node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.10
    ```
@@ -66,8 +52,7 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    verify matrix and archives
      -> publish @rhinoq/node
      -> publish rhinoq
-     -> publish create-rhinoq-app
-     -> install exact versions from npm and smoke ESM/CJS/CLI/scaffold/signatures
+     -> install exact versions from npm and smoke ESM/CJS/CLI/signatures
      -> publish GitHub assets, Go binaries and container
    ```
 
@@ -76,10 +61,8 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    ```bash
    npm view @rhinoq/node@0.1.0-beta.10 version dist.integrity dist.attestations
    npm view rhinoq@0.1.0-beta.10 version dist.integrity dist.attestations
-   npm view create-rhinoq-app@0.1.0-beta.10 version dist.integrity dist.attestations
    npm dist-tag ls @rhinoq/node
    npm dist-tag ls rhinoq
-   npm dist-tag ls create-rhinoq-app
    gh release view v0.1.0-beta.10
    ```
 
@@ -101,8 +84,8 @@ failed workflow.
 
 ## Do not release if
 
-- package, template, changelog and tag versions disagree;
-- Node, Go, scaffold or browser acceptance fails;
+- package, changelog and tag versions disagree;
+- Node or Go acceptance fails;
 - the changelog advertises behavior without code and tests;
 - a security release blocker is unresolved;
 - the prerelease would be presented as production-ready.

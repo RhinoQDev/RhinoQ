@@ -7,28 +7,18 @@ users see progress and results, developers integrate a stable Task contract,
 and operators can understand failures and recover safely. You keep the runtime
 that executes the work; RhinoQ supplies the missing Task layer around it.
 
-```bash
-npx create-rhinoq-app@next my-batch && cd my-batch && npm start
-```
-
-That brings up PostgreSQL and Redis, applies the schema, runs a 50-item batch
-and opens <http://localhost:3000>. Nothing needs to exist first except Docker
-and Node 22.
-
-Inside is the whole user journey: start a batch, watch live progress in the
-owner-scoped Task Center, cancel work, inspect every retry, and investigate
-stuck or uncertain tasks in the protected operator Workbench. A storage-drift
-demo then shows the harder case: the queue says `completed`, but the expected
-output is missing.
+The supported evaluation path starts from an existing Node.js application with
+PostgreSQL and BullMQ. Follow the [BullMQ integration example](./examples/fanout-bullmq/)
+or the [existing-application guide](./docs/start-here.md) to add the Task
+Center, owner API and operator Workbench to work you already run.
 
 Task Center and Workbench use the same plain-language Task explanation: what is
 happening, how much finished, whether repeating the work needs review, and the
 next recommended action. Generic failures never claim that retry is safe when
 RhinoQ has no evidence about the external result.
 
-The generated app links directly to Task Center and to a local operator sign-in.
-The operator token is entered into the sign-in form and stored in an HttpOnly,
-SameSite cookie scoped to `/admin`; it is not embedded in the page or URL.
+The operator token is exchanged for an HttpOnly, SameSite cookie scoped to
+`/admin`; it is not embedded in the page or URL.
 
 ```js
 const app = await rhinoq({ pool, queue, events, ownerFromRequest });
@@ -92,7 +82,7 @@ until the publish workflow and registry smoke test pass.
 
 | If you are… | Read |
 |---|---|
-| starting a new project | `npx create-rhinoq-app@next`, above |
+| evaluating the supported Node/BullMQ path | [the BullMQ integration example](./examples/fanout-bullmq/) |
 | adding this around async work you already run | [the two integration doors](./docs/two-doors.md); the current production-shaped adapter example uses [`BullMQ`](./examples/fanout-bullmq/) |
 | deciding whether it will save you code | [two doors](./docs/two-doors.md) |
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
@@ -122,7 +112,6 @@ These cost an afternoon each when you find them yourself. The example
 |---|---|---|
 | `@rhinoq/node` | npm | the Node SDK. This is the one you want. |
 | `rhinoq` | npm | a distribution alias for the same code, so `npm install rhinoq` works |
-| `create-rhinoq-app` | npm, via `npx` | the scaffolder above |
 | `@rhinoq/nest` | **not published** — `npm install ./sdks/nest` from a checkout | an optional NestJS module |
 | `rhinoq` (Go CLI) | `go build ./cmd/rhinoq` | Rules, Findings, the Gateway, full migrations |
 
@@ -205,7 +194,7 @@ await recordVerification(pool, 'output-exists', await check({ bucket, key }));
 `objectExists`, `httpReadBack` and `rowMatches` each return `present`, `missing`
 or `unknown`-with-a-reason, and `recordVerification` writes that into a table a
 Rule can read. RhinoQ stores and classifies findings; the trip to the bucket is
-yours, and the scaffold has a working one you can run.
+yours, and the integration example has a working one you can run.
 
 ### Three outcomes, not two
 
@@ -252,9 +241,8 @@ honest comparison with established alternatives.
 
 ## Adding it to an application you already have
 
-`create-rhinoq-app` writes a new project. To put RhinoQ into an existing one,
-the Rules half of the product starts from a database you already have — no
-queue, no worker, no cutover:
+To put RhinoQ into an existing project, start from a database and worker you
+already have — no queue replacement, no worker rewrite, no cutover:
 
 ```bash
 npm install @rhinoq/node@next pg
@@ -269,9 +257,8 @@ npx rhinoq dev
 ```
 
 For the fan-out half, [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) is
-the same feature set as the scaffold with every decision written out rather than
-made for you, and `npm run smoke` in that directory is the test that proves a
-batch finishes.
+the same feature set with every decision written out rather than made for you,
+and `npm run smoke` in that directory is the test that proves a batch finishes.
 
 Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and BullMQ, previews
 what is missing, refuses to overwrite generated Rules, and prints a next action
@@ -409,7 +396,7 @@ failed/cancelled outcomes), and announces terminal transitions through an
 unresponsive while cancel, retry or result resolution is in flight. Its list
 links to an owner-facing `/task-center/{taskId}` detail with plain-language
 guidance and an attempt timeline; runtime job identity remains operator-only.
-The default scaffold connects Overview, Tasks and Workbench in one same-tab
+The default integration connects Overview, Tasks and Workbench in one same-tab
 product shell instead of presenting three isolated pages.
 
 The self-contained Task Center includes responsive search, evidence-based views

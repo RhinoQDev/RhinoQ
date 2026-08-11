@@ -124,8 +124,8 @@ estimates below are estimates.
    claim.
 
 3. **Rerun the browser scenario in a real adopter.** The repository now ships
-   Task Center with owner-scoped SSE and polling fallback, plus a scaffold that
-   exercises progress and cancellation. The missing evidence is no longer a
+   Task Center with owner-scoped SSE and polling fallback, plus the BullMQ
+   integration example that exercises progress and cancellation. The missing evidence is no longer a
    frontend artifact; it is two tabs, reload and cancel-during-finish behavior
    inside an adopter application.
 

@@ -8,8 +8,8 @@ RhinoQ has two layers that you can adopt separately:
 
 1. **Async Task Platform:** durable state, per-item attempts, progress,
    cancellation, reconciliation, owner API, Task Center and Workbench around
-   work your application already runs. The current scaffold uses BullMQ as its
-   concrete runtime adapter.
+   work your application already runs. The supported integration uses BullMQ as
+   its concrete runtime adapter.
 2. **Verified Tasks:** evidence, Rules, Findings and guarded repair when queue
    completion is not enough proof.
 
@@ -18,16 +18,19 @@ RhinoQ has two layers that you can adopt separately:
 
 ## First value: one connected async-task loop
 
+Install the Node SDK into an existing application and start the Task layer:
+
 ```bash
-npx create-rhinoq-app@next my-batch
-cd my-batch
-npm start
+npm install @rhinoq/node@next pg
+npx rhinoq init
+npx rhinoq adopt --mode single --apply
+npx rhinoq doctor
+npx rhinoq dev
 ```
 
-Open the generated page and start a batch. You can watch progress, cancel
-queued work, open the owner-facing Task Center and investigate retry history or
-attention states in the operator Workbench. The application code uses the same
-shape you would put around an existing worker:
+You can watch progress, cancel queued work, open the owner-facing Task Center
+and investigate retry history or attention states in the operator Workbench.
+The application code uses the same shape you would put around an existing worker:
 
 ```js
 const app = await rhinoq({ pool, queue, events, ownerFromRequest });

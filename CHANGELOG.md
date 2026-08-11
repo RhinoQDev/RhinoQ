@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-- Fixed the npm release workflow so `@rhinoq/node` and `rhinoq` prefer GitHub
-  OIDC trusted publishing and never fall back to a token that can trigger an
-  interactive OTP challenge. `create-rhinoq-app` uses a 2FA-bypass bootstrap
-  token only before its first publication. Added a release-workflow regression
-  check.
+- Fixed the npm release workflow so `@rhinoq/node` and `rhinoq` use GitHub OIDC
+  trusted publishing and never fall back to a token that can trigger an
+  interactive OTP challenge. Added a release-workflow regression check.
+- Removed the unreleased `create-rhinoq-app` scaffold. Evaluation now starts
+  from an existing Node.js/BullMQ application and the supported integration
+  example.
 - Added Task schema v10 durable notification outbox with lease-based claim,
   complete and retry/failure transitions; custom delivery callbacks remain
   optional and application-owned.
@@ -20,7 +21,7 @@
 ## 0.1.0-beta.10
 
 - Release candidate for the connected Async Operations Hub, including the
-  owner waiting inbox, Task discovery/detail polish and the three-package npm
+  owner waiting inbox, Task discovery/detail polish and the two-package npm
   release matrix. Prerelease packages publish under `next`; `latest` is not
   moved until a stable release decision.
 - Added explicit owner-scoped At risk/Stuck policy, append-only Task
@@ -30,24 +31,23 @@
 - Connected Task-correlated ProviderOperations to the Flight Recorder and
   added a fail-closed verification-to-Finding-to-durable-notification helper
   with operator deep links.
-- Added desktop/mobile browser acceptance with screenshots captured as CI
-  artifacts, plus the complete three-package prerelease publish and registry
-  smoke pipeline for `@rhinoq/node`, `rhinoq` and `create-rhinoq-app`.
+- Added the two-package prerelease publish and registry smoke pipeline for
+  `@rhinoq/node` and `rhinoq`.
 
 - Added a bounded owner-scoped waitpoint list route and browser client method.
   Task detail now explains pending input/webhook waits and resolves approval
   waitpoints in-place with version fencing and deterministic resolution identity.
-  A bounded `GET /tasks/_waitpoints` inbox now powers the scaffold's real
+  A bounded `GET /tasks/_waitpoints` inbox now powers the owner-facing
   “Waiting for me” Overview bucket without per-Task reads.
 - Added responsive Task Center search, attention/active/finished filters and
   sorting with bookmarkable URL state. Owner Task detail now makes result
   availability, cancellation posture and recorded verification uncertainty
   explicit without claiming that a completed runtime outcome is verified. Long
   attempt histories can now be loaded incrementally through the owner cursor API.
-- Connected the scaffold's Overview, Task Center and operator Workbench with
-  same-tab product navigation, added evidence-based Overview counts, and added
-  an owner-facing `/task-center/{taskId}` detail with progress, next action and
-  an attempt timeline. Runtime job identity remains in Workbench only.
+- Connected the Task Center and operator Workbench with same-tab product
+  navigation, added evidence-based Overview counts, and added an owner-facing
+  `/task-center/{taskId}` detail with progress, next action and an attempt
+  timeline. Runtime job identity remains in Workbench only.
 - Added `GET /tasks/_capabilities` so Task Center does not render retry or result
   actions whose application handlers are absent. Result reads now fail closed
   with `RHINOQ_RESULT_NOT_CONFIGURED` when no authorized resolver is configured,
@@ -65,8 +65,8 @@
   described as the production-shaped adapter available today, not RhinoQ's
   identity or headline.
 
-- Fixed the generated application's operator journey: the Workbench link now
-  opens a local sign-in form instead of a guaranteed 403. The token is exchanged
+- Fixed the Node operator journey: the Workbench link now opens a local sign-in
+  form instead of a guaranteed 403. The token is exchanged
   for an HttpOnly, SameSite cookie scoped to `/admin`, is no longer embedded in
   page markup, and the evaluation server binds to loopback. Updated the current
   competitive review and release priorities from official product docs.
@@ -76,7 +76,7 @@
 - Added `app.http({ operatorToken })`, the default one-mount HTTP journey for
   async tasks: owner-scoped API at `/tasks`, user Task Center at
   `/task-center`, and protected operator Workbench at `/admin`. Updated the
-  scaffold and onboarding narrative so first value is one initialization, one
+  Node onboarding narrative so first value is one initialization, one
   middleware and one dispatch call; lower-level composition remains available.
 
 - Added a generic Node Task Workbench Async Flight Recorder. It joins Task,
@@ -144,11 +144,6 @@
   and the busier the batch the more reliably Cancel returned 409. The field is
   now optional; omitting it converges server-side. Callers who want the fence
   keep it by sending it.
-- **Added: `npx create-rhinoq-app`.** One command to a running fan-out — it
-  brings up PostgreSQL and Redis on ports it checks are free, applies the
-  schema, runs a 50-item batch and opens the browser. Includes a button that
-  deletes the output of a job the queue reported as `completed`, and a
-  verification pass that finds it.
 - **Added: `rhinoq({ pool, queue, events })`.** A high-level entry point that
   makes the decisions with one right answer for a queue-backed fan-out —
   `terminalProjection`, the retry projection, the projector lease, the terminal

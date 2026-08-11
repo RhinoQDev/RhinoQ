@@ -17,9 +17,9 @@
 | Capability | Trạng thái | Bằng chứng / phần còn thiếu |
 |---|---|---|
 | Golden path một mount | Hoàn thành | `app.http()` nối owner API, Task Center, runtime-aware cancellation và Workbench |
-| Product shell / route continuity | Hoàn thành cho scaffold | Overview, Tasks, Workbench dùng same-tab navigation; `/overview` redirect tương thích về `/`; SDK nhận navigation path từ host app |
-| Overview attention summary | Hoàn thành cho scaffold | Needs attention, Waiting for me, In progress, Completed và Recent dùng Task/waitpoint evidence thật; stuck/verified bucket vẫn chờ contract tương ứng |
-| First-run operator access | Hoàn thành cho scaffold | `/operator-login` đổi token thành HttpOnly/SameSite cookie, không nhúng secret trong trang và chỉ bind loopback; production auth vẫn application-owned |
+| Product shell / route continuity | Hoàn thành cho Node integration | Overview, Tasks, Workbench dùng same-tab navigation; `/overview` redirect tương thích về `/`; SDK nhận navigation path từ host app |
+| Overview attention summary | Hoàn thành cho Node integration | Needs attention, Waiting for me, In progress, Completed và Recent dùng Task/waitpoint evidence thật; stuck/verified bucket vẫn chờ contract tương ứng |
+| First-run operator access | Hoàn thành cho Node integration | `/operator-login` đổi token thành HttpOnly/SameSite cookie, không nhúng secret trong trang và chỉ bind loopback; production auth vẫn application-owned |
 | Owner-scoped SSE cho một Task | Hoàn thành | `GET /tasks/{id}/events`, auth trước stream, `Last-Event-ID`, heartbeat, capacity và test |
 | Owner Task inbox SSE | Hoàn thành | `GET /tasks/_events`, bounded page reset, version convergence và test |
 | `createUseRhinoTaskLive()` | Hoàn thành | live-first TaskStore, snapshot fallback và reconnect |

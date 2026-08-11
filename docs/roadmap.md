@@ -8,8 +8,8 @@ without migrating their queue.
 ## Release gates before more surface area
 
 - [x] one-mount BullMQ golden path with owner API, Task Center and Workbench
-- [x] scaffold operator sign-in that does not expose its token in page markup
-- [x] connected scaffold Overview/Tasks/Workbench navigation and owner Task detail
+- [x] operator sign-in that does not expose its token in page markup
+- [x] connected Overview/Tasks/Workbench navigation and owner Task detail
 - [x] capability-gated retry/result UI with fail-closed result resolution
 - [ ] publish the tested npm beta and prebuilt CLI artifacts
 - [ ] rerun two Tasks in a real adopter and record code/route/process/credential delta
@@ -17,7 +17,7 @@ without migrating their queue.
 - [x] wire tenant context through the public HTTP boundary
 - [x] extend Flight Recorder through provider/effect confirmation evidence
 - [x] explicit At risk/Stuck thresholds, Task verification records and Artifact v1
-- [x] browser acceptance with desktop/mobile screenshot artifacts in CI
+- [ ] browser acceptance in a real adopter application
 - [ ] run a deployment-shaped fault campaign and end-to-end benchmark
 
 The current competitive review is in
@@ -55,7 +55,7 @@ priority over a DAG engine, another runtime adapter or generic streaming.
 - [x] snapshot-convergent owner Task and inbox SSE with polling fallback
 - [x] durable input, approval and webhook waitpoints with version-fenced settlement
 - [x] bounded owner waitpoint detail with in-place approval decisions
-- [x] bounded owner waiting inbox and scaffold “Waiting for me” overview
+- [x] bounded owner waiting inbox and “Waiting for me” overview
 - [x] Task Group batch dispatch, failed-item retry, pending cancellation and manifests
 - [x] atomic retry command and at-least-once dispatch intent publication
 - [x] bounded waitpoint expiry scheduler with application-owned escalation hook
