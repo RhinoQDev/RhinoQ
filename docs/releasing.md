@@ -7,11 +7,12 @@ tag/release:
 - `rhinoq` — unscoped compatibility alias;
 - `create-rhinoq-app` — one-command evaluation app.
 
-`0.1.0-beta.10` is the current source candidate. It is not published merely
-because the manifests contain that version. The release is complete only when
-the tag workflow has published all three packages, registry smoke has passed,
-the GitHub prerelease contains the Node/Go artifacts, and provenance/signature
-verification has passed.
+`0.1.0-beta.10` is the current source candidate. Its tag exists, but the
+publish workflow is incomplete, so it is not yet a verified public release.
+`0.1.0-beta.8` is the latest verified public release. A candidate is complete
+only when the tag workflow has published all three packages, registry smoke has
+passed, the GitHub prerelease contains the Node/Go artifacts, and
+provenance/signature verification has passed.
 
 Prereleases publish to `next`; stable versions publish to `latest`. A dist-tag
 is an installation pointer, not a stability claim.
@@ -19,17 +20,22 @@ is an installation pointer, not a stability claim.
 ## One-time npm owner setup
 
 In npm package settings, configure trusted publishing for repository
-`madebyduy/RhinoQ` and workflow `.github/workflows/release.yml` for all three
-package names. Do not add a long-lived `NPM_TOKEN`: the workflow requests a
-GitHub OIDC identity and every `npm publish` uses `--provenance`.
+`madebyduy/RhinoQ` and workflow `release.yml` for `@rhinoq/node` and `rhinoq`.
+The workflow prefers this GitHub OIDC path, and npm generates provenance
+automatically for trusted publishes. If the configuration is not ready for a
+recovery run, an expiring granular token may be stored temporarily as
+`NPM_BOOTSTRAP_TOKEN`; the two jobs use it only when that secret is present and
+still publish with provenance. Delete and revoke it after the first successful
+run. Do not add a long-lived `NPM_TOKEN`.
 
 The first publication of `create-rhinoq-app` is the one exception: npm requires
 a package to exist before trusted publishing can be configured. Create an
 expiring granular token with publish permission and store it temporarily as
-`NPM_CREATE_APP_BOOTSTRAP_TOKEN`. The GitHub-hosted job still publishes with
-`--provenance`. Immediately after the first successful release, configure the
-trusted publisher for `create-rhinoq-app`, delete the secret and revoke the
-token. Future releases authenticate with OIDC like the other two packages.
+`NPM_CREATE_APP_BOOTSTRAP_TOKEN`. The workflow uses it only when the secret is
+present and publishes with `--provenance`. Immediately after the first
+successful release, configure the trusted publisher for `create-rhinoq-app`,
+delete the secret and revoke the token. Future releases authenticate with OIDC
+like the other two packages.
 
 Protect the `v*` tag rule so a reviewed maintainer creates release tags.
 

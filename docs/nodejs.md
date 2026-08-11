@@ -159,8 +159,9 @@ Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
 not own or configure the application's connection pool.
 
 This source-install path is the authoritative way to evaluate changes not yet
-published. A stable package, the tagged beta.10 registry/GitHub release, and
-prebuilt `rhinoq` CLI binaries remain release gates.
+published. The tagged beta.10 candidate is not yet a verified registry/GitHub
+release; beta.8 remains the latest verified release with prebuilt `rhinoq` CLI
+binaries.
 
 ### Verify the installed package
 

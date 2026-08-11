@@ -18,6 +18,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: Use the same npm CLI as publishing
         run: npm install --global npm@12
       - run: npm ci
@@ -30,6 +31,8 @@ jobs:
         working-directory: sdks/node
       - name: Verify one version across every published package
         run: node .github/scripts/verify-release-matrix.mjs "${GITHUB_REF_NAME}"
+      - name: Verify npm authentication contract
+        run: node .github/scripts/verify-release-workflow.mjs
       - name: Validate unscoped npm alias
         shell: bash
         run: |
@@ -56,6 +59,7 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: Use an npm CLI with trusted-publishing support
         run: npm install --global npm@12
       - run: npm ci
@@ -63,14 +67,21 @@ jobs:
       - name: Publish scoped SDK with the semver-appropriate dist-tag
         shell: bash
         env:
-          # Temporary bootstrap token: remove after the first successful
-          # publish, then configure npm Trusted Publishing for this package.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+          # Optional one-time fallback while npm Trusted Publishing is being
+          # configured. Delete this secret after the first successful publish.
+          NPM_BOOTSTRAP_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
           [[ "$version" == *-* ]] && tag=next
-          npm publish --provenance --access public --tag "$tag"
+          if [[ -n "${NPM_BOOTSTRAP_TOKEN:-}" ]]; then
+            NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN" \
+              npm publish --provenance --access public --tag "$tag"
+          else
+            # npm Trusted Publishing authenticates this publish with the job's
+            # GitHub OIDC identity. No long-lived npm token is needed here.
+            npm publish --access public --tag "$tag"
+          fi
         working-directory: sdks/node
 
   node-publish-alias:
@@ -86,19 +97,27 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: Use an npm CLI with trusted-publishing support
         run: npm install --global npm@12
       - name: Publish rhinoq alias
         shell: bash
         env:
-          # Temporary bootstrap token: remove after the first successful
-          # publish, then configure npm Trusted Publishing for this package.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+          # Optional one-time fallback while npm Trusted Publishing is being
+          # configured. Delete this secret after the first successful publish.
+          NPM_BOOTSTRAP_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
           [[ "$version" == *-* ]] && tag=next
-          npm publish --provenance --access public --tag "$tag"
+          if [[ -n "${NPM_BOOTSTRAP_TOKEN:-}" ]]; then
+            NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN" \
+              npm publish --provenance --access public --tag "$tag"
+          else
+            # npm Trusted Publishing authenticates this publish with the job's
+            # GitHub OIDC identity. No long-lived npm token is needed here.
+            npm publish --access public --tag "$tag"
+          fi
         working-directory: sdks/rhinoq
 
   create-app-publish:
@@ -114,19 +133,26 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: Use an npm CLI with trusted-publishing support
         run: npm install --global npm@12
       - name: Publish scaffolder after its SDK dependency
         shell: bash
         env:
-          # Temporary bootstrap token: remove after the first successful
-          # publish, then configure npm Trusted Publishing for this package.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+          # npm cannot configure a trusted publisher until this package exists.
+          # Keep this expiring token only for that first publication, then
+          # delete the secret and let the OIDC branch below take over.
+          NPM_CREATE_APP_BOOTSTRAP_TOKEN: ${{ secrets.NPM_CREATE_APP_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
           [[ "$version" == *-* ]] && tag=next
-          npm publish --provenance --access public --tag "$tag"
+          if [[ -n "${NPM_CREATE_APP_BOOTSTRAP_TOKEN:-}" ]]; then
+            NODE_AUTH_TOKEN="$NPM_CREATE_APP_BOOTSTRAP_TOKEN" \
+              npm publish --provenance --access public --tag "$tag"
+          else
+            npm publish --access public --tag "$tag"
+          fi
         working-directory: sdks/create-rhinoq-app
 
   registry-smoke:

@@ -62,6 +62,17 @@ That second layer is optional on day one and uses the same operator workflow.
 ![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white)
 ![Status](https://img.shields.io/badge/status-prerelease-f59e0b)
 
+## Release status
+
+RhinoQ is currently in public beta.
+
+- Latest source candidate: `v0.1.0-beta.10`.
+- Latest verified public release: `v0.1.0-beta.8`.
+
+Use RhinoQ for evaluation and controlled pilots. Production use is not yet
+recommended. The beta.10 tag exists, but its npm/GitHub release is incomplete
+until the publish workflow and registry smoke test pass.
+
 > [!WARNING]
 > RhinoQ is a prerelease for evaluation and controlled pilots. The full Go
 > profile enforces tenant isolation in PostgreSQL, while the embedded Node Task
@@ -860,7 +871,7 @@ exists but is not the default browser polling shape.
 | Bounded, previewable retention for observation and delivery evidence | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.10 pipeline configured; tagged release not yet executed |
+| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.10 candidate pipeline configured; beta.8 is the latest verified public release |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 

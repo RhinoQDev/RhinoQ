@@ -58,14 +58,16 @@ go run ./cmd/rhinoq help
 go run ./cmd/rhinoq workbench --demo
 ```
 
-Once a tagged release exists, the intended installation command is:
+The latest verified tagged CLI release is beta.8. Its intended installation
+command is:
 
 ```bash
-go install github.com/madebyduy/RhinoQ/cmd/rhinoq@<version>
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.8
 ```
 
-Do not put `@latest` into production automation until RhinoQ publishes its
-first tagged CLI release.
+The beta.10 tag is a newer source candidate, but its release workflow is not
+complete. Do not put `@latest` into production automation while RhinoQ remains
+in prerelease.
 
 ## Get help in the terminal
 
