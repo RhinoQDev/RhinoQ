@@ -121,6 +121,25 @@ type QueueRateLimit struct {
 	Window time.Duration
 }
 
+// QueueHealth is a bounded read model for operational queue watchdogs. It is
+// deliberately separate from JobStore so memory/fault test doubles do not
+// have to pretend they can answer database-level age questions.
+type QueueHealth struct {
+	QueueName       string
+	Pending         int64
+	RetryWait       int64
+	Leased          int64
+	OldestPendingAt time.Time
+	OldestRetryAt   time.Time
+}
+
+// QueueHealthReader is implemented by stores that can expose queue age and
+// state counts in one bounded query. A watchdog should degrade to JobCounts
+// when a store does not implement it, but must not invent timestamps.
+type QueueHealthReader interface {
+	QueueHealth(ctx context.Context, queueName string) (QueueHealth, error)
+}
+
 type ListJobsInput struct {
 	// QueueName filters by execution lane and JobName by handler contract.
 	// Either may be empty, which means "any".

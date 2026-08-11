@@ -7,7 +7,8 @@ import type {
 import type { PostgresTaskClient } from '../postgres/task-client.js';
 
 export interface TaskVerificationChainOptions {
-  tasks: Pick<PostgresTaskClient, 'recordTaskVerification'>;
+  tasks: Pick<PostgresTaskClient, 'recordTaskVerification'> &
+    Partial<Pick<PostgresTaskClient, 'queueTaskNotification'>>;
   taskId: string;
   verification: TaskVerificationCreateRequest;
   /** Go Gateway's observeFinding method. Required for mismatch Findings. */
@@ -35,6 +36,9 @@ export async function recordTaskVerificationChain(
   if (input.status === 'mismatch' && !options.observeFinding) {
     throw new TypeError('mismatch verification requires observeFinding');
   }
+  if (input.status === 'mismatch' && !options.queueNotification && !options.tasks.queueTaskNotification) {
+    throw new TypeError('mismatch verification requires a durable notification queue');
+  }
   if (options.queueNotification && !options.observeFinding) {
     throw new TypeError('queueNotification requires observeFinding');
   }
@@ -60,12 +64,17 @@ export async function recordTaskVerificationChain(
     observedAt: verification.verifiedAt,
     evidence: JSON.stringify({ taskId: options.taskId, verificationId: verification.id, summary: verification.summary }),
   });
-  await options.queueNotification?.({
+  const notification = {
     notificationId: `task-verification:${verification.id}`,
     verification,
     finding,
     ...(deepLink ? { deepLink } : {}),
-  });
+  };
+  if (options.queueNotification) {
+    await options.queueNotification(notification);
+  } else {
+    await options.tasks.queueTaskNotification!(options.taskId, notification);
+  }
   return { verification, finding };
 }
 

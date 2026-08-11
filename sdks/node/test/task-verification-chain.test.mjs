@@ -34,5 +34,25 @@ test('mismatch fails closed when no Finding writer is configured', async () => {
     tasks: { async recordTaskVerification() { throw new Error('must not write'); } },
     taskId: 'task-1',
     verification: { id: 'verify-1', verifier: 'check', status: 'mismatch' },
-  }), /requires observeFinding/);
+}), /requires observeFinding/);
+});
+
+test('mismatch uses the Task profile outbox when no custom notification sender is supplied', async () => {
+  let queued;
+  const result = await recordTaskVerificationChain({
+    tasks: {
+      async recordTaskVerification(taskId, verification) {
+        return { schemaVersion: 1, taskId, verifiedAt: '2026-08-10T08:00:00.000Z', createdAt: '2026-08-10T08:00:00.000Z', ...verification };
+      },
+      async queueTaskNotification(taskId, notification) { queued = { taskId, notification }; },
+    },
+    taskId: 'task-1',
+    verification: { id: 'verify-2', verifier: 'invoice-exists', status: 'mismatch' },
+    async observeFinding(observation) {
+      return { ...observation, status: 'open', firstSeen: observation.observedAt, lastSeen: observation.observedAt, occurrenceCount: 1, updatedAt: observation.observedAt };
+    },
+  });
+  assert.equal(result.finding.status, 'open');
+  assert.equal(queued.taskId, 'task-1');
+  assert.equal(queued.notification.notificationId, 'task-verification:verify-2');
 });

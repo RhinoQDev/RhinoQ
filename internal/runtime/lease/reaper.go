@@ -3,6 +3,7 @@ package lease
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/job"
@@ -18,6 +19,7 @@ type Reaper struct {
 	budget     time.Duration
 	now        func() time.Time
 	observe    func(ports.ReapResult)
+	lastSweep  atomic.Int64
 }
 
 type Config struct {
@@ -54,13 +56,26 @@ func NewReaper(config Config) (*Reaper, error) {
 	if budget <= 0 {
 		budget = config.Interval
 	}
-	return &Reaper{
+	reaper := &Reaper{
 		store: config.Store, effects: config.Effects, interval: config.Interval,
 		protection: config.Protection.Normalize(),
 		batchLimit: ports.NormalizeReapLimit(config.BatchLimit),
 		budget:     budget,
 		now:        config.Now, observe: config.Observe,
-	}, nil
+	}
+	reaper.lastSweep.Store(config.Now().UTC().UnixNano())
+	return reaper, nil
+}
+
+// LastSweepAt is used by queue health observers. It reports the start of the
+// latest bounded sweep, including an empty sweep, so a quiet queue does not
+// look like a dead recovery loop.
+func (r *Reaper) LastSweepAt() time.Time {
+	value := r.lastSweep.Load()
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, value).UTC()
 }
 
 func (r *Reaper) Run(ctx context.Context) error {
@@ -95,6 +110,7 @@ func (r *Reaper) Run(ctx context.Context) error {
 // safe even if the job has already been claimed again: only effects from the
 // dead execution are touched (specification 42).
 func (r *Reaper) Sweep(ctx context.Context) (ports.ReapResult, error) {
+	r.lastSweep.Store(r.now().UTC().UnixNano())
 	deadline := r.now().Add(r.budget)
 	var total ports.ReapResult
 	for {

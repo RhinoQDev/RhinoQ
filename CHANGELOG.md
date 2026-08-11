@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added Task schema v10 durable notification outbox with lease-based claim,
+  complete and retry/failure transitions; custom delivery callbacks remain
+  optional and application-owned.
+- Added tenant authorization hooks for the Node Task HTTP surface, owner/tenant
+  fenced artifact refresh, Flight Recorder attempt comparisons, source-authored
+  waterfall spans and bounded diagnostic download.
+- Added queue-control row locking for concurrent admission, a default Go queue
+  watchdog for at-risk/stuck/growing backlog and reaper health, plus a real
+  recovery sidecar entrypoint at `cmd/rhinoq-worker`.
+
 ## 0.1.0-beta.10
 
 - Release candidate for the connected Async Operations Hub, including the

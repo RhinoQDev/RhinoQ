@@ -147,7 +147,8 @@ func (s *JobStore) admitTx(ctx context.Context, tx *sql.Tx, queueName string, cr
 	err := tx.QueryRowContext(ctx, `
 		SELECT admission_max_pending, admission_reserved_critical, admission_overflow_mode,
 		       admission_delay_ms, admission_retry_after_ms
-		FROM rhinoq_queue_controls WHERE queue_name = $1`, queueName).
+		FROM rhinoq_queue_controls WHERE queue_name = $1
+		FOR UPDATE`, queueName).
 		Scan(&maxPending, &reserved, &mode, &delayMS, &retryAfterMS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
@@ -288,6 +289,35 @@ func (s *JobStore) JobCounts(ctx context.Context, queueName string) (map[job.Sta
 		counts[job.State(state)] = count
 	}
 	return counts, rows.Err()
+}
+
+// QueueHealth returns the counts and oldest eligible backlog timestamps in one
+// aggregate read. The watchdog uses this instead of sampling a paginated job
+// list, so a large queue cannot turn an alert into an unbounded scan.
+func (s *JobStore) QueueHealth(ctx context.Context, queueName string) (ports.QueueHealth, error) {
+	var health ports.QueueHealth
+	health.QueueName = queueName
+	var oldestPending, oldestRetry sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			count(*) FILTER (WHERE state = 'pending'),
+			count(*) FILTER (WHERE state = 'retry_wait'),
+			count(*) FILTER (WHERE state = 'leased'),
+			min(created_at) FILTER (WHERE state = 'pending'),
+			min(created_at) FILTER (WHERE state = 'retry_wait')
+		FROM rhinoq_jobs
+		WHERE ($1 = '' OR queue_name = $1)`, queueName).
+		Scan(&health.Pending, &health.RetryWait, &health.Leased, &oldestPending, &oldestRetry)
+	if err != nil {
+		return ports.QueueHealth{}, err
+	}
+	if oldestPending.Valid {
+		health.OldestPendingAt = oldestPending.Time
+	}
+	if oldestRetry.Valid {
+		health.OldestRetryAt = oldestRetry.Time
+	}
+	return health, nil
 }
 
 // Claim takes a batch in exactly one round trip, whatever the batch size and

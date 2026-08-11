@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { taskFlightRecorder } from '../dist/index.js';
+import { taskFlightRecorder, taskFlightRecorderDiagnostic } from '../dist/index.js';
 
 const task = (overrides = {}) => ({
   schemaVersion: 1,
@@ -31,7 +31,7 @@ test('Flight Recorder joins task, execution result and partial-failure attention
     now: () => new Date('2026-08-10T08:03:00.000Z'),
   });
 
-  assert.equal(recorder.schemaVersion, 1);
+  assert.equal(recorder.schemaVersion, 2);
   assert.equal(recorder.generatedAt, '2026-08-10T08:03:00.000Z');
   assert.equal(recorder.attention[0].kind, 'partial_failure');
   assert.equal(recorder.attention[0].safeToRetry, undefined);
@@ -82,4 +82,29 @@ test('Flight Recorder joins business verification, provider outcome and artifact
   assert.ok(recorder.events.some((event) => event.kind === 'artifact.recorded'));
   assert.ok(recorder.attention.some((item) => item.kind === 'business_mismatch' && item.safeToRetry === false));
   assert.ok(recorder.attention.some((item) => item.kind === 'provider_uncertain' && item.safeToRetry === false));
+});
+
+test('Flight Recorder compares retries and preserves supplied waterfall timings', () => {
+  const recorder = taskFlightRecorder({
+    task: task({ executions: [
+      { id: 'attempt-1', itemKey: 'item-a', attempt: 1, runtime: 'worker', state: 'failed', version: 2, failureReason: 'timeout' },
+      { id: 'attempt-2', itemKey: 'item-a', attempt: 2, runtime: 'worker', state: 'succeeded', version: 3, hasResult: true },
+    ] }),
+    traceId: 'trace-1',
+    waterfall: [{ id: 'span-1', label: 'provider call', startAt: '2026-08-10T08:00:00.000Z', endAt: '2026-08-10T08:00:01.000Z', traceId: 'trace-1' }],
+  });
+  assert.equal(recorder.traceId, 'trace-1');
+  assert.deepEqual(recorder.attemptDiffs[0], {
+    itemKey: 'item-a', executionId: 'attempt-2', attempt: 2, previousExecutionId: 'attempt-1',
+    changed: ['state:failed->succeeded', 'failureReason'],
+  });
+  assert.equal(recorder.waterfall[0].label, 'provider call');
+});
+
+test('Flight Recorder diagnostic export is bounded and redaction-safe', () => {
+  const recorder = taskFlightRecorder({ task: task() });
+  const diagnostic = taskFlightRecorderDiagnostic(recorder, 4096);
+  assert.ok(new TextEncoder().encode(diagnostic).byteLength <= 4096);
+  assert.equal(JSON.parse(diagnostic).recorder.taskId, 'task-flight-1');
+  assert.equal(diagnostic.includes('storage://'), false);
 });

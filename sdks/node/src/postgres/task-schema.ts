@@ -1,7 +1,8 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 9;
-export const TASK_SCHEMA_NAME = '009_tenant_verification_artifacts';
+export const TASK_SCHEMA_VERSION = 10;
+export const TASK_SCHEMA_NAME = '010_durable_task_notifications';
+const TASK_SCHEMA_V9_NAME = '009_tenant_verification_artifacts';
 
 /**
  * Task-only PostgreSQL profile.
@@ -1704,6 +1705,30 @@ BEGIN
 END; $$;
 `;
 
+const TASK_SCHEMA_V10_SQL = String.raw`
+CREATE TABLE IF NOT EXISTS rhinoq_task.notification_outbox (
+  id text PRIMARY KEY CHECK (btrim(id) <> ''),
+  task_id text NOT NULL REFERENCES rhinoq_task.tasks(id) ON DELETE CASCADE,
+  verification_id text NOT NULL REFERENCES rhinoq_task.verifications(id) ON DELETE CASCADE,
+  verification jsonb NOT NULL CHECK (jsonb_typeof(verification) = 'object'),
+  finding jsonb NOT NULL CHECK (jsonb_typeof(finding) = 'object'),
+  deep_link text,
+  state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','leased','sent','failed')),
+  attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  available_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  lease_owner text,
+  lease_until timestamptz,
+  last_error text CHECK (length(COALESCE(last_error,'')) <= 2048),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (verification_id)
+);
+CREATE INDEX IF NOT EXISTS notification_outbox_ready_idx
+  ON rhinoq_task.notification_outbox(state, available_at, created_at, id);
+CREATE INDEX IF NOT EXISTS notification_outbox_task_idx
+  ON rhinoq_task.notification_outbox(task_id, created_at, id);
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
@@ -1713,7 +1738,8 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 6, name: '006_transactional_item_effect', sql: TASK_SCHEMA_V6_SQL },
   { version: 7, name: '007_actionable_conflicts_and_late_starts', sql: TASK_SCHEMA_V7_SQL },
   { version: 8, name: '008_durable_waitpoints', sql: TASK_SCHEMA_V8_SQL },
-  { version: 9, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V9_SQL },
+  { version: 9, name: TASK_SCHEMA_V9_NAME, sql: TASK_SCHEMA_V9_SQL },
+  { version: 10, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V10_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {

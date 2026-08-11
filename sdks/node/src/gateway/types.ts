@@ -298,6 +298,32 @@ export interface TaskVerificationCreateRequest {
   verifiedAt?: string;
 }
 
+export type TaskNotificationState = 'pending' | 'leased' | 'sent' | 'failed';
+/** Durable handoff created by the Task profile; delivery transport stays host-owned. */
+export interface TaskNotificationRecord {
+  schemaVersion: 1;
+  id: string;
+  taskId: string;
+  verificationId: string;
+  verification: TaskVerificationRecord;
+  finding: FindingRecord;
+  deepLink?: string;
+  state: TaskNotificationState;
+  attempts: number;
+  availableAt: string;
+  leaseOwner?: string;
+  leaseUntil?: string;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface TaskNotificationCreateRequest {
+  notificationId: string;
+  verification: TaskVerificationRecord;
+  finding: FindingRecord;
+  deepLink?: string;
+}
+
 /** Browser-safe artifact metadata. Storage references are never included. */
 export interface TaskArtifact {
   schemaVersion: 1;

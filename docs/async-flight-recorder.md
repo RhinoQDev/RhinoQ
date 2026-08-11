@@ -20,16 +20,23 @@ The operator detail response includes:
 GET /rhinoq/api/tasks/{taskId}/flight-recorder
 ```
 
-The projection is versioned (`schemaVersion: 1`) and contains:
+The projection is versioned (`schemaVersion: 2`) and contains:
 
 - `events`: task, execution and waitpoint observations;
 - `attention`: uncertain, partial-failure, failed, waiting and expired states;
 - `explanation`: the first deterministic reason an operator should act;
 - `safeToRetry`: only where the available state makes that decision safe.
+- `attemptDiffs`: a bounded comparison of consecutive attempts for each item;
+- `waterfall`: optional application/provider spans with source-authored times;
+- `traceId`: optional correlation identity, never fabricated evidence.
 
 The projection never copies storage references or runtime job IDs into the
 flight events. Runtime identity remains available only in the operator-gated
 Workbench detail read.
+
+Support tooling can download `GET /rhinoq/api/tasks/{taskId}/flight-recorder/diagnostic`.
+The private/no-store JSON export is bounded to 256 KiB; oversized records keep
+the explanation and attention summary, drop event detail and mark `truncated`.
 
 ## Timestamp boundary
 
@@ -60,5 +67,7 @@ business verification records and Artifact metadata. `RhinoQClient
 provider mutation callback. Unknown provider outcomes and business mismatches
 are explicitly unsafe to retry.
 
-Compare-attempt diffs, diagnostic bundles and OpenTelemetry propagation remain
-separate roadmap work.
+Compare-attempt diffs and bounded diagnostic bundles are now part of the Node
+projection. Full OpenTelemetry export/collector integration remains separate
+roadmap work: the current `traceId`/`spanId` fields are correlation-only and
+never fabricate timings that the source did not record.

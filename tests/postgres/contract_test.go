@@ -3,6 +3,8 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -312,6 +314,57 @@ func TestAdmissionDelayModeDefersInsteadOfRejecting(t *testing.T) {
 	}
 	if jobs := claim(t, client, "worker-1", 10, time.Minute); len(jobs) != 1 {
 		t.Fatalf("only the admitted job is claimable now: %d", len(jobs))
+	}
+}
+
+func TestAdmissionSerializesConcurrentProducers(t *testing.T) {
+	client := newClient(t)
+	ctx := context.Background()
+	const queue = "admission-concurrent"
+	if err := client.SetAdmission(ctx, queue, rhinoq.AdmissionPolicy{
+		MaxPending: 3, OnOverflow: rhinoq.OverflowReject,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const producers = 24
+	results := make(chan error, producers)
+	var group sync.WaitGroup
+	for index := 0; index < producers; index++ {
+		index := index
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, err := client.Enqueue(ctx, rhinoq.JobRequest{
+				QueueName: queue, JobName: queue, Payload: []byte("{}"),
+				IdempotencyKey: fmt.Sprintf("concurrent-%d", index),
+			})
+			results <- err
+		}()
+	}
+	group.Wait()
+	close(results)
+
+	accepted, rejected := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, rhinoq.ErrQueueOverCapacity):
+			rejected++
+		default:
+			t.Fatalf("concurrent enqueue returned unexpected error: %v", err)
+		}
+	}
+	if accepted != 3 || rejected != producers-accepted {
+		t.Fatalf("admission must be exact under contention: accepted=%d rejected=%d", accepted, rejected)
+	}
+	counts, err := client.JobCounts(ctx, queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["pending"] != 3 {
+		t.Fatalf("admission cap must hold after concurrent enqueue: %+v", counts)
 	}
 }
 

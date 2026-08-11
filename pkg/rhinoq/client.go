@@ -22,6 +22,7 @@ import (
 	domaintask "github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
+	"github.com/madebyduy/RhinoQ/internal/runtime/queuewatch"
 	"github.com/madebyduy/RhinoQ/internal/runtime/supervisor"
 	"github.com/madebyduy/RhinoQ/internal/runtime/worker"
 )
@@ -266,7 +267,28 @@ type WorkerConfig struct {
 	MaxWorkerCrashes int
 	// OnError observes non-fatal runtime errors instead of losing them.
 	OnError func(error)
+	// QueueWatchInterval controls the read-only queue watchdog. It defaults to
+	// 30 seconds; set it negative to disable it for a deliberately quiet worker.
+	QueueWatchInterval time.Duration
+	// QueueAtRiskAfter and QueueStuckAfter are age thresholds for pending work.
+	QueueAtRiskAfter time.Duration
+	QueueStuckAfter  time.Duration
+	// QueueBacklogGrowthAfter alerts when pending work keeps increasing.
+	QueueBacklogGrowthAfter time.Duration
+	// QueueReaperTimeout alerts when lease recovery has not swept recently.
+	QueueReaperTimeout time.Duration
+	// OnQueueAlert receives transitions only, not repeated identical samples.
+	OnQueueAlert func(queuewatch.Alert)
+	// WorkerReady optionally reports a deployment-level handler readiness state.
+	// Nil means the running Client is considered ready for its registered queues.
+	WorkerReady func(queueName string) bool
+	// QueueNames overrides the registered handler list for a recovery-only
+	// process that has no business handlers of its own.
+	QueueNames []string
 }
+
+// QueueAlert is the public operator-facing shape emitted by the watchdog.
+type QueueAlert = queuewatch.Alert
 
 func (c WorkerConfig) withDefaults() WorkerConfig {
 	if c.Name == "" {
@@ -309,6 +331,23 @@ func (c WorkerConfig) withDefaults() WorkerConfig {
 	if c.ReapSweepBudget > c.ReaperInterval {
 		// A sweep that outlasts its own tick never yields to live claims.
 		c.ReapSweepBudget = c.ReaperInterval
+	}
+	if c.QueueWatchInterval == 0 {
+		c.QueueWatchInterval = 30 * time.Second
+	}
+	if c.QueueWatchInterval > 0 {
+		if c.QueueAtRiskAfter <= 0 {
+			c.QueueAtRiskAfter = 5 * time.Minute
+		}
+		if c.QueueStuckAfter <= c.QueueAtRiskAfter {
+			c.QueueStuckAfter = c.QueueAtRiskAfter * 3
+		}
+		if c.QueueBacklogGrowthAfter <= 0 {
+			c.QueueBacklogGrowthAfter = c.QueueStuckAfter
+		}
+		if c.QueueReaperTimeout <= 0 {
+			c.QueueReaperTimeout = c.ReaperInterval * 3
+		}
 	}
 	return c
 }
@@ -738,6 +777,37 @@ func (c *Client) JobCounts(ctx context.Context, queue string) (map[string]int64,
 	return result, nil
 }
 
+// QueueHealth is the bounded operational view used by the queue watchdog and
+// by dashboards. OldestPendingAt is zero when the store cannot answer age.
+type QueueHealth struct {
+	QueueName       string    `json:"queueName"`
+	Pending         int64     `json:"pending"`
+	RetryWait       int64     `json:"retryWait"`
+	Leased          int64     `json:"leased"`
+	OldestPendingAt time.Time `json:"oldestPendingAt,omitempty"`
+	OldestRetryAt   time.Time `json:"oldestRetryAt,omitempty"`
+}
+
+func (c *Client) QueueHealth(ctx context.Context, queue string) (QueueHealth, error) {
+	if c == nil || c.store == nil {
+		return QueueHealth{}, errors.New("rhinoq store is required")
+	}
+	reader, ok := c.store.(ports.QueueHealthReader)
+	if !ok {
+		counts, err := c.JobCounts(ctx, queue)
+		if err != nil {
+			return QueueHealth{}, err
+		}
+		return QueueHealth{QueueName: queue, Pending: counts["pending"], RetryWait: counts["retry_wait"], Leased: counts["leased"]}, nil
+	}
+	health, err := reader.QueueHealth(ctx, queue)
+	if err != nil {
+		return QueueHealth{}, err
+	}
+	return QueueHealth{QueueName: health.QueueName, Pending: health.Pending, RetryWait: health.RetryWait,
+		Leased: health.Leased, OldestPendingAt: health.OldestPendingAt, OldestRetryAt: health.OldestRetryAt}, nil
+}
+
 // AttemptTimeline returns append-only execution evidence in sequence order.
 func (c *Client) AttemptTimeline(ctx context.Context, id string, offset, limit int) ([]AttemptEvent, error) {
 	if c == nil || c.store == nil {
@@ -930,11 +1000,72 @@ func (c *Client) RunWorker(ctx context.Context, config WorkerConfig) error {
 	if err != nil {
 		return err
 	}
-	group, err := supervisor.New(runtime, reaper)
+	runners, err := c.recoveryRunners(settings, reaper)
+	if err != nil {
+		return err
+	}
+	runners = append([]supervisor.Runner{runtime}, runners...)
+	group, err := supervisor.New(runners...)
 	if err != nil {
 		return err
 	}
 	return group.Run(ctx)
+}
+
+// RunRecovery starts only lease recovery and queue health observation. It is
+// the safe generic entrypoint for a sidecar binary: business handlers still
+// belong to the application process and cannot be guessed by RhinoQ.
+func (c *Client) RunRecovery(ctx context.Context, config WorkerConfig) error {
+	if c == nil || c.store == nil {
+		return errors.New("rhinoq client is not configured")
+	}
+	settings := config.withDefaults()
+	reaper, err := lease.NewReaper(lease.Config{
+		Store: c.store, Effects: c.effects, Interval: settings.ReaperInterval,
+		Protection: job.Protection{MaxWorkerCrashesPerJob: settings.MaxWorkerCrashes},
+		BatchLimit: settings.ReapBatchLimit, SweepBudget: settings.ReapSweepBudget,
+		Now: func() time.Time { return time.Now().UTC() },
+	})
+	if err != nil {
+		return err
+	}
+	runners, err := c.recoveryRunners(settings, reaper)
+	if err != nil {
+		return err
+	}
+	group, err := supervisor.New(runners...)
+	if err != nil {
+		return err
+	}
+	return group.Run(ctx)
+}
+
+func (c *Client) recoveryRunners(settings WorkerConfig, reaper *lease.Reaper) ([]supervisor.Runner, error) {
+	runners := []supervisor.Runner{reaper}
+	if settings.QueueWatchInterval <= 0 {
+		return runners, nil
+	}
+	queues := settings.QueueNames
+	if len(queues) == 0 && c.handlers != nil {
+		queues = c.handlers.QueueNames()
+	}
+	watcher, err := queuewatch.New(queuewatch.Config{
+		Store: c.store, Queues: queues, Interval: settings.QueueWatchInterval,
+		AtRiskAfter: settings.QueueAtRiskAfter, StuckAfter: settings.QueueStuckAfter,
+		BacklogGrowthAfter: settings.QueueBacklogGrowthAfter, ReaperTimeout: settings.QueueReaperTimeout,
+		Now: func() time.Time { return time.Now().UTC() },
+		OnAlert: func(alert queuewatch.Alert) {
+			if settings.OnQueueAlert != nil {
+				settings.OnQueueAlert(alert)
+			}
+		},
+		OnError:     settings.OnError,
+		WorkerReady: settings.WorkerReady, ReaperLastSweep: reaper.LastSweepAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(runners, watcher), nil
 }
 
 func (c *Client) queueControl() (*operations.QueueControl, error) {

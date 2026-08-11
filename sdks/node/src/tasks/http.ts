@@ -21,6 +21,10 @@ export interface TaskRequestHandlerOptions {
   ownerFromRequest(request: Request): Promise<string | undefined> | string | undefined;
   /** Resolve a stable tenant from the host session. Omit for a single `default` tenant. */
   tenantFromRequest?(request: Request): Promise<string | undefined> | string | undefined;
+  /** Optional tenant-wide policy hook; ownership checks remain mandatory below. */
+  authorize?(input: TaskAuthorizationInput): Promise<boolean> | boolean;
+  /** Refuse mounting a tenant surface without an explicit policy hook. */
+  requireTenantAuthorization?: boolean;
   /** Defaults to /tasks. */
   basePath?: string;
   /**
@@ -69,6 +73,15 @@ export interface TaskRiskPolicy {
   stuckAfterMs: number;
 }
 
+export type TaskAuthorizationAction = 'task:read' | 'task:write' | 'task:cancel' | 'task:retry' | 'waitpoint:write' | 'artifact:read';
+export interface TaskAuthorizationInput {
+  request: Request;
+  ownerId: string;
+  tenantId: string;
+  action: TaskAuthorizationAction;
+  taskId?: string;
+}
+
 /** Capabilities the owner UI may render without discovering support via 501. */
 export interface TaskSurfaceCapabilities {
   schemaVersion: 1;
@@ -81,6 +94,7 @@ export interface TaskSurfaceCapabilities {
   tenant: boolean;
   verifications: true;
   artifacts: boolean;
+  authorization: boolean;
 }
 
 /**
@@ -95,6 +109,9 @@ export function createTaskRequestHandler(
 ): (request: Request) => Promise<Response> {
   if (!options?.tasks) {
     throw new TypeError('PostgresTaskClient is required');
+  }
+  if (options.requireTenantAuthorization && !options.authorize) {
+    throw new TypeError('tenant authorization requires authorize');
   }
   const basePath = normalizeBasePath(options.basePath ?? '/tasks');
   const riskPolicy = normalizeRiskPolicy(options.riskPolicy);
@@ -121,6 +138,15 @@ export function createTaskRequestHandler(
         return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
       }
 
+      if (options.authorize) {
+        const taskId = relative[0] && !relative[0].startsWith('_') ? relative[0] : undefined;
+        const allowed = await options.authorize({
+          request, ownerId, tenantId, taskId,
+          action: taskAuthorizationAction(request.method, relative),
+        });
+        if (!allowed) return json({ code: 'RHINOQ_FORBIDDEN', message: 'tenant policy denied this Task action' }, 403);
+      }
+
       if (request.method === 'GET' && relative.length === 0) {
         const limit = integerQuery(url, 'limit', 50);
         const offset = integerQuery(url, 'offset', 0);
@@ -145,6 +171,7 @@ export function createTaskRequestHandler(
           tenant: typeof options.tenantFromRequest === 'function',
           verifications: true,
           artifacts: typeof options.resolveArtifact === 'function',
+          authorization: typeof options.authorize === 'function',
         };
         return json(capabilities);
       }
@@ -257,6 +284,13 @@ export function createTaskRequestHandler(
         const limit = integerQuery(url, 'limit', 100);
         if (limit < 1 || limit > 100) return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'artifact limit must be 1..100' }, 400);
         return json({ artifacts: await options.tasks.listTaskArtifactsForOwner(taskId, ownerId, limit, tenantId) });
+      }
+      if (request.method === 'POST' && relative.length === 4 && relative[1] === 'artifacts' && relative[3] === 'refresh') {
+        const artifact = await options.tasks.getTaskArtifactForOwner(relative[2]!, ownerId, tenantId);
+        if (artifact.taskId !== taskId) return json({ code: 'RHINOQ_ARTIFACT_NOT_FOUND' }, 404);
+        const body = await request.json().catch(() => undefined);
+        const refreshed = await options.tasks.refreshTaskArtifact(relative[2]!, body);
+        return json(refreshed);
       }
       if (request.method === 'GET' && relative.length === 4 && relative[1] === 'artifacts' && relative[3] === 'download') {
         if (!options.resolveArtifact) return json({ code: 'RHINOQ_ARTIFACT_DOWNLOAD_NOT_CONFIGURED' }, 501);
@@ -463,6 +497,10 @@ export class ApplicationTaskClient {
     return this.send('GET', `/${path(taskId)}/artifacts/${path(artifactId)}/download`);
   }
 
+  refreshTaskArtifact(taskId: string, artifactId: string, request: import('../gateway/types.js').TaskArtifactRefreshRequest): Promise<import('../gateway/types.js').TaskArtifact> {
+    return this.send('POST', `/${path(taskId)}/artifacts/${path(artifactId)}/refresh`, request);
+  }
+
   listAtRiskTasks(limit = 50): Promise<{
     policy: TaskRiskPolicy;
     tasks: Array<TaskSummary & { risk: 'at_risk' | 'stuck'; idleForMs: number }>;
@@ -608,6 +646,16 @@ function normalizeRiskPolicy(policy?: TaskRiskPolicy): TaskRiskPolicy | undefine
     throw new RangeError('riskPolicy requires stuckAfterMs > atRiskAfterMs >= 1000');
   }
   return { atRiskAfterMs: Math.floor(policy.atRiskAfterMs), stuckAfterMs: Math.floor(policy.stuckAfterMs) };
+}
+
+function taskAuthorizationAction(method: string, relative: string[]): TaskAuthorizationAction {
+  if (method === 'GET') {
+    return relative[1] === 'artifacts' || relative[3] === 'download' ? 'artifact:read' : 'task:read';
+  }
+  if (relative[1] === 'cancel') return 'task:cancel';
+  if (relative[1] === 'retry') return 'task:retry';
+  if (relative[1] === 'waitpoints') return 'waitpoint:write';
+  return 'task:write';
 }
 
 function path(value: string): string {

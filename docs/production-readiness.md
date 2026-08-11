@@ -27,9 +27,12 @@ production-ready.
 
 ## Still blocking a production-ready claim
 
-- **Tenant isolation is enforced in storage; the HTTP surface is not wired to
-  it.** Migrations 026–027 give every tenant-owned row a `tenant_id`, force
-  row-level policies on twelve tables, and make cross-tenant *references*
+- **The full Go Gateway is still not a tenant-wide public RBAC surface. The
+  Node Task HTTP profile now carries owner/tenant predicates and an explicit
+  `authorize` hook with deny-by-default mounting. The storage boundary remains
+  enforced by the storage migrations, which give every tenant-owned row a
+  `tenant_id` and force row-level policies on twelve tables, making
+  cross-tenant *references*
   unrepresentable through composite foreign keys. `internal/domain/authz`
   holds the role matrix and a single decision point, and
   `tests/postgres/tenant_isolation_test.go` proves the boundary by trying to

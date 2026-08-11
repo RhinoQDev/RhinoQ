@@ -440,12 +440,23 @@ Tasks in Needs attention with a concrete next action.
 Business verification is append-only Task evidence. `GET /tasks/_verified`
 powers Recently verified, while each verification may carry the exact Finding
 key and operator deep link. `recordTaskVerificationChain()` connects a mismatch
-to the Go-owned Finding writer and an application-owned durable notification
-enqueue hook; it fails closed when the Finding writer is missing.
+to the Go-owned Finding writer and writes a durable Task notification outbox
+record. A custom `queueNotification` callback is still supported when an
+application already has a delivery system; recipients and transport remain
+application-owned, while the handoff itself is retryable and lease-fenced.
 
 Artifact v1 stores browser-safe metadata, SHA-256 checksum, expiry, refresh
-version and lineage. Private storage references are available only to the
-application's `resolveArtifact` callback and never appear in list/detail JSON.
+version and lineage. Owner/tenant-authorized refresh is available at
+`POST /tasks/{taskId}/artifacts/{artifactId}/refresh`. Private storage
+references are available only to the application's `resolveArtifact` callback
+and never appear in list/detail JSON.
+
+The Go worker starts a queue watchdog by default. It reports transition-only
+At risk, Stuck, backlog-growth and reaper-health alerts using explicit
+thresholds; concurrent enqueue admission is serialized at the queue-control
+row. `go run ./cmd/rhinoq-worker` is a recovery/health sidecar and does not
+pretend to know application handlers. A business worker still registers its
+handlers and calls `Client.Run`.
 
 The same owner-authenticated surface now exposes `GET /tasks/{id}/events` and
 `GET /tasks/_events` as SSE. `ApplicationTaskClient` uses Fetch streaming, so
@@ -755,6 +766,9 @@ not a claim this project makes.
 
 See [Notifications](./docs/notifications.md).
 
+Operational details for Task notification handoff, tenant authorization and
+queue protection live in [Task profile operations](./docs/task-profile-operations.md).
+
 ## Evidence does not accumulate forever
 
 Every scan writes one row per observed subject, per Rule, per Rule version.
@@ -834,8 +848,10 @@ exists but is not the default browser polling shape.
 | Explicit At risk/Stuck policy and owner-scoped view | implemented in Node Task profile |
 | Task verification records and Recently verified | implemented in Node Task profile |
 | Artifact v1 metadata/checksum/expiry/refresh/lineage | implemented in Node Task profile |
-| Task-to-provider Flight Recorder correlation | implemented through explicit `taskId`; Gateway + Workbench tested |
-| Node Task tenant HTTP/SQL boundary | implemented; full-profile PostgreSQL RLS remains the stronger boundary |
+| Task-to-provider Flight Recorder correlation | implemented; compare-attempt diffs, supplied waterfall spans and bounded diagnostic export are available |
+| Node Task tenant HTTP/SQL boundary | implemented with owner/tenant scope plus optional deny-by-default authorization hook; full-profile Gateway RBAC remains separate |
+| Durable Task verification notification handoff | implemented in Task schema v10 with claim/complete/fail leases; recipient/transport stays application-owned |
+| Queue admission and watchdog | admission race fenced; at-risk/stuck/backlog/no-worker/reaper signals are available through WorkerConfig |
 | Signed webhook and Slack notifications with durable dedup | implemented |
 | Failure inbox with claim/replay/retry/ignore states | implemented in Node source checkout; application-owned table |
 | Notification destinations configurable from the CLI, with a delivery probe | implemented |

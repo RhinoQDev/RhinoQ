@@ -99,7 +99,7 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
   }))).json();
   assert.deepEqual(capabilities, {
     schemaVersion: 1, cancel: true, retry: true, result: false, waitpoints: true, stream: true, risk: false,
-    tenant: false, verifications: true, artifacts: false,
+    tenant: false, verifications: true, artifacts: false, authorization: false,
   });
   assert.deepEqual(await client.capabilities(), capabilities);
   const unresolvedResult = await handler(new Request('http://app.test/tasks/task-1/result', {
@@ -206,6 +206,22 @@ test('tenant context fences verification and artifact reads through the owner HT
   assert.equal(JSON.stringify(await (await fetch('/task-tenant/artifacts')).json()).includes('storage://'), false);
   assert.deepEqual(await (await fetch('/task-tenant/artifacts/artifact-1/download')).json(), { url: '/downloads/report.csv' });
   assert.equal((await handler(new Request('http://app.test/tasks/_verified'))).status, 401);
+});
+
+test('tenant authorization is an explicit deny-by-default policy hook', async () => {
+  assert.throws(() => createTaskRequestHandler({
+    tasks: {}, ownerFromRequest: () => 'owner-a', tenantFromRequest: () => 'tenant-a',
+    requireTenantAuthorization: true,
+  }), /tenant authorization requires authorize/);
+  const seen = [];
+  const handler = createTaskRequestHandler({
+    tasks: { async getTaskForOwner() { throw new Error('ownership read must not happen'); } },
+    ownerFromRequest: () => 'owner-a', tenantFromRequest: () => 'tenant-a',
+    authorize: ({ action, taskId, tenantId }) => { seen.push({ action, taskId, tenantId }); return false; },
+  });
+  const response = await handler(new Request('http://app.test/tasks/task-1/cancel', { method: 'POST' }));
+  assert.equal(response.status, 403);
+  assert.deepEqual(seen, [{ action: 'task:cancel', taskId: 'task-1', tenantId: 'tenant-a' }]);
 });
 
 test('result download is capability-gated and owner-authorized', async () => {

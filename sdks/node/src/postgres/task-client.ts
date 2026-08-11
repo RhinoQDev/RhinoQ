@@ -21,6 +21,8 @@ import type {
 	TaskArtifactRefreshRequest,
 	TaskVerificationCreateRequest,
 	TaskVerificationRecord,
+	TaskNotificationCreateRequest,
+	TaskNotificationRecord,
 	TaskWaitpoint,
 	TaskWaitpointCreateRequest,
 	TaskWaitpointResolveRequest,
@@ -99,6 +101,13 @@ interface ArtifactRow {
   id: string; task_id: string; execution_id: string | null; name: string; content_type: string;
   size_bytes: string | number; checksum_sha256: string; reference: string; expires_at: Date | string;
   lineage: unknown; version: string | number; created_at: Date | string; updated_at: Date | string;
+}
+
+interface NotificationRow {
+  id: string; task_id: string; verification_id: string; verification: unknown; finding: unknown;
+  deep_link: string | null; state: TaskNotificationRecord['state']; attempts: number;
+  available_at: Date | string; lease_owner: string | null; lease_until: Date | string | null;
+  last_error: string | null; created_at: Date | string; updated_at: Date | string;
 }
 
 interface ExecutionCursor { id: string }
@@ -716,6 +725,75 @@ export class PostgresTaskClient implements TaskClient {
     return mapVerification(row);
   }
 
+  /**
+   * Write the Task-profile notification outbox. This is a durable handoff,
+   * not an email/webhook sender: the host still owns recipients and transport.
+   */
+  async queueTaskNotification(taskId: string, request: TaskNotificationCreateRequest): Promise<TaskNotificationRecord> {
+    if (!taskId?.trim() || !request?.notificationId?.trim() || !request.verification?.id || !request.finding?.ruleId) {
+      throw new TypeError('task notification requires task, notification, verification and finding');
+    }
+    if (request.verification.taskId !== taskId) throw new TypeError('notification verification belongs to another task');
+    const payloadSize = new TextEncoder().encode(JSON.stringify({ verification: request.verification, finding: request.finding })).byteLength;
+    if (payloadSize > 131_072) throw new RangeError('task notification payload must be JSON up to 128 KiB');
+    await this.execute(
+      `INSERT INTO rhinoq_task.notification_outbox
+       (id,task_id,verification_id,verification,finding,deep_link)
+       VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6)
+       ON CONFLICT (id) DO NOTHING`,
+      [request.notificationId, taskId, request.verification.id, JSON.stringify(request.verification), JSON.stringify(request.finding), request.deepLink ?? null],
+    );
+    const result = await this.execute<NotificationRow>(`SELECT * FROM rhinoq_task.notification_outbox WHERE id=$1`, [request.notificationId]);
+    const row = result.rows[0];
+    if (!row || row.task_id !== taskId || row.verification_id !== request.verification.id) throw taskError('RHINOQ_NOTIFICATION_CONFLICT', request.notificationId);
+    return mapNotification(row);
+  }
+
+  async claimTaskNotification(owner: string, leaseMs = 60_000): Promise<TaskNotificationRecord | undefined> {
+    if (!owner?.trim()) throw new TypeError('notification lease owner is required');
+    if (!Number.isInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 3_600_000) throw new RangeError('notification leaseMs must be 1000..3600000');
+    const result = await this.execute<NotificationRow>(
+      `WITH candidate AS (
+         SELECT id FROM rhinoq_task.notification_outbox
+         WHERE (state IN ('pending','failed') AND available_at <= clock_timestamp())
+            OR (state='leased' AND lease_until <= clock_timestamp())
+         ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED
+       )
+       UPDATE rhinoq_task.notification_outbox n
+       SET state='leased', attempts=n.attempts+1, lease_owner=$1,
+           lease_until=clock_timestamp()+($2::bigint * interval '1 millisecond'),
+           updated_at=clock_timestamp()
+       FROM candidate WHERE n.id=candidate.id
+       RETURNING n.*`, [owner, leaseMs]);
+    return result.rows[0] ? mapNotification(result.rows[0]) : undefined;
+  }
+
+  async completeTaskNotification(id: string, owner: string): Promise<TaskNotificationRecord> {
+    const result = await this.execute<NotificationRow>(
+      `UPDATE rhinoq_task.notification_outbox
+       SET state='sent', lease_owner=NULL, lease_until=NULL, updated_at=clock_timestamp()
+       WHERE id=$1 AND state='leased' AND lease_owner=$2
+       RETURNING *`, [id, owner]);
+    const row = result.rows[0];
+    if (!row) throw taskError('RHINOQ_NOTIFICATION_LEASE_CONFLICT', id);
+    return mapNotification(row);
+  }
+
+  async failTaskNotification(id: string, owner: string, error: string, retryAfterMs = 30_000): Promise<TaskNotificationRecord> {
+    if (!error?.trim()) throw new TypeError('notification failure reason is required');
+    if (!Number.isInteger(retryAfterMs) || retryAfterMs < 0 || retryAfterMs > 86_400_000) throw new RangeError('retryAfterMs must be 0..86400000');
+    const result = await this.execute<NotificationRow>(
+      `UPDATE rhinoq_task.notification_outbox
+       SET state='failed', lease_owner=NULL, lease_until=NULL,
+           available_at=clock_timestamp()+($3::bigint * interval '1 millisecond'),
+           last_error=$4, updated_at=clock_timestamp()
+       WHERE id=$1 AND state='leased' AND lease_owner=$2
+       RETURNING *`, [id, owner, retryAfterMs, error.slice(0, 2048)]);
+    const row = result.rows[0];
+    if (!row) throw taskError('RHINOQ_NOTIFICATION_LEASE_CONFLICT', id);
+    return mapNotification(row);
+  }
+
   async listTaskVerificationsForOwner(taskId: string, ownerId: string, limit = 50, tenantId = 'default'): Promise<TaskVerificationRecord[]> {
     await this.getTaskForOwner(taskId, ownerId, tenantId);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RangeError('verification limit must be 1..100');
@@ -1102,6 +1180,26 @@ function mapArtifact(row: ArtifactRow): TaskArtifactRecord {
     ...(row.execution_id ? { executionId: row.execution_id } : {}), name: row.name, contentType: row.content_type,
     sizeBytes: Number(row.size_bytes), checksumSha256: row.checksum_sha256, reference: row.reference,
     expiresAt: timestamp(row.expires_at), lineage, createdAt: timestamp(row.created_at), updatedAt: timestamp(row.updated_at) };
+}
+
+function mapNotification(row: NotificationRow): TaskNotificationRecord {
+  return {
+    schemaVersion: 1,
+    id: row.id,
+    taskId: row.task_id,
+    verificationId: row.verification_id,
+    verification: row.verification as TaskNotificationRecord['verification'],
+    finding: row.finding as TaskNotificationRecord['finding'],
+    ...(row.deep_link ? { deepLink: row.deep_link } : {}),
+    state: row.state,
+    attempts: Number(row.attempts),
+    availableAt: timestamp(row.available_at),
+    ...(row.lease_owner ? { leaseOwner: row.lease_owner } : {}),
+    ...(row.lease_until ? { leaseUntil: timestamp(row.lease_until) } : {}),
+    ...(row.last_error ? { lastError: row.last_error } : {}),
+    createdAt: timestamp(row.created_at),
+    updatedAt: timestamp(row.updated_at),
+  };
 }
 
 function withoutArtifactReference(record: TaskArtifactRecord): TaskArtifact {

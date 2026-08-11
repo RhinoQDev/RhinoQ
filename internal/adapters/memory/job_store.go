@@ -202,6 +202,32 @@ func (s *JobStore) JobCounts(_ context.Context, queueName string) (map[job.State
 	return counts, nil
 }
 
+func (s *JobStore) QueueHealth(_ context.Context, queueName string) (ports.QueueHealth, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	health := ports.QueueHealth{QueueName: queueName}
+	for _, record := range s.jobs {
+		if queueName != "" && record.QueueName != queueName {
+			continue
+		}
+		switch record.State {
+		case job.Pending:
+			health.Pending++
+			if health.OldestPendingAt.IsZero() || record.CreatedAt.Before(health.OldestPendingAt) {
+				health.OldestPendingAt = record.CreatedAt
+			}
+		case job.RetryWait:
+			health.RetryWait++
+			if health.OldestRetryAt.IsZero() || record.CreatedAt.Before(health.OldestRetryAt) {
+				health.OldestRetryAt = record.CreatedAt
+			}
+		case job.Leased:
+			health.Leased++
+		}
+	}
+	return health, nil
+}
+
 func (s *JobStore) Claim(ctx context.Context, input ports.ClaimInput) ([]job.Record, error) {
 	select {
 	case <-ctx.Done():

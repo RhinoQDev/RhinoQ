@@ -94,7 +94,7 @@ test('app.http exposes the complete default user and operator journey from one m
   const capabilities = await invoke(middleware, '/tasks/_capabilities');
   assert.deepEqual(JSON.parse(capabilities.body), {
     schemaVersion: 1, cancel: true, retry: false, result: false, waitpoints: true, stream: true, risk: false,
-    tenant: false, verifications: true, artifacts: false,
+    tenant: false, verifications: true, artifacts: false, authorization: false,
   });
 
   const forbidden = await invoke(middleware, '/admin');

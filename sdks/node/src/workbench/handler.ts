@@ -11,7 +11,7 @@ import type {
   ProviderOperationRecord,
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
-import { taskFlightRecorder, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
+import { taskFlightRecorder, taskFlightRecorderDiagnostic, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
 import { taskUIModel, type TaskUIModel } from '../tasks/ui.js';
 import { workbenchPage } from './page.js';
 
@@ -215,6 +215,14 @@ export function createWorkbenchHandler(
         if (request.method === 'GET' && relative.length === 4 && relative[3] === 'flight-recorder') {
           const detail = await taskDetail(options.tasks, taskId, options.providerOperationsByTask);
           return json(detail.flightRecorder);
+        }
+        if (request.method === 'GET' && relative.length === 5 && relative[3] === 'flight-recorder' && relative[4] === 'diagnostic') {
+          const detail = await taskDetail(options.tasks, taskId, options.providerOperationsByTask);
+          return new Response(taskFlightRecorderDiagnostic(detail.flightRecorder), { headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'content-disposition': `attachment; filename="${safeFilename(taskId)}-flight-recorder.json"`,
+            'cache-control': 'private, no-store',
+          } });
         }
 
         if (request.method === 'POST' && relative.length === 4 && relative[3] === 'cancel') {
@@ -474,6 +482,10 @@ type WorkbenchTaskRow = TaskSummary & { ui: TaskUIModel };
 
 function withTaskUI(task: TaskSummary): WorkbenchTaskRow {
   return { ...task, ui: taskUIModel(task) };
+}
+
+function safeFilename(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'task';
 }
 
 /**

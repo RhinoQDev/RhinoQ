@@ -55,12 +55,35 @@ export interface TaskFlightRecorderAttention {
 }
 
 export interface TaskFlightRecorder {
-  schemaVersion: 1;
+  schemaVersion: 2;
   taskId: string;
   generatedAt: string;
+  traceId?: string;
   explanation: string;
   attention: TaskFlightRecorderAttention[];
   events: TaskFlightRecorderEvent[];
+  attemptDiffs: TaskFlightAttemptDiff[];
+  waterfall: TaskFlightSpan[];
+}
+
+export interface TaskFlightAttemptDiff {
+  itemKey: string;
+  executionId: string;
+  attempt: number;
+  previousExecutionId?: string;
+  changed: string[];
+  failureReason?: string;
+}
+
+/** Timing and trace values must come from an instrumented application/provider. */
+export interface TaskFlightSpan {
+  id: string;
+  label: string;
+  startAt: string;
+  endAt?: string;
+  kind?: string;
+  traceId?: string;
+  spanId?: string;
 }
 
 export interface TaskFlightRecorderInput {
@@ -70,6 +93,8 @@ export interface TaskFlightRecorderInput {
   verifications?: TaskVerificationRecord[];
   providerOperations?: ProviderOperationRecord[];
   artifacts?: TaskArtifact[];
+  traceId?: string;
+  waterfall?: TaskFlightSpan[];
   now?: () => Date;
 }
 
@@ -81,8 +106,9 @@ export interface TaskFlightRecorderInput {
  * richer attempt/effect audit records when those records are available.
  */
 export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRecorder {
-  const { task, executionResults = [], waitpoints = [], verifications = [], providerOperations = [], artifacts = [] } = input;
-  const generatedAt = (input.now ?? (() => new Date()))().toISOString();
+  const { task, executionResults = [], waitpoints = [], verifications = [], providerOperations = [], artifacts = [], waterfall = [] } = input;
+  const now = (input.now ?? (() => new Date()))();
+  const generatedAt = now.toISOString();
   const resultByExecution = new Map(executionResults.map((result) => [result.executionId, result]));
   const events: TaskFlightRecorderEvent[] = [
     {
@@ -161,21 +187,66 @@ export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRe
     })),
     ...artifacts.map((artifact) => ({
       id: artifact.id, observedAt: artifact.createdAt, kind: 'artifact.recorded' as const,
-      label: `Artifact recorded: ${artifact.name}`, state: Date.parse(artifact.expiresAt) <= Date.now() ? 'expired' : 'available',
+      label: `Artifact recorded: ${artifact.name}`, state: Date.parse(artifact.expiresAt) <= now.getTime() ? 'expired' : 'available',
       message: `SHA-256 ${artifact.checksumSha256}`, artifactId: artifact.id,
     })),
   ].sort((left, right) => left.observedAt.localeCompare(right.observedAt) || left.id.localeCompare(right.id));
 
   const attention = taskAttention(task, waitpoints, verifications, providerOperations);
   const explanation = explainTask(task);
+  const attemptDiffs = compareAttempts(task);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     taskId: task.id,
     generatedAt,
+    ...(input.traceId ? { traceId: input.traceId } : {}),
     explanation: `${explanation.headline}. ${explanation.explanation}`,
     attention,
     events,
+    attemptDiffs,
+    waterfall: [...waterfall].sort((left, right) => left.startAt.localeCompare(right.startAt) || left.id.localeCompare(right.id)),
   };
+}
+
+/** Produces a bounded, redaction-safe JSON export for support diagnostics. */
+export function taskFlightRecorderDiagnostic(recorder: TaskFlightRecorder, maxBytes = 262_144): string {
+  if (!Number.isInteger(maxBytes) || maxBytes < 4_096) throw new RangeError('maxBytes must be at least 4096');
+  const full = JSON.stringify({ schemaVersion: 1, exportedAt: recorder.generatedAt, recorder });
+  if (new TextEncoder().encode(full).byteLength <= maxBytes) return full;
+  const compact = {
+    schemaVersion: 1,
+    exportedAt: recorder.generatedAt,
+    truncated: true,
+    recorder: { ...recorder, events: [], attemptDiffs: [], waterfall: [] },
+  };
+  const result = JSON.stringify(compact);
+  if (new TextEncoder().encode(result).byteLength > maxBytes) throw new RangeError('flight recorder diagnostic cannot fit maxBytes');
+  return result;
+}
+
+function compareAttempts(task: TaskSnapshot): TaskFlightAttemptDiff[] {
+  const byItem = new Map<string, TaskSnapshot['executions']>();
+  for (const execution of task.executions) {
+    const key = execution.itemKey ?? 'default';
+    const list = byItem.get(key) ?? [];
+    list.push(execution);
+    byItem.set(key, list);
+  }
+  const diffs: TaskFlightAttemptDiff[] = [];
+  for (const [itemKey, executions] of byItem) {
+    const ordered = [...executions].sort((left, right) => left.attempt - right.attempt || left.id.localeCompare(right.id));
+    for (let index = 1; index < ordered.length; index += 1) {
+      const previous = ordered[index - 1]!;
+      const current = ordered[index]!;
+      const changed: string[] = [];
+      if (previous.state !== current.state) changed.push(`state:${previous.state}->${current.state}`);
+      if (previous.runtime !== current.runtime) changed.push(`runtime:${previous.runtime}->${current.runtime}`);
+      if ((previous.failureReason ?? '') !== (current.failureReason ?? '')) changed.push('failureReason');
+      diffs.push({ itemKey, executionId: current.id, attempt: current.attempt, previousExecutionId: previous.id, changed,
+        ...(current.failureReason ? { failureReason: current.failureReason } : {}) });
+    }
+  }
+  return diffs;
 }
 
 function taskAttention(task: TaskSnapshot, waitpoints: TaskWaitpoint[], verifications: TaskVerificationRecord[], providerOperations: ProviderOperationRecord[]): TaskFlightRecorderAttention[] {

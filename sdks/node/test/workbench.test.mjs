@@ -119,7 +119,7 @@ test('the detail view joins runtime job identity from the server-side read', asy
     [['item-a', 'running', 'bull-job-a'], ['item-b', 'failed', null]],
   );
   assert.equal(body.items[1].failureReason, 'source returned 404');
-  assert.equal(body.flightRecorder.schemaVersion, 1);
+  assert.equal(body.flightRecorder.schemaVersion, 2);
   assert.match(body.flightRecorder.explanation, /progress|finished/i);
   assert.match(body.ui.explanation.headline, /attention|progress/i);
   assert.ok(body.ui.explanation.recommendedAction.label);
@@ -134,6 +134,16 @@ test('the Flight Recorder has a focused endpoint for operator tooling', async ()
   assert.equal(body.taskId, 'task-1');
   assert.ok(Array.isArray(body.events));
   assert.ok(Array.isArray(body.attention));
+});
+
+test('the Flight Recorder exposes a bounded diagnostic download', async () => {
+  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true });
+  const response = await get(handler, '/rhinoq/api/tasks/task-1/flight-recorder/diagnostic');
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-disposition'), /task-1-flight-recorder\.json/);
+  const body = JSON.parse(await response.text());
+  assert.equal(body.schemaVersion, 1);
+  assert.equal(body.recorder.schemaVersion, 2);
 });
 
 test('the Workbench exposes a bounded Needs attention bucket', async () => {
