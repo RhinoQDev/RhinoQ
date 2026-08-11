@@ -48,7 +48,7 @@ function đã validate mà không có quyền ghi trực tiếp vào bảng queu
 ```sql
 GRANT USAGE ON SCHEMA rhinoq TO app_report_producer;
 GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
-    text, jsonb, text, text, integer, text, interval, text
+    text, jsonb, text, text, integer, text, interval, text, text
 ) TO app_report_producer;
 ```
 
@@ -118,7 +118,7 @@ PostgreSQL thật. CI luôn vô hiệu test cache và shuffle thứ tự:
 
 ```bash
 cd tests/postgres
-RHINOQ_TEST_DATABASE_URL=postgres://rhinoq:rhinoq@localhost:55432/rhinoq?sslmode=disable \
+RHINOQ_TEST_DATABASE_URL='postgres://rhinoq:rhinoq@localhost:55432/rhinoq?sslmode=disable&options=-c%20rhinoq.tenant_id%3Dtnt_system' \
   go test ./... -count=1 -shuffle=on
 ```
 

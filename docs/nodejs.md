@@ -1,8 +1,8 @@
 # Node.js integration
 
-> Status: development preview. npm currently carries `0.1.0-beta.9`; this
-> source is the unreleased `0.1.0-beta.10` candidate. Pin an exact published
-> version and see
+> Status: development preview. This checkout is the `0.1.0-beta.10` candidate.
+> Pin the exact published version after the release workflow succeeds; until
+> then, build the beta.10 tarball from this checkout. See
 > [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
@@ -55,7 +55,7 @@ or below the highest rendered `entityVersion`, stops on terminal state by
 default and accepts an `AbortSignal`. Network and authorization failures are
 reported to the caller; the helper does not invent an outage retry policy.
 
-The published beta.9 package and this beta.10 candidate export `TaskStore`, a browser external
+The beta.10 candidate exports `TaskStore`, a browser external
 store suitable for React `useSyncExternalStore` and equivalent adapters. It
 exposes loading, connected, reconnecting and stopped states, retries transport
 failures with bounded backoff, and never accepts an older `entityVersion`.
@@ -297,7 +297,7 @@ boundary to the producer role; do not grant queue-table access:
 ```sql
 GRANT USAGE ON SCHEMA rhinoq TO app_report_producer;
 GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
-  text, jsonb, text, text, integer, text, interval, text
+  text, jsonb, text, text, integer, text, interval, text, text
 ) TO app_report_producer;
 
 INSERT INTO rhinoq.job_allowlist (
@@ -347,6 +347,11 @@ const jobId = await producer.enqueue({
   correlationId: 'report_01',
 });
 ```
+
+After migrations 026–027, the connection must carry an explicit tenant session
+setting, for example
+`?options=-c%20rhinoq.tenant_id%3Dtnt_acme`. RhinoQ deliberately fails a write
+that has no tenant context instead of silently assigning it to a default.
 
 `PostgresProducer` does not create a pool and does not run migrations. The
 application owns connection lifecycle. RhinoQ sends one parameterized
@@ -870,10 +875,10 @@ reproducible.
 
 ## Current limitations
 
-- Every published version is a prerelease. At the time this beta.10 candidate
-  was prepared, `latest` still resolved to `0.1.0-beta.9`; use `next` only
-  after the release workflow succeeds, and pin an exact version in anything
-  that must not move under you.
+- Every published version is a prerelease. The beta.10 release workflow uses
+  `next`; `latest` may remain on an older release. Use `next` only after the
+  workflow succeeds, and pin an exact version in anything that must not move
+  under you.
 - The package ships an ESM and a CommonJS entry point, verified from a clean
   install of the packed tarball in both module systems.
 - Express and Fastify have request adapters (`createNodeTaskMiddleware`,

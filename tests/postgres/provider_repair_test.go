@@ -28,7 +28,9 @@ func TestProviderOperationPersistsUnknownAndDeduplicatesAcrossClients(t *testing
 	}
 	found := false
 	for _, item := range attention {
-		if item.ID == first.ID { found = true }
+		if item.ID == first.ID {
+			found = true
+		}
 	}
 	if !found {
 		t.Fatalf("uncertain operation %s missing from reconciliation query: %+v", first.ID, attention)

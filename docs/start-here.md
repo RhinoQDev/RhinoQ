@@ -207,13 +207,14 @@ source files. Prefer `RHINOQ_DATABASE_URL` when the application already uses
 ### 3. Install the pinned SDK
 
 ```bash
-npm install rhinoq@0.1.0-beta.10 pg
+npm install @rhinoq/node@0.1.0-beta.10 pg
 ```
 
 Why: `pg` is a peer dependency and lets RhinoQ reuse the application's pool.
-The exact GitHub archive is required while npm trusted publishing is pending;
-the older npm tags do not contain the current contract. Pinning the URL also
-makes the evaluation repeatable.
+Pin the exact beta.10 package after the release workflow succeeds; before that,
+install the beta.10 tarball built from this checkout as described in
+[`docs/nodejs.md`](./nodejs.md). Older prerelease tags do not contain this
+contract.
 
 ### 4. Initialize the Task profile
 

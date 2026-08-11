@@ -105,7 +105,7 @@ Nếu migration do DBA/owner khác chạy, cấp đúng function boundary cho pr
 ```sql
 GRANT USAGE ON SCHEMA rhinoq TO app_report_producer;
 GRANT EXECUTE ON FUNCTION rhinoq.enqueue(
-    text, jsonb, text, text, integer, text, interval, text
+    text, jsonb, text, text, integer, text, interval, text, text
 ) TO app_report_producer;
 ```
 

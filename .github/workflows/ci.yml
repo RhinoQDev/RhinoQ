@@ -74,7 +74,7 @@ jobs:
         run: go test ./... -count=1 -shuffle=on
         working-directory: tests/postgres
         env:
-          RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable
+          RHINOQ_TEST_DATABASE_URL: "postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable&options=-c%20rhinoq.tenant_id%3Dtnt_system"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -86,13 +86,13 @@ jobs:
         run: node --test test/postgres.integration.test.mjs
         working-directory: sdks/node
         env:
-          RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable
+          RHINOQ_TEST_DATABASE_URL: "postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable&options=-c%20rhinoq.tenant_id%3Dtnt_system"
       - name: PostgreSQL concurrency and fan-out smoke
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: node bench/postgres-benchmark.mjs
         working-directory: sdks/node
         env:
-          RHINOQ_TEST_DATABASE_URL: postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable
+          RHINOQ_TEST_DATABASE_URL: "postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable&options=-c%20rhinoq.tenant_id%3Dtnt_system"
           RHINOQ_BENCH_ITERATIONS: 200
           RHINOQ_BENCH_CONCURRENCIES: 1,8,16,32
           RHINOQ_BENCH_FANOUT_SIZES: 10,100,500

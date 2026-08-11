@@ -246,7 +246,7 @@ the Rules half of the product starts from a database you already have — no
 queue, no worker, no cutover:
 
 ```bash
-npm install rhinoq@next pg
+npm install @rhinoq/node@next pg
 npx rhinoq init
 npx rhinoq adopt --mode single        # preview
 npx rhinoq adopt --mode single --apply

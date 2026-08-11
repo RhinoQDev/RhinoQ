@@ -1,6 +1,7 @@
 # Adopter pilot readiness — 2026-08-10
 
-This is a blocker audit, not adopter evidence and not a code-reduction claim.
+This is a blocker audit, not external-adopter evidence and not a production
+code-reduction claim.
 
 ## Repositories inspected
 
@@ -14,6 +15,22 @@ This is a blocker audit, not adopter evidence and not a code-reduction claim.
 
 The existing A/B fixture remains a local benchmark. Calling it a beta.10
 adopter pilot would misstate both the version and the provenance of the code.
+
+## Beta.10 controlled fixture
+
+RhinoQ now contains a separate reproducible fixture with two real commits. It
+is useful for validating the beta.10 package and integration surface, but it is
+not a consenting adopter and does not close the external-adopter gate:
+
+- before: `9095ce6e3ee9a2233728b5489403374619093c5c`
+- after: `225f59400bf45ede7a437b7a0b134d9dadce896e`
+- [fixture instructions](./adopter-pilot-beta10/README.md)
+- [measured report](./adopter-pilot-beta10/code-reduction-partner-beta10-fixture-2026-08-11.md)
+
+The fixture removes 36 net application-source lines but adds PostgreSQL to an
+in-memory baseline. Its falsification result is therefore **not proven**, and
+the report must not be used as an adopter savings claim. The old beta.9
+fixture was not used to produce these numbers.
 
 ## Measurement required for the next run
 
