@@ -231,6 +231,31 @@ func withPostgresOption(rawURL, option string) string {
 	return parsed.String()
 }
 
+func withoutPostgresSetting(rawURL, setting string) string {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	query := parsed.Query()
+	tokens := strings.Fields(query.Get("options"))
+	kept := make([]string, 0, len(tokens))
+	for i := 0; i < len(tokens); i++ {
+		if tokens[i] == "-c" && i+1 < len(tokens) &&
+			(strings.HasPrefix(tokens[i+1], setting+"=") || tokens[i+1] == setting) {
+			i++
+			continue
+		}
+		kept = append(kept, tokens[i])
+	}
+	if len(kept) == 0 {
+		query.Del("options")
+	} else {
+		query.Set("options", strings.Join(kept, " "))
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
 func TestWithPostgresOptionPreservesExistingOptions(t *testing.T) {
 	rawURL := "postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable&options=-c%20rhinoq.tenant_id%3Dtnt_system"
 	got := withPostgresOption(rawURL, "-c rhinoq.maintenance=on")
@@ -241,6 +266,22 @@ func TestWithPostgresOptionPreservesExistingOptions(t *testing.T) {
 	}
 	if options := parsed.Query().Get("options"); options !=
 		"-c rhinoq.tenant_id=tnt_system -c rhinoq.maintenance=on" {
+		t.Fatalf("options = %q", options)
+	}
+	if sslmode := parsed.Query().Get("sslmode"); sslmode != "disable" {
+		t.Fatalf("sslmode = %q", sslmode)
+	}
+}
+
+func TestWithoutPostgresSettingPreservesOtherOptions(t *testing.T) {
+	rawURL := "postgres://rhinoq:rhinoq@localhost:5432/rhinoq?sslmode=disable&options=-c%20rhinoq.tenant_id%3Dtnt_system"
+	got := withoutPostgresSetting(rawURL, "rhinoq.tenant_id")
+
+	parsed, err := neturl.Parse(got)
+	if err != nil {
+		t.Fatalf("parse rewritten URL: %v", err)
+	}
+	if options := parsed.Query().Get("options"); options != "" {
 		t.Fatalf("options = %q", options)
 	}
 	if sslmode := parsed.Query().Get("sslmode"); sslmode != "disable" {

@@ -192,7 +192,8 @@ func TestSessionWithoutATenantIsInert(t *testing.T) {
 
 	// Same role as the runtime, no tenant announced. Opening this as the owner
 	// would prove nothing, since the owner is exempt from the policy.
-	anonymous, err := sql.Open("pgx", appURL(t))
+	anonymousURL := withoutPostgresSetting(appURL(t), "rhinoq.tenant_id")
+	anonymous, err := sql.Open("pgx", anonymousURL)
 	if err != nil {
 		t.Fatalf("open anonymous pool: %v", err)
 	}
