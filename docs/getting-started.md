@@ -77,7 +77,7 @@ npm install /absolute/path/to/rhinoq-node-0.1.0-beta.11.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
-Pack the beta.11 candidate from this checkout until its tag workflow succeeds.
+The published beta.11 package and GitHub archive contain this Task-only path.
 It creates the isolated Task tables in `rhinoq_task`, including durable
 waitpoints, tenant-scoped owner reads, verification records and Artifact v1,
 and reuses the application's `pg.Pool` through `PostgresTaskClient`.

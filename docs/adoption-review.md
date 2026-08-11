@@ -1,6 +1,6 @@
 # Adoption and usability review
 
-Reviewed: 2026-08-08. Superseded for priority ordering by
+Reviewed: 2026-08-11. Superseded for priority ordering by
 [the adoption gap](./adoption-gap.md); retained as the broader readiness review.
 
 This review asks whether a team can evaluate RhinoQ as a user-facing Task layer
@@ -34,6 +34,10 @@ prerequisite for someone who only needs import/export progress.
 
 ### P0 — required before recruiting existing-worker design partners
 
+Distribution prerequisite completed for beta.11: both npm packages, the
+`next` dist-tags, provenance attestations, registry smoke, prebuilt CLI assets,
+container and GitHub prerelease agree on `0.1.0-beta.11`.
+
 1. Re-run the real adopter against the implemented embedded Node Task profile
    and verify that Gateway/process/credential removal produces net code deletion.
 2. Wire the existing two-task probe into real call sites and measure
@@ -41,9 +45,6 @@ prerequisite for someone who only needs import/export progress.
    compared with hand-built task plumbing.
 3. Run browser reload, delayed-response, duplicate-event and cancellation-race
    tests against the real application.
-4. Publish the verified `beta.11` packages through npm trusted publishing,
-   and confirm the Git tag, GitHub Release, provenance attestations and `next`
-   dist-tag agree before recruiting a design partner.
 
 ### P1 — required for a credible frontend task experience
 
@@ -72,6 +73,11 @@ These are design-partner measurements, not current claims:
 - time for a user to get an authorized result or retry/cancel command;
 - number of provider outcomes that correctly remain `uncertain` rather than
   being retried blindly.
+
+The next external test uses the fixed, no-coaching protocol in
+[`usability-pilot.md`](./usability-pilot.md). Its beta gate is: first visible
+Task within 15 minutes, existing BullMQ integration within 30 minutes, at least
+4/5 participants completing without intervention, and median ease at least 5/7.
 
 The existing-worker thesis fails if adoption requires a worker rewrite, adds as
 much glue as it removes, or teams prefer a hosted/runtime migration instead.

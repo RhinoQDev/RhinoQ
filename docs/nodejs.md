@@ -1,8 +1,7 @@
 # Node.js integration
 
-> Status: development preview. This checkout is the `0.1.0-beta.11` candidate.
-> Pin the exact published version after the release workflow succeeds; until
-> then, build the beta.11 tarball from this checkout. See
+> Status: public prerelease. Pin the exact published `0.1.0-beta.11` version;
+> build a tarball from this checkout only when evaluating unreleased changes. See
 > [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
@@ -55,7 +54,7 @@ or below the highest rendered `entityVersion`, stops on terminal state by
 default and accepts an `AbortSignal`. Network and authorization failures are
 reported to the caller; the helper does not invent an outage retry policy.
 
-The beta.11 candidate exports `TaskStore`, a browser external
+The beta.11 prerelease exports `TaskStore`, a browser external
 store suitable for React `useSyncExternalStore` and equivalent adapters. It
 exposes loading, connected, reconnecting and stopped states, retries transport
 failures with bounded backoff, and never accepts an older `entityVersion`.
@@ -159,9 +158,8 @@ Why `pg` is separate: `@rhinoq/node` accepts a minimal query executor and does
 not own or configure the application's connection pool.
 
 This source-install path is the authoritative way to evaluate changes not yet
-published. The tagged beta.11 candidate is not yet a verified registry/GitHub
-release; beta.8 remains the latest verified release with prebuilt `rhinoq` CLI
-binaries.
+published. The tagged beta.11 prerelease is verified on npm and GitHub and
+includes prebuilt `rhinoq` CLI binaries.
 
 ### Verify the installed package
 

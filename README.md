@@ -56,12 +56,12 @@ That second layer is optional on day one and uses the same operator workflow.
 
 RhinoQ is currently in public beta.
 
-- Latest source candidate: `v0.1.0-beta.11`.
-- Latest verified public release: `v0.1.0-beta.8`.
+- Latest verified public prerelease: `v0.1.0-beta.11`.
 
 Use RhinoQ for evaluation and controlled pilots. Production use is not yet
 recommended. The beta.10 release was superseded after its partial npm publish;
-beta.11 is complete only after both packages and the registry smoke test pass.
+beta.11 passed both npm publishes, registry smoke, binary/container publication
+and GitHub Release creation.
 
 > [!WARNING]
 > RhinoQ is a prerelease for evaluation and controlled pilots. The full Go
@@ -86,6 +86,7 @@ beta.11 is complete only after both packages and the registry smoke test pass.
 | adding this around async work you already run | [the two integration doors](./docs/two-doors.md); the current production-shaped adapter example uses [`BullMQ`](./examples/fanout-bullmq/) |
 | deciding whether it will save you code | [two doors](./docs/two-doors.md) |
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
+| running an external usability evaluation | [the no-coaching pilot protocol](./docs/usability-pilot.md) |
 | completely new to all of it | [the beginner guide](./docs/start-here.md) |
 
 ### Four things a fan-out has to get right
@@ -863,7 +864,7 @@ exists but is not the default browser polling shape.
 | Bounded, previewable retention for observation and delivery evidence | implemented |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.11 candidate pipeline configured; beta.8 is the latest verified public release |
+| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.11 verified public prerelease published |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 

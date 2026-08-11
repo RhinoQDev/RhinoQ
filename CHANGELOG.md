@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Synchronized release documentation after the verified beta.11 publication
+  and added a no-coaching external usability pilot with explicit activation,
+  ease and incident-resolution gates.
+
 ## 0.1.0-beta.11
 
 - Fixed a fan-out settlement race where a progress synchronization could retain

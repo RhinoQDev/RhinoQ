@@ -389,7 +389,7 @@ RhinoQ has two local visual surfaces:
 ### Try Workbench without a database
 
 Download the archive for your OS/CPU from the
-[beta.8 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.8),
+[beta.11 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.11),
 extract it, place `rhinoq` (`rhinoq.exe` on Windows) on `PATH`, then run:
 
 ```bash

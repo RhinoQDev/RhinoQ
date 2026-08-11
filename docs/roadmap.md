@@ -11,7 +11,7 @@ without migrating their queue.
 - [x] operator sign-in that does not expose its token in page markup
 - [x] connected Overview/Tasks/Workbench navigation and owner Task detail
 - [x] capability-gated retry/result UI with fail-closed result resolution
-- [ ] publish the tested npm beta and prebuilt CLI artifacts
+- [x] publish the tested npm beta and prebuilt CLI artifacts (`v0.1.0-beta.11`)
 - [ ] rerun two Tasks in a real adopter and record code/route/process/credential delta
   ([readiness audit](./evidence/adopter-pilot-readiness-2026-08-10.md): no valid beta.10 before/after refs yet)
 - [x] wire tenant context through the public HTTP boundary

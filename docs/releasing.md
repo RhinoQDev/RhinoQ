@@ -6,10 +6,9 @@ tag/release:
 - `@rhinoq/node` — authoritative Node SDK and CLIs;
 - `rhinoq` — unscoped compatibility alias.
 
-`0.1.0-beta.11` is the current source candidate. `0.1.0-beta.10` was partially
-published before a fan-out progress race was fixed, so it is superseded and is
-not a verified public release.
-`0.1.0-beta.8` is the latest verified public release. A candidate is complete
+`0.1.0-beta.11` is the latest verified public prerelease. `0.1.0-beta.10` was
+partially published before a fan-out progress race was fixed, so it is
+superseded and is not a verified public release. A candidate is complete
 only when the tag workflow has published both packages, registry smoke has
 passed, the GitHub prerelease contains the Node/Go artifacts, and
 provenance/signature verification has passed.
