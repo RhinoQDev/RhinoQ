@@ -1643,6 +1643,17 @@ export class BullMQTaskBridge {
     if (!(await this.client.settleTaskItems(taskId))) {
       return;
     }
+    // `settleTaskItems` is the authoritative proof that every live attempt is
+    // terminal. A concurrent sync may have started before the last Execution
+    // committed and then waited on the Task row with an older PostgreSQL
+    // statement snapshot, leaving progress at (for example) 49/50. Refresh it
+    // once more after settlement wins and before the callback can transition
+    // the Task to a terminal state, where progress updates are intentionally
+    // refused. This extra write is only needed for terminal-item aggregation;
+    // the SQL is idempotent when progress is already current.
+    if (this.aggregateProgress && this.client.syncTaskItemProgress) {
+      await this.client.syncTaskItemProgress(taskId);
+    }
     this.metrics?.increment('rhinoq_task_items_settled_total', {
       ...(this.runtimeScope ? { scope: this.runtimeScope } : {}),
     });

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed a fan-out settlement race where a progress synchronization could retain
+  a pre-terminal PostgreSQL snapshot (for example `49/50`) and the settlement
+  callback could then close the Task before progress converged to `50/50`.
 - Fixed the npm release workflow so `@rhinoq/node` and `rhinoq` use GitHub OIDC
   trusted publishing and never fall back to a token that can trigger an
   interactive OTP challenge. Added a release-workflow regression check.

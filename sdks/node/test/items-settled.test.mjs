@@ -57,6 +57,24 @@ test('the signal carries the finished Task, not just its id', async () => {
   }
 });
 
+test('terminal-item progress is synchronized after settlement and before the callback', async () => {
+  const h = newHarness({ items: 2, aggregateProgress: true });
+  try {
+    await h.finish('bull-job-1');
+    // Simulate a stale aggregate write that began before the last Execution
+    // committed. Settlement must force one fresh sync before the callback can
+    // make the Task terminal and close the progress-writing window.
+    h.task.progress = { completed: 1, total: 2 };
+    await h.finish('bull-job-2');
+
+    assert.deepEqual(h.task.progress, { completed: 2, total: 2 });
+    assert.deepEqual(h.settled[0].progress, { completed: 2, total: 2 });
+    assert.equal(h.syncCalls >= 3, true, 'each completion syncs and settlement performs a final sync');
+  } finally {
+    h.bridge.close();
+  }
+});
+
 // The Gateway client cannot settle items. Configuring the callback there would
 // otherwise mean it silently never fires.
 test('a client that cannot settle items warns once instead of never firing', async () => {
@@ -100,10 +118,16 @@ test('without onItemsSettled the bridge never asks the store', async () => {
   }
 });
 
-function newHarness({ items, supportsSettle = true, withCallback = true, metrics } = {}) {
+function newHarness({
+  items,
+  supportsSettle = true,
+  withCallback = true,
+  aggregateProgress = false,
+  metrics,
+} = {}) {
   const settled = [];
   const warnings = [];
-  const state = { settleCalls: 0, settledAt: undefined };
+  const state = { settleCalls: 0, syncCalls: 0, settledAt: undefined };
   const executions = Array.from({ length: items }, (_value, index) => ({
     id: `exec-${index + 1}`, taskId: 'task-1', itemKey: `item-${index + 1}`, attempt: 1,
     runtime: 'bullmq', runtimeScope: 'reports', externalId: `bull-job-${index + 1}`,
@@ -149,6 +173,16 @@ function newHarness({ items, supportsSettle = true, withCallback = true, metrics
       return true;
     };
   }
+  if (aggregateProgress) {
+    client.syncTaskItemProgress = async () => {
+      state.syncCalls += 1;
+      const completed = executions.filter((execution) =>
+        ['succeeded', 'failed', 'cancelled'].includes(execution.state)).length;
+      task.progress = { completed, total: executions.length };
+      task.entityVersion += 1;
+      return task.entityVersion;
+    };
+  }
 
   const listeners = new Map();
   const make = () => new BullMQTaskBridge({
@@ -159,6 +193,7 @@ function newHarness({ items, supportsSettle = true, withCallback = true, metrics
     },
     runtimeScope: 'reports',
     terminalProjection: 'execution-only',
+    ...(aggregateProgress ? { aggregate: { progress: 'terminal-items', terminal: 'manual' } } : {}),
     onWarning: (warning) => warnings.push(warning),
     ...(withCallback ? { onItemsSettled: (finished) => { settled.push(finished); } } : {}),
     ...(metrics ? { metrics } : {}),
@@ -169,6 +204,7 @@ function newHarness({ items, supportsSettle = true, withCallback = true, metrics
   return {
     bridge, task, executions, settled, warnings,
     get settleCalls() { return state.settleCalls; },
+    get syncCalls() { return state.syncCalls; },
     addBridge: make,
     finish(jobId) { return bridge.project('completed', { jobId }); },
   };

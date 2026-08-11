@@ -106,6 +106,11 @@ These cost an afternoon each when you find them yourself. The example
 4. **Do not drive `queued` or `running` by hand.** The bridge owns them; setting
    them from a route races the projector and loses.
 
+For `terminal-items` aggregation, the bridge performs one final durable
+progress synchronization after settlement succeeds and before invoking
+`onItemsSettled`. The callback can therefore close the Task without leaving a
+finished batch at a stale aggregate such as `49/50`.
+
 ### Which package
 
 | Package | Install from | For |
