@@ -60,10 +60,12 @@ jobs:
         run: npm install --global npm@12
       - run: npm ci
         working-directory: sdks/node
-      # Configure npm trusted publishing for @rhinoq/node before the first tag.
-      # This uses GitHub OIDC instead of storing an npm token in repository secrets.
       - name: Publish scoped SDK with the semver-appropriate dist-tag
         shell: bash
+        env:
+          # Temporary bootstrap token: remove after the first successful
+          # publish, then configure npm Trusted Publishing for this package.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
@@ -88,6 +90,10 @@ jobs:
         run: npm install --global npm@12
       - name: Publish rhinoq alias
         shell: bash
+        env:
+          # Temporary bootstrap token: remove after the first successful
+          # publish, then configure npm Trusted Publishing for this package.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
@@ -113,10 +119,9 @@ jobs:
       - name: Publish scaffolder after its SDK dependency
         shell: bash
         env:
-          # npm requires a package to exist before trusted publishing can be
-          # configured. Set this expiring granular token only for the first
-          # create-rhinoq-app publish, then configure OIDC and delete it.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_CREATE_APP_BOOTSTRAP_TOKEN }}
+          # Temporary bootstrap token: remove after the first successful
+          # publish, then configure npm Trusted Publishing for this package.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
