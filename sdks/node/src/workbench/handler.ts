@@ -182,6 +182,7 @@ export function createWorkbenchHandler(
           signal: request.signal,
           providerOperationsByTask: options.providerOperationsByTask,
           runtimeJobLink: options.runtimeJobLink,
+          runtimeHealth: options.runtimeHealth,
         });
       }
 
@@ -192,12 +193,18 @@ export function createWorkbenchHandler(
           counts[state] = tasks.length;
         }
         counts[ATTENTION_BUCKET] = (await listAttentionTasks(options.tasks, limit)).length;
-        return json({ schemaVersion: 1, states: [...states, ATTENTION_BUCKET], counts, actions, limit });
+        return json({
+          schemaVersion: 1,
+          states: [...states, ATTENTION_BUCKET],
+          counts,
+          actions,
+          limit,
+          runtimeHealth: await inspectRuntimeHealth(options.runtimeHealth),
+        });
       }
 
       if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'runtime-health') {
-        const scopes = await Promise.all((options.runtimeHealth ?? []).slice(0, 50).map((reader) => reader.inspect()));
-        return json({ schemaVersion: 1, scopes: scopes.map(sanitizeRuntimeHealth) });
+        return json({ schemaVersion: 1, scopes: await inspectRuntimeHealth(options.runtimeHealth) });
       }
 
       if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'tasks' && relative.length === 2) {
@@ -361,6 +368,7 @@ interface StreamOptions {
   signal: AbortSignal;
   providerOperationsByTask?: WorkbenchHandlerOptions['providerOperationsByTask'];
   runtimeJobLink?: RuntimeJobLink;
+  runtimeHealth?: readonly RuntimeHealthReader[];
 }
 
 /**
@@ -469,6 +477,7 @@ async function collect(options: StreamOptions): Promise<Record<string, unknown>>
     actions: options.actions,
     counts,
     lists,
+    runtimeHealth: await inspectRuntimeHealth(options.runtimeHealth),
     ...(detail ? { detail } : {}),
   };
 }
@@ -594,4 +603,9 @@ function safeRuntimeLink(link: RuntimeJobLink, externalId: string, runtime?: str
 function sanitizeRuntimeHealth<T extends { dashboardURL?: string }>(health: T): T {
   const dashboardURL = safeOperatorURL(health.dashboardURL);
   return { ...health, ...(dashboardURL ? { dashboardURL } : { dashboardURL: undefined }) };
+}
+
+async function inspectRuntimeHealth(readers: readonly RuntimeHealthReader[] | undefined) {
+  const scopes = await Promise.all((readers ?? []).slice(0, 50).map((reader) => reader.inspect()));
+  return scopes.map(sanitizeRuntimeHealth);
 }

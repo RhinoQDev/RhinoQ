@@ -100,6 +100,8 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.ok(!html.includes('<script src'), 'no external script tags');
   assert.match(html, /Async Flight Recorder/);
   assert.match(html, /Runtime health/);
+  assert.match(html, /snap\?\.runtimeHealth/);
+  assert.ok(!html.includes("fetch(base + '/api/runtime-health'"), 'runtime health must share the Workbench snapshot');
   assert.match(html, /flightPanel/);
   assert.match(html, /let active = 'attention'/);
   assert.match(html, /What this means/);
@@ -122,6 +124,8 @@ test('runtime health is operator-only, bounded and strips unsafe dashboard URLs'
   assert.equal(calls, 50);
   assert.equal(body.scopes.length, 50);
   assert.equal(body.scopes[0].dashboardURL, undefined);
+  const overview = await (await get(handler, '/rhinoq/api/overview')).json();
+  assert.equal(overview.runtimeHealth.length, 50);
 });
 
 test('runtime job links accept only relative and HTTP(S) destinations', async () => {
@@ -320,6 +324,7 @@ test('the stream carries the open Task detail so the item table updates too', as
   const keepAlive = setInterval(() => {}, 25);
   const handler = createWorkbenchHandler({
     tasks: source(), requireOperator: () => true, streamIntervalMs: 20,
+    runtimeHealth: [{ async inspect() { return { schemaVersion: 1, runtime: 'bullmq', scope: 'reports', status: 'healthy', observedAt: '2026-08-11T00:00:00.000Z', queue: { waiting: 0, active: 1, delayed: 0, failed: 0, completed: 2, paused: false }, workers: { observable: true, connected: 1 } }; } }],
   });
   const controller = new AbortController();
   const response = await handler(new Request(
@@ -338,6 +343,7 @@ test('the stream carries the open Task detail so the item table updates too', as
 
   assert.equal(payload.detail.task.id, 'task-1');
   assert.equal(payload.detail.items[0].externalId, 'bull-job-a');
+  assert.equal(payload.runtimeHealth[0].scope, 'reports');
   controller.abort();
   await reader.cancel().catch(() => {});
   clearInterval(keepAlive);

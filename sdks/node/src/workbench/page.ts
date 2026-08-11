@@ -172,7 +172,6 @@ let pollTimer = null;
 let failures = 0;
 let previousRows = new Map();
 let previousItems = new Map();
-let runtimeScopes = [];
 
 const $ = (id) => document.getElementById(id);
 const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
@@ -216,6 +215,7 @@ function renderBuckets() {
 }
 
 function renderRuntimeHealth() {
+  const runtimeScopes = snap?.runtimeHealth || [];
   $('runtimePanel').hidden = runtimeScopes.length === 0;
   $('runtimeHealth').innerHTML = runtimeScopes.map((scope) => {
     const reason = scope.reason === 'waiting_without_workers' ? 'Work is waiting but no worker is connected.' : scope.reason === 'worker_visibility_unavailable' ? 'Worker visibility is unavailable; health is not assumed.' : scope.reason === 'runtime_unreachable' ? 'The queue could not be inspected.' : 'Queue inspection succeeded.';
@@ -223,15 +223,6 @@ function renderRuntimeHealth() {
     const title = scope.dashboardURL ? '<a class="runtime-link" href="' + esc(scope.dashboardURL) + '">' + esc(scope.scope) + ' ↗</a>' : '<strong>' + esc(scope.scope) + '</strong>';
     return '<article class="runtime-card"><div class="top">' + title + '<span class="health-' + esc(scope.status) + '">' + esc(scope.status) + '</span></div><div class="runtime-counts"><span><b>' + scope.queue.waiting + '</b>waiting</span><span><b>' + scope.queue.active + '</b>active</span><span><b>' + workers + '</b>workers</span><span><b>' + scope.queue.delayed + '</b>delayed</span><span><b>' + scope.queue.failed + '</b>failed</span><span><b>' + (scope.queue.paused ? 'yes' : 'no') + '</b>paused</span></div><span class="muted">' + esc(reason) + '</span></article>';
   }).join('');
-}
-
-async function refreshRuntimeHealth() {
-  try {
-    const response = await fetch(base + '/api/runtime-health', { headers: { accept: 'application/json' } });
-    if (!response.ok) return;
-    runtimeScopes = (await response.json()).scopes || [];
-    renderRuntimeHealth();
-  } catch { /* Optional runtime evidence must not hide durable Tasks. */ }
 }
 
 function renderList() {
@@ -323,6 +314,7 @@ function renderFlightRecorder(recorder) {
 function render() {
   if (!snap) return;
   renderBuckets();
+  renderRuntimeHealth();
   renderList();
   renderDetail();
   $('err').hidden = true;
@@ -446,9 +438,6 @@ $('cancelBtn').onclick = async () => {
 
 // Idle labels drift on their own; refresh them without re-reading the store.
 setInterval(() => { if (snap) renderList(); }, 10000);
-void refreshRuntimeHealth();
-setInterval(refreshRuntimeHealth, 10000);
-
 skeleton();
 connect();
 </script>

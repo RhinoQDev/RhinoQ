@@ -5,7 +5,9 @@
 - Added a provider-neutral Runtime Health contract, a bounded read-only BullMQ
   inspector, and an operator-only Workbench overview for queue counts, pause
   state and worker visibility. Added safe optional queue/job deep links while
-  deliberately keeping runtime mutation controls out of RhinoQ.
+  deliberately keeping runtime mutation controls out of RhinoQ. Runtime health,
+  Task buckets and open Task detail now travel in the same authorized
+  SSE/polling snapshot so the interface cannot present disconnected moments.
 - Synchronized release documentation after the verified beta.11 publication
   and added a no-coaching external usability pilot with explicit activation,
   ease and incident-resolution gates.

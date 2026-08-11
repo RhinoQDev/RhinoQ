@@ -3,10 +3,10 @@ import test from 'node:test';
 
 import { RhinoQApp } from '../dist/index.js';
 
-function createApp() {
+function createApp(options = {}) {
   const snapshot = {
     schemaVersion: 1, entityVersion: 2, id: 'task-cancel', type: 'export', ownerId: 'owner-a', state: 'running',
-    cancellation: { status: 'none' }, progress: { completed: 0, total: 1 }, hasResult: false, executions: [],
+    cancellation: { status: 'none' }, progress: { completed: 0, total: 1 }, hasResult: false, executions: options.executions ?? [],
     createdAt: '2026-08-10T00:00:00.000Z', updatedAt: '2026-08-10T00:00:01.000Z',
   };
   const tasks = {
@@ -18,7 +18,7 @@ function createApp() {
       return { ...snapshot, id };
     },
     async listTaskExecutionRuntimeRefs(taskId) {
-      return { schemaVersion: 1, entityVersion: 2, taskId, executions: [] };
+      return { schemaVersion: 1, entityVersion: 2, taskId, executions: options.runtimeRefs ?? [] };
     },
     async requestTaskCancellation(id) {
       this.cancelled = id;
@@ -35,6 +35,7 @@ function createApp() {
     queue: { async getJob() { return undefined; } },
     observe: async () => undefined,
     ownerFromRequest: () => 'owner-a',
+    runtimeHealth: options.runtimeHealth ?? [],
   }) };
 }
 
@@ -121,4 +122,31 @@ test('app.http exposes the complete default user and operator journey from one m
 
 test('app.http refuses to expose the cross-owner Workbench without a token', () => {
   assert.throws(() => createApp().app.http({ operatorToken: '' }), /operatorToken/);
+});
+
+test('app.http connects runtime evidence and job links through the authenticated operator journey', async () => {
+  const { app } = createApp({
+    runtimeHealth: [{ async inspect() {
+      return { schemaVersion: 1, runtime: 'bullmq', scope: 'reports', status: 'degraded', observedAt: '2026-08-11T00:00:00.000Z', queue: { waiting: 2, active: 0, delayed: 0, failed: 0, completed: 4, paused: false }, workers: { observable: true, connected: 0 }, reason: 'waiting_without_workers' };
+    } }],
+    runtimeRefs: [{ executionId: 'task-cancel:run', runtime: 'bullmq', runtimeScope: 'reports', externalId: 'job-7', state: 'running' }],
+    executions: [{ id: 'task-cancel:run', runtime: 'bullmq', runtimeScope: 'reports', state: 'running', attempt: 1, version: 1, hasResult: false }],
+  });
+  const middleware = app.http({
+    operatorToken: 'ops-secret',
+    runtimeDashboardURL: '/queues/reports',
+    runtimeJobLink: ({ scope, externalId }) => `/queues/${scope}/jobs/${externalId}`,
+  });
+  const headers = { 'x-operator-token': 'ops-secret' };
+
+  const overview = JSON.parse((await invoke(middleware, '/admin/api/overview', headers)).body);
+  assert.equal(overview.runtimeHealth[0].scope, 'reports');
+  assert.equal(overview.runtimeHealth[0].status, 'degraded');
+
+  const detail = JSON.parse((await invoke(middleware, '/admin/api/tasks/task-cancel', headers)).body);
+  assert.equal(detail.items[0].runtimeURL, '/queues/reports/jobs/job-7');
+
+  const forbidden = await invoke(middleware, '/admin/api/runtime-health');
+  assert.equal(forbidden.status, 403);
+  assert.ok(!forbidden.body.includes('reports'));
 });
