@@ -404,6 +404,10 @@ links to an owner-facing `/task-center/{taskId}` detail with plain-language
 guidance and an attempt timeline; runtime job identity remains operator-only.
 The default integration connects Overview, Tasks and Workbench in one same-tab
 product shell instead of presenting three isolated pages.
+Both embedded surfaces share a responsive light/dark visual system and product
+navigation, while preserving different information density: Task Center uses
+plain-language cards for end users; Workbench uses compact evidence tables and
+an operator-first attention hierarchy.
 
 The embedded Node Workbench also shows a read-only **Runtime health** card when
 the supplied BullMQ Queue supports `getJobCounts()`. It reports bounded queue

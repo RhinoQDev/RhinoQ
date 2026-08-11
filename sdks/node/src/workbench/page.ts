@@ -120,6 +120,45 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   .timeline .event-state { color: var(--muted); }.timeline .event-time { color: var(--muted); font: 12px ui-monospace, monospace; }
   .timeline .event-message { grid-column: 2 / -1; color: var(--muted); }
   @media (max-width: 700px) { .timeline li { grid-template-columns: 1fr; gap: 3px; } .timeline .event-message { grid-column: auto; } }
+
+  /* RhinoQ mineral console: one visual system with Task Center, tuned denser
+     here because operators compare evidence rather than scan a consumer feed. */
+  :root {
+    --bg:#f4f5f2;--panel:#fcfdfa;--raised:#fff;--line:#d9ddd7;--ink:#18201d;
+    --muted:#66706b;--accent:#176b55;--accent-soft:#e3f2ec;--warn:#9a6200;
+    --warn-soft:#fff3d6;--bad:#a53b36;--bad-soft:#fbe9e7;--shadow:0 16px 40px rgba(28,42,36,.07);
+  }
+  @media (prefers-color-scheme:dark){:root{--bg:#111713;--panel:#171e1a;--raised:#1b231f;--line:#303b35;--ink:#eef4f0;--muted:#9eaaa4;--accent:#74d1b4;--accent-soft:#183b30;--warn:#efbd62;--warn-soft:#3b2d14;--bad:#f08b83;--bad-soft:#40221f;--shadow:0 20px 50px rgba(0,0,0,.25)}}
+  body{min-height:100vh;background:var(--bg)}
+  body>header{position:sticky;top:0;z-index:20;padding:12px max(20px,calc((100vw - 1240px)/2));align-items:center;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(16px);border-color:var(--line)}
+  body>header h1 a{font-size:17px;font-weight:780;letter-spacing:-.035em}
+  body>header nav{padding-left:8px;border-left:1px solid var(--line)}
+  body>header nav strong{padding:5px 9px;border-radius:7px;background:var(--accent-soft);color:var(--accent)}
+  main{max-width:1240px;width:100%;margin:0 auto;padding:28px 24px 64px;gap:18px}
+  .workspace-intro{display:flex;justify-content:space-between;align-items:end;gap:24px;padding:8px 2px 4px}
+  .workspace-intro .eyebrow{margin:0 0 5px;color:var(--accent);font-size:11px;font-weight:760;letter-spacing:.11em;text-transform:uppercase}
+  .workspace-intro h2{margin:0;font-size:clamp(25px,3vw,36px);line-height:1.12;letter-spacing:-.045em}
+  .workspace-intro p:last-child{max-width:560px;margin:8px 0 0;color:var(--muted);font-size:14px}
+  .panel{border-color:var(--line);border-radius:12px;background:var(--panel);box-shadow:0 1px 0 rgba(20,30,25,.03)}
+  .head{min-height:48px;padding:12px 16px;background:color-mix(in srgb,var(--raised) 75%,transparent)}
+  .head strong{font-size:14px;letter-spacing:-.01em}.head .muted{font-size:12px}
+  .buckets{display:grid;grid-template-columns:repeat(7,minmax(110px,1fr));gap:8px}
+  .bucket{min-width:0;padding:13px 14px;border-color:var(--line);border-radius:10px;background:var(--panel);transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}
+  .bucket:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--accent) 45%,var(--line));box-shadow:0 8px 18px rgba(25,50,40,.06)}
+  .bucket[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent)}
+  .bucket b{font-size:24px;letter-spacing:-.04em}.bucket span{font-size:12px;text-transform:capitalize}
+  .runtime-grid{gap:12px;padding:14px}.runtime-card{border-color:var(--line);border-radius:10px;padding:14px;background:var(--raised)}
+  .runtime-card .top>span{font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}
+  .runtime-counts{gap:8px}.runtime-counts span{padding:7px 8px;border-radius:7px;background:var(--bg)}
+  th,td{padding:10px 14px}th{background:color-mix(in srgb,var(--bg) 70%,transparent);font-size:10px;letter-spacing:.09em}
+  tbody tr[data-id]{transition:background .12s ease}tbody tr[data-id]:hover{background:var(--accent-soft)}
+  code{padding:2px 5px;border-radius:4px;background:color-mix(in srgb,var(--bg) 75%,transparent)}
+  .guidance{margin:14px;padding:15px 16px;border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);border-radius:9px;background:var(--accent-soft)}
+  .attention{border-radius:0 8px 8px 0;background:var(--warn-soft)}.attention.error{background:var(--bad-soft)}
+  .timeline{padding:16px 20px;gap:14px}.timeline li{border-left-color:color-mix(in srgb,var(--accent) 42%,var(--line));padding-left:15px}
+  button:focus-visible,a:focus-visible,[data-id]:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 38%,transparent);outline-offset:2px}
+  @media(max-width:980px){.buckets{grid-template-columns:repeat(4,1fr)}}
+  @media(max-width:700px){body>header{padding:11px 14px}.workspace-intro{align-items:start;flex-direction:column}.buckets{display:flex;overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}.bucket{min-width:116px}main{padding:20px 12px 48px}.head{align-items:flex-start;flex-wrap:wrap}.runtime-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -133,6 +172,9 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
 </header>
 <div class="err" id="err" hidden></div>
 <main>
+  <section class="workspace-intro" aria-labelledby="workbenchTitle">
+    <div><p class="eyebrow">Operator workspace</p><h2 id="workbenchTitle">Async work, explained.</h2><p>Find what needs attention, follow every attempt, and move from runtime evidence to a safe next action.</p></div>
+  </section>
   <section class="panel" id="runtimePanel" hidden>
     <div class="head"><strong>Runtime health</strong><span class="muted">read-only evidence from the connected job runtime</span></div>
     <div class="runtime-grid" id="runtimeHealth"></div>

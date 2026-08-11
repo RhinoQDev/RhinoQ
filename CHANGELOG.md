@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Refreshed the embedded Task Center and Node Workbench with one responsive
+  mineral/ink visual system, clearer page and section hierarchy, denser
+  operator tables, calmer user-facing Task cards, consistent status language,
+  visible keyboard focus and polished light/dark modes. Their authorization,
+  payload boundaries and server contracts are unchanged.
 - Fixed `PostgresProjectorLease` handling for an asynchronously terminated
   checked-out `pg` client. The lease now consumes the client `error` event,
   invalidates ownership immediately and destroys the broken session instead

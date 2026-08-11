@@ -21,6 +21,10 @@ test('Task Center page is self-contained and points at the owner API', () => {
   assert.match(page, /function progressText/);
   assert.match(page, /New async work will appear here automatically/);
   assert.match(page, /Search tasks/);
+  assert.match(page, /Background activity/);
+  assert.match(page, /--rq-accent/);
+  assert.match(page, /rhinoq-intro/);
+  assert.match(page, /focus-visible/);
   assert.match(page, /Needs attention/);
   assert.match(page, /Recently updated/);
   assert.match(page, /function visibleTasks/);
