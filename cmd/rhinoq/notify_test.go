@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,15 @@ import (
 	"strings"
 	"testing"
 )
+
+func testNotifySecret(t *testing.T) string {
+	t.Helper()
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		t.Fatalf("generate test notification secret: %v", err)
+	}
+	return hex.EncodeToString(bytes)
+}
 
 func notifyEnv(t *testing.T, values map[string]string) func(string) string {
 	t.Helper()
@@ -31,7 +41,7 @@ func notifyEnv(t *testing.T, values map[string]string) func(string) string {
 // have to line up at the far end. This exercises exactly that, and the receiver
 // verifies the HMAC rather than merely accepting the request.
 func TestNotifyTestDeliversASignedEventAReceiverCanVerify(t *testing.T) {
-	const secret = "0123456789abcdef"
+	secret := testNotifySecret(t)
 	var body []byte
 	var signature, eventID string
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,7 +88,7 @@ func TestNotifyTestDeliversASignedEventAReceiverCanVerify(t *testing.T) {
 // The registry is meant to be safe to leave on disk and even to commit. That is
 // only true if the secret genuinely never reaches it.
 func TestNotifyRegistryNeverStoresTheSecret(t *testing.T) {
-	const secret = "super-secret-value"
+	secret := testNotifySecret(t)
 	registryPath := filepath.Join(t.TempDir(), "notifications.json")
 	getenv := func(key string) string {
 		switch key {

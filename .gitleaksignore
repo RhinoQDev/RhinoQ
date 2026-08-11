@@ -1,0 +1,4 @@
+# Historical deterministic test fixture; the current test generates its
+# secret at runtime. Keep this exact fingerprint ignored without weakening
+# detection for the file, rule, or future commits.
+bb2a02e7b81dbdb9aab5cd9199801c2b3125c4c6:cmd/rhinoq/notify_test.go:generic-api-key:34
