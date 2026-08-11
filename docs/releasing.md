@@ -21,21 +21,20 @@ is an installation pointer, not a stability claim.
 
 In npm package settings, configure trusted publishing for repository
 `madebyduy/RhinoQ` and workflow `release.yml` for `@rhinoq/node` and `rhinoq`.
-The workflow prefers this GitHub OIDC path, and npm generates provenance
-automatically for trusted publishes. If the configuration is not ready for a
-recovery run, an expiring granular token may be stored temporarily as
-`NPM_BOOTSTRAP_TOKEN`; the two jobs use it only when that secret is present and
-still publish with provenance. Delete and revoke it after the first successful
-run. Do not add a long-lived `NPM_TOKEN`.
+The workflow uses this GitHub OIDC path exclusively for those two packages;
+npm generates provenance automatically for trusted publishes. Remove the
+`NPM_BOOTSTRAP_TOKEN` GitHub secret before retrying the release. A normal
+granular token without 2FA bypass cannot work in a non-interactive runner: npm
+will stop with `EOTP` and wait for a one-time password.
 
 The first publication of `create-rhinoq-app` is the one exception: npm requires
 a package to exist before trusted publishing can be configured. Create an
-expiring granular token with publish permission and store it temporarily as
-`NPM_CREATE_APP_BOOTSTRAP_TOKEN`. The workflow uses it only when the secret is
-present and publishes with `--provenance`. Immediately after the first
-successful release, configure the trusted publisher for `create-rhinoq-app`,
-delete the secret and revoke the token. Future releases authenticate with OIDC
-like the other two packages.
+expiring granular write token with **2FA bypass enabled** and store it
+temporarily as `NPM_CREATE_APP_BOOTSTRAP_TOKEN`. The workflow uses it only if
+the package does not exist yet. Immediately after the first successful
+publication, configure the trusted publisher for `create-rhinoq-app`, delete
+the secret and revoke the token. If the package already exists, the workflow
+always uses OIDC and ignores that secret.
 
 Protect the `v*` tag rule so a reviewed maintainer creates release tags.
 

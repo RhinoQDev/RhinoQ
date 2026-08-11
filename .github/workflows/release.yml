@@ -66,22 +66,14 @@ jobs:
         working-directory: sdks/node
       - name: Publish scoped SDK with the semver-appropriate dist-tag
         shell: bash
-        env:
-          # Optional one-time fallback while npm Trusted Publishing is being
-          # configured. Delete this secret after the first successful publish.
-          NPM_BOOTSTRAP_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
           [[ "$version" == *-* ]] && tag=next
-          if [[ -n "${NPM_BOOTSTRAP_TOKEN:-}" ]]; then
-            NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN" \
-              npm publish --provenance --access public --tag "$tag"
-          else
-            # npm Trusted Publishing authenticates this publish with the job's
-            # GitHub OIDC identity. No long-lived npm token is needed here.
-            npm publish --access public --tag "$tag"
-          fi
+          # npm Trusted Publishing authenticates this publish with the job's
+          # GitHub OIDC identity. Do not fall back to a token: a token without
+          # the npm 2FA-bypass capability stops the runner at an OTP prompt.
+          npm publish --access public --tag "$tag"
         working-directory: sdks/node
 
   node-publish-alias:
@@ -102,22 +94,14 @@ jobs:
         run: npm install --global npm@12
       - name: Publish rhinoq alias
         shell: bash
-        env:
-          # Optional one-time fallback while npm Trusted Publishing is being
-          # configured. Delete this secret after the first successful publish.
-          NPM_BOOTSTRAP_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
           [[ "$version" == *-* ]] && tag=next
-          if [[ -n "${NPM_BOOTSTRAP_TOKEN:-}" ]]; then
-            NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN" \
-              npm publish --provenance --access public --tag "$tag"
-          else
-            # npm Trusted Publishing authenticates this publish with the job's
-            # GitHub OIDC identity. No long-lived npm token is needed here.
-            npm publish --access public --tag "$tag"
-          fi
+          # npm Trusted Publishing authenticates this publish with the job's
+          # GitHub OIDC identity. Do not fall back to a token: a token without
+          # the npm 2FA-bypass capability stops the runner at an OTP prompt.
+          npm publish --access public --tag "$tag"
         working-directory: sdks/rhinoq
 
   create-app-publish:
@@ -139,19 +123,25 @@ jobs:
       - name: Publish scaffolder after its SDK dependency
         shell: bash
         env:
-          # npm cannot configure a trusted publisher until this package exists.
-          # Keep this expiring token only for that first publication, then
-          # delete the secret and let the OIDC branch below take over.
+          # Used only if the package does not exist yet; then configure its
+          # trusted publisher and delete this secret immediately afterwards.
           NPM_CREATE_APP_BOOTSTRAP_TOKEN: ${{ secrets.NPM_CREATE_APP_BOOTSTRAP_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           tag=latest
           [[ "$version" == *-* ]] && tag=next
-          if [[ -n "${NPM_CREATE_APP_BOOTSTRAP_TOKEN:-}" ]]; then
+          if npm view create-rhinoq-app name >/dev/null 2>&1; then
+            # The package already exists, so use OIDC and never trigger an
+            # interactive OTP challenge from a stale bootstrap token.
+            npm publish --access public --tag "$tag"
+          elif [[ -n "${NPM_CREATE_APP_BOOTSTRAP_TOKEN:-}" ]]; then
+            # This token must be a granular write token with 2FA bypass
+            # enabled; otherwise npm returns EOTP in a non-interactive runner.
             NODE_AUTH_TOKEN="$NPM_CREATE_APP_BOOTSTRAP_TOKEN" \
               npm publish --provenance --access public --tag "$tag"
           else
-            npm publish --access public --tag "$tag"
+            echo "create-rhinoq-app is not on npm; set NPM_CREATE_APP_BOOTSTRAP_TOKEN or configure the package first"
+            exit 1
           fi
         working-directory: sdks/create-rhinoq-app
 

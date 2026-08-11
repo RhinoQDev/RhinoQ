@@ -29,31 +29,25 @@ for (const [name, job] of [
   if (!job.includes('id-token: write')) {
     throw new Error(`${name} must have GitHub OIDC permission`);
   }
-  if (!job.includes('NPM_BOOTSTRAP_TOKEN')) {
-    throw new Error(`${name} must expose the optional bootstrap fallback`);
-  }
-  if (!job.includes('if [[ -n "${NPM_BOOTSTRAP_TOKEN:-}" ]]')) {
-    throw new Error(`${name} must make bootstrap authentication conditional`);
-  }
-  if (!job.includes('NODE_AUTH_TOKEN="$NPM_BOOTSTRAP_TOKEN"')) {
-    throw new Error(`${name} must pass the bootstrap token only to npm publish`);
+  if (/NODE_AUTH_TOKEN|NPM_BOOTSTRAP_TOKEN/.test(job)) {
+    throw new Error(`${name} must use OIDC and must not read a bootstrap token`);
   }
   if (!job.includes('npm publish --access public --tag "$tag"')) {
     throw new Error(`${name} must publish through the OIDC path`);
-  }
-  if (!job.includes('npm publish --provenance --access public --tag "$tag"')) {
-    throw new Error(`${name} must preserve provenance for bootstrap publication`);
   }
 }
 
 if (!createAppPublish.includes('NPM_CREATE_APP_BOOTSTRAP_TOKEN')) {
   throw new Error('create-app-publish must isolate its first-publication token');
 }
+if (!createAppPublish.includes('npm view create-rhinoq-app name')) {
+  throw new Error('create-app-publish must use OIDC after the package exists');
+}
 if (!createAppPublish.includes('npm publish --provenance --access public --tag "$tag"')) {
   throw new Error('create-app-publish must preserve provenance for bootstrap publication');
 }
-if (!createAppPublish.includes('npm publish --access public --tag "$tag"')) {
-  throw new Error('create-app-publish must support OIDC after bootstrap-token removal');
+if (!createAppPublish.includes('NPM_CREATE_APP_BOOTSTRAP_TOKEN:-')) {
+  throw new Error('create-app-publish must fail clearly when first-publication auth is missing');
 }
 
 console.log('PASS release workflow npm authentication contract');

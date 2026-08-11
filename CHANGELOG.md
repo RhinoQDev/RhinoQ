@@ -3,9 +3,10 @@
 ## Unreleased
 
 - Fixed the npm release workflow so `@rhinoq/node` and `rhinoq` prefer GitHub
-  OIDC trusted publishing, with a temporary provenance-enabled bootstrap
-  fallback, while `create-rhinoq-app` keeps its bootstrap token isolated to
-  the first publication. Added a release-workflow regression check.
+  OIDC trusted publishing and never fall back to a token that can trigger an
+  interactive OTP challenge. `create-rhinoq-app` uses a 2FA-bypass bootstrap
+  token only before its first publication. Added a release-workflow regression
+  check.
 - Added Task schema v10 durable notification outbox with lease-based claim,
   complete and retry/failure transitions; custom delivery callbacks remain
   optional and application-owned.
