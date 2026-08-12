@@ -255,6 +255,9 @@ test('Shadow Mode reports work it could not identify without inventing a Task', 
   const report = await rhino.adoptionReport();
   assert.equal(report.unboundEvents, 1);
   assert.equal(report.unresolvedEvents, 1);
+  assert.equal(report.checklist.find((item) => item.id === 'runtime_identity').status, 'required');
+  assert.match(report.checklist.find((item) => item.id === 'business_verifier').nextAction, /verifier/);
+  assert.equal(report.checklist.find((item) => item.id === 'durable_reporting').status, 'required');
   assert.equal(report.tasksBound, 0);
   await assert.rejects(client.getTask('task-1'), /RHINOQ_TASK_NOT_FOUND/);
 });

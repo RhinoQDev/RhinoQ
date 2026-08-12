@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "scope": "local deterministic and opt-in integration evidence; not a production deployment claim",
+  "scenarios": [
+    { "id": "sse-loss-polling-fallback", "file": "test/task-sse.test.mjs", "marker": "falls back to an authoritative snapshot after SSE loss" },
+    { "id": "stale-snapshot-reordering", "file": "test/task-store-fault.test.mjs", "marker": "randomized duplicates and reordering" },
+    { "id": "duplicate-event-convergence", "file": "test/bullmq-bridge-scope.test.mjs", "marker": "project the same event twice but transition the Task once" },
+    { "id": "stream-capacity-release", "file": "test/task-sse.test.mjs", "marker": "bounded connection budget and releases it on cancel" },
+    { "id": "unauthorized-sse-no-enumeration", "file": "test/task-sse.test.mjs", "marker": "authenticates before opening and does not enumerate" },
+    { "id": "provider-timeout-uncertain", "file": "test/provider-repair.test.mjs", "marker": "never repeats an uncertain mutation" },
+    { "id": "lost-repair-response-uncertain", "file": "test/recovery-sqs-adoption.test.mjs", "marker": "consumes a lost execute response as uncertain" },
+    { "id": "dispatch-bind-loss-no-redispatch", "file": "test/runtime-integration.test.mjs", "marker": "committed runtime dispatch with failed binding is uncertain" },
+    { "id": "unsupported-cancel-zero-mutation", "file": "test/task-http.test.mjs", "marker": "refused before any Task read or mutation" },
+    { "id": "runtime-unknown-fail-closed", "file": "test/runtime-integration.test.mjs", "marker": "uncertain runtime result fails closed" },
+    { "id": "runtime-health-secret-redaction", "file": "test/runtime-health.test.mjs", "marker": "without leaking their message" },
+    { "id": "operator-secret-html-redaction", "file": "test/quickstart-http.test.mjs", "marker": "never embed operator tokens or private result references" },
+    { "id": "owner-tenant-isolation-postgres", "file": "test/postgres.integration.test.mjs", "marker": "tenant-b-task" },
+    { "id": "postgres-lost-ack-retry-outbox", "file": "test/real-retry-fault.test.mjs", "marker": "survives lost HTTP acknowledgement" },
+    { "id": "projector-session-loss", "file": "test/projector-lease.test.mjs", "marker": "broken connection is not returned to the pool" }
+  ]
+}

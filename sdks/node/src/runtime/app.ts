@@ -38,8 +38,11 @@ export interface RhinoQAppHTTPOptions {
   overviewPath?: string;
   workbenchPath?: string;
   retryTask?: NodeTaskMiddlewareOptions['retryTask'];
+  cancelTask?: NodeTaskMiddlewareOptions['cancelTask'];
   resolveResult?: NodeTaskMiddlewareOptions['resolveResult'];
   resolveArtifact?: NodeTaskMiddlewareOptions['resolveArtifact'];
+  authorize?: NodeTaskMiddlewareOptions['authorize'];
+  requireTenantAuthorization?: NodeTaskMiddlewareOptions['requireTenantAuthorization'];
   riskPolicy?: NodeTaskMiddlewareOptions['riskPolicy'];
   providerOperationsByTask?: WorkbenchHandlerOptions['providerOperationsByTask'];
   runtimeJobLink?: WorkbenchHandlerOptions['runtimeJobLink'];
@@ -78,8 +81,17 @@ export class RhinoQPortableApp {
       tasks: this.tasks, basePath: '/tasks', origin: options.origin,
       ...this.identity,
       ...(options.retryTask ? { retryTask: options.retryTask } : {}),
+      ...(options.cancelTask ? { cancelTask: options.cancelTask } : {}),
+      // A runtime capability alone is insufficient: the owner endpoint still
+      // needs an application composition that selects refs and handles every
+      // outcome. Without that hook the honest product capability is false.
+      cancel: Boolean(options.cancelTask),
       ...(options.resolveResult ? { resolveResult: options.resolveResult } : {}),
       ...(options.resolveArtifact ? { resolveArtifact: options.resolveArtifact } : {}),
+      ...(options.authorize ? { authorize: options.authorize } : {}),
+      ...(options.requireTenantAuthorization !== undefined
+        ? { requireTenantAuthorization: options.requireTenantAuthorization }
+        : {}),
       ...(options.riskPolicy ? { riskPolicy: options.riskPolicy } : {}),
     });
     const workbench = createNodeWorkbenchMiddleware({

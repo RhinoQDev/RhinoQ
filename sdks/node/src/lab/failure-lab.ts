@@ -8,6 +8,8 @@ export type FailureLabScenario = 'completed-but-missing-output';
 export interface FailureLabResult {
   schemaVersion: 1;
   scenario: FailureLabScenario;
+  proofScope: 'simulated_workflow_only';
+  externalProviderCalled: false;
   task: TaskSnapshot;
   explanation: {
     summary: string;
@@ -25,6 +27,8 @@ export interface FailureLabResult {
 export interface FailureLabRecoveryResult {
   schemaVersion: 1;
   scenario: FailureLabScenario;
+  proofScope: 'simulated_workflow_only';
+  externalProviderCalled: false;
   stages: readonly ['break', 'detect', 'explain', 'preview', 'repair', 'recheck', 'verified'];
   recovery: GuardedRecoveryResult;
   task: TaskSnapshot;
@@ -72,6 +76,8 @@ export async function runFailureLab(
   return {
     schemaVersion: 1,
     scenario,
+    proofScope: 'simulated_workflow_only',
+    externalProviderCalled: false,
     task,
     explanation: {
       summary: 'The runtime completed the work, but RhinoQ has no output evidence.',
@@ -161,8 +167,14 @@ export async function recoverFailureLab(
   const recovered = await client.getTask(taskId);
   return {
     schemaVersion: 1, scenario: 'completed-but-missing-output',
+    proofScope: 'simulated_workflow_only', externalProviderCalled: false,
     stages: ['break', 'detect', 'explain', 'preview', 'repair', 'recheck', 'verified'],
     recovery: result, task: recovered,
-    incidentSummary: JSON.stringify({ taskId, before: 'uncertain/no-output', after: `${recovered.state}/output-recorded`, repairId: result.repairId }),
+    incidentSummary: JSON.stringify({
+      taskId, before: 'uncertain/no-output', after: `${recovered.state}/output-recorded`,
+      workflowVerified: true, providerOutcomeVerified: false,
+      proofScope: 'simulated_workflow_only', externalProviderCalled: false,
+      repairId: result.repairId,
+    }),
   };
 }

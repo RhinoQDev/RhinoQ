@@ -23,6 +23,7 @@ export * from './runtime/integration.js';
 export * from './runtime/app.js';
 export * from './runtime/testkit.js';
 export * from './runtime/adoption.js';
+export * from './runtime/identity.js';
 export * from './recovery/guarded.js';
 export * from './lab/failure-lab.js';
 export * from './bullmq/runtime-inspector.js';

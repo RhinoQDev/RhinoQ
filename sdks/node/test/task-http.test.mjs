@@ -266,6 +266,14 @@ test('application Task retry is owner-scoped and command-identified', async () =
 
   const missing = await handler(new Request('http://app.test/tasks/task-9/retry', { method: 'POST', body: JSON.stringify({ expectedVersion: 9 }) }));
   assert.equal(missing.status, 400);
+  assert.deepEqual(await missing.json(), {
+    code: 'RHINOQ_INVALID_REQUEST',
+    message: 'expectedVersion must be a positive integer and commandId must be a non-empty string.',
+    field: 'commandId', retryable: false,
+    expectedShape: { expectedVersion: 7, commandId: 'task-123-retry-7' },
+    nextAction: 'Read the latest Task entityVersion and create a stable commandId for this retry intent.',
+    docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
+  });
   const conflict = await handler(new Request('http://app.test/tasks/task-9/retry', { method: 'POST', body: JSON.stringify({ expectedVersion: 8, commandId: 'retry-command-8' }) }));
   assert.equal(conflict.status, 409);
 });
@@ -303,6 +311,60 @@ test('runtime-aware cancellation verifies ownership before handing work to the r
   }));
   assert.equal(denied.status, 404);
   assert.equal(seen.some((entry) => entry.startsWith('cancel:owner-b')), false);
+});
+
+test('unsupported cancellation is advertised and refused before any Task read or mutation', async () => {
+  let touched = false;
+  const handler = createTaskRequestHandler({
+    tasks: new Proxy({}, { get() { touched = true; throw new Error('Task store must not be touched'); } }),
+    ownerFromRequest: () => 'owner-a',
+    cancel: false,
+  });
+  const capabilities = await (await handler(new Request('http://app.test/tasks/_capabilities'))).json();
+  assert.equal(capabilities.cancel, false);
+
+  const response = await handler(new Request('http://app.test/tasks/task-1/cancel', {
+    method: 'POST', body: JSON.stringify({ expectedVersion: 7 }),
+  }));
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    code: 'RHINOQ_UNSUPPORTED',
+    message: 'Cancellation is not configured for this owner API; no Task state was changed.',
+    field: 'action', retryable: false,
+    nextAction: 'Configure app.http({ cancelTask }) or open the runtime tool if it offers a safe cancellation workflow.',
+    docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
+  });
+  assert.equal(touched, false);
+});
+
+test('invalid cancellation fence explains the field, shape and next action', async () => {
+  const handler = createTaskRequestHandler({ tasks: {}, ownerFromRequest: () => 'owner-a' });
+  const response = await handler(new Request('http://app.test/tasks/task-1/cancel', {
+    method: 'POST', body: JSON.stringify({ expectedVersion: 0 }),
+  }));
+  assert.equal(response.status, 400);
+  const error = await response.json();
+  assert.equal(error.code, 'RHINOQ_INVALID_REQUEST');
+  assert.equal(error.field, 'expectedVersion');
+  assert.deepEqual(error.expectedShape, { expectedVersion: 7 });
+  assert.match(error.nextAction, /omit expectedVersion/);
+});
+
+test('browser client preserves structured mutation guidance', async () => {
+  const handler = createTaskRequestHandler({ tasks: {}, ownerFromRequest: () => 'owner-a', cancel: false });
+  const client = new ApplicationTaskClient({
+    url: 'http://app.test/tasks', fetch: (input, init) => handler(new Request(input, init)),
+  });
+  await assert.rejects(client.cancelTask('task-1', 7), (error) => {
+    assert.ok(error instanceof RhinoQError);
+    assert.equal(error.code, 'RHINOQ_UNSUPPORTED');
+    assert.equal(error.status, 409);
+    assert.equal(error.retryable, false);
+    assert.equal(error.field, 'action');
+    assert.match(error.nextAction, /cancelTask/);
+    assert.match(error.docs, /task-api\.md#cancel-a-task/);
+    return true;
+  });
 });
 
 test('application Task handler returns non-enumerating owner misses', async () => {

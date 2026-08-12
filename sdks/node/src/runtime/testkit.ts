@@ -1,13 +1,44 @@
 import type { RuntimeAdapter, RuntimeHealth, RuntimeObservation, RuntimeRef } from './contracts.js';
 import {
-  validateRuntimeAdapter, validateRuntimeObservation, validateRuntimeRef,
+  validateRuntimeAdapter, validateRuntimeEvent, validateRuntimeObservation, validateRuntimeRef,
 } from './contracts.js';
+import type { RuntimeEvent } from './contracts.js';
 
 export interface RuntimeAdapterContractResult {
   adapter: string;
   checks: string[];
   observation?: RuntimeObservation;
   health?: RuntimeHealth;
+}
+
+export interface RuntimeParityResult { adapters: string[]; fixture: string; checks: string[] }
+
+/**
+ * Public parity fixture for adapter authors. Each adapter maps the same neutral
+ * facts; provider-only differences belong in capabilities, never Task meaning.
+ */
+export function checkRuntimeEventParity(
+  adapters: Array<{ name: string; map(fixture: readonly RuntimeEvent[]): readonly RuntimeEvent[] }>,
+  fixture: readonly RuntimeEvent[],
+): RuntimeParityResult {
+  if (adapters.length < 2) throw new TypeError('runtime parity requires at least two adapters');
+  const expected = canonical(fixture.map(validateRuntimeEvent));
+  for (const adapter of adapters) {
+    if (!adapter.name?.trim() || typeof adapter.map !== 'function') throw new TypeError('runtime parity adapter requires name and map');
+    const actual = canonical([...adapter.map(fixture)].map(validateRuntimeEvent));
+    if (actual !== expected) throw new TypeError(`runtime parity mismatch for ${adapter.name}: lifecycle semantics differ from the shared fixture`);
+  }
+  return { adapters: adapters.map((adapter) => adapter.name), fixture: expected, checks: ['state', 'attempt', 'progress', 'result', 'uncertainty'] };
+}
+
+function canonical(events: readonly RuntimeEvent[]): string {
+  return JSON.stringify(events.map((event) => ({
+    type: event.type, attempt: event.attempt,
+    ...('progress' in event ? { progress: event.progress } : {}),
+    ...('resultReference' in event ? { resultReference: event.resultReference } : {}),
+    ...('reason' in event ? { reason: event.reason } : {}),
+    ...('terminal' in event ? { terminal: event.terminal } : {}),
+  })));
 }
 
 /**

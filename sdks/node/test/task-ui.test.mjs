@@ -12,6 +12,14 @@ test('task UI model exposes safe actions and attention states', () => {
   assert.equal(taskUIModel(task('failed', { executionCounts: { pending: 0, running: 0, succeeded: 2, failed: 1, cancelled: 0, uncertain: 0 } })).attention.kind, 'partial_failure');
 });
 
+test('task UI distinguishes recorded result and unconfigured business verification', () => {
+  const model = taskUIModel(task('succeeded', { hasResult: true }));
+  assert.deepEqual(model.result, { recorded: true, availability: 'not_configured' });
+  assert.deepEqual(model.verification, { status: 'not_configured' });
+  const verified = taskUIModel(task('succeeded', { hasResult: true, verifications: [{ status: 'verified' }] }));
+  assert.deepEqual(verified.verification, { status: 'verified' });
+});
+
 test('task explanations answer status, meaning and next action without runtime jargon', () => {
   for (const state of ['pending', 'queued', 'running', 'cancel_requested', 'cancelled', 'failed', 'uncertain', 'succeeded']) {
     const explanation = explainTask(task(state));

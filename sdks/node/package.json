@@ -52,6 +52,7 @@
       "import": "./dist/server.js",
       "require": "./dist/cjs/server.js"
     },
+    "./openapi.json": "./dist/openapi.json",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -73,7 +74,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/mark-cjs.mjs && node scripts/build-info.mjs",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json && node scripts/mark-cjs.mjs && node scripts/build-contracts.mjs && node scripts/build-info.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.mjs test/*.test.cjs",
     "benchmark": "npm run build && node bench/task-benchmark.mjs",
@@ -82,6 +83,8 @@
     "pack": "node scripts/pack.mjs",
     "pack:check": "npm pack --dry-run",
     "verify:installed": "node scripts/verify-installed.mjs",
+    "contract:check": "node scripts/build-contracts.mjs --check",
+    "fault:check": "node scripts/verify-fault-matrix.mjs",
     "release:check": "node scripts/verify-release.mjs"
   },
   "devDependencies": {

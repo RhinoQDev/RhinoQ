@@ -2,6 +2,8 @@
 
 This is the unscoped npm distribution alias for `@rhinoq/node`.
 
+Latest verified npm prerelease: `v0.1.0-beta.12`.
+
 ```bash
 npm install rhinoq pg
 npx rhinoq init

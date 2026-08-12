@@ -56,6 +56,15 @@ export interface ShadowAdoptionReport {
   guaranteeGaps: string[];
   /** Number of distinct replicas that contributed durable facts, when enabled. */
   replicas?: number;
+  checklist: AdoptionChecklistItem[];
+}
+
+export interface AdoptionChecklistItem {
+  id: 'runtime_identity' | 'owner_identity' | 'tenant_identity' | 'result_resolver' |
+    'business_verifier' | 'cancellation' | 'reconciliation' | 'durable_reporting';
+  status: 'observed' | 'configured' | 'required' | 'unsupported';
+  guarantee: string;
+  nextAction?: string;
 }
 
 export interface RhinoQRuntimeIntegration extends RuntimeEventSink {
@@ -295,7 +304,7 @@ export function createRhinoQ(options: CreateRhinoQOptions): RhinoQRuntimeIntegra
       const durable: DurableAdoptionReport | undefined = adoptionStore
         ? await adoptionStore.snapshot()
         : undefined;
-      return {
+      const facts: Omit<ShadowAdoptionReport, 'checklist'> = {
         schemaVersion: 1,
         mode: 'observe',
         startedAt: durable?.startedAt ?? startedAt,
@@ -312,6 +321,7 @@ export function createRhinoQ(options: CreateRhinoQOptions): RhinoQRuntimeIntegra
         ...(durable ? { replicas: durable.replicas } : {}),
         guaranteeGaps: [...new Set(reports.flatMap((report) => report.guaranteeGaps))],
       };
+      return { ...facts, checklist: adoptionChecklist(facts, reports, Boolean(adoptionStore), Boolean(options.resolveUnboundEvent)) };
     },
     async start() {
       if (started) return;
@@ -332,6 +342,30 @@ export function createRhinoQ(options: CreateRhinoQOptions): RhinoQRuntimeIntegra
     async close() { started = false; await disposeAll(subscriptions); },
   };
   return integration;
+}
+
+function adoptionChecklist(
+  facts: Omit<ShadowAdoptionReport, 'checklist'>,
+  reports: RuntimeAdapterReport[],
+  durableReporting: boolean,
+  hasIdentityResolver: boolean,
+): AdoptionChecklistItem[] {
+  const anyInspect = reports.some((report) => report.capabilities.inspect);
+  const anyCancel = reports.some((report) => report.capabilities.cancel !== 'unsupported');
+  return [
+    {
+      id: 'runtime_identity', status: facts.tasksBound > 0 ? 'observed' : facts.unresolvedEvents > 0 ? 'required' : hasIdentityResolver ? 'configured' : 'required',
+      guarantee: 'Every runtime reference maps deterministically to one Task and Execution.',
+      ...(facts.tasksBound > 0 || (hasIdentityResolver && facts.unresolvedEvents === 0) ? {} : { nextAction: 'Implement resolveUnboundEvent without guessing identity.' }),
+    },
+    { id: 'owner_identity', status: 'required', guarantee: 'Every Task is scoped to a stable authenticated owner.', nextAction: 'Configure ownerFromRequest/ownerFromNodeRequest and run owner A/B isolation tests.' },
+    { id: 'tenant_identity', status: 'required', guarantee: 'Tenant context is resolved server-side for every owner request.', nextAction: 'Configure tenantFromRequest and an explicit tenant authorization policy.' },
+    { id: 'result_resolver', status: 'required', guarantee: 'Private result references never reach the browser.', nextAction: 'Configure resolveResult with owner and tenant authorization.' },
+    { id: 'business_verifier', status: 'required', guarantee: 'Runtime success is independently checked against the business outcome.', nextAction: 'Register a verifier that preserves verified, mismatch and unverifiable outcomes.' },
+    { id: 'cancellation', status: anyCancel ? 'configured' : 'unsupported', guarantee: 'Cancellation eligibility follows runtime evidence and fails before Task mutation when unavailable.', ...(anyCancel ? {} : { nextAction: 'Keep cancel hidden or provide an application-owned safe cancellation workflow.' }) },
+    { id: 'reconciliation', status: anyInspect ? 'configured' : 'required', guarantee: 'Known runtime references can be inspected after event loss.', ...(anyInspect ? {} : { nextAction: 'Implement bounded inspect(ref) or document the reconciliation gap.' }) },
+    { id: 'durable_reporting', status: durableReporting ? 'configured' : 'required', guarantee: 'Adoption facts deduplicate and aggregate across replicas.', ...(durableReporting ? {} : { nextAction: 'Install PostgresAdoptionReportStore before multi-replica evaluation.' }) },
+  ];
 }
 
 async function track(client: TaskClient, binding: RuntimeTaskBinding): Promise<TaskSnapshot> {

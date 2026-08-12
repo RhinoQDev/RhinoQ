@@ -113,9 +113,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
+      - name: Verify release documentation consistency
+        run: node .github/scripts/verify-release-docs.mjs
       - run: npm ci
         working-directory: sdks/node
       - run: npm test
+        working-directory: sdks/node
+      - run: npm run fault:check
         working-directory: sdks/node
       - run: npm run pack:check
         working-directory: sdks/node

@@ -25,6 +25,8 @@ export interface TaskUIModel {
   canCancel: boolean;
   canRetry: boolean;
   hasResult: boolean;
+  result: { recorded: boolean; availability: 'available' | 'not_configured' | 'not_recorded' };
+  verification: { status: 'verified' | 'mismatch' | 'unknown' | 'not_configured' };
   explanation: TaskExplanation;
   attention?: { kind: TaskAttentionKind; message: string };
 }
@@ -49,9 +51,18 @@ export function taskUIModel(task: TaskSummary | TaskSnapshot): TaskUIModel {
     canCancel: task.state === 'queued' || task.state === 'running',
     canRetry: task.state === 'failed' || task.state === 'cancelled',
     hasResult: task.hasResult,
+    result: { recorded: task.hasResult, availability: task.hasResult ? 'not_configured' : 'not_recorded' },
+    verification: verificationModel(task),
     explanation: explainTask(task),
     ...(attention ? { attention } : {}),
   };
+}
+
+function verificationModel(task: TaskSummary | TaskSnapshot): TaskUIModel['verification'] {
+  const records = (task as TaskSnapshot & { verifications?: Array<{ status: string }> }).verifications;
+  const latest = records?.[0];
+  if (!latest) return { status: 'not_configured' };
+  return { status: latest.status === 'verified' ? 'verified' : latest.status === 'mismatch' ? 'mismatch' : 'unknown' };
 }
 
 /**

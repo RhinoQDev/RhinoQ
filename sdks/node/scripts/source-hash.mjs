@@ -11,7 +11,14 @@ import { fileURLToPath } from 'node:url';
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 /** Files outside src/ that change what the build emits. */
-const EXTRA_INPUTS = ['package.json', 'tsconfig.json', 'tsconfig.cjs.json'];
+const EXTRA_INPUTS = [
+  'package.json', 'tsconfig.json', 'tsconfig.cjs.json',
+  'contracts/owner-api.openapi.json',
+  'contracts/fault-matrix.json',
+  'scripts/build-contracts.mjs', 'scripts/build-info.mjs',
+  'scripts/mark-cjs.mjs', 'scripts/source-hash.mjs',
+  'scripts/verify-fault-matrix.mjs',
+];
 
 async function collectSourceFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });

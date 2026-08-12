@@ -60,6 +60,8 @@ export interface TaskRequestHandlerOptions {
     expectedVersion?: number;
     request: Request;
   }): Promise<TaskSnapshot>;
+  /** Set false when the mounted runtime cannot cancel; requests fail before Task mutation. */
+  cancel?: boolean;
   /** Optional health report mounted at `<basePath>/_health`. */
   health?(): Promise<unknown> | unknown;
   /** Explicit no-progress thresholds. Omit to disable derived risk labels. */
@@ -85,7 +87,7 @@ export interface TaskAuthorizationInput {
 /** Capabilities the owner UI may render without discovering support via 501. */
 export interface TaskSurfaceCapabilities {
   schemaVersion: 1;
-  cancel: true;
+  cancel: boolean;
   retry: boolean;
   result: boolean;
   waitpoints: true;
@@ -162,7 +164,7 @@ export function createTaskRequestHandler(
       if (request.method === 'GET' && relative.length === 1 && relative[0] === '_capabilities') {
         const capabilities: TaskSurfaceCapabilities = {
           schemaVersion: 1,
-          cancel: true,
+          cancel: options.cancel !== false,
           retry: typeof options.retryTask === 'function',
           result: typeof options.resolveResult === 'function',
           waitpoints: true,
@@ -308,6 +310,9 @@ export function createTaskRequestHandler(
           return json({
             code: 'RHINOQ_RESULT_NOT_CONFIGURED',
             message: 'Result download is not configured for this application.',
+            retryable: false,
+            nextAction: 'Configure app.http({ resolveResult }) with owner-aware result authorization.',
+            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#resolve-a-result',
           }, 501);
         }
         const result = await options.tasks.getTaskResultForOwner(taskId, ownerId, tenantId);
@@ -319,10 +324,28 @@ export function createTaskRequestHandler(
         relative.length === 2 &&
         relative[1] === 'cancel'
       ) {
+        if (options.cancel === false) {
+          return json({
+            code: 'RHINOQ_UNSUPPORTED',
+            message: 'Cancellation is not configured for this owner API; no Task state was changed.',
+            field: 'action',
+            retryable: false,
+            nextAction: 'Configure app.http({ cancelTask }) or open the runtime tool if it offers a safe cancellation workflow.',
+            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
+          }, 409);
+        }
         const body = await request.json().catch(() => ({})) as { expectedVersion?: unknown };
         if (body.expectedVersion !== undefined &&
             (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0)) {
-          return json({ code: 'RHINOQ_INVALID_REQUEST' }, 400);
+          return json({
+            code: 'RHINOQ_INVALID_REQUEST',
+            message: 'expectedVersion must be a positive integer when supplied.',
+            field: 'expectedVersion',
+            retryable: false,
+            expectedShape: { expectedVersion: 7 },
+            nextAction: 'Read the latest Task entityVersion, or omit expectedVersion for an unfenced cancellation request.',
+            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
+          }, 400);
         }
         const expectedVersion = body.expectedVersion === undefined
           ? undefined
@@ -343,11 +366,25 @@ export function createTaskRequestHandler(
         return json(snapshot);
       }
       if (request.method === 'POST' && relative.length === 2 && relative[1] === 'retry') {
-        if (!options.retryTask) return json({ code: 'RHINOQ_RETRY_NOT_CONFIGURED' }, 501);
+        if (!options.retryTask) return json({
+          code: 'RHINOQ_RETRY_NOT_CONFIGURED',
+          message: 'Retry is not configured for this owner API.',
+          retryable: false,
+          nextAction: 'Configure app.http({ retryTask }) with a durable commandId and application-owned dispatch policy.',
+          docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
+        }, 501);
         const body = await request.json() as { expectedVersion?: unknown; commandId?: unknown };
         if (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0 ||
             typeof body.commandId !== 'string' || !body.commandId.trim()) {
-          return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'expectedVersion and commandId are required' }, 400);
+          return json({
+            code: 'RHINOQ_INVALID_REQUEST',
+            message: 'expectedVersion must be a positive integer and commandId must be a non-empty string.',
+            field: !Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0 ? 'expectedVersion' : 'commandId',
+            retryable: false,
+            expectedShape: { expectedVersion: 7, commandId: 'task-123-retry-7' },
+            nextAction: 'Read the latest Task entityVersion and create a stable commandId for this retry intent.',
+            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
+          }, 400);
         }
         const task = await options.tasks.getTaskForOwner(taskId, ownerId, tenantId);
         if (task.entityVersion !== Number(body.expectedVersion)) {
@@ -513,7 +550,10 @@ export class ApplicationTaskClient {
   async downloadFailedTaskItems(taskId: string, format: 'json' | 'csv' = 'json'): Promise<Blob> {
     const headers = new Headers(await this.getHeaders?.());
     const response = await this.doFetch(`${this.url}/${path(taskId)}/failed-items?format=${format}`, { headers });
-    if (!response.ok) { const payload = await response.json() as Record<string,unknown>; throw new RhinoQError(String(payload.code ?? 'RHINOQ_HTTP_ERROR'), String(payload.message ?? response.statusText), false, { status: response.status }); }
+    if (!response.ok) {
+      const payload = await response.json() as Record<string,unknown>;
+      throw taskHTTPError(payload, response);
+    }
     return response.blob();
   }
 
@@ -545,12 +585,7 @@ export class ApplicationTaskClient {
     });
     const payload = await response.json() as Record<string, unknown>;
     if (!response.ok) {
-      throw new RhinoQError(
-        typeof payload.code === 'string' ? payload.code : 'RHINOQ_HTTP_ERROR',
-        typeof payload.message === 'string' ? payload.message : response.statusText,
-        payload.retryable === true,
-        { status: response.status },
-      );
+      throw taskHTTPError(payload, response);
     }
     return payload as T;
   }
@@ -562,6 +597,21 @@ export class ApplicationTaskClient {
     const response = await this.doFetch(`${this.url}${pathname}`, { method: 'GET', headers, signal: options.signal });
     yield* parseTaskEventStream(response, options.signal);
   }
+}
+
+function taskHTTPError(payload: Record<string, unknown>, response: Response): RhinoQError {
+  return new RhinoQError(
+    typeof payload.code === 'string' ? payload.code : 'RHINOQ_HTTP_ERROR',
+    typeof payload.message === 'string' ? payload.message : response.statusText,
+    payload.retryable === true,
+    {
+      status: response.status,
+      ...(typeof payload.field === 'string' ? { field: payload.field } : {}),
+      ...('expectedShape' in payload ? { expectedShape: payload.expectedShape } : {}),
+      ...(typeof payload.nextAction === 'string' ? { nextAction: payload.nextAction } : {}),
+      ...(typeof payload.docs === 'string' ? { docs: payload.docs } : {}),
+    },
+  );
 }
 
 /**

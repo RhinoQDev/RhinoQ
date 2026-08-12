@@ -49,12 +49,19 @@ export class RhinoQError extends Error {
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
   readonly status?: number;
+  readonly field?: string;
+  readonly expectedShape?: unknown;
+  readonly nextAction?: string;
+  readonly docs?: string;
 
   constructor(
     code: string,
     message: string,
     retryable: boolean,
-    options: { retryAfterMs?: number; status?: number; cause?: unknown } = {},
+    options: {
+      retryAfterMs?: number; status?: number; cause?: unknown; field?: string;
+      expectedShape?: unknown; nextAction?: string; docs?: string;
+    } = {},
   ) {
     super(message, { cause: options.cause });
     this.name = 'RhinoQError';
@@ -62,6 +69,10 @@ export class RhinoQError extends Error {
     this.retryable = retryable;
     this.retryAfterMs = options.retryAfterMs;
     this.status = options.status;
+    this.field = options.field;
+    this.expectedShape = options.expectedShape;
+    this.nextAction = options.nextAction;
+    this.docs = options.docs;
   }
 }
 

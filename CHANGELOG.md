@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+- Mark Failure Lab output as simulated workflow evidence with no external
+  provider call, and distinguish workflow verification from provider outcome.
+- Add deterministic runtime identity validation, machine-readable adoption
+  checklist diagnostics, and owner/tenant-aware local, proxy and S3-compatible
+  result adapters.
+- Add production, live UI, first-real-app, adopter responsibility and honest
+  code-reduction guides.
+- Add a shared runtime event parity fixture and bounded webhook transport retry
+  that preserves the notification event ID. Durable delivery remains owned by
+  the Go ledger.
+- Extend `TaskUIModel` with explicit result availability and business
+  verification status, including `not_configured`.
+- Add fail-closed `init --example report-export`, explicitly simulated transport
+  and missing-output demos, and an acceptance-first LOC benchmark harness that
+  refuses to emit a claim until both real implementations pass.
+
+- Corrected root and packaged README release status for the verified beta.12
+  artifacts. CI now rejects version drift across package manifests,
+  `SDK_VERSION`, release documentation and generated build metadata; registry
+  smoke also validates the README and build information from the installed
+  package.
+- Added a production-shaped `report.export` consumer using the published npm
+  package, stable server-side owner/tenant sessions, authorized result
+  resolution, real filesystem readback and separate technical/business
+  outcomes. `createRhinoQApp().http()` now forwards tenant authorization and
+  application-owned cancellation hooks so unsupported actions can be rejected
+  before Task mutation.
+- Portable applications now advertise owner cancellation only when an
+  application-owned `cancelTask` composition is configured; a runtime
+  capability alone is insufficient to select references and handle unknown
+  external outcomes. Otherwise the API returns structured
+  `RHINOQ_UNSUPPORTED` before any Task store read or write. Invalid
+  cancellation fences now include the field, expected shape, next action and
+  contract link.
+- Added a packaged OpenAPI 3.1 owner API contract at
+  `@rhinoq/node/openapi.json`, with a build-time consistency gate for version,
+  all 25 owner operations and capability fields. OpenAPI and contract build
+  inputs are included in artifact provenance hashing. Browser-client
+  `RhinoQError` now retains
+  `field`, `expectedShape`, `nextAction` and `docs`; retry and result
+  configuration failures provide actionable structured responses.
+- Added business-verification onboarding and a production-shaped report
+  recovery composition with preview, separate approval, idempotency fencing,
+  provider readback and mandatory post-check. Unknown readback consumes the
+  fence as `uncertain` and replay performs no second provider write.
+- Shadow Mode reports now include a machine-readable eight-item checklist for
+  identity, tenant/owner boundaries, result resolution, verification,
+  cancellation, reconciliation and durable multi-replica reporting.
+- Added a gated 15-scenario fault evidence inventory spanning transport,
+  duplicate delivery, provider uncertainty, authorization, secret redaction
+  and PostgreSQL/projector interruption. It is explicitly local evidence, not
+  a production-readiness claim.
+
 ## 0.1.0-beta.12
 
 - Added the runtime-neutral `createRhinoQApp()` composition root. It installs
@@ -26,8 +79,8 @@
 - Reworked Node CLI help around user goals before adapter choice, and made
   Workbench action labels distinguish actions available in the page, external
   tool links and workflows that are not configured.
-- Marked main-only portable APIs explicitly in the repository and package
-  README until the prepared beta.12 artifact passes registry publication smoke.
+- Marked the portable APIs as main-only while beta.12 was being prepared; the
+  release documentation is updated after its registry publication smoke.
 
 - Added the first public runtime-neutral Node adapter contracts for durable
   `(runtime, scope, externalId)` identity, portable lifecycle events,

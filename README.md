@@ -20,21 +20,37 @@ happening, how much finished, whether repeating the work needs review, and the
 next recommended action. Generic failures never claim that retry is safe when
 RhinoQ has no evidence about the external result.
 
+Frontend applications do not need to write SSE parsing, polling fallback,
+reconnect timers or stale-snapshot handling. See
+[what you do not build](./docs/what-you-do-not-build.md), the
+[live UI contract](./docs/live-task-ui.md), and the explicit
+[adopter responsibilities](./docs/adopter-responsibilities.md).
+
 The operator token is exchanged for an HttpOnly, SameSite cookie scoped to
 `/admin`; it is not embedded in the page or URL. This complete manual-runtime
 example creates and finishes one durable Task without BullMQ:
 
 > [!IMPORTANT]
-> The runtime-neutral APIs below are currently **unreleased/main-only** and are
-> being prepared for `v0.1.0-beta.12`. The verified npm prerelease remains
-> `v0.1.0-beta.11`; do not expect `npm install @rhinoq/node@next` to contain a
-> main-branch API until the beta.12 registry smoke has passed.
+> The runtime-neutral APIs below are available in the verified
+> `v0.1.0-beta.12` prerelease. Install the `next` channel or pin that exact
+> version; the stable `latest` channel may still point to an older release.
 
 For the currently supported prerelease channel, always install explicitly:
 
 ```bash
 npm install @rhinoq/node@next pg
 ```
+
+Or generate the fail-closed consumer shell without overwriting existing files:
+
+```bash
+npx rhinoq init --example report-export
+npx rhinoq doctor --product-surface
+npx rhinoq demo transport-fallback
+```
+
+The transport demo is explicitly simulated. It is a teaching aid, not
+service-backed reliability evidence.
 
 ```js
 import { createServer } from 'node:http';
@@ -87,12 +103,12 @@ That second layer is optional on day one and uses the same operator workflow.
 
 RhinoQ is currently in public beta.
 
-- Latest verified public prerelease: `v0.1.0-beta.11`.
+- Latest verified public prerelease: `v0.1.0-beta.12`.
 
 Use RhinoQ for evaluation and controlled pilots. Production use is not yet
 recommended. The beta.10 release was superseded after its partial npm publish;
-beta.11 passed both npm publishes, registry smoke, binary/container publication
-and GitHub Release creation.
+beta.12 passed both npm publishes, installed-package registry smoke,
+binary/container publication and GitHub Release creation.
 
 > [!WARNING]
 > RhinoQ is a prerelease for evaluation and controlled pilots. The full Go
@@ -120,6 +136,17 @@ and GitHub Release creation.
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
 | running an external usability evaluation | [the no-coaching pilot protocol](./docs/usability-pilot.md) |
 | completely new to all of it | [the beginner guide](./docs/start-here.md) |
+| ready to inspect a production-shaped consumer | [the report export example](./examples/report-export/) |
+| integrating owner API actions | [the owner Task API contract](./docs/task-api.md) |
+| adding business outcome checks | [business verification onboarding](./docs/business-verification.md) |
+| reviewing failure evidence | [the fault evidence matrix](./docs/fault-matrix.md) |
+
+The [`report.export` consumer example](./examples/report-export/) is the
+recommended first real application after the five-minute fixture. It installs
+the verified npm package rather than importing this checkout and demonstrates
+two server-side owner sessions, tenant-scoped owner queries, an authorized
+result resolver, storage readback, a verified success and a runtime-success/missing-
+output Task that remains `uncertain`.
 
 ### Four things a runtime-backed fan-out has to get right
 
@@ -1002,7 +1029,7 @@ exists but is not the default browser polling shape.
 | Guarded recovery preview/idempotency/post-check | implemented; Go repair service remains mutation authority |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.11 verified public prerelease published |
+| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.12 verified public prerelease published |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 

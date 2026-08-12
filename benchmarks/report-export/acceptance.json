@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "workload": "report.export",
+  "requiredCases": [
+    "normal result with progress 1/1",
+    "two-owner isolation",
+    "missing output becomes uncertain",
+    "guarded repair requires separate approval",
+    "unknown readback does not redispatch"
+  ],
+  "baselineCommand": null,
+  "rhinoqCommand": null
+}

@@ -1,0 +1,13 @@
+{
+  "name": "rhinoq-report-export-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs",
+    "test": "node --test test.mjs"
+  },
+  "dependencies": {
+    "@rhinoq/node": "0.1.0-beta.12",
+    "pg": "^8.22.0"
+  }
+}

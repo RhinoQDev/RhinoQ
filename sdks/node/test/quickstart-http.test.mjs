@@ -124,6 +124,22 @@ test('app.http refuses to expose the cross-owner Workbench without a token', () 
   assert.throws(() => createApp().app.http({ operatorToken: '' }), /operatorToken/);
 });
 
+test('owner and operator HTML never embed operator tokens or private result references', async () => {
+  const privateReference = 'storage://private/report.csv?credential=do-not-leak';
+  const operatorToken = 'operator-secret-do-not-render';
+  const { app } = createApp();
+  const middleware = app.http({ operatorToken });
+  for (const response of [
+    await invoke(middleware, '/task-center/task-cancel'),
+    await invoke(middleware, '/admin', { 'x-operator-token': operatorToken }),
+  ]) {
+    assert.equal(response.status, 200);
+    assert.equal(response.body.includes(operatorToken), false);
+    assert.equal(response.body.includes(privateReference), false);
+    assert.equal(response.body.includes('x-operator-token'), false);
+  }
+});
+
 test('createRhinoQApp gives a non-BullMQ adapter the same Task Center and Workbench surface', async () => {
   const { tasks } = createApp();
   const adapter = createManualRuntimeAdapter('manual', 'reports');
@@ -137,12 +153,46 @@ test('createRhinoQApp gives a non-BullMQ adapter the same Task Center and Workbe
 
   assert.equal((await invoke(middleware, '/task-center')).status, 200);
   assert.equal((await invoke(middleware, '/tasks')).status, 200);
+  const capabilities = JSON.parse((await invoke(middleware, '/tasks/_capabilities')).body);
+  assert.equal(capabilities.cancel, false);
+  const unsupported = await invoke(
+    middleware, '/tasks/task-cancel/cancel', { 'content-type': 'application/json' }, 'POST', '{}',
+  );
+  assert.equal(unsupported.status, 409);
+  assert.equal(JSON.parse(unsupported.body).code, 'RHINOQ_UNSUPPORTED');
+  assert.equal(tasks.cancelled, undefined);
   assert.equal((await invoke(middleware, '/admin')).status, 403);
   assert.equal((await invoke(middleware, '/admin', { 'x-operator-token': 'ops-secret' })).status, 200);
 
   const reports = await app.runtime.runtimeReports();
   assert.equal(reports[0].name, 'manual');
   assert.equal(reports[0].scope, 'reports');
+  await app.close();
+});
+
+test('portable app forwards tenant authorization and application-owned cancellation', async () => {
+  const { tasks } = createApp();
+  const adapter = createManualRuntimeAdapter('manual', 'reports');
+  const authorization = [];
+  const app = await createRhinoQApp({
+    pool: { async query() { return { rows: [] }; } }, tasks, adapters: [adapter],
+    ownerFromRequest: () => 'owner-a', tenantFromRequest: () => 'tenant-a',
+  });
+  const middleware = app.http({
+    operatorToken: 'ops-secret', requireTenantAuthorization: true,
+    authorize(input) { authorization.push(input); return input.tenantId === 'tenant-a'; },
+    async cancelTask({ task }) { return { ...task, cancellation: { status: 'cannot_cancel_safely' } }; },
+  });
+
+  const response = await invoke(
+    middleware, '/tasks/task-cancel/cancel', { 'content-type': 'application/json' }, 'POST', '{}',
+  );
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(response.body).cancellation.status, 'cannot_cancel_safely');
+  assert.equal(tasks.cancelled, undefined, 'the generic Task cancellation command is not called');
+  assert.deepEqual(authorization.map(({ action, ownerId, tenantId }) => ({ action, ownerId, tenantId })), [
+    { action: 'task:cancel', ownerId: 'owner-a', tenantId: 'tenant-a' },
+  ]);
   await app.close();
 });
 

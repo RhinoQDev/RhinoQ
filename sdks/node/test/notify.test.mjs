@@ -142,6 +142,18 @@ test('a non-2xx response is a delivery failure, not a silent success', async () 
   }
 });
 
+test('bounded webhook retry reuses the same deduplication event ID', async () => {
+  let attempts = 0;
+  const ids = [];
+  const destination = { name: 'ops', kind: 'webhook', url: 'https://notify.test/hook', secret: '', timeoutMs: 5_000, includeEvidence: false, gracePeriodMs: 0, findingBaseUrl: '' };
+  await sendNotification(destination, JSON.parse(readFileSync(goldenURL, 'utf8')), {
+    maxAttempts: 3, backoffMs: 0,
+    fetch: async (_url, init) => { attempts += 1; ids.push(init.headers['x-rhinoq-event-id']); return new Response(attempts < 3 ? '' : null, { status: attempts < 3 ? 503 : 204 }); },
+  });
+  assert.equal(attempts, 3);
+  assert.deepEqual(new Set(ids).size, 1);
+});
+
 // A configured-but-empty secret variable must not fall back to unsigned:
 // silently weakening a destination somebody chose to sign is worse than
 // refusing to send.

@@ -33,6 +33,30 @@ export interface DurableAdoptionReport {
   replicas: number;
 }
 
+export interface AdoptionRequirement {
+  callback: 'owner' | 'tenant' | 'result' | 'verifier' | 'runtimeIdentity' | 'durableStore';
+  configured: boolean; guaranteeGap: string; nextAction: string;
+}
+export interface AdoptionChecklistReport {
+  schemaVersion: 1; generatedAt: string; durable: boolean;
+  requirements: AdoptionRequirement[]; warnings: string[];
+}
+
+/** Machine-readable integration checklist suitable for rhinoq-adoption-report.json. */
+export function adoptionChecklist(configured: Partial<Record<AdoptionRequirement['callback'], boolean>>): AdoptionChecklistReport {
+  const definitions: Array<[AdoptionRequirement['callback'], string, string]> = [
+    ['owner', 'Owner isolation cannot be proven.', 'Configure an authenticated owner resolver and run the two-owner contract test.'],
+    ['tenant', 'Cross-tenant authorization cannot be proven.', 'Configure tenant authorization or document a single-tenant deployment.'],
+    ['result', 'Recorded results cannot be safely downloaded.', 'Configure an owner-and-tenant-aware result resolver.'],
+    ['verifier', 'Runtime success is not independent business verification.', 'Register a verifier with unknown and timeout handling.'],
+    ['runtimeIdentity', 'Runtime events cannot be correlated deterministically.', 'Configure stable runtime, scope, application key and replica identity.'],
+    ['durableStore', 'Adoption observations are process-local and do not aggregate across replicas.', 'Install the PostgreSQL adoption profile.'],
+  ];
+  const requirements = definitions.map(([callback, guaranteeGap, nextAction]) => ({ callback, configured: configured[callback] === true, guaranteeGap, nextAction }));
+  return { schemaVersion: 1, generatedAt: new Date().toISOString(), durable: configured.durableStore === true, requirements,
+    warnings: requirements.filter((item) => !item.configured).map((item) => `${item.callback}: ${item.guaranteeGap}`) };
+}
+
 /**
  * Durable adoption storage is intentionally narrower than TaskClient. An
  * adopter can back it with PostgreSQL, a warehouse, or an append-only log

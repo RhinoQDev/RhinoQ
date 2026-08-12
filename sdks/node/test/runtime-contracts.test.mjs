@@ -5,6 +5,7 @@ import {
   validateRuntimeObservation,
   validateRuntimeAdapter,
   checkRuntimeAdapterContract,
+  checkRuntimeEventParity,
   validateRuntimeRef,
 } from '../dist/index.js';
 
@@ -15,6 +16,20 @@ test('runtime identity is the complete runtime/scope/externalId tuple', () => {
   assert.equal(validateRuntimeRef(ref), ref);
   assert.throws(() => validateRuntimeRef({ ...ref, scope: ' ' }), /ref\.scope/);
   assert.throws(() => validateRuntimeRef({ ...ref, externalId: '' }), /ref\.externalId/);
+});
+
+test('runtime parity suite rejects lifecycle meaning differences', () => {
+  const fixture = [
+    { type: 'started', ref, occurredAt: now, attempt: 1 },
+    { type: 'progressed', ref, occurredAt: now, attempt: 1, progress: { completed: 1, total: 1 } },
+    { type: 'succeeded', ref, occurredAt: now, attempt: 1, resultReference: 'result-1' },
+  ];
+  const pass = checkRuntimeEventParity([{ name: 'manual', map: (value) => value }, { name: 'custom', map: (value) => value }], fixture);
+  assert.deepEqual(pass.checks, ['state', 'attempt', 'progress', 'result', 'uncertainty']);
+  assert.throws(() => checkRuntimeEventParity([
+    { name: 'manual', map: (value) => value },
+    { name: 'broken', map: (value) => value.filter((event) => event.type !== 'progressed') },
+  ], fixture), /parity mismatch/);
 });
 
 test('adapter capability claims require matching methods', () => {

@@ -10,6 +10,8 @@ test('completed-but-missing-output lab creates deterministic evidence without a 
   assert.equal(result.task.hasResult, false);
   assert.equal(result.task.executions[0].state, 'succeeded');
   assert.equal(result.explanation.businessOutcome, 'unknown');
+  assert.equal(result.proofScope, 'simulated_workflow_only');
+  assert.equal(result.externalProviderCalled, false);
   assert.deepEqual(result.explanation.affected, { tasks: 1, items: 1 });
   assert.deepEqual(result.explanation.recommendedActions, [{
     id: 'recheck-output', label: 'Recheck output evidence', eligibility: 'safe', mutatesRuntime: false,
@@ -33,6 +35,7 @@ test('Failure Lab closes the disposable incident through guarded repair and veri
   assert.equal(result.task.hasResult, true);
   assert.equal(client.verifications[0].status, 'verified');
   assert.match(result.incidentSummary, /uncertain\/no-output/);
+  assert.match(result.incidentSummary, /\"providerOutcomeVerified\":false/);
 });
 
 class LabTaskClient {

@@ -12,9 +12,11 @@ the same core without making BullMQ the product boundary.
 For custom runtimes, the development-preview `createRhinoQ()` API exposes
 Observe, Track and capability-gated Control over portable runtime events:
 
-> This portable surface is unreleased/main-only until `v0.1.0-beta.12` is
-> published and passes the installed-package smoke test. The latest verified
-> npm prerelease is still `v0.1.0-beta.11`.
+> This portable surface is available in the verified `v0.1.0-beta.12`
+> prerelease. Install the `next` channel or pin that exact version; the stable
+> `latest` channel may still point to an older release.
+
+Latest verified npm prerelease: `v0.1.0-beta.12`.
 
 ```ts
 const adapter = createManualRuntimeAdapter('manual', 'reports');
@@ -37,6 +39,16 @@ const rhino = await createRhinoQApp({ pool, adapters: [adapter], ownerFromReques
 server.use(rhino.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN }));
 await rhino.runtime.track({ task, executionId, ref });
 ```
+
+`app.http()` also accepts the application-owned `authorize`,
+`requireTenantAuthorization`, `resolveResult` and `cancelTask` boundaries. The
+complete [`report.export` consumer](https://github.com/madebyduy/RhinoQ/tree/main/examples/report-export) shows two
+owners, provider readback and unsupported cancellation without Task mutation.
+
+Frontend and framework integrations can load the packaged OpenAPI 3.1 owner
+contract from `@rhinoq/node/openapi.json`. The build fails if its version,
+complete 25-operation inventory or capability fields drift from the package
+implementation. Contract inputs are included in build provenance hashing.
 
 `createRhinoQ()` remains the lower-level runtime primitive;
 `createRhinoQApp()` is the generic golden path for every adapter.
@@ -253,7 +265,7 @@ authentication has populated it. It mounts `/tasks`, `/tasks/*` and
 `/task-center`. RhinoQ refuses owner middleware without an explicit resolver;
 it never trusts an owner header by default.
 
-The Node `init` path creates the isolated Task profile. `beta.11` is the current
+The Node `init` path creates the isolated Task profile. `beta.12` is the current
 release that contains the complete Verified Rule loop; an older tarball answers
 `FAIL verify requires 'add <rule-name>'`. For Verified Rules, start the full Go
 Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32 bytes, then run:
@@ -349,7 +361,7 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. The beta.11 release workflow publishes
+This package is a development preview. The beta.12 release workflow publishes
 the prerelease on `next`; `latest` may remain on an older release. Pin an exact
 version after publication if that matters to you. The preview targets Node.js
 22+.
@@ -376,7 +388,7 @@ Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.11.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.12.tgz pg
 ```
 
 #### Confirm what the application actually installed
@@ -399,7 +411,7 @@ For an application evaluation without a source checkout, install from npm and
 pin the exact version rather than a moving tag:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.11 pg
+npm install @rhinoq/node@0.1.0-beta.12 pg
 ```
 
 A published copy carries the same provenance a locally packed one does. It is

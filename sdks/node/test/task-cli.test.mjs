@@ -72,6 +72,33 @@ test('developer CLI help and Rule generator work without hidden services or over
   } finally { rmSync(cwd, { recursive:true, force:true }); }
 });
 
+test('init report-export generates a fail-closed consumer without overwriting', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-init-report-'));
+  try {
+    const first = spawnSync(process.execPath, [developerCLI, 'init', '--example', 'report-export'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /URL Task Center/);
+    const root = join(cwd, 'rhinoq-report-export');
+    const app = readFileSync(join(root, 'app.mjs'), 'utf8');
+    assert.match(app, /owner-a-session/);
+    assert.match(app, /tenantFromNodeRequest/);
+    const surface = JSON.parse(readFileSync(join(root, '.rhinoq', 'product-surface.json'), 'utf8'));
+    assert.equal(surface.result, false);
+    assert.equal(surface.verifier, false);
+    const second = spawnSync(process.execPath, [developerCLI, 'init', '--example', 'report-export'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(second.status, 0, second.stderr);
+    assert.match(second.stdout, /KEEP/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('transport fallback demo labels simulated evidence', () => {
+  const result = spawnSync(process.execPath, [developerCLI, 'demo', 'transport-fallback'], { encoding: 'utf8', env: {} });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /simulated browser transport demo/);
+  assert.match(result.stdout, /polling_fallback/);
+  assert.match(result.stdout, /service-backed browser campaign/);
+});
+
 test('Failure Lab refuses to connect without explicit disposable confirmation', () => {
   const result = spawnSync(
     process.execPath,
@@ -380,6 +407,10 @@ test('observe adoption previews and generates a runtime-neutral fail-closed reso
     assert.match(generated, /PostgresAdoptionReportStore/);
     assert.match(generated, /if \(!identity\) return undefined/);
     assert.match(generated, /resolveIdentity\(event\.ref\)/);
+    const report = JSON.parse(readFileSync(join(cwd, 'rhinoq-adoption-report.json'), 'utf8'));
+    assert.equal(report.schemaVersion, 1);
+    assert.equal(report.durable, true);
+    assert.ok(report.requirements.some((item) => item.callback === 'owner' && item.configured === false));
     const syntax = spawnSync(process.execPath, ['--check', join(cwd, 'rhinoq.observe.mjs')], { encoding: 'utf8' });
     assert.equal(syntax.status, 0, syntax.stderr);
   } finally { rmSync(cwd, { recursive: true, force: true }); }

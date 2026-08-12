@@ -21,22 +21,24 @@ import { sendTestNotification } from '../notify/sender.js';
 import { createNodeWorkbenchMiddleware } from '../workbench/handler.js';
 import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
 import { recoverFailureLab, runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
+import { adoptionChecklist } from '../runtime/adoption.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
   const args = process.argv.slice(3);
   switch (command) {
-    case 'init': await init(); break;
+    case 'init': await init(args); break;
     case 'adopt': await adopt(args); break;
     case 'verify': await verify(args); break;
-    case 'doctor': await doctor(); break;
+    case 'doctor': await doctor(args); break;
     case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
     case 'lab': await lab(args); break;
+    case 'demo': await demo(args); break;
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Start from your goal:\n  npx rhinoq init                         # install the Task profile\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
+      console.log('Start from your goal:\n  npx rhinoq init                         # install the Task profile\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
@@ -67,7 +69,14 @@ function requireDatabase(command: string): ResolvedDatabaseConfig {
   return resolved;
 }
 
-async function init(): Promise<void> {
+async function init(args: string[] = []): Promise<void> {
+  if (args.length) {
+    const index = args.findIndex((value) => value === '--example');
+    const example = index >= 0 ? args[index + 1] : undefined;
+    if (example !== 'report-export' || args.length !== 2) fail('init example must be report-export', 'Run: npx rhinoq init --example report-export');
+    await initReportExportExample();
+    return;
+  }
   const root = resolve('.rhinoq');
   await mkdir(resolve(root, 'rules'), { recursive: true });
   const resolved = database();
@@ -104,6 +113,71 @@ async function init(): Promise<void> {
   console.log(`PASS created ${root}`);
   console.log(`INFO PostgreSQL client: ${detected.pg ? 'detected' : 'missing'}; BullMQ: ${detected.bullmq ? 'detected' : 'not detected (optional)'}.`);
   console.log('NEXT add a verification: npx rhinoq verify add completed-report-has-output');
+}
+
+async function initReportExportExample(): Promise<void> {
+  const root = resolve('rhinoq-report-export');
+  await mkdir(root, { recursive: true });
+  const files: Record<string, string> = {
+    'package.json': `${JSON.stringify({ name: 'rhinoq-report-export', private: true, type: 'module', scripts: { start: 'node app.mjs' }, dependencies: { '@rhinoq/node': '^0.1.0-beta.12', pg: '^8.22.0' } }, null, 2)}\n`,
+    '.env.example': 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app\nRHINOQ_OPERATOR_TOKEN=replace-me\n',
+    '.rhinoq/product-surface.json': `${JSON.stringify({ owner: true, tenant: true, result: false, verifier: false, runtimeIdentity: true, durableStore: false }, null, 2)}\n`,
+    'app.mjs': reportExportAppTemplate(),
+    'README.md': '# RhinoQ report-export consumer\n\nRun `npm install`, configure `DATABASE_URL`, then `npm start`.\n\nDemo sessions are server-side and stable: `owner-a-session` and `owner-b-session`. Replace them with real authentication before deployment. Result and verifier callbacks intentionally remain fail-closed until configured; run `npx rhinoq doctor --product-surface` in this directory.\n',
+  };
+  for (const [name, content] of Object.entries(files)) {
+    const path = resolve(root, name); await mkdir(dirname(path), { recursive: true }); await writeNew(path, content);
+  }
+  console.log(`PASS generated ${root}`);
+  console.log('URL Task Center: http://127.0.0.1:8787/task-center');
+  console.log('URL Workbench: http://127.0.0.1:8787/admin');
+  console.log('WARN result and verifier are fail-closed until application callbacks are configured.');
+  console.log(`NEXT cd ${relative(resolve('.'), root)}; npm install; copy .env.example to .env; npm start`);
+}
+
+function reportExportAppTemplate(): string {
+  return `import { createServer } from 'node:http';
+import { Pool } from 'pg';
+import { createManualRuntimeAdapter, createRhinoQApp } from '@rhinoq/node';
+
+const sessions = new Map([
+  ['owner-a-session', { ownerId: 'owner-a', tenantId: 'tenant-demo' }],
+  ['owner-b-session', { ownerId: 'owner-b', tenantId: 'tenant-demo' }],
+]);
+function identity(request) {
+  const session = sessions.get(String(request.headers['x-demo-session'] || ''));
+  if (!session) throw new Error('authenticated demo session required');
+  return session;
+}
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const runtime = createManualRuntimeAdapter('manual', 'report-export');
+const app = await createRhinoQApp({
+  pool, adapters: [runtime],
+  ownerFromNodeRequest: (request) => identity(request).ownerId,
+  tenantFromNodeRequest: (request) => identity(request).tenantId,
+});
+const http = app.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN });
+createServer((request, response) => http(request, response)).listen(8787, '127.0.0.1', () => {
+  console.log('Task Center http://127.0.0.1:8787/task-center');
+  console.log('Workbench http://127.0.0.1:8787/admin');
+});
+`;
+}
+
+async function demo(args: string[]): Promise<void> {
+  const scenario = args[0];
+  if (scenario === 'transport-fallback' && args.length === 1) {
+    console.log('NOTICE simulated browser transport demo; no network or provider called.');
+    console.log(JSON.stringify({ stages: ['live', 'stream_lost', 'polling_fallback', 'converged'], staleSnapshotRejected: true, applicationCodeChanged: false }));
+    console.log('NEXT run the service-backed browser campaign before using this as production evidence.');
+    return;
+  }
+  if (scenario === 'missing-output') {
+    console.log('NOTICE missing-output uses the disposable Failure Lab; no external provider called.');
+    await lab(['run', 'completed-but-missing-output', ...args.slice(1)]);
+    return;
+  }
+  fail('unknown demo scenario', 'Run: npx rhinoq demo transport-fallback or npx rhinoq demo missing-output --confirm-disposable');
 }
 
 async function adopt(args: string[]): Promise<void> {
@@ -239,7 +313,10 @@ async function adoptObserve(options: {
   }
   const written = await writeNew(output, observeIntegrationTemplate(options.adapter));
   if (!written) { console.log('INFO no observe integration file was changed.'); return; }
+  const reportPath = resolve(dirname(output), 'rhinoq-adoption-report.json');
+  await writeNew(reportPath, `${JSON.stringify(adoptionChecklist({ durableStore: true }), null, 2)}\n`);
   console.log(`PASS generated ${output}`);
+  console.log(`PASS generated ${reportPath}`);
   console.log('NEXT implement resolveIdentity(ref) from authenticated application data, then mount rhino.http({ operatorToken }).');
   console.log('NEXT inspect await rhino.runtime.adoptionReport(); unresolvedEvents identifies identities still missing.');
 }
@@ -900,7 +977,20 @@ async function gatewayRequest(path: string, init: RequestInit, allowMissing = fa
 // identity, lease/heartbeat/reaper timing and migration state. They share a
 // name because they answer the same question for different planes, so this one
 // says out loud what it did not look at: a PASS here is not a runtime PASS.
-async function doctor(): Promise<void> {
+async function doctor(args: string[] = []): Promise<void> {
+  if (args.includes('--product-surface')) {
+    const path = resolve('.rhinoq/product-surface.json');
+    let value: Record<string, unknown> = {};
+    try { value = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; }
+    catch { console.log(`WARN ${relative(resolve('.'), path)} is missing or invalid.`); }
+    console.log('INFO product surface callbacks and guarantees:');
+    for (const [field, consequence] of [
+      ['owner', 'owner isolation cannot be proven'], ['tenant', 'tenant authorization cannot be proven'],
+      ['result', 'recorded results are not downloadable'], ['verifier', 'business outcome remains unverified'],
+      ['runtimeIdentity', 'runtime correlation may be unstable'], ['durableStore', 'adoption data is process-local'],
+    ] as const) console.log(`${value[field] === true ? 'PASS' : 'WARN'} ${field}: ${value[field] === true ? 'configured' : consequence}`);
+    if (args.length === 1) return;
+  }
   const resolved = requireDatabase('doctor');
   console.log('INFO scope: Task schema, local Rule files and client packages.');
   console.log('INFO not checked here: worker identity, lease/heartbeat/reaper timing,');
@@ -1324,6 +1414,8 @@ async function lab(args: string[]): Promise<void> {
   try {
     const tasks = await installPostgresTaskProfile(pool);
     const result = await runFailureLab(tasks, scenario);
+    console.log('NOTICE simulated repair; no external provider called.');
+    console.log('NOTICE this proves the guarded workflow only, not a production provider outcome.');
     console.log(`PASS Failure Lab ${scenario}`);
     console.log(`TASK ${result.task.id} runtime=succeeded outcome=${result.explanation.businessOutcome}`);
     console.log(`WHY ${result.explanation.technicalState}`);

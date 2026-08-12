@@ -56,3 +56,13 @@ node can claim the work after the backoff. A `dead` row is an operator decision,
 not an invitation to retry blindly. Because the payload is durable, opt-in
 evidence may contain business data; protect the table and apply the same
 retention policy as the receiver-facing message.
+# Notification delivery boundary
+
+The Node sender supports a bounded same-process transport retry with
+`maxAttempts` (1–5) and linear `backoffMs`. Every attempt carries the same
+`x-rhinoq-event-id`, so a conforming receiver can deduplicate it. Only HTTP 429
+and 5xx responses are retried; authentication and other 4xx failures stop.
+
+This is not a durable scheduler. The Go delivery ledger remains authoritative
+for persisted delivery state, retry scheduling and cross-process
+deduplication. A Node process crash can still lose an in-process retry.

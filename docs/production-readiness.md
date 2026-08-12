@@ -70,3 +70,9 @@ production-ready.
   one local run is recorded in
   [`docs/evidence/redis-bullmq-chaos-2026-08-05.md`](evidence/redis-bullmq-chaos-2026-08-05.md).
   This is local process-restart evidence, not a production reliability claim.
+# Runtime parity evidence
+
+Adapter authors can run `checkRuntimeEventParity()` over the same lifecycle
+fixture. It compares state, attempt, progress, result and uncertainty semantics;
+provider-specific differences must be declared through capabilities. Passing
+the pure contract suite is necessary but is not service-backed fault evidence.
