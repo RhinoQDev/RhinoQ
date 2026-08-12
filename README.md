@@ -2,15 +2,18 @@
 
 ## Make async work visible, understandable and recoverable.
 
-RhinoQ turns background work into a product experience people can actually use:
-users see progress and results, developers integrate a stable Task contract,
-and operators can understand failures and recover safely. You keep the runtime
-that executes the work; RhinoQ supplies the missing Task layer around it.
+RhinoQ is a runtime-independent reliability layer for asynchronous work. It
+turns runtime signals into durable Tasks, makes uncertain outcomes visible,
+and gives users and operators evidence-guided recovery. You keep the system
+that executes the work; RhinoQ supplies the Task, evidence and recovery layer
+around it.
 
-The supported evaluation path starts from an existing Node.js application with
-PostgreSQL and BullMQ. Follow the [BullMQ integration example](./examples/fanout-bullmq/)
-or the [existing-application guide](./docs/start-here.md) to add the Task
-Center, owner API and operator Workbench to work you already run.
+Choose the adapter that matches the system you already run: BullMQ currently
+has the deepest Node coverage, while manual/custom adapters and an SQS proof
+adapter exercise the same portable contracts. Start with the
+[runtime-neutral integration guide](./docs/start-here.md), then choose a
+[concrete BullMQ example](./examples/fanout-bullmq/) only if that is your
+runtime.
 
 Task Center and Workbench use the same plain-language Task explanation: what is
 happening, how much finished, whether repeating the work needs review, and the
@@ -18,15 +21,22 @@ next recommended action. Generic failures never claim that retry is safe when
 RhinoQ has no evidence about the external result.
 
 The operator token is exchanged for an HttpOnly, SameSite cookie scoped to
-`/admin`; it is not embedded in the page or URL.
+`/admin`; it is not embedded in the page or URL. The following is the
+runtime-neutral boundary; `tasks`, `runtimeAdapter` and `runtimeEvent` come
+from the application or its chosen adapter.
 
 ```js
-const app = await rhinoq({ pool, queue, events, ownerFromRequest });
-server.use(app.http({ operatorToken })); // /tasks + /task-center + /admin
-await app.dispatch(taskId, urls.map((url, index) => ({ key: `item-${index}`, data: { url } })));
+import { createRhinoQ } from '@rhinoq/node';
+
+const app = createRhinoQ({
+  client: tasks,
+  adapters: [runtimeAdapter], // BullMQ, SQS, manual or another adapter
+  terminalProjection: 'execution-only',
+});
+await app.observe(runtimeEvent);
 ```
 
-Those three lines replace the generic plumbing around your business handler:
+That small portable boundary replaces the generic plumbing around your business handler:
 
 | You keep | RhinoQ supplies |
 |---|---|
@@ -82,30 +92,31 @@ and GitHub Release creation.
 
 | If you are… | Read |
 |---|---|
-| evaluating the supported Node/BullMQ path | [the BullMQ integration example](./examples/fanout-bullmq/) |
-| adding this around async work you already run | [the two integration doors](./docs/two-doors.md); the current production-shaped adapter example uses [`BullMQ`](./examples/fanout-bullmq/) |
+| evaluating the runtime-neutral Task layer | [the beginner guide](./docs/start-here.md) |
+| adding this around async work you already run | [the two integration doors](./docs/two-doors.md) |
+| using BullMQ specifically | [the BullMQ adapter example](./examples/fanout-bullmq/) |
 | deciding whether it will save you code | [two doors](./docs/two-doors.md) |
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
 | running an external usability evaluation | [the no-coaching pilot protocol](./docs/usability-pilot.md) |
 | completely new to all of it | [the beginner guide](./docs/start-here.md) |
 
-### Four things a fan-out has to get right
+### Four things a runtime-backed fan-out has to get right
 
-These cost an afternoon each when you find them yourself. The example
-[gets them right on purpose](./examples/fanout-bullmq/README.md), and
-`rhinoq()` makes all four for you.
+These rules are runtime-independent unless marked otherwise. The
+[BullMQ example](./examples/fanout-bullmq/README.md) makes the adapter-specific
+parts explicit, and `rhinoq()` provides them for that compatibility path.
 
 1. **`itemKey` is the idempotency key.** Omit it on a fan-out and fifty items
    become attempts 1..50 of a single item, the aggregate reads `total: 1`, and
    the batch terminates on the first finish — silently, and irreversibly.
-2. **`jobId` may not contain `:`.** BullMQ rejects a custom job ID containing
-   one unless it splits into exactly three parts, so the natural
-   `` `${taskId}:${itemKey}` `` is refused.
+2. **External identity belongs to the adapter.** For BullMQ this is `jobId`,
+   while SQS uses a message ID and other runtimes have their own scoped
+   identity. Never assume an external ID is globally unique.
 3. **`isTerminalFailure` is required for a fan-out with retries.** Without it
    every failure is "the attempt may still retry", the settled check never runs
    after a failure, and a batch whose last item fails never settles at all.
-4. **Do not drive `queued` or `running` by hand.** The bridge owns them; setting
-   them from a route races the projector and loses.
+4. **Do not drive `queued` or `running` by hand.** The portable projector owns
+   those transitions; setting them from a route races the projector and loses.
 
 For `terminal-items` aggregation, the bridge performs one final durable
 progress synchronization after settlement succeeds and before invoking
@@ -122,9 +133,58 @@ finished batch at a stale aggregate such as `49/50`.
 | `rhinoq` (Go CLI) | `go build ./cmd/rhinoq` | Rules, Findings, the Gateway, full migrations |
 
 The Node SDK and the Go engine are two planes, not two versions of one thing.
-The current BullMQ adapter, Tasks and the Workbench are Node-only and need no Go binary. Rules,
-Findings and ProviderOperation are the Go engine's, and Node talks to them
-through the Gateway.
+The Node SDK owns portable runtime adapters, Tasks and the Workbench; the Go
+engine owns Rules, Findings and ProviderOperation. Node talks to those Go-owned
+capabilities through the Gateway when an application needs them.
+
+The Node package also exports a development-preview, runtime-neutral adapter
+contract, `RuntimeTaskProjector` and `createRhinoQ()` integration for Observe,
+Track and capability-gated Control. Its validators reject incomplete runtime
+identity, ambiguous failure terminality and unexplained unknown observations
+before they reach projection. A [manual/custom runtime example](./examples/manual-runtime/)
+drives Task lifecycle, progress, retry attempts, results and uncertainty without
+BullMQ. The manual adapter is a contract proof; SQS is an observe/inspect proof;
+neither is presented as a production deployment claim. Custom adapters with
+`inspect` can reconcile a known runtime reference; runtime reports list exact
+capability gaps, and unsupported cancellation is rejected before Task state
+changes.
+
+BullMQ now also has a development-preview `BullMQRuntimeAdapter` that translates
+QueueEvents, dispatch receipts and bounded inspection into those portable
+contracts. BullMQ currently has the deepest Node coverage; the supported
+`rhinoq()` and `createBullMQIntegration()` entry points
+retain their compatibility facade while the portable composition is adopted.
+
+The migration target is available as `createBullMQPortableIntegration()`, which
+composes Queue/QueueEvents through the portable adapter and projector while
+keeping the existing facade export stable. The second-runtime proof is the
+development-preview SQS adapter: it models redelivery attempts, unknown
+readback and unsupported cancellation without importing the AWS SDK.
+
+### Runtime adapters
+
+All adapters implement the same identity and evidence contract:
+
+| Adapter | Role | Current boundary |
+|---|---|---|
+| Manual/custom | contract and lifecycle proof | application supplies events and optional inspection |
+| SQS | second-runtime proof | polling/inspect semantics; cancellation is unsupported |
+| BullMQ | deepest Node coverage today | compatibility facade plus portable migration path |
+
+The Task projector, Workbench, verification model and recovery guardrails do
+not branch on the adapter name. Runtime-specific retry, dispatch, inspection
+and cancellation semantics stay inside the adapter.
+
+Observe-only Shadow Mode is available through `resolveUnboundEvent` for any
+adapter.
+Existing runtime events can be mapped to stable Task/Execution identity without
+changing producer or worker code; RhinoQ binds the reference durably and replays
+the first event after binding. `adoptionReport()` reports only measured events,
+references, retries, uncertain/terminal outcomes and unresolved identities. It
+does not estimate removable code or operational savings. Pass a
+`PostgresAdoptionReportStore` and install its explicit SQL profile to aggregate
+the facts durably across replicas; without that store the report is intentionally
+process-local.
 
 ## What it actually does
 
@@ -242,8 +302,8 @@ profile and local Rule files, not the runtime. Before a pilot, run both.
 
 **New here?** Read the [complete beginner guide](./docs/start-here.md): the
 failure story, every setup command and why it exists, the two dashboards,
-BullMQ/ProviderOperation integration, safe repair, troubleshooting, and an
-honest comparison with established alternatives.
+runtime adapters, ProviderOperation integration, safe repair, troubleshooting,
+and an honest comparison with established alternatives.
 
 ## Adding it to an application you already have
 
@@ -262,13 +322,15 @@ npx rhinoq fixture failure
 npx rhinoq dev
 ```
 
-For the fan-out half, [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) is
-the same feature set with every decision written out rather than made for you,
-and `npm run smoke` in that directory is the test that proves a batch finishes.
+For a BullMQ fan-out, [`examples/fanout-bullmq/`](./examples/fanout-bullmq/) is
+the concrete adapter example with every decision written out rather than made
+for you, and `npm run smoke` in that directory is the test that proves a batch
+finishes. Other runtimes use the same Task contract through their adapter.
 
-Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and BullMQ, previews
-what is missing, refuses to overwrite generated Rules, and prints a next action
-for every failure. Open the Workbench URL printed by `rhinoq dev` to see a
+Set `DATABASE_URL` before `init`. The CLI detects PostgreSQL and configured
+runtime prerequisites (including BullMQ when present), previews what is
+missing, refuses to overwrite generated Rules, and prints a next action for
+every failure. Open the Workbench URL printed by `rhinoq dev` to see a
 technically successful Execution whose real-world Task is `uncertain`. For the
 generic async control-loop demo, use `npx rhinoq fixture async`: it creates a
 completed step, a failed attempt and an expired approval waitpoint so the
@@ -276,6 +338,26 @@ Workbench's Async Flight Recorder has something real to explain. The Node-only
 path mounts the same self-contained, read-only Task Workbench used by the SDK,
 including live state buckets, per-attempt detail and Flight Recorder attention;
 it binds to loopback and does not enable operator actions.
+
+To rehearse the completed-but-wrong hero flow on a disposable database:
+
+```bash
+npx rhinoq lab run completed-but-missing-output --confirm-disposable
+npx rhinoq dev
+```
+
+Failure Lab creates one additive Task through public commands: its Execution is
+technically `succeeded`, no result evidence is attached, and the Task is
+`uncertain`. It prints deterministic evidence, affected scope and the only safe
+next action (`recheck-output`). The command refuses before connecting to
+PostgreSQL unless disposable-database confirmation is explicit.
+
+Workbench Task detail now includes a deterministic Incident Explainer answering
+what happened, why, affected Task/item/owner scope and which next actions are
+eligible. It derives `verified`, `violated` or `unknown` only from stored
+verification/runtime/provider evidence. Portable runtime capability reports
+gate cancellation in both the page and backend; `unsupported` is not rendered
+as an actionable button and a direct request is refused before store mutation.
 
 The five-minute path uses the isolated Task profile. To continue into the
 Verified Tasks loop, build the Go CLI and Gateway from the same checkout, apply
@@ -346,8 +428,9 @@ failed QueueEvents connection from another queue.
 
 Frontend bundles can import `@rhinoq/node/browser` or `@rhinoq/node/react`
 without entering the PostgreSQL/Nest lifecycle graph. Server integrations can
-use `@rhinoq/node/server` and BullMQ-only code can use
-`@rhinoq/node/bullmq`; ESM and CommonJS smoke tests cover every subpath.
+use `@rhinoq/node/server`; runtime-specific code can use
+`@rhinoq/node/bullmq` or `@rhinoq/node/sqs`. ESM and CommonJS smoke tests cover
+every subpath.
 
 `--owner-property` points at the principal installed by upstream application
 authentication. It mounts the owner API at `/tasks` and the self-contained Task
@@ -359,10 +442,11 @@ If the application has no PostgreSQL service, add `--local-postgres` to generate
 a loopback-only Compose service for evaluation. Production database ownership,
 credentials and backups remain deployment responsibilities.
 
-`createBullMQIntegration` reuses the
-application's PostgreSQL pool, Queue and QueueEvents, enables bounded known-job
+The BullMQ preset `createBullMQIntegration` reuses the application's
+PostgreSQL pool, Queue and QueueEvents, enables bounded known-job
 reconciliation, and requires the application to choose `single` or `fanout`
-semantics explicitly. It never scans or mutates the application's Redis.
+semantics explicitly. It never scans or mutates the application's Redis. This
+is one adapter preset, not the Task platform boundary.
 
 For NestJS, the same `@rhinoq/node` package exposes a `/nest` subpath. Its async
 module factory installs the embedded Task
@@ -624,7 +708,8 @@ A Go-only team does not need the Node package at all:
 ## The demo that explains the product
 
 The official [Next.js + BullMQ + PostgreSQL + Stripe sandbox demo](./examples/nextjs-bullmq-stripe/)
-reproduces the failure RhinoQ is built for:
+uses BullMQ as a concrete runtime adapter to reproduce the failure RhinoQ is
+built for:
 
 1. BullMQ completes a refund job.
 2. Stripe accepts the idempotent request, but the response is lost.
@@ -711,11 +796,11 @@ This label applies to that declared effect, not to arbitrary code in the Task.
 Missing identity, provider idempotency, independent verification or retry proof
 downgrades the report instead of producing a misleading exactly-once claim.
 
-## Stop duplicate application writes across BullMQ retries
+## Stop duplicate application writes across runtime retries
 
 For a fan-out item, a retry can be a second handler run even when the business
 write from the first run already committed. The embedded Task profile provides
-an item-scoped transaction gate without replacing BullMQ:
+an item-scoped transaction gate without replacing the execution runtime:
 
 ```ts
 const result = await tasks.onceForItem(executionId, 'deduct-credits', async (tx) => {
@@ -725,7 +810,7 @@ const result = await tasks.onceForItem(executionId, 'deduct-credits', async (tx)
   );
   return 'written';
 });
-// A later BullMQ retry receives { executed: false } for this item/effect key.
+// A later runtime retry receives { executed: false } for this item/effect key.
 ```
 
 The claim and the application write commit together in PostgreSQL, and the
@@ -749,6 +834,11 @@ arbitrary SQL from the browser. A changed precondition makes the plan stale; an
 unknown callback result becomes `uncertain`.
 
 See [Safe repair](./docs/safe-repair.md) and [Workbench](./docs/workbench.md).
+
+The Node SDK also exposes `GuardedRecovery` for application/operator clients.
+It derives a deterministic repair identity from an idempotency key, refuses to
+execute without a preview and separate approval, and requires a post-check;
+`PostgresRecoveryLedger` supplies the cross-process idempotency fence.
 
 ## Findings reach people
 
@@ -833,16 +923,17 @@ See [Workbench](./docs/workbench.md).
 
 RhinoQ is not another queue and does not require rewriting handlers:
 
-- **BullMQ bridge:** observes explicitly tracked jobs and reconciles known jobs;
-  the application still owns Redis, enqueueing and worker code. A retry of a
-  job the runtime reuses becomes a new attempt with its own outcome, so a batch
-  view can say "attempt 1 failed with a 502, attempt 2 succeeded" instead of
-  showing one row that changed its mind. Failed events close the current
-  attempt even when BullMQ will retry; a terminal-failure classifier decides
-  whether the parent Task also fails. One projector owns each `runtimeScope`;
-  use the Node SDK's PostgreSQL advisory lease when that scope spans processes.
-  Failed projections can also be recorded through the application-owned
-  PostgreSQL failure sink before process-local error handling runs.
+- **Runtime adapters:** translate runtime-specific lifecycle facts into the
+  portable Task contract; the application still owns its queue, broker,
+  enqueueing and worker code. The BullMQ bridge is the first production-shaped
+  adapter, while manual/custom and SQS proof adapters use the same projector.
+  A retry of work that the runtime reuses becomes a new attempt with its own
+  outcome, so a batch view can say "attempt 1 failed with a 502, attempt 2
+  succeeded" instead of showing one row that changed its mind. One projector
+  owns each `runtimeScope`; use the Node SDK's PostgreSQL advisory lease when
+  that scope spans processes. Failed projections can also be recorded through
+  the application-owned PostgreSQL failure sink before process-local error
+  handling runs.
 - **Fan-out signals:** `onItemsSettled` fires exactly once when every item of a
   batch reaches a terminal state — decided in one SQL statement, so it survives
   a crash and several bridges rather than being counted in application code.
@@ -885,6 +976,9 @@ exists but is not the default browser polling shape.
 | Durable multi-node notification scheduler | implemented in Go; SQL, real PostgreSQL lease takeover and memory failover tested |
 | Rule lifecycle: create, explain, enable, disable, delete, from Go or Node | implemented |
 | Bounded, previewable retention for observation and delivery evidence | implemented |
+| Runtime-neutral adapter contracts and portable Task projector | implemented; manual/custom, SQS proof and BullMQ compositions tested |
+| Durable multi-replica adoption report | implemented as an opt-in PostgreSQL profile; measured facts only |
+| Guarded recovery preview/idempotency/post-check | implemented; Go repair service remains mutation authority |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
 | Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.11 verified public prerelease published |
@@ -931,7 +1025,7 @@ through a public issue.
 
 - [Start here: complete beginner guide](./docs/start-here.md)
 - [Five-minute setup](./docs/getting-started.md)
-- [Node.js and BullMQ](./docs/nodejs.md)
+- [Node.js adapters and BullMQ integration](./docs/nodejs.md)
 - [NestJS integration package](./sdks/nest/README.md)
 - [ProviderOperation](./docs/provider-operations.md)
 - [Safe repair](./docs/safe-repair.md)

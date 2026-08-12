@@ -69,7 +69,7 @@ test('mounting without an operator gate is refused at construction', () => {
 
 test('a request that fails the operator gate sees no data at all', async () => {
   const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => false });
-  for (const path of ['/rhinoq', '/rhinoq/api/overview', '/rhinoq/api/runtime-health', '/rhinoq/api/tasks', '/rhinoq/api/tasks/task-1', '/rhinoq/api/tasks/task-1/flight-recorder']) {
+  for (const path of ['/rhinoq', '/rhinoq/api/overview', '/rhinoq/api/runtime-health', '/rhinoq/api/tasks', '/rhinoq/api/tasks/task-1', '/rhinoq/api/tasks/task-1/flight-recorder', '/rhinoq/api/tasks/task-1/incident-explanation']) {
     const response = await get(handler, path);
     const body = await response.text();
     assert.equal(response.status, 403, path);
@@ -99,6 +99,7 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.ok(!/https?:\/\/(?!app\.test)/.test(html), 'the page must not fetch from another origin');
   assert.ok(!html.includes('<script src'), 'no external script tags');
   assert.match(html, /Async Flight Recorder/);
+  assert.match(html, /Incident Explainer/);
   assert.match(html, /Runtime health/);
   assert.match(html, /Operator workspace/);
   assert.match(html, /Async work, explained/);
@@ -155,6 +156,44 @@ test('the detail view joins runtime job identity from the server-side read', asy
   assert.match(body.flightRecorder.explanation, /progress|finished/i);
   assert.match(body.ui.explanation.headline, /attention|progress/i);
   assert.ok(body.ui.explanation.recommendedAction.label);
+  assert.equal(body.incidentExplanation.schemaVersion, 1);
+  assert.equal(body.incidentExplanation.taskId, 'task-1');
+  assert.ok(body.incidentExplanation.evidence.length > 0);
+});
+
+test('Incident Explainer has a focused authorized endpoint', async () => {
+  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true });
+  const response = await get(handler, '/rhinoq/api/tasks/task-1/incident-explanation');
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.schemaVersion, 1);
+  assert.equal(body.taskId, 'task-1');
+  assert.equal(body.businessOutcome, 'unknown');
+  assert.ok(Array.isArray(body.recommendedActions));
+});
+
+test('Workbench refuses cancellation when runtime capability says unsupported', async () => {
+  const recorder = {};
+  const tasks = source(recorder);
+  const original = tasks.getTask;
+  tasks.getTask = async () => {
+    const value = await original();
+    return { ...value, executions: value.executions.map((execution) => ({ ...execution, runtimeScope: 'reports' })) };
+  };
+  const handler = createWorkbenchHandler({
+    tasks, requireOperator: () => true, actions: true,
+    runtimeReports: async () => [{
+      name: 'bullmq', scope: 'reports',
+      capabilities: { events: 'push', dispatch: true, inspect: true, cancel: 'unsupported', progress: true, stableAttempts: false },
+      health: { status: 'healthy', checkedAt: new Date().toISOString() }, guaranteeGaps: ['cancellation unsupported'],
+    }],
+  });
+  const response = await handler(new Request('http://app.test/rhinoq/api/tasks/task-1/cancel', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedVersion: 4 }),
+  }));
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).code, 'RHINOQ_UNSUPPORTED');
+  assert.equal(recorder.cancelled, undefined);
 });
 
 test('the Flight Recorder has a focused endpoint for operator tooling', async () => {

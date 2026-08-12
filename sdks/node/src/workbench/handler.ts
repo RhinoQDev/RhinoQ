@@ -15,6 +15,8 @@ import { taskFlightRecorder, taskFlightRecorderDiagnostic, type TaskFlightRecord
 import { taskUIModel, type TaskUIModel } from '../tasks/ui.js';
 import { safeOperatorURL, type RuntimeHealthReader, type RuntimeJobLink } from '../observe/runtime-health.js';
 import { workbenchPage } from './page.js';
+import { explainTaskIncident, type IncidentExplanation } from '../tasks/incident-explanation.js';
+import type { RuntimeAdapterReport } from '../runtime/contracts.js';
 
 /** The reads the Workbench performs. `PostgresTaskClient` satisfies it. */
 export interface WorkbenchTaskSource {
@@ -67,6 +69,8 @@ export interface WorkbenchHandlerOptions {
   runtimeHealth?: readonly RuntimeHealthReader[];
   /** Optional operator-only link to the corresponding provider job. */
   runtimeJobLink?: RuntimeJobLink;
+  /** Portable capability/health reports used to gate runtime actions. */
+  runtimeReports?(): Promise<RuntimeAdapterReport[]>;
 }
 
 const DEFAULT_STATES: TaskState[] = [
@@ -183,6 +187,7 @@ export function createWorkbenchHandler(
           providerOperationsByTask: options.providerOperationsByTask,
           runtimeJobLink: options.runtimeJobLink,
           runtimeHealth: options.runtimeHealth,
+          runtimeReports: options.runtimeReports,
         });
       }
 
@@ -227,7 +232,12 @@ export function createWorkbenchHandler(
         const taskId = decodeURIComponent(relative[2] as string);
 
         if (request.method === 'GET' && relative.length === 3) {
-          return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId, options.providerOperationsByTask, options.runtimeJobLink)) });
+          return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId, options.providerOperationsByTask, options.runtimeJobLink, options.runtimeReports)) });
+        }
+
+        if (request.method === 'GET' && relative.length === 4 && relative[3] === 'incident-explanation') {
+          const detail = await taskDetail(options.tasks, taskId, options.providerOperationsByTask, undefined, options.runtimeReports);
+          return json(detail.incidentExplanation);
         }
 
         if (request.method === 'GET' && relative.length === 4 && relative[3] === 'flight-recorder') {
@@ -249,6 +259,16 @@ export function createWorkbenchHandler(
           }
           if (typeof options.tasks.requestTaskCancellation !== 'function') {
             return json({ code: 'RHINOQ_UNSUPPORTED', message: 'this store cannot cancel' }, 501);
+          }
+          if (options.runtimeReports) {
+            const detail = await taskDetail(options.tasks, taskId, options.providerOperationsByTask, undefined, options.runtimeReports);
+            const cancel = detail.incidentExplanation.recommendedActions.find((action) => action.id === 'request-cancellation');
+            if (!cancel || cancel.availability !== 'available') {
+              return json({
+                code: 'RHINOQ_UNSUPPORTED',
+                message: cancel?.reason ?? 'runtime cancellation capability is unavailable',
+              }, 409);
+            }
           }
           const body = (await request.json().catch(() => ({}))) as { expectedVersion?: unknown };
           if (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0) {
@@ -369,6 +389,7 @@ interface StreamOptions {
   providerOperationsByTask?: WorkbenchHandlerOptions['providerOperationsByTask'];
   runtimeJobLink?: RuntimeJobLink;
   runtimeHealth?: readonly RuntimeHealthReader[];
+  runtimeReports?: WorkbenchHandlerOptions['runtimeReports'];
 }
 
 /**
@@ -469,7 +490,7 @@ async function collect(options: StreamOptions): Promise<Record<string, unknown>>
   lists[ATTENTION_BUCKET] = (await listAttentionTasks(options.tasks, options.limit)).map(withTaskUI);
   counts[ATTENTION_BUCKET] = lists[ATTENTION_BUCKET].length;
   const detail = options.taskId
-    ? await taskDetail(options.tasks, options.taskId, options.providerOperationsByTask, options.runtimeJobLink).catch(() => undefined)
+    ? await taskDetail(options.tasks, options.taskId, options.providerOperationsByTask, options.runtimeJobLink, options.runtimeReports).catch(() => undefined)
     : undefined;
   return {
     schemaVersion: 1,
@@ -519,15 +540,17 @@ async function taskDetail(
   taskId: string,
   providerOperationsByTask?: (taskId: string) => Promise<ProviderOperationRecord[]>,
   runtimeJobLink?: RuntimeJobLink,
-): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder }> {
+  runtimeReports?: () => Promise<RuntimeAdapterReport[]>,
+): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder; incidentExplanation: IncidentExplanation }> {
   const task = await tasks.getTask(taskId);
-  const [refs, results, waitpoints, verifications, artifacts, providerOperations] = await Promise.all([
+  const [refs, results, waitpoints, verifications, artifacts, providerOperations, reports] = await Promise.all([
     tasks.listTaskExecutionRuntimeRefs?.(taskId).catch(() => undefined),
     tasks.getTaskExecutionResults(taskId).catch(() => undefined),
     tasks.listTaskWaitpoints?.(taskId).catch(() => undefined),
     tasks.listTaskVerifications?.(taskId).catch(() => undefined),
     tasks.listTaskArtifacts?.(taskId).catch(() => undefined),
     (providerOperationsByTask ?? tasks.listProviderOperationsByTask?.bind(tasks))?.(taskId).catch(() => undefined),
+    runtimeReports?.().catch(() => undefined),
   ]);
 
   const runtimeRefs = new Map<string, { externalId: string; runtime: string; runtimeScope?: string }>();
@@ -578,6 +601,12 @@ async function taskDetail(
       verifications: verifications ?? [],
       artifacts: artifacts ?? [],
       providerOperations: providerOperations ?? [],
+    }),
+    incidentExplanation: explainTaskIncident({
+      task,
+      verifications: verifications ?? [],
+      providerOperations: providerOperations ?? [],
+      runtimeReports: reports,
     }),
   };
 }

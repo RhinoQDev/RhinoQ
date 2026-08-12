@@ -46,6 +46,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /npx rhinoq init/);
   assert.match(help.stdout, /npx rhinoq adopt --mode single/);
+  assert.match(help.stdout, /lab run completed-but-missing-output --confirm-disposable/);
   const version = spawnSync(process.execPath, [developerCLI, '--version'], { encoding: 'utf8', env: {} });
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), packageVersion);
@@ -69,6 +70,18 @@ test('developer CLI help and Rule generator work without hidden services or over
     assert.equal(apply.status, 1);
     assert.match(apply.stderr, /RHINOQ_AGENT_URL\/RHINOQ_GATEWAY_URL/);
   } finally { rmSync(cwd, { recursive:true, force:true }); }
+});
+
+test('Failure Lab refuses to connect without explicit disposable confirmation', () => {
+  const result = spawnSync(
+    process.execPath,
+    [developerCLI, 'lab', 'run', 'completed-but-missing-output'],
+    { encoding: 'utf8', env: {} },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires disposable database confirmation/);
+  assert.match(result.stderr, /--confirm-disposable/);
+  assert.doesNotMatch(result.stderr, /PostgreSQL connection/);
 });
 
 test('verify apply sends the Rule through the Go Gateway and keeps it disabled', async () => {

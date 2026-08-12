@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+- Added the first public runtime-neutral Node adapter contracts for durable
+  `(runtime, scope, externalId)` identity, portable lifecycle events,
+  observations and capability-based optional operations. Boundary validators
+  fail closed when failure terminality, unknown-state reasons, timestamps,
+  attempts or progress are ambiguous. Added a portable, per-reference serialized
+  projector, generic Observe/Track/Control integration and manual adapter proof.
+  Reserve/bind can resume after a crash, and a dispatch accepted by the runtime
+  but not durably bound becomes non-retryable `RHINOQ_RUNTIME_DISPATCH_UNCERTAIN`
+  with its receipt. Existing BullMQ APIs and behavior are unchanged. Generic
+  inspection reconciliation, guarded cancellation, health/capability gap
+  reports and a read-only adapter conformance testkit are included. Added a
+  development-preview BullMQ
+  runtime adapter that translates QueueEvents, explicit terminal failure,
+  progress/results, dispatch receipts, inspection, cancellation and health into
+  portable contracts. Translation failures degrade health instead of being
+  silently swallowed; the legacy BullMQ facade remains the supported path
+  during parity migration.
+- Added `GuardedRecovery` with deterministic repair IDs, preview/precondition
+  enforcement, separate approval, a memory/PostgreSQL idempotency ledger and a
+  mandatory post-check that leaves unknown evidence `uncertain`. A lost execute
+  response consumes the idempotency fence as `uncertain` instead of permitting
+  a blind second mutation; reusing a key with a different repair payload is
+  rejected. The existing Go repair service remains the mutation authority.
+- Added resolver-backed observe-only Shadow Mode. An event for an unknown
+  runtime reference may be mapped to stable Task/Execution identity, bound
+  durably and replayed once through the portable projector without changing the
+  producer or worker. Mismatched identity fails before writes; unresolved work
+  remains counted rather than becoming a guessed Task. Added an in-process
+  adoption report containing only observed events, references, bindings,
+  retries, uncertain/terminal outcomes and capability gaps. Added an explicit
+  PostgreSQL adoption-event profile with event-id deduplication and aggregate
+  reports across replicas; process-local reporting remains the safe default.
+- Added the SQS proof adapter. It models polling/redelivery and unknown
+  readback, keeps cancellation unsupported, and accepts host-owned send/inspect
+  callbacks without importing the AWS SDK. Added
+  `createBullMQPortableIntegration()` as the compatibility-facade migration
+  composition over the portable adapter/projector.
+- Added `rhinoq lab run completed-but-missing-output --confirm-disposable` and
+  the reusable Failure Lab service. The deterministic scenario records a
+  succeeded Execution without output evidence, leaves its Task uncertain and
+  returns an evidence-backed incident explanation with affected scope and one
+  read-only recheck action. The CLI refuses before connecting to PostgreSQL
+  unless disposable-database confirmation is explicit.
+- Added a deterministic Incident Explainer to Workbench Task detail and a
+  focused operator-authorized endpoint. It separates technical Task/Execution
+  state from verified/violated/unknown business outcome and returns bounded
+  evidence, affected scope, evidence-backed causes and guarded actions. Runtime
+  capability reports now hide unsupported cancellation in the UI and make the
+  backend refuse it before Task mutation.
 - Refreshed the embedded Task Center and Node Workbench with one responsive
   mineral/ink visual system, clearer page and section hierarchy, denser
   operator tables, calmer user-facing Task cards, consistent status language,

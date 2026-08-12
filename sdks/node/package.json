@@ -42,6 +42,11 @@
       "import": "./dist/bullmq-entry.js",
       "require": "./dist/cjs/bullmq-entry.js"
     },
+    "./sqs": {
+      "types": "./dist/sqs-entry.d.ts",
+      "import": "./dist/sqs-entry.js",
+      "require": "./dist/cjs/sqs-entry.js"
+    },
     "./server": {
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js",

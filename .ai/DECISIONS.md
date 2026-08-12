@@ -499,6 +499,54 @@
   stored Task data unchanged.
 - **Owner:** Node SDK + product
 
+## ADR-0035 — Recovery and adoption evidence use explicit durable fences
+
+- **Status:** accepted
+- **Context:** A previewed repair must not be re-issued by a second operator or
+  replica, and an in-process Shadow Mode counter cannot describe a deployment
+  with several adopters. SQS also cannot be made to look like a push queue or a
+  reliably cancellable runtime without inventing evidence.
+- **Decision:** The Node `GuardedRecovery` workflow derives a stable repair ID
+  from a caller idempotency key, requires preview, a different approver and a
+  post-check, and can persist its execution fence in PostgreSQL. Adoption
+  facts are append-only and deduplicated by event ID in an explicitly installed
+  PostgreSQL profile; report aggregation is therefore replica-safe. The SQS
+  proof adapter declares polling, unstable attempts and unsupported cancel,
+  maps receive count to an observed attempt and reports missing readback as
+  unknown. `createBullMQPortableIntegration()` composes BullMQ translation and
+  control over the portable integration while the compatibility preset retains
+  its public shape during migration.
+- **Consequences:** Unknown recovery/readback remains visible rather than being
+  retried or treated as failure. A lost recovery response consumes its fence as
+  `uncertain`, so it cannot be retried blindly. Durable adoption totals require
+  opting into the SQL profile and a stable replica ID; no runtime-wide or
+  savings claim is made by the memory default. SQS hosts retain ownership of
+  AWS clients and receipt handles.
+- **Rollback:** Stop installing the optional profiles and remove the new
+  factories/exports; existing repair rows, Task rows and BullMQ compatibility
+  APIs remain valid.
+- **Owner:** Node SDK + PostgreSQL adapter + architecture
+
+## ADR-0033 — Failure Lab is additive, disposable and evidence-driven
+
+- **Status:** accepted
+- **Context:** A useful reliability demo must reproduce completed-but-wrong
+  behavior, but a chaos command pointed at production could create the incident
+  it is meant to teach. Runtime completion alone also cannot prove a missing
+  artifact; absence of evidence is an unknown outcome.
+- **Decision:** Failure Lab scenarios use public Task commands to create
+  uniquely identified additive fixtures. The first scenario records one
+  succeeded Execution with no result reference and transitions the Task to
+  `uncertain`. Its explanation and safe action are deterministic. The CLI
+  requires `--confirm-disposable` before resolving or opening a database.
+- **Consequences:** teams can rehearse the hero flow without queue mutation,
+  provider calls, deletes or blind retry. The current lab proves explanation,
+  not recovery execution; guarded repair and post-repair verification remain a
+  separate milestone.
+- **Rollback:** remove the lab command/service; created Tasks remain ordinary
+  additive Task history and require no schema rollback.
+- **Owner:** Node SDK + product
+
 ## ADR-0024 — Application-owned Task vertical slice
 
 - **Status:** accepted
@@ -636,4 +684,73 @@
   mutation application-owned.
 - **Rollback:** stop supplying the inspector and link callbacks; Task storage,
   projection and owner APIs are unchanged.
+- **Owner:** Node SDK + product
+
+## ADR-0031 — Runtime adapters supply facts; the Task client owns transitions
+
+- **Status:** accepted
+- **Context:** `BullMQTaskBridge` combined queue listeners, retry inference,
+  dispatch and cancellation with portable Task projection. Reusing that class
+  for another runtime would either import BullMQ semantics into core or copy a
+  second state coordinator.
+- **Decision:** Node defines portable `RuntimeRef`, `RuntimeEvent`,
+  `RuntimeObservation` and capability contracts. `RuntimeTaskProjector`
+  serializes events per complete runtime reference and invokes the existing
+  fenced `TaskClient`; it does not inspect or control a runtime. Adapters must
+  provide terminal failure and unknown reasons. Observe and Track do not
+  require dispatch capability. A dispatch receipt that cannot be bound is
+  reported as non-retryable `RHINOQ_RUNTIME_DISPATCH_UNCERTAIN` with the known
+  receipt.
+- **Consequences:** custom runtimes can prove Task lifecycle without BullMQ,
+  while PostgreSQL/Go commands remain authoritative for legal transitions.
+  BullMQ stays the supported production adapter. A portable BullMQ translator
+  exists, but its compatibility facade remains on the legacy bridge until
+  lease, fan-out settlement and fault tests pass through the new composition;
+  a second production adapter must also pass contract and fault tests before a
+  multi-runtime claim. Generic reconciliation is bounded to adapter inspection of
+  an already-known reference; runtime-wide discovery remains future work.
+- **Rollback:** stop exporting the preview runtime modules. Existing BullMQ
+  APIs, Task schema and stored runtime references are unchanged.
+- **Owner:** Node SDK + architecture
+
+## ADR-0032 — Shadow Mode requires application-owned stable identity
+
+- **Status:** accepted
+- **Context:** Observe-only adoption must show existing work without taking
+  dispatch/cancel ownership. Runtime events alone usually lack Task type,
+  authenticated owner and stable business item identity; guessing those values
+  would corrupt aggregation and authorization.
+- **Decision:** an application resolver may map an unbound portable event to a
+  complete Task request, Execution ID and the exact same `RuntimeRef`. RhinoQ
+  creates/binds idempotently, re-reads the binding and replays the original
+  event. A mismatched reference fails before writes; `undefined` stays
+  unresolved. Adoption reports count only events seen in this process and
+  capability gaps reported by configured adapters.
+- **Consequences:** existing producer and worker contracts remain unchanged,
+  while a fast first-seen terminal event is not lost. The default report is
+  process-local; the optional PostgreSQL adoption-event profile supports
+  replica-safe totals. Neither path claims code savings or reliability
+  improvement without external evidence.
+- **Rollback:** remove the resolver and in-process report; explicit Track and
+  Control paths and all durable Task rows remain valid.
+- **Owner:** Node SDK + product
+
+## ADR-0034 — Incident explanation is deterministic and capability-gated
+
+- **Status:** accepted
+- **Context:** Operators need one answer joining Task, attempts, verification
+  and provider evidence. Free-form or AI-authored conclusions cannot safely
+  decide whether an outcome is correct or whether a runtime mutation is
+  eligible. Hiding an action in the browser alone is not a safety boundary.
+- **Decision:** `IncidentExplanation` is a pure bounded projection of stored
+  evidence and runtime capability reports. Business outcome is selected only
+  from verification status; technical success without verification remains
+  unknown. Workbench renders the model and exposes it behind the operator gate.
+  Backend cancellation repeats capability checks before Task mutation.
+- **Consequences:** UI and API agree on affected scope, evidence, likely causes
+  and action availability. Missing capabilities stay unknown, explicit
+  unsupported capability is refused, and optional AI may later paraphrase but
+  cannot alter state/severity/eligibility.
+- **Rollback:** stop rendering/exposing the derived explanation. Durable Task,
+  verification and provider records are unchanged.
 - **Owner:** Node SDK + product

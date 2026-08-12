@@ -1,16 +1,158 @@
 # RhinoQ for Node.js
 
-A Task experience for async work: progress, cancellation, per-attempt history,
-recovery, a user Task Center and an operator Workbench. Your execution runtime
-and business logic stay yours; the surrounding task platform does not have to.
+A runtime-independent Task reliability layer for async work: progress,
+cancellation, per-attempt history, recovery, a user Task Center and an operator
+Workbench. Your execution runtime and business logic stay yours; the Task
+platform does not replace them.
 
-The production-shaped adapter available today is BullMQ. It is the first
-runtime integration, not RhinoQ's product identity.
+The Node SDK exposes one portable adapter contract. BullMQ currently has the
+deepest Node coverage; manual/custom adapters and the SQS proof adapter exercise
+the same core without making BullMQ the product boundary.
 
-## The supported way in
+For custom runtimes, the development-preview `createRhinoQ()` API exposes
+Observe, Track and capability-gated Control over portable runtime events:
 
-In an application that already has a `pg.Pool`, a BullMQ `Queue` and its
-`QueueEvents`:
+```ts
+const adapter = createManualRuntimeAdapter('manual', 'reports');
+const app = createRhinoQ({
+  client: new PostgresTaskClient(pool),
+  terminalProjection: 'single-execution',
+  adapters: [adapter],
+});
+
+await app.track({ task, executionId, ref });
+await app.start();
+await adapter.emit({ type: 'started', ref, occurredAt: new Date().toISOString() });
+```
+
+An adapter that implements `inspect` can reconcile one already-known reference
+without scanning its runtime:
+
+```ts
+const observation = await app.reconcile('custom', ref);
+const runtimes = await app.runtimeReports(); // health, capabilities, guarantee gaps
+```
+
+`app.cancel(taskId, adapterName, ref)` checks capability and verifies that the
+server-side reference belongs to the Task before requesting cancellation.
+`unsupported` fails before mutation; `best_effort` results such as
+`cannot_cancel_safely` are persisted as evidence rather than reported as
+success. Adapter authors can run the read-only
+`checkRuntimeAdapterContract(adapter, ref)` testkit without invoking dispatch
+or cancel.
+
+BullMQ can use the same portable path explicitly:
+
+```ts
+const adapter = createBullMQRuntimeAdapter({
+  scope: queue.name,
+  queue,
+  events,
+  jobName: 'report.export',
+  jobId: ({ idempotencyKey }) => `rhinoq-${idempotencyKey}`,
+  terminalFailure: async (event) => isTerminal(queue, event.jobId),
+});
+const app = createRhinoQ({ client: tasks, terminalProjection: 'single-execution', adapters: [adapter] });
+```
+
+The adapter refuses BullMQ custom IDs containing `:` before enqueue, requires
+the returned job ID to equal the reserved ID, defaults failed events to
+non-terminal, and degrades health when event translation/projection fails.
+Applications migrating the compatibility facade can use
+`createBullMQPortableIntegration()`. It composes the same Queue/QueueEvents
+objects through `BullMQRuntimeAdapter -> createRhinoQ()`; the legacy
+`rhinoq()` preset remains available while its older lease/fan-out surface is
+kept byte-compatible.
+
+The SQS proof adapter is available from `@rhinoq/node/sqs`. It models
+`ApproximateReceiveCount` as an observed redelivery attempt, reports missing
+readback as `unknown`, and always fails closed for cancellation. It does not
+import or own the AWS SDK; the host supplies send/inspect callbacks.
+
+### Observe-only Shadow Mode
+
+For work the host application already dispatches, provide a deterministic
+identity resolver. RhinoQ does not enqueue or cancel anything:
+
+```ts
+const app = createRhinoQ({
+  client: tasks,
+  terminalProjection: 'single-execution',
+  adapters: [adapter],
+  resolveUnboundEvent: (event) => ({
+    task: {
+      id: `task-${event.ref.externalId}`,
+      type: 'report.export',
+      ownerId: ownerFor(event.ref),
+      definitionVersion: 1,
+    },
+    executionId: `execution-${event.ref.externalId}`,
+    ref: event.ref,
+  }),
+});
+```
+
+The resolver must return the exact event reference. RhinoQ creates and binds
+the Task attempt idempotently, then replays the original event so a first-seen
+`succeeded` job does not remain queued. Returning `undefined` leaves the event
+unresolved and creates no guessed Task. `await app.adoptionReport()` returns
+measured counts for observed events/references, bound Tasks, retry attempts,
+uncertain/terminal failures, unresolved identity and capability gaps. For
+multi-replica adoption, pass `adoptionStore: new PostgresAdoptionReportStore(pool)`
+and a stable `adoptionReplicaId`, then install `ADOPTION_REPORT_SCHEMA_SQL`;
+events are deduplicated by event ID and the report is aggregated from all
+replicas rather than process memory.
+
+### Guarded recovery
+
+`GuardedRecovery` wraps the Gateway repair API with a deterministic repair ID,
+preview/precondition checks, a separate approver, an idempotency ledger and a
+mandatory post-check. `execute()` is preview-only unless `confirm: true` is
+supplied; an unknown post-check remains `uncertain` and is never retried
+blindly. A lost execute response consumes the fence as `uncertain` instead of
+leaving a retryable running record. Use `PostgresRecoveryLedger` for a
+multi-process idempotency fence.
+
+### Failure Lab
+
+Run the completed-but-wrong rehearsal only against disposable resources:
+
+```bash
+npx rhinoq lab run completed-but-missing-output --confirm-disposable
+npx rhinoq dev
+```
+
+The lab writes one additive fixture through the public Task client. It does not
+delete, drain, pause, retry or call an external provider. The returned incident
+model states what happened, why RhinoQ believes it, affected Task/item counts
+and a read-only `recheck-output` action. Missing confirmation is rejected before
+the CLI opens a database connection.
+
+### Incident Explainer
+
+The authorized Workbench detail and
+`GET /rhinoq/api/tasks/{taskId}/incident-explanation` expose a deterministic
+model containing summary, technical state, business outcome, bounded evidence,
+affected scope, evidence-backed cause hypotheses and guarded actions. Technical
+success without verification remains `unknown`.
+
+Supply `runtimeReports: () => app.runtimeReports()` to the Workbench handler to
+make runtime actions capability-aware. If any matching runtime reports cancel
+as `unsupported`, the cancellation button is hidden and the POST endpoint
+returns `RHINOQ_UNSUPPORTED` before requesting Task cancellation. Missing
+capability evidence remains `unknown`; it is never upgraded to supported.
+
+Failures must carry adapter-owned `terminal`; unknown results must carry a
+reason. Dispatch capability is checked before use. If a runtime accepts a
+dispatch but PostgreSQL binding fails, RhinoQ throws
+`RHINOQ_RUNTIME_DISPATCH_UNCERTAIN` with the receipt and explicitly marks it
+non-retryable, so callers reconcile and bind rather than dispatching twice.
+See the [manual runtime example](../../examples/manual-runtime/).
+
+## A concrete adapter path: BullMQ
+
+If the application already has a `pg.Pool`, a BullMQ `Queue` and its
+`QueueEvents`, the compatibility preset gives a low-friction starting point:
 
 ```ts
 import { rhinoq } from '@rhinoq/node';

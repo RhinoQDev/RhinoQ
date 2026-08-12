@@ -20,6 +20,7 @@ import {
 import { sendTestNotification } from '../notify/sender.js';
 import { createNodeWorkbenchMiddleware } from '../workbench/handler.js';
 import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
+import { runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -31,10 +32,11 @@ async function main(): Promise<void> {
     case 'doctor': await doctor(); break;
     case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
+    case 'lab': await lab(args); break;
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Adopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nGeneric async demo:\n  npx rhinoq fixture async\n  npx rhinoq fixture failure\n');
+      console.log('Adopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nGeneric async demo:\n  npx rhinoq fixture async\n  npx rhinoq fixture failure\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
@@ -1222,6 +1224,36 @@ function redactURL(value: string): string {
   } catch {
     return '(unparsable URL)';
   }
+}
+
+async function lab(args: string[]): Promise<void> {
+  const action = args[0];
+  const scenario = args[1] as FailureLabScenario | undefined;
+  const confirmed = args.includes('--confirm-disposable');
+  const unknown = args.slice(2).filter((argument) => argument !== '--confirm-disposable');
+  if (action !== 'run' || scenario !== 'completed-but-missing-output' || unknown.length > 0) {
+    fail(
+      'lab requires `run completed-but-missing-output`',
+      'Run: npx rhinoq lab run completed-but-missing-output --confirm-disposable',
+    );
+  }
+  if (!confirmed) {
+    fail(
+      'Failure Lab writes an additive incident fixture and requires disposable database confirmation',
+      'Re-run against a disposable/evaluation database with --confirm-disposable',
+    );
+  }
+  const pool = new Pool(requireDatabase(`lab run ${scenario} --confirm-disposable`).pool);
+  try {
+    const tasks = await installPostgresTaskProfile(pool);
+    const result = await runFailureLab(tasks, scenario);
+    console.log(`PASS Failure Lab ${scenario}`);
+    console.log(`TASK ${result.task.id} runtime=succeeded outcome=${result.explanation.businessOutcome}`);
+    console.log(`WHY ${result.explanation.technicalState}`);
+    console.log(`AFFECTED tasks=${result.explanation.affected.tasks} items=${result.explanation.affected.items}`);
+    console.log(`SAFE NEXT ${result.explanation.recommendedActions[0]!.label}`);
+    console.log('NEXT inspect and rehearse recovery: npx rhinoq dev');
+  } finally { await pool.end(); }
 }
 
 async function fixture(args: string[]): Promise<void> {

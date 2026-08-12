@@ -81,6 +81,8 @@ This layer contains stable types and protocols visible to adopters:
 - `JobDefinition`, `JobPayload` and `JobContext`;
 - versioned `TaskSnapshot` with `schemaVersion` and `entityVersion`;
 - `TaskProgress`, `TaskExecutionSummary` and command preconditions;
+- runtime-neutral `(runtime, scope, externalId)` identity, lifecycle events,
+  observations and capability reports for Node runtime adapters;
 - `EffectDefinition`, `ConfirmationPolicy` and `EffectState`;
 - transactional per-item application-effect claim result;
 - `OutcomeContract`, `OutcomeState`, `RetryPolicy`, `Lease` and `Attempt`;
@@ -92,6 +94,59 @@ backward-compatibility policy. `TaskSnapshot.entityVersion` is the aggregate
 revision: Task mutations and Execution create/update operations must increment
 it in the same store transaction. Incrementing only `Execution.Version` would
 make stale-response rejection in the frontend unsound.
+
+The Node runtime integration follows the same inward dependency rule:
+
+```text
+custom/BullMQ adapter -> RuntimeEvent/RuntimeObservation
+                     -> RuntimeTaskProjector -> TaskClient
+```
+
+The projector serializes facts per `RuntimeRef` and invokes fenced Task
+commands. It does not listen to a queue, infer retry terminality, inspect Redis,
+dispatch, or cancel. Adapters own those runtime semantics and expose optional
+operations through capabilities. A dispatch receipt that cannot be durably
+bound is `uncertain` and non-retryable; reconciliation must bind the known
+receipt before any new dispatch is considered.
+
+Generic reconciliation is bounded to one already-known `RuntimeRef`: the
+adapter's `inspect` result must return the exact same identity before it is
+translated into a portable event. Runtime reports derive guarantee gaps from
+capabilities instead of assuming every adapter can dispatch, inspect, cancel
+or report progress. Unsupported cancel is refused before requesting a Task
+cancellation; best-effort failure remains explicit evidence.
+
+`BullMQRuntimeAdapter` is the first translation implementation of this port.
+BullMQ lifecycle names and retry inference terminate inside that adapter. The
+portable projector sees only normalized facts with adapter-owned terminality.
+`createBullMQPortableIntegration()` is the migration composition for new
+adopters: BullMQ translation/control is supplied by the adapter and lifecycle
+projection by `createRhinoQ()`. The legacy `BullMQTaskBridge` remains a
+byte-compatible facade during the beta so existing lease, fan-out and
+settlement callers do not change underneath them.
+
+Shadow Mode may resolve an unbound event into a complete Task create request,
+Execution ID and the exact same RuntimeRef. Binding commits before the original
+event is replayed. A missing resolver result is evidence of an identity gap and
+does not create a synthetic Task. The default in-process adoption report is
+descriptive only; an explicitly installed PostgreSQL adoption-event profile
+deduplicates facts by event ID and aggregates them across replicas. Neither
+profile infers LOC savings, runtime-wide job totals or reliability from events
+the adapter did not observe.
+
+Failure Lab scenarios are additive Application-level scripts over public Task
+commands. A scenario declares its evidence and safe next action; it cannot call
+queue administration or external mutation APIs. The CLI composition root adds
+an explicit disposable-resource confirmation before opening PostgreSQL. Lab
+runtime success remains separate from business outcome evidence, so the hero
+scenario terminates at `uncertain`, not a fabricated failure or success.
+
+Incident explanation is a pure deterministic projection of Task snapshots,
+verification records, provider operation states and runtime capability reports.
+Prose labels cannot change business outcome or action eligibility. Workbench
+authorization protects both the embedded view and focused explanation endpoint.
+Mutation is checked again server-side: UI hiding is not an authorization or
+safety boundary.
 
 ### Layer 2 — Domain (Go)
 

@@ -5,8 +5,9 @@
 > [releasing.md](./releasing.md) before evaluating it.
 
 RhinoQ supports JavaScript and TypeScript on Node.js 22+ through one package
-with two separate integration paths. Choose the smaller path that solves the
-actual problem.
+and one runtime-neutral Task contract. Choose the smallest integration surface
+that solves the actual problem: application-owned runtime events through an
+adapter, or the BullMQ preset when the application already uses BullMQ.
 
 | Need | Use | What it does | Extra process |
 |---|---|---|---:|

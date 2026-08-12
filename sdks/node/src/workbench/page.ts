@@ -203,6 +203,16 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
     <div id="attention" aria-live="polite"></div>
     <ol class="timeline" id="timeline"></ol>
   </div>
+  <div class="panel" id="incidentPanel" hidden>
+    <div class="head"><strong>Incident Explainer</strong><span class="muted" id="incidentOutcome"></span></div>
+    <div class="guidance">
+      <strong id="incidentSummary"></strong>
+      <p id="incidentTechnical"></p>
+      <p class="muted" id="incidentAffected"></p>
+      <div id="incidentEvidence"></div>
+      <p class="next" id="incidentActions"></p>
+    </div>
+  </div>
 </main>
 <script>
 const base = location.pathname.replace(/\/+$/, '');
@@ -318,7 +328,8 @@ function renderDetail() {
   $('guidanceProgress').textContent = explanation?.progressText || '';
   $('guidanceNext').textContent = 'Next action: ' + (explanation?.recommendedAction?.label || 'Review task details');
   const cancellable = ['pending', 'queued', 'running'].includes(detail.task.state);
-  $('cancelBtn').hidden = !(snap.actions && cancellable);
+  const cancelAction = detail.incidentExplanation?.recommendedActions?.find((action) => action.id === 'request-cancellation');
+  $('cancelBtn').hidden = !(snap.actions && cancellable && (!cancelAction || cancelAction.availability === 'available'));
   const next = new Map();
   $('detail').querySelector('tbody').innerHTML =
     '<tr><th>Item</th><th>Attempt</th><th>State</th><th>Runtime job</th><th>Outcome</th></tr>' +
@@ -334,7 +345,19 @@ function renderDetail() {
         '</td></tr>';
     }).join('');
   previousItems = next;
+  renderIncident(detail.incidentExplanation);
   renderFlightRecorder(detail.flightRecorder);
+}
+
+function renderIncident(incident) {
+  if (!incident) { $('incidentPanel').hidden = true; return; }
+  $('incidentPanel').hidden = false;
+  $('incidentOutcome').textContent = 'business outcome: ' + incident.businessOutcome;
+  $('incidentSummary').textContent = incident.summary;
+  $('incidentTechnical').textContent = incident.technicalState;
+  $('incidentAffected').textContent = 'Affected: ' + incident.affected.tasks + ' task(s), ' + incident.affected.items + ' item(s)' + (incident.affected.owners ? ', ' + incident.affected.owners + ' owner(s)' : '');
+  $('incidentEvidence').innerHTML = (incident.evidence || []).map((item) => '<p><strong>' + esc(item.kind) + ':</strong> ' + esc(item.statement) + '</p>').join('');
+  $('incidentActions').textContent = 'Next actions: ' + (incident.recommendedActions || []).map((action) => action.label + ' [' + action.availability + ']').join(' · ');
 }
 
 function renderFlightRecorder(recorder) {
@@ -369,6 +392,7 @@ function select(taskId) {
   previousItems = new Map();
   $('detailPanel').hidden = false;
   $('flightPanel').hidden = true;
+  $('incidentPanel').hidden = true;
   $('timeline').replaceChildren();
   $('detail').querySelector('tbody').innerHTML =
     '<tr><td><span class="skel w-lg"></span></td><td><span class="skel"></span></td><td><span class="skel"></span></td></tr>';
@@ -381,6 +405,7 @@ addEventListener('popstate', () => {
   if (!currentId) {
     $('detailPanel').hidden = true;
     $('flightPanel').hidden = true;
+    $('incidentPanel').hidden = true;
     connect();
     return;
   }

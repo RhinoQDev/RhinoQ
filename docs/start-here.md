@@ -8,8 +8,10 @@ RhinoQ has two layers that you can adopt separately:
 
 1. **Async Task Platform:** durable state, per-item attempts, progress,
    cancellation, reconciliation, owner API, Task Center and Workbench around
-   work your application already runs. The supported integration uses BullMQ as
-   its concrete runtime adapter.
+   work your application already runs. A portable adapter contract keeps this
+   layer independent of the execution runtime; BullMQ is the deepest Node
+   integration today, while manual/custom and SQS proof adapters exercise the
+   same boundary.
 2. **Verified Tasks:** evidence, Rules, Findings and guarded repair when queue
    completion is not enough proof.
 
@@ -18,7 +20,10 @@ RhinoQ has two layers that you can adopt separately:
 
 ## First value: one connected async-task loop
 
-Install the Node SDK into an existing application and start the Task layer:
+Install the Node SDK into an existing application and start the Task layer. The
+shortest concrete Node tour below uses the BullMQ preset; use the portable
+adapter path in the [Node SDK guide](../sdks/node/README.md) for another
+runtime:
 
 ```bash
 npm install @rhinoq/node@next pg
@@ -141,6 +146,7 @@ recovery.
 |---|---|---|
 | understand the full product story | [official Docker demo](#run-the-full-stripe-shaped-failure) | completed -> uncertain -> Finding -> approved repair -> verified |
 | add user-facing Task status to Node/PostgreSQL | [five-minute Node tour](#take-the-five-minute-node-tour) | Task schema, health check and local Task Workbench |
+| integrate a non-BullMQ runtime | [Node adapter contract](../sdks/node/README.md) | portable lifecycle, inspection and capability semantics |
 | keep an existing BullMQ worker | [BullMQ bridge](#connect-an-existing-bullmq-queue) | durable Task/Execution identity and lifecycle projection |
 | protect an external provider call | [ProviderOperation](#protect-an-external-provider-operation) | idempotency identity, uncertainty and confirmation |
 | inspect evidence and Findings | [Workbench](#open-the-dashboard) | local evidence, integrity and recovery interface |
