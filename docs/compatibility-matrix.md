@@ -9,7 +9,7 @@ for an adopter's upgrade rehearsal.
 | Node.js | 22, 24 | Node SDK CI matrix |
 | PostgreSQL | 16 | integration and non-superuser RLS jobs |
 | Redis | 7 | gating BullMQ fan-out service |
-| BullMQ | 5.81.3 | example lockfile and gating fan-out smoke |
+| BullMQ | 5.81.3 | pinned example manifest and gating fan-out smoke |
 | Go | 1.26.5 toolchain | `go.mod` and Go CI |
 
 The PostgreSQL harness creates application roles with `NOSUPERUSER` and

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed the compatibility gate on clean CI checkouts: it now reads the tracked,
+  exactly pinned BullMQ example manifest instead of an intentionally ignored
+  local lockfile.
+
 - Added preview-first `npx rhinoq setup`, combining framework/database/runtime
   detection, existing init/adopt flows, schema/evaluation checks and
   non-overwriting integration/environment generation into one golden path.

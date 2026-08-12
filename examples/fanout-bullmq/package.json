@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@rhinoq/node": "file:../../sdks/node",
-    "bullmq": "^5.81.3",
+    "bullmq": "5.81.3",
     "express": "^4.22.2",
     "ioredis": "^5.11.1",
     "pg": "^8.22.0"
