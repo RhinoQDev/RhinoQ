@@ -4,33 +4,44 @@ Reviewed: 2026-08-08.
 
 ## One sentence
 
-> Catch background jobs that succeeded technically but failed in the real world.
+> Install the async-task platform instead of rebuilding queue safety, Task APIs,
+> realtime UI, operations and recovery in every application.
 
-RhinoQ is an outcome-verification and safe-recovery layer for existing
-background workers. It separates queue completion, provider confirmation and
-the business outcome so a green job cannot silently become a false success.
+RhinoQ gives Node.js and Go teams a configured async-task product surface: use
+its PostgreSQL queue or keep an existing runtime, then mount durable Tasks,
+attempts, progress, owner APIs, realtime delivery, Task Center, Workbench,
+health, metrics, reconciliation, notifications and guarded recovery. The
+application supplies its business handler and authenticated identity instead
+of rebuilding the surrounding platform.
 
-TaskStore, the BullMQ bridge, Gateway and native Go runtime reduce integration
-cost. They support the product; they are not the central product promise.
+Outcome verification remains the strongest safety differentiator. It separates
+queue completion, provider confirmation and business outcome so a green job
+cannot silently become false success, but it is one layer of the platform—not
+the whole product story.
 
 ## The category trigger RhinoQ should own
 
-> The queue says completed. Is the real-world outcome actually true?
+> I have background work. Why should every application rebuild the queue,
+> status API, realtime UI, operator console and recovery loop?
 
-RhinoQ should be the first product a team recalls when `completed` is not
-enough evidence: money may not have moved, a resource may not be ready, or an
-output may be absent. The memorable unit is not a queue, workflow or dashboard;
-it is the evidence-backed path from ambiguous completion to a verified outcome.
+The adoption promise is a short path from an application handler to a complete
+user and operator experience. `init` discovers database/runtime prerequisites;
+`adopt` detects supported BullMQ/NestJS structure and generates integration
+without overwriting files; `doctor` identifies missing configuration; and
+`createRhinoQApp()` mounts the standard product surface.
 
-Every quickstart, demo and integration should therefore reach one visible
-`completed != verified` example before introducing the broader platform. Task
-convenience earns adoption, while outcome evidence and guarded repair provide
-the reason to choose RhinoQ over another status table.
+After that first value, verification answers the harder question: whether a
+technically completed job produced the real result. Task convenience and low
+integration code earn adoption; outcome evidence and guarded repair distinguish
+RhinoQ from a basic queue wrapper.
 
 ## First user
 
-The strongest first adopter is a Node.js or Go team that already runs BullMQ or
-another worker and has at least one high-risk asynchronous effect:
+The strongest first adopter is a Node.js or Go team that needs background work
+but does not want to build the full task platform around it. That includes a
+team starting with RhinoQ's PostgreSQL queue and a team retaining BullMQ or
+another worker. High-risk asynchronous effects make the verification layer
+especially valuable:
 
 - payment, refund, subscription or entitlement;
 - provisioning, storage or fulfilment;
@@ -40,7 +51,15 @@ They have experienced, or can reproduce, a case where the handler returned but
 the provider result was unknown or the business row was still wrong. A simple
 fire-and-forget queue with no customer-visible invariant does not need RhinoQ.
 
-## Value loop
+## Two value loops
+
+The everyday platform loop is:
+
+```text
+install -> detect/configure -> dispatch -> show progress -> operate/recover
+```
+
+The evidence loop for high-risk outcomes is:
 
 ```text
 detect -> investigate -> decide -> repair -> verify
@@ -53,6 +72,23 @@ detect -> investigate -> decide -> repair -> verify
 - Workbench rechecks a subject and drives a preview/approval/precondition/
   callback/verification repair workflow without arbitrary database editing.
 - Signed webhook and Slack delivery move Findings outside the dashboard.
+
+## What “automatic setup” means
+
+RhinoQ automates the standard, evidence-backed parts it can know:
+
+- detects PostgreSQL, `pg`, BullMQ and NestJS prerequisites;
+- installs or verifies its schema;
+- discovers supported queue declarations and producer call sites;
+- generates a non-overwriting integration module or example consumer;
+- mounts owner API, Task Center, Workbench and operator login together;
+- supplies default projector/reconciler leases, health and metrics wiring;
+- validates the resulting product surface and prints the next action.
+
+It deliberately cannot infer authenticated owner/tenant identity, business
+payload behavior, provider credentials, whether retrying an external mutation
+is safe, or what business result counts as correct. Asking for those callbacks
+is a correctness boundary, not unfinished setup automation.
 
 ## Integration boundary
 

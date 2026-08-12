@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reframe the product documentation around RhinoQ's complete, low-code async
+  platform and automated setup path; keep outcome verification as the safety
+  differentiator instead of presenting it as the product's only purpose.
 - Record a fresh Node, Go and PostgreSQL local benchmark baseline, including
   the observed Execution-page scaling trend and the missing native-queue load
   evidence instead of turning local numbers into a production claim.

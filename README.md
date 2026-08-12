@@ -1,12 +1,43 @@
 # RhinoQ
 
-## Make async work visible, understandable and recoverable.
+## Add a complete async-task platform without rebuilding the plumbing.
 
-RhinoQ is a runtime-independent reliability layer for asynchronous work. It
-turns runtime signals into durable Tasks, makes uncertain outcomes visible,
-and gives users and operators evidence-guided recovery. You keep the system
-that executes the work; RhinoQ supplies the Task, evidence and recovery layer
-around it.
+RhinoQ is an installable async-task platform for Node.js and Go applications.
+It can use its native PostgreSQL queue or attach to the queue you already run,
+then supplies the durable state, retry/lease safety, Task API, realtime updates,
+Task Center, operator Workbench, health, metrics, reconciliation, notifications
+and guarded recovery around your business handler.
+
+The point is not to make every adopter assemble those pieces. `init`, `adopt`,
+`doctor` and `createRhinoQApp()` detect and configure the standard path, install
+or verify the schema, generate integration code without overwriting existing
+files, and mount the product surface together. The application keeps only the
+parts RhinoQ cannot safely invent: authentication, tenant identity, business
+handler, provider credentials and the definition of a correct business result.
+
+Outcome verification—catching a technically successful job whose real result
+is wrong—is the differentiating safety layer on top of that complete platform,
+not the only reason to install RhinoQ.
+
+## What one installation gives you
+
+| Instead of building… | RhinoQ supplies… |
+|---|---|
+| queue infrastructure | native PostgreSQL queue, or adapters for an existing runtime |
+| job/Task tables and state transitions | durable Tasks, Executions, attempts, progress and version fencing |
+| status, history, cancel and result endpoints | owner-scoped Task API |
+| browser polling and reconnect code | SSE with polling fallback and stale-snapshot rejection |
+| customer job-status screens | mountable Task Center |
+| internal support tooling | authenticated operator login and Workbench |
+| missed-event and stuck-job scripts | reconciliation, attention states and queue watchdog |
+| ad-hoc health endpoints | readiness, liveness and metrics |
+| unsafe manual repair runbooks | preview, separate approval, idempotent execution and post-check |
+| “completed means correct” assumptions | optional verification, Rules, Findings and provider evidence |
+
+The shortest integration uses RhinoQ's public Task contract and one mounted
+HTTP surface. Existing applications can retain their endpoints through the
+lower-level clients, but doing so intentionally keeps more mapping code in the
+application.
 
 ## New here? Get one green run first
 
