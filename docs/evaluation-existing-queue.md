@@ -11,12 +11,11 @@ The purpose is not to prove that API calls return `200`. It is to answer:
 > Does RhinoQ remove enough user-facing task plumbing to justify one more
 > dependency while leaving business handlers and the current runtime intact?
 
-## Use the exact candidate
+## Use an exact version
 
-The published package is behind the source candidate. The tenant-aware Task,
-verification, Artifact, waitpoint, SSE and fan-out contract is the `beta.11`
-candidate on `main`. Until the tag workflow succeeds, pack it from this
-checkout:
+The verified public prerelease is `0.1.0-beta.12`. Pin that version when
+evaluating the published contract. Pack from a checkout only when the
+evaluation intentionally covers unreleased source changes:
 
 ```powershell
 cd C:\path\to\rhinoq\sdks\node
@@ -28,7 +27,7 @@ npm pack
 Install the resulting tarball by absolute path in the target application:
 
 ```powershell
-npm install C:\path\to\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.11.tgz pg
+npm install C:\path\to\rhinoq\sdks\node\rhinoq-node-0.1.0-beta.12.tgz pg
 ```
 
 Record all four identities in the report:

@@ -50,4 +50,29 @@ for (const [path, [contents, marker]] of Object.entries(documentation)) {
   }
 }
 
+// These are current installation and operator guides, not historical evidence
+// records. Every explicit prerelease mentioned in them must match the package
+// manifest so a release cannot leave a cold-start path pinned to an older SDK.
+const currentGuides = {
+  'docs/agent.md': [`\`beta.${expected.split('beta.')[1]}\` là public prerelease đã được xác minh gần nhất`],
+  'docs/cli.md': [`github.com/madebyduy/RhinoQ/cmd/rhinoq@v${expected}`],
+  'docs/evaluation-existing-queue.md': [`verified public prerelease is \`${expected}\``],
+  'docs/getting-started.md': [`npm install @rhinoq/node@${expected} pg`],
+  'docs/nodejs.md': [`Pin the exact published \`${expected}\` version`],
+  'docs/quickstart.md': [`@rhinoq/node@${expected}`],
+  'docs/postgres-queue.md': [`RhinoQ@v${expected}`],
+  'docs/releasing.md': [`\`${expected}\` is the latest verified public prerelease`],
+  'docs/start-here.md': [`npm install @rhinoq/node@${expected} pg`],
+  'docs/usability-pilot.md': [`Use RhinoQ \`${expected}\``],
+  'docs/workbench.md': [`releases/tag/v${expected}`],
+};
+for (const [path, markers] of Object.entries(currentGuides)) {
+  const contents = await read(path);
+  for (const marker of markers) {
+    if (!contents.includes(marker)) {
+      throw new Error(`${path} must contain current-release marker ${JSON.stringify(marker)}`);
+    }
+  }
+}
+
 console.log(`PASS release documentation ${expected}`);

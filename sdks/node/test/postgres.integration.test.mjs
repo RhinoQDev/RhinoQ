@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import test from 'node:test';
 
 import pg from 'pg';
@@ -36,6 +38,43 @@ test('runtime-neutral app composition projects a real PostgreSQL Task to termina
     assert.equal(task.hasResult, true);
     assert.doesNotThrow(() => app.http({ operatorToken: 'e2e-token' }));
   } finally {
+    await app.close();
+    await pool.end();
+  }
+});
+
+test('HTTP owner surfaces hide a real PostgreSQL Task across tenant and owner boundaries', {
+  skip: !databaseUrl,
+}, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const taskId = `http-tenant-${suffix}`;
+  const app = await createRhinoQApp({
+    pool, adapters: [],
+    ownerFromRequest: (request) => request.headers.get('x-owner') ?? undefined,
+    tenantFromRequest: (request) => request.headers.get('x-tenant') ?? undefined,
+  });
+  const middleware = app.http({ operatorToken: 'http-tenant-operator' });
+  const server = createServer((request, response) => middleware(request, response));
+  try {
+    await app.tasks.createTask({ id: taskId, type: 'tenant.probe', tenantId: 'tenant-a', ownerId: 'owner-a', definitionVersion: 1 });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const own = await fetch(`${base}/tasks/${taskId}`, { headers: { 'x-owner': 'owner-a', 'x-tenant': 'tenant-a' } });
+    assert.equal(own.status, 200);
+    assert.equal((await own.json()).id, taskId);
+    for (const headers of [
+      { 'x-owner': 'owner-a', 'x-tenant': 'tenant-b' },
+      { 'x-owner': 'owner-b', 'x-tenant': 'tenant-a' },
+    ]) {
+      const hidden = await fetch(`${base}/tasks/${taskId}`, { headers });
+      assert.equal(hidden.status, 404);
+      assert.equal((await hidden.text()).includes(taskId), true, 'structured error may echo only the requested opaque id');
+    }
+    assert.equal((await fetch(`${base}/admin`)).status, 403);
+  } finally {
+    if (server.listening) { server.close(); await once(server, 'close'); }
     await app.close();
     await pool.end();
   }

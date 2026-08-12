@@ -6,7 +6,7 @@ import test from 'node:test';
 import { authorizeDemoTenant, demoSession, loginSession } from './auth.mjs';
 import { ReportStorage } from './storage.mjs';
 import { createReportRecovery, reportRecoveryRequest } from './recovery.mjs';
-import { GuardedRecovery } from '../../sdks/node/dist/index.js';
+import { GuardedRecovery } from '@rhinoq/node';
 
 test('demo sessions resolve stable owner and tenant identities', () => {
   const request = { headers: { cookie: `rhinoq_demo_session=${loginSession('alice')}` } };

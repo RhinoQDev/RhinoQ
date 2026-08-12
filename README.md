@@ -8,12 +8,52 @@ and gives users and operators evidence-guided recovery. You keep the system
 that executes the work; RhinoQ supplies the Task, evidence and recovery layer
 around it.
 
-Choose the adapter that matches the system you already run: BullMQ currently
-has the deepest Node coverage, while manual/custom adapters and an SQS proof
-adapter exercise the same portable contracts. Start with the
-[runtime-neutral integration guide](./docs/start-here.md), then choose a
-[concrete BullMQ example](./examples/fanout-bullmq/) only if that is your
-runtime.
+## New here? Get one green run first
+
+Start with the [five-minute quickstart](./docs/quickstart.md). It needs only
+Node.js and Docker: no Redis, queue, worker, Go build or provider credentials.
+The shortest path is:
+
+```text
+start PostgreSQL -> install the pinned SDK -> set RHINOQ_DATABASE_URL -> npx rhinoq eval
+```
+
+The quickstart tells you exactly which `PASS` results to expect and how to fix
+the common first-run errors. After it passes, choose only the integration that
+matches your application:
+
+| You have | Read next |
+|---|---|
+| BullMQ | [BullMQ example](./examples/fanout-bullmq/README.md) |
+| another queue/custom runtime | [portable Node adapter guide](./sdks/node/README.md) |
+| no existing queue; use PostgreSQL as the queue | [native PostgreSQL queue](./docs/postgres-queue.md) |
+| PostgreSQL business checks, no queue adoption | [integrity-only example](./examples/integrity-only/README.md) |
+| a deployment decision | [production checklist](./docs/production-checklist.md) |
+
+RhinoQ is currently a prerelease. Use it for evaluation and controlled pilots;
+the [production status](./docs/production-readiness.md) explains the remaining
+deployment-specific gates without presenting local tests as a production SLA.
+
+Choose the execution path that matches your system. RhinoQ can keep an existing
+queue through a runtime adapter, **or run jobs itself on its native
+PostgreSQL-backed Go queue**. BullMQ currently has the deepest Node adapter
+coverage; the native queue provides transactional enqueue, fenced leases,
+retries, cancellation and recovery without Redis.
+
+## Choose your queue path
+
+| Your application | Recommended path | What runs the job |
+|---|---|---|
+| already uses BullMQ | [BullMQ adapter example](./examples/fanout-bullmq/README.md) | your existing BullMQ workers |
+| already uses another queue | [portable adapter guide](./sdks/node/README.md) | your existing runtime |
+| wants a queue without adding Redis/broker infrastructure | [native PostgreSQL queue](./docs/postgres-queue.md) | RhinoQ Go workers using PostgreSQL |
+| uses a Node producer with a Go execution worker | [Node + PostgreSQL queue example](./examples/nodejs/README.md) | application-registered RhinoQ Go worker |
+| only needs Task status around existing work | [runtime-neutral guide](./docs/start-here.md) | the application’s existing worker |
+
+“PostgreSQL Task storage” and “PostgreSQL queue” are different choices. The
+Node Task profile can store Task views while BullMQ still executes jobs. In the
+native queue path, PostgreSQL also owns enqueue, claiming, leases and retry
+state, and Go is the authoritative runtime.
 
 Task Center and Workbench use the same plain-language Task explanation: what is
 happening, how much finished, whether repeating the work needs review, and the
@@ -35,10 +75,10 @@ example creates and finishes one durable Task without BullMQ:
 > `v0.1.0-beta.12` prerelease. Install the `next` channel or pin that exact
 > version; the stable `latest` channel may still point to an older release.
 
-For the currently supported prerelease channel, always install explicitly:
+For a reproducible evaluation, pin the verified prerelease explicitly:
 
 ```bash
-npm install @rhinoq/node@next pg
+npm install @rhinoq/node@0.1.0-beta.12 pg
 ```
 
 Or generate the fail-closed consumer shell without overwriting existing files:
@@ -46,11 +86,19 @@ Or generate the fail-closed consumer shell without overwriting existing files:
 ```bash
 npx rhinoq init --example report-export
 npx rhinoq doctor --product-surface
+npx rhinoq eval
 npx rhinoq demo transport-fallback
 ```
 
 The transport demo is explicitly simulated. It is a teaching aid, not
 service-backed reliability evidence.
+
+`rhinoq eval` performs a bounded local product check against the configured
+PostgreSQL database: it installs or verifies the Task profile, creates a
+durable technical-success/business-uncertain fixture, starts both UI surfaces
+on an ephemeral loopback port and exercises them over HTTP. Browser behavior,
+external-provider readback and deployment faults remain `NOT VERIFIED`; the
+command does not manufacture production evidence from a local smoke test.
 
 ```js
 import { createServer } from 'node:http';
@@ -129,17 +177,27 @@ binary/container publication and GitHub Release creation.
 
 | If you are… | Read |
 |---|---|
+| running RhinoQ for the first time | [the five-minute quickstart](./docs/quickstart.md) |
+| using PostgreSQL as the job queue | [the native PostgreSQL queue guide](./docs/postgres-queue.md) |
 | evaluating the runtime-neutral Task layer | [the beginner guide](./docs/start-here.md) |
 | adding this around async work you already run | [the two integration doors](./docs/two-doors.md) |
 | using BullMQ specifically | [the BullMQ adapter example](./examples/fanout-bullmq/) |
 | deciding whether it will save you code | [two doors](./docs/two-doors.md) |
 | deciding whether to trust it | [what RhinoQ does, and what you still write](./docs/what-you-still-write.md) |
+| checking tested dependency versions | [the compatibility matrix](./docs/compatibility-matrix.md) |
 | running an external usability evaluation | [the no-coaching pilot protocol](./docs/usability-pilot.md) |
 | completely new to all of it | [the beginner guide](./docs/start-here.md) |
 | ready to inspect a production-shaped consumer | [the report export example](./examples/report-export/) |
 | integrating owner API actions | [the owner Task API contract](./docs/task-api.md) |
 | adding business outcome checks | [business verification onboarding](./docs/business-verification.md) |
 | reviewing failure evidence | [the fault evidence matrix](./docs/fault-matrix.md) |
+
+On Windows, the disposable two-container PostgreSQL failover drill can be run
+with `./scripts/run-failover-drill.ps1`. It starts an isolated primary and
+streaming standby, kills the primary, promotes the standby, verifies that it
+accepts writes and checks acknowledged Task rows plus forced RLS before
+removing its containers and volumes. This is single-host fault evidence, not a
+split-brain or production-availability claim.
 
 The [`report.export` consumer example](./examples/report-export/) is the
 recommended first real application after the five-minute fixture. It installs
@@ -399,6 +457,12 @@ output plus verified evidence, and post-checks the Task as
 `succeeded`. It prints the complete recovery chain and a JSON incident summary.
 The command refuses before connecting to PostgreSQL unless disposable-database
 confirmation is explicit; omit `--recover` to stop at the incident.
+
+The production-shaped `examples/report-export` consumer exposes the same
+guarded recovery as a two-browser-session reference journey: support previews,
+a separate approver executes, provider readback closes the Task, and repeating
+the approval demonstrates lost-response replay without a second provider
+mutation.
 
 Workbench Task detail now includes a deterministic Incident Explainer answering
 what happened, why, affected Task/item/owner scope and which next actions are
@@ -969,7 +1033,8 @@ See [Workbench](./docs/workbench.md).
 
 ## Existing infrastructure stays in place
 
-RhinoQ is not another queue and does not require rewriting handlers:
+RhinoQ does not require replacing an existing queue. It also includes an
+optional native PostgreSQL queue for teams that want RhinoQ to execute jobs:
 
 - **Runtime adapters:** translate runtime-specific lifecycle facts into the
   portable Task contract; the application still owns its queue, broker,
@@ -990,8 +1055,9 @@ RhinoQ is not another queue and does not require rewriting handlers:
   process, not a distributed scheduler, and the callback must be idempotent.
 - **TaskStore:** browser-friendly summary polling, owner-scoped actions and lazy
   Execution history.
-- **Native Go runtime:** optional PostgreSQL-backed runtime for teams that need
-  one; it is not the product's central promise.
+- **Native Go runtime:** PostgreSQL-backed queue with transactional enqueue,
+  registered handlers, fenced leases, retries, cancellation, admission control
+  and recovery. See the [dedicated queue guide](./docs/postgres-queue.md).
 - **Gateway:** typed bridge for Node and other languages while Go remains the
   authoritative correctness engine.
 

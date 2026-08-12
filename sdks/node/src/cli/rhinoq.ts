@@ -19,6 +19,7 @@ import {
 } from '../notify/registry.js';
 import { sendTestNotification } from '../notify/sender.js';
 import { createNodeWorkbenchMiddleware } from '../workbench/handler.js';
+import { createNodeTaskCenterMiddleware, createNodeTaskMiddleware } from '../tasks/adapters.js';
 import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
 import { recoverFailureLab, runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
 import { adoptionChecklist } from '../runtime/adoption.js';
@@ -33,12 +34,13 @@ async function main(): Promise<void> {
     case 'doctor': await doctor(args); break;
     case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
+    case 'eval': await evaluateProduct(args); break;
     case 'lab': await lab(args); break;
     case 'demo': await demo(args); break;
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Start from your goal:\n  npx rhinoq init                         # install the Task profile\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
+      console.log('Start from your goal:\n  npx rhinoq init                         # install the Task profile\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
@@ -130,7 +132,7 @@ async function initReportExportExample(): Promise<void> {
   }
   console.log(`PASS generated ${root}`);
   console.log('URL Task Center: http://127.0.0.1:8787/task-center');
-  console.log('URL Workbench: http://127.0.0.1:8787/admin');
+  console.log('URL Workbench sign in: http://127.0.0.1:8787/operator-login');
   console.log('WARN result and verifier are fail-closed until application callbacks are configured.');
   console.log(`NEXT cd ${relative(resolve('.'), root)}; npm install; copy .env.example to .env; npm start`);
 }
@@ -159,7 +161,7 @@ const app = await createRhinoQApp({
 const http = app.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN });
 createServer((request, response) => http(request, response)).listen(8787, '127.0.0.1', () => {
   console.log('Task Center http://127.0.0.1:8787/task-center');
-  console.log('Workbench http://127.0.0.1:8787/admin');
+  console.log('Workbench sign in http://127.0.0.1:8787/operator-login');
 });
 `;
 }
@@ -1460,6 +1462,88 @@ async function fixture(args: string[]): Promise<void> {
     console.log(`PASS created ${task.id}: BullMQ execution=succeeded, real-world Task=uncertain.`);
     console.log('NEXT inspect it: npx rhinoq dev');
   } finally { await pool.end(); }
+}
+
+type EvalStatus = 'PASS' | 'FAIL' | 'NOT VERIFIED';
+type EvalCheck = { status: EvalStatus; check: string; evidence: string };
+
+async function evaluateProduct(args: string[]): Promise<void> {
+  if (args.length > 0) fail(`unknown eval option ${JSON.stringify(args[0])}`, 'Run: npx rhinoq eval');
+  const resolved = requireDatabase('eval');
+  const checks: EvalCheck[] = [];
+  const pool = new Pool({ ...resolved.pool, connectionTimeoutMillis: 5_000 });
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    await pool.query('SELECT 1');
+    checks.push({ status: 'PASS', check: 'PostgreSQL', evidence: `${resolved.target} (${resolved.source})` });
+
+    const tasks = await installPostgresTaskProfile(pool);
+    const migration = await pool.query<{ version: number }>('SELECT COALESCE(MAX(version),0)::int AS version FROM rhinoq_task.migrations');
+    const installed = migration.rows[0]?.version ?? 0;
+    if (installed !== TASK_SCHEMA_VERSION) throw new Error(`Task schema v${installed}; expected v${TASK_SCHEMA_VERSION}`);
+    checks.push({ status: 'PASS', check: 'Task profile', evidence: `schema v${installed}` });
+
+    const taskId = `eval_${Date.now()}`;
+    let task = await tasks.createTask({ id: taskId, type: 'rhinoq.eval', ownerId: 'eval-user', definitionVersion: 1 });
+    task = await tasks.transitionTask(taskId, task.entityVersion, 'queued');
+    task = await tasks.transitionTask(taskId, task.entityVersion, 'running');
+    await tasks.createTaskExecution(taskId, { id: `${taskId}:1`, runtime: 'eval', runtimeScope: 'loopback', externalId: `${taskId}:job` });
+    let execution = await tasks.getTaskExecution(`${taskId}:1`);
+    await tasks.bindTaskExecution(execution.id, { runtime: 'eval', runtimeScope: 'loopback', externalId: `${taskId}:job` });
+    execution = await tasks.getTaskExecution(execution.id);
+    await tasks.transitionTaskExecution(execution.id, execution.version, 'running');
+    execution = await tasks.getTaskExecution(execution.id);
+    await tasks.transitionTaskExecution(execution.id, execution.version, 'succeeded');
+    task = await tasks.getTask(taskId);
+    await tasks.transitionTask(taskId, task.entityVersion, 'uncertain');
+    checks.push({ status: 'PASS', check: 'Durable fixture', evidence: `${taskId}: execution=succeeded, task=uncertain` });
+
+    const taskCenter = createNodeTaskCenterMiddleware({ path: '/task-center', apiPath: '/tasks' });
+    const routes = createNodeTaskMiddleware({ tasks, basePath: '/tasks', ownerFromRequest: () => 'eval-user' });
+    const workbench = createNodeWorkbenchMiddleware({ tasks, basePath: '/admin', requireOperator: () => true });
+    server = createServer((request, response) => {
+      taskCenter(request, response, () => routes(request, response, () => workbench(request, response)));
+    });
+    await new Promise<void>((ready, reject) => {
+      server!.once('error', reject);
+      server!.listen(0, '127.0.0.1', ready);
+    });
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('loopback evaluation server has no TCP address');
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const owner = await fetch(`${base}/tasks/${encodeURIComponent(taskId)}`);
+    if (!owner.ok || (await owner.json() as { id?: string }).id !== taskId) throw new Error(`owner Task API returned HTTP ${owner.status}`);
+    checks.push({ status: 'PASS', check: 'Owner Task API', evidence: `GET /tasks/${taskId} returned the fixture` });
+
+    const center = await fetch(`${base}/task-center`);
+    const centerHTML = await center.text();
+    if (!center.ok || !centerHTML.includes('data-rhinoq-task-center')) throw new Error(`Task Center returned HTTP ${center.status}`);
+    checks.push({ status: 'PASS', check: 'Task Center', evidence: 'loopback HTML and owner API wiring reachable' });
+
+    const admin = await fetch(`${base}/admin`);
+    const adminHTML = await admin.text();
+    if (!admin.ok || !adminHTML.includes('RhinoQ Workbench')) throw new Error(`Workbench returned HTTP ${admin.status}`);
+    checks.push({ status: 'PASS', check: 'Workbench', evidence: 'loopback operator HTML reachable' });
+  } catch (error) {
+    checks.push({ status: 'FAIL', check: 'Evaluation stopped', evidence: safe(error) });
+  } finally {
+    if (server?.listening) await new Promise<void>((closed) => server!.close(() => closed()));
+    await pool.end();
+  }
+
+  checks.push(
+    { status: 'NOT VERIFIED', check: 'Browser journey', evidence: 'run the printed surfaces in a real browser for layout, keyboard and reconnect evidence' },
+    { status: 'NOT VERIFIED', check: 'External provider', evidence: 'no provider credential or readback callback was supplied' },
+    { status: 'NOT VERIFIED', check: 'Deployment faults', evidence: 'single-process loopback evaluation does not prove failover or multi-replica behavior' },
+  );
+  console.log('RhinoQ evaluation checklist');
+  for (const item of checks) console.log(`${item.status.padEnd(12)} ${item.check.padEnd(20)} ${item.evidence}`);
+  if (checks.some((item) => item.status === 'FAIL')) {
+    process.exitCode = 1;
+    throw new Error('__reported__');
+  }
+  console.log('NEXT open a persistent local Workbench with: npx rhinoq dev');
 }
 
 /**

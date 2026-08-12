@@ -347,8 +347,16 @@ test('verify delete previews before it removes', async () => {
 test('Node CLI help separates its doctor from the Go runtime doctor', () => {
   const result = spawnSync(process.execPath, [developerCLI, 'help'], { encoding: 'utf8', env: {} });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /npx rhinoq eval/);
   assert.match(result.stdout, /isolated Task profile only/);
   assert.match(result.stdout, /rhinoq doctor/);
+});
+
+test('eval fails with one actionable database contract when PostgreSQL is absent', () => {
+  const result = spawnSync(process.execPath, [developerCLI, 'eval'], { encoding: 'utf8', env: {} });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /FAIL no PostgreSQL connection/);
+  assert.match(result.stderr, /then run: npx rhinoq eval/);
 });
 
 test('adopt previews first, generates once and never overwrites', () => {

@@ -367,7 +367,7 @@ function renderIncident(incident) {
     if (action.id === 'recheck-evidence' && action.availability === 'available') {
       return action.label + ' [not configured: register a verifier/recheck workflow]';
     }
-    return action.label + ' [' + action.availability + ']';
+    return action.label + ' [' + action.availability + ': ' + action.reason + ']';
   }).join(' · ');
 }
 

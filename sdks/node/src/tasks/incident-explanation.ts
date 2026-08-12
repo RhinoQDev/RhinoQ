@@ -45,15 +45,20 @@ export function explainTaskIncident(input: IncidentExplanationInput): IncidentEx
   const uncertainProvider = (input.providerOperations ?? []).filter((operation) => operation.state === 'uncertain');
   const evidence: IncidentExplanation['evidence'] = [
     { kind: 'task_state', statement: `Task state is ${task.state}.` },
+    { kind: 'task_snapshot', statement: `Authoritative Task snapshot version ${task.entityVersion}, updated ${task.updatedAt}.` },
     { kind: 'attempts', statement: `${latest.length} current item attempt(s): ${failed.length} failed, ${stalled.length} stalled, ${succeededWithoutResult.length} succeeded without a recorded result.` },
   ];
   if (latestVerification) evidence.push({
     kind: 'verification',
-    statement: `Latest verification ${latestVerification.verifier} is ${latestVerification.status}.`,
+    statement: `Latest verification ${latestVerification.verifier} is ${latestVerification.status}; readback recorded ${latestVerification.verifiedAt}${evidenceFields(latestVerification.evidence)}.`,
   });
   else evidence.push({ kind: 'verification', statement: 'No business outcome verification is recorded.' });
   if (uncertainProvider.length) evidence.push({
     kind: 'provider', statement: `${uncertainProvider.length} provider operation(s) have an uncertain outcome.`,
+  });
+  for (const operation of (input.providerOperations ?? []).slice(0, 5)) evidence.push({
+    kind: 'provider_provenance',
+    statement: `${operation.provider}.${operation.operation} is ${operation.state}; confirmation=${operation.confirmation}; retry=${operation.retryPolicy}; updated ${operation.updatedAt}.`,
   });
 
   const causes: IncidentExplanation['likelyCauses'] = [];
@@ -119,4 +124,10 @@ function cancellationAvailability(task: TaskSnapshot, reports: RuntimeAdapterRep
   return { availability: 'available' as const, reason: matching.some((report) => report.capabilities.cancel === 'best_effort')
     ? 'Runtime cancellation is best effort and may still be refused safely.'
     : 'Every reported Task runtime supports cancellation.' };
+}
+
+function evidenceFields(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const fields = Object.keys(value as Record<string, unknown>).sort().slice(0, 8);
+  return fields.length ? `; evidence fields: ${fields.join(', ')}` : '';
 }

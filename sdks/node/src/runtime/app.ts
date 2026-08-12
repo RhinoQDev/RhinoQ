@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { installPostgresTaskProfile, type PostgresTaskClient } from '../postgres/task-client.js';
 import type { SqlPool } from '../postgres/task-schema.js';
 import {
@@ -48,6 +49,8 @@ export interface RhinoQAppHTTPOptions {
   runtimeJobLink?: WorkbenchHandlerOptions['runtimeJobLink'];
 }
 
+const OPERATOR_COOKIE = 'rhinoq_operator_session';
+
 export type RhinoQAppHTTPMiddleware = (
   request: NodeTaskRequest & { on(event: 'close', listener: () => void): unknown },
   response: NodeTaskResponse & { write(chunk: Uint8Array | string): unknown },
@@ -96,13 +99,14 @@ export class RhinoQPortableApp {
     });
     const workbench = createNodeWorkbenchMiddleware({
       tasks: this.tasks, basePath: '/admin', actions: options.actions,
-      requireOperator: (request) => request.headers.get('x-operator-token') === options.operatorToken,
+      requireOperator: (request) => operatorAuthorized(request.headers, options.operatorToken),
       navigation: { overviewPath: options.overviewPath ?? '/', tasksPath: '/task-center' },
       runtimeReports: () => this.runtime.runtimeReports(),
       ...(options.providerOperationsByTask ? { providerOperationsByTask: options.providerOperationsByTask } : {}),
       ...(options.runtimeJobLink ? { runtimeJobLink: options.runtimeJobLink } : {}),
     });
     return (request, response, next) => {
+      if (serveOperatorLogin(request, response, options.operatorToken, options.origin)) return;
       taskCenter(request, response, () => {
         routes(request, response, (error) => {
           if (error) { next?.(error); return; }
@@ -117,6 +121,76 @@ export class RhinoQPortableApp {
     this.closed = true;
     await this.runtime.close();
   }
+}
+
+function operatorAuthorized(headers: Headers, token: string): boolean {
+  const header = headers.get('x-operator-token');
+  if (header && safeEqual(header, token)) return true;
+  const expected = operatorSession(token);
+  const cookie = headers.get('cookie')?.split(';')
+    .map((part) => part.trim().split('='))
+    .find(([name]) => name === OPERATOR_COOKIE)?.[1];
+  return Boolean(cookie && safeEqual(cookie, expected));
+}
+
+function serveOperatorLogin(
+  request: NodeTaskRequest,
+  response: NodeTaskResponse,
+  token: string,
+  origin?: string,
+): boolean {
+  const pathname = new URL(request.originalUrl ?? request.url ?? '/', 'http://rhinoq.invalid').pathname;
+  if (pathname !== '/operator-login') return false;
+  response.setHeader('cache-control', 'no-store');
+  response.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  if (request.method === 'GET') {
+    response.statusCode = 200;
+    response.setHeader('content-type', 'text/html; charset=utf-8');
+    response.end('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>RhinoQ operator sign in</title><style>body{font:16px system-ui;max-width:32rem;margin:10vh auto;padding:1rem}label,input,button{display:block;width:100%;box-sizing:border-box}input,button{font:inherit;padding:.7rem;margin-top:.5rem}p{color:#555}</style><h1>Operator sign in</h1><p>Enter the operator token configured on this server. It is exchanged for an HttpOnly cookie and is not placed in the URL.</p><form method="post" action="/operator-login"><label>Operator token<input name="token" type="password" required autocomplete="current-password"></label><button type="submit">Open Workbench</button></form></html>');
+    return true;
+  }
+  if (request.method !== 'POST') {
+    response.statusCode = 405;
+    response.setHeader('allow', 'GET, POST');
+    response.end('Method Not Allowed');
+    return true;
+  }
+  let body = '';
+  let tooLarge = false;
+  request.on('data', (chunk) => {
+    if (tooLarge) return;
+    body += chunk.toString();
+    if (Buffer.byteLength(body) > 8_192) tooLarge = true;
+  });
+  request.on('error', () => {
+    if (!response.statusCode) response.statusCode = 400;
+    response.end('Invalid request');
+  });
+  request.on('end', () => {
+    const supplied = tooLarge ? '' : new URLSearchParams(body).get('token') ?? '';
+    if (!safeEqual(supplied, token)) {
+      response.statusCode = 403;
+      response.setHeader('content-type', 'text/plain; charset=utf-8');
+      response.end('Invalid operator token');
+      return;
+    }
+    const secure = origin?.startsWith('https://') ? '; Secure' : '';
+    response.statusCode = 303;
+    response.setHeader('set-cookie', `${OPERATOR_COOKIE}=${operatorSession(token)}; HttpOnly; SameSite=Strict; Path=/admin${secure}`);
+    response.setHeader('location', '/admin');
+    response.end();
+  });
+  return true;
+}
+
+function operatorSession(token: string): string {
+  return createHash('sha256').update(`rhinoq-operator-session\0${token}`).digest('base64url');
+}
+
+function safeEqual(left: string, right: string): boolean {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<RhinoQPortableApp> {

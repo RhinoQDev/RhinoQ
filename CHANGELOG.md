@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- Record a fresh Node, Go and PostgreSQL local benchmark baseline, including
+  the observed Execution-page scaling trend and the missing native-queue load
+  evidence instead of turning local numbers into a production claim.
+- Promote the native PostgreSQL-backed Go queue to a first-class onboarding
+  path, with a dedicated guide covering runtime choice, minimal registered
+  worker code, Node-producer interoperability, operations and production gates.
+- Add a copy/paste beginner quickstart with one bounded success criterion,
+  platform-specific environment setup, cleanup and first-run troubleshooting;
+  reorganize production guidance into explicit go/no-go gates.
+- Add a Windows orchestration command for the disposable PostgreSQL
+  primary/streaming-standby failover drill, with configurable collision-free
+  ports and automatic container/volume cleanup.
+- Add `rhinoq eval`, a bounded PostgreSQL, durable-fixture, owner API, Task
+  Center and Workbench check that reports explicit PASS/FAIL/NOT VERIFIED
+  results and refuses to turn loopback checks into browser, provider or
+  failover claims.
+- Complete the `report-export` guarded-recovery example with separate browser
+  sessions for support preview and approver execution, including an explicit
+  lost-response replay path that reuses the idempotent recorded result.
+- Add a CI-gated compatibility matrix derived from the Node CI matrix, service
+  images, BullMQ lockfile and Go toolchain, with migration-026/non-superuser
+  rehearsal boundaries stated explicitly.
+- Add a real-PostgreSQL HTTP isolation test proving owner Task reads return 404
+  across tenant and owner boundaries, complementing the full-profile
+  non-superuser/non-BYPASSRLS storage harness.
+- Add a browser notification transport fixture covering 204, 429, 503, 403 and
+  timeout outcomes with bounded retry counts and stable event-ID evidence,
+  explicitly labelled as local rather than external-provider proof.
+- Record a local remediation campaign covering `rhinoq eval`, two-actor
+  recovery replay, notification outcomes, HTTP tenant isolation, 450-item
+  BullMQ settlement and Redis restart, with external-provider, multi-host and
+  design-partner evidence kept explicitly open.
+- Add a browser-usable `/operator-login` reference flow to the runtime-neutral
+  app composition. It exchanges the configured token for an opaque HttpOnly,
+  SameSite cookie scoped to `/admin`, while retaining header authentication for
+  non-browser operator clients. The BullMQ fan-out example now provides the
+  same browser journey at its `/admin/rhinoq` mount.
+- Synchronize current installation and operator guides with beta.12, and make
+  the release-documentation CI gate reject stale prerelease references across
+  those guides instead of checking only package READMEs.
+- Fix the `report-export` example test to import `GuardedRecovery` from the
+  installed `@rhinoq/node` package instead of the repository-relative SDK
+  build, so the example remains testable when copied outside this checkout.
 - Fixed the release-documentation CI gate so branch builds validate against
   the package manifest version instead of treating the branch name as a
   release version. Tag builds and explicit release-version checks are

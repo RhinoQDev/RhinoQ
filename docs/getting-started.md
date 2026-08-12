@@ -5,7 +5,7 @@
 With Node.js 22 and PostgreSQL available:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.11 pg
+npm install @rhinoq/node@0.1.0-beta.12 pg
 npx rhinoq init
 npx rhinoq verify add completed-report-has-output
 npx rhinoq doctor
@@ -21,9 +21,9 @@ The Node `init` path creates only the isolated Task profile. Verified Rules use
 the full Go schema and authenticated Gateway. From the RhinoQ checkout, start
 both Go processes with the same database configuration before continuing:
 
-The beta.11 package contains the current `verify` commands. An older tarball
+The beta.12 package contains the current `verify` commands. An older tarball
 answers `FAIL verify requires 'add <rule-name>'`; if that is what you see,
-install the exact beta.11 package or tarball.
+install the exact beta.12 package or tarball.
 
 ```bash
 go build -o rhinoq ./cmd/rhinoq
@@ -73,11 +73,11 @@ For a Node application keeping its existing queue, prefer the isolated
 Task-only path instead of the full Go migration chain:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.11.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.12.tgz pg
 RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
 ```
 
-The published beta.11 package and GitHub archive contain this Task-only path.
+The published beta.12 package and GitHub archive contain this Task-only path.
 It creates the isolated Task tables in `rhinoq_task`, including durable
 waitpoints, tenant-scoped owner reads, verification records and Artifact v1,
 and reuses the application's `pg.Pool` through `PostgresTaskClient`.
@@ -222,12 +222,17 @@ For a second real application, follow the
 [existing-queue evaluation protocol](./evaluation-existing-queue.md) so the
 feedback measures adoption cost instead of only confirming happy-path API calls.
 
-## Native runtime is a separate optional path
+## Use PostgreSQL as the native job queue
 
 RhinoQ also includes a native Go/PostgreSQL job runtime with transactional
 enqueue, fenced leases, retries, cancellation and a worker. That runtime is an
 execution backend, not a requirement for an application that already has a
 queue.
+
+This is a first-class runtime choice, not just storage for Task views. Start
+with the dedicated [PostgreSQL queue quickstart](./postgres-queue.md) for
+installation, a runnable worker shape, Node-producer interoperability and its
+production gates.
 
 ```go
 queue, err := rhinoq.NewPostgres(db)

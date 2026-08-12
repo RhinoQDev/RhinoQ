@@ -4,6 +4,9 @@ This is the one-page guide for evaluating and integrating RhinoQ. It starts
 with the async-task experience most applications need, then continues into the
 harder case where a technically green job did not produce the expected outcome.
 
+If you only want the shortest copy/paste first run, use the
+[five-minute quickstart](./quickstart.md) first and return here after it passes.
+
 RhinoQ has two layers that you can adopt separately:
 
 1. **Async Task Platform:** durable state, per-item attempts, progress,
@@ -14,6 +17,11 @@ RhinoQ has two layers that you can adopt separately:
    same boundary.
 2. **Verified Tasks:** evidence, Rules, Findings and guarded repair when queue
    completion is not enough proof.
+
+The Task Platform can observe an existing runtime **or execute work through
+RhinoQ's native PostgreSQL-backed Go queue**. If you do not already have a
+queue, read the [PostgreSQL queue quickstart](./postgres-queue.md); BullMQ is an
+adapter choice, not a prerequisite.
 
 > RhinoQ is a prerelease for evaluation and controlled pilots. Pin the exact
 > version shown below. Do not treat this guide as a production-readiness claim.
@@ -152,6 +160,7 @@ recovery.
 | inspect evidence and Findings | [Workbench](#open-the-dashboard) | local evidence, integrity and recovery interface |
 | verify business tables without adopting a queue | [Integrity-only example](../examples/integrity-only/) | bounded Rules, Outcomes and Findings |
 | use RhinoQ's optional Go runtime | [runtime operations](./operations.md) | PostgreSQL job execution with fencing and recovery |
+| use PostgreSQL as the job queue | [PostgreSQL queue quickstart](./postgres-queue.md) | transactional enqueue, registered Go handlers, fenced leases and retry |
 
 ## Take the five-minute Node tour
 
@@ -216,12 +225,12 @@ source files. Prefer `RHINOQ_DATABASE_URL` when the application already uses
 ### 3. Install the pinned SDK
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.11 pg
+npm install @rhinoq/node@0.1.0-beta.12 pg
 ```
 
 Why: `pg` is a peer dependency and lets RhinoQ reuse the application's pool.
-Pin the exact beta.11 package after the release workflow succeeds; before that,
-install the beta.11 tarball built from this checkout as described in
+Pin the exact beta.12 package after the release workflow succeeds; before that,
+install the beta.12 tarball built from this checkout as described in
 [`docs/nodejs.md`](./nodejs.md). Older prerelease tags do not contain this
 contract.
 
@@ -395,7 +404,7 @@ RhinoQ has two local visual surfaces:
 ### Try Workbench without a database
 
 Download the archive for your OS/CPU from the
-[beta.11 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.11),
+[beta.12 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.12),
 extract it, place `rhinoq` (`rhinoq.exe` on Windows) on `PATH`, then run:
 
 ```bash
@@ -706,6 +715,10 @@ is available through `createUseRhinoTask(React)`.
 
 ## Production checklist
 
+For a go/no-go decision with pass criteria and conditional provider/runtime
+requirements, use the [production checklist](./production-checklist.md). The
+summary below is the minimum orientation for a controlled pilot.
+
 Before a controlled pilot:
 
 - pin an exact prerelease and verify its checksum/signature bundle;
@@ -740,7 +753,7 @@ Read [Production readiness](./production-readiness.md),
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
 | repair is unavailable | Workbench is read-only or handler is not registered | supply the callback allowlist and start with `--actions` |
 | repair becomes `stale` | the business object changed after preview | investigate again and create a new plan; do not bypass the precondition |
-| npm installs an unexpected version | prereleases use `next` and `latest` is not moved by the prerelease workflow | pin an exact version, for example `@rhinoq/node@0.1.0-beta.11` after the release succeeds |
+| npm installs an unexpected version | prereleases use `next` and `latest` is not moved by the prerelease workflow | pin an exact version, for example `@rhinoq/node@0.1.0-beta.12` after the release succeeds |
 
 ## Honest current limits
 

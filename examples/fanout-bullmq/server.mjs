@@ -17,6 +17,7 @@ import {
   createNodeWorkbenchMiddleware,
   installPostgresTaskProfile,
 } from '@rhinoq/node';
+import { createOperatorLoginRouter, operatorAuthorized } from './operator-auth.mjs';
 
 const DATABASE_URL = process.env.RHINOQ_DATABASE_URL
   ?? 'postgres://postgres:rhinoq@127.0.0.1:55433/fanout';
@@ -151,6 +152,11 @@ reconciler.start();
 // ---------------------------------------------------------------------------
 const app = express();
 app.use(express.json());
+const operatorToken = process.env.OPERATOR_TOKEN ?? 'let-me-in';
+app.use(createOperatorLoginRouter({
+  token: operatorToken,
+  secure: process.env.RHINOQ_COOKIE_SECURE === 'true',
+}));
 
 // The end-user API: owner-scoped, no runtime identity, safe for a browser.
 app.use(createNodeTaskMiddleware({
@@ -166,8 +172,7 @@ app.use(createNodeWorkbenchMiddleware({
   tasks,
   basePath: '/admin/rhinoq',
   actions: true,
-  requireOperator: (request) =>
-    (process.env.OPERATOR_TOKEN ?? 'let-me-in') === request.headers.get('x-operator-token'),
+  requireOperator: (request) => operatorAuthorized(request.headers, operatorToken),
 }));
 
 app.post('/batches', async (request, response) => {
@@ -208,7 +213,7 @@ app.post('/batches', async (request, response) => {
     { awaitEnqueue: false },
   );
 
-  response.json({ taskId, items: size, watch: `/admin/rhinoq` });
+  response.json({ taskId, items: size, watch: `/operator-login` });
 });
 
 app.get('/', (_request, response) => {
@@ -219,7 +224,7 @@ app.get('/', (_request, response) => {
 <button id="go" style="font:inherit;padding:.6rem 1rem">Start a 50-item batch</button>
 <pre id="out" style="margin-top:1rem"></pre>
 <p>Operator console:
-<a href="/admin/rhinoq">/admin/rhinoq</a> (send <code>x-operator-token: let-me-in</code>).</p>
+<a href="/operator-login">sign in to the Workbench</a>.</p>
 <script>
 document.getElementById('go').onclick = async () => {
   const out = document.getElementById('out');
@@ -235,7 +240,7 @@ document.getElementById('go').onclick = async () => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log(`example on http://localhost:${PORT}  ·  console on /admin/rhinoq`);
+  console.log(`example on http://localhost:${PORT}  ·  Workbench sign in on /operator-login`);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

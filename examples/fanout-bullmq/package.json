@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Fan-out over BullMQ with progress, cancellation and an exactly-once settled signal",
   "scripts": {
+    "test": "node --test operator-auth.test.mjs",
     "migrate": "rhinoq-task",
     "start": "node server.mjs",
     "doctor": "rhinoq doctor",

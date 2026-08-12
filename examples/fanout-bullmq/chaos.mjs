@@ -20,18 +20,23 @@ const queueName = `rhinoq-chaos-${process.pid}`;
 const runtimeScope = queueName;
 const taskId = `chaos-${randomUUID()}`;
 const pool = new pg.Pool({ connectionString: databaseUrl, max: 8 });
+const errors = [];
 const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
+connection.on('error', (error) => errors.push(`redis: ${error.message}`));
+const eventsConnection = connection.duplicate();
+eventsConnection.on('error', (error) => errors.push(`events-redis: ${error.message}`));
+const workerConnection = connection.duplicate();
+workerConnection.on('error', (error) => errors.push(`worker-redis: ${error.message}`));
 const queue = new Queue(queueName, { connection });
-const events = new QueueEvents(queueName, { connection: connection.duplicate() });
+const events = new QueueEvents(queueName, { connection: eventsConnection });
 const worker = new Worker(
   queueName,
   async () => {
     await sleep(1_500);
     return { recovered: true };
   },
-  { connection: connection.duplicate(), concurrency: 1 },
+  { connection: workerConnection, concurrency: 1 },
 );
-const errors = [];
 worker.on('error', (error) => errors.push(`worker: ${error.message}`));
 events.on('error', (error) => errors.push(`events: ${error.message}`));
 

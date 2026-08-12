@@ -21,6 +21,7 @@ test('Incident Explainer keeps technical success separate from business verifica
       health: { status: 'healthy', checkedAt: '2026-08-12T00:02:00.000Z' }, guaranteeGaps: [],
     }],
   });
+  assert.ok(explanation.evidence.some((item) => item.kind === 'task_snapshot' && item.statement.includes('version')));
   assert.equal(explanation.businessOutcome, 'unknown');
   assert.match(explanation.summary, /cannot yet determine/);
   assert.ok(explanation.evidence.some((item) => /without a recorded result/.test(item.statement)));

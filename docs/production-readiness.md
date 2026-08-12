@@ -3,6 +3,21 @@
 RhinoQ remains a prerelease. A green unit suite is not enough to call it
 production-ready.
 
+## Answer today
+
+| Question | Answer |
+|---|---|
+| Can a beginner evaluate it locally? | Yes; use the [five-minute quickstart](./quickstart.md). |
+| Can a team run a controlled single-tenant pilot? | Yes, after the required deployment gates pass. |
+| Is it generally recommended for production? | No; the release remains a prerelease. |
+| Can it be exposed as a public hostile multi-tenant control plane? | No; the full Go Gateway tenant-wide HTTP authorization boundary is incomplete. |
+| Does the local container campaign prove production HA? | No; it proves local crash/promotion behavior, not multi-host quorum, fencing or split brain. |
+| Can PostgreSQL execute jobs without BullMQ/Redis? | Yes; use the [native PostgreSQL queue](./postgres-queue.md) and apply its runtime-specific gates. |
+
+For an actual deployment decision, use the
+[go/no-go production checklist](./production-checklist.md). The rest of this
+page explains why those gates exist.
+
 ## Implemented trust controls
 
 - Go race tests run on Linux CI; PostgreSQL contracts run against PostgreSQL 16.
@@ -16,7 +31,7 @@ production-ready.
 - `scripts/restore-drill.sh` compares migration and Finding counts after a
   PostgreSQL custom-format restore.
 
-## Deployment obligations
+## Required deployment work
 
 - Put the Gateway behind TLS, a network policy and a distributed edge limiter.
 - Use separate PostgreSQL roles for runtime writes, Rule reads and backups.
@@ -24,8 +39,11 @@ production-ready.
 - Configure retention/partitioning from [the retention guide](./retention.md).
 - Follow [migration recovery](./migration-rollback.md); migrations are forward
   fixes, never edited history.
+- Pin an exact prerelease and record the evidence used for the deployment
+  decision.
+- Run runtime/provider fault tests against the actual deployment topology.
 
-## Still blocking a production-ready claim
+## Product-wide blockers and evidence gaps
 
 - **The full Go Gateway is still not a tenant-wide public RBAC surface. The
   Node Task HTTP profile now carries owner/tenant predicates and an explicit
@@ -36,24 +54,29 @@ production-ready.
   unrepresentable through composite foreign keys. `internal/domain/authz`
   holds the role matrix and a single decision point, and
   `tests/postgres/tenant_isolation_test.go` proves the boundary by trying to
-  cross it. What is **not** done: `internal/interfaces/agent/server.go` still
-  authorises with one operator token plus a list of per-owner Task
-  credentials, and no test exercises cross-tenant access over HTTP. One
-  process also serves one tenant, because the tenant is a property of the
-  connection pool. See [`docs/tenancy.md`](tenancy.md).
+  cross it. The Node PostgreSQL integration harness now also exercises its
+  owner HTTP API across tenant and owner boundaries and requires a metadata-free
+  404. What is **not** done: `internal/interfaces/agent/server.go` still
+  authorises with one operator token plus a list of per-owner Task credentials;
+  the full Go Gateway does not yet have equivalent tenant-wide HTTP coverage.
+  One Go process also serves one tenant, because the tenant is a property of
+  the connection pool. See [`docs/tenancy.md`](tenancy.md).
 - **Isolation is off by default on a common setup, and RhinoQ now says so.**
   PostgreSQL exempts superusers and `BYPASSRLS` roles from row-level security,
   and the official `postgres` image makes `POSTGRES_USER` a superuser.
   `rhinoq doctor` reports this as a FAIL rather than letting a green test suite
   imply isolation that is not in force.
-- **PostgreSQL failover has one measured drill, not a campaign.**
+- **PostgreSQL failover has repeatable measured drills, not a campaign.**
   `scripts/failover-drill.sh` runs a real primary/standby pair, kills the
   primary with SIGKILL, promotes the standby and compares surviving rows
-  against acknowledged writes. One run is recorded in
-  [`docs/evidence/postgres-failover-2026-08-05.md`](evidence/postgres-failover-2026-08-05.md):
+  against acknowledged writes. The latest run is recorded in
+  [`docs/evidence/postgres-failover-2026-08-12.md`](evidence/postgres-failover-2026-08-12.md):
   150 of 150 acknowledged writes survived and policies stayed forced after
-  promotion. That is one run, on one host, with no witness and no fencing —
+  promotion. That is a local run, on one host, with no witness and no fencing —
   split brain is untested and a deployment-scale campaign remains open.
+  Windows users can run the same disposable rig through
+  `./scripts/run-failover-drill.ps1`; it chooses dedicated ports, waits for both
+  containers, runs the evidence-producing drill and removes its volumes.
 - **Benchmarks are shaped like the adopter workload but are not from an
   adopter.** `tests/postgres/adopter_workload_bench_test.go` measures Task
   summary polling and Execution paging at fan-out 100/1,000/5,000, which is
@@ -61,6 +84,9 @@ production-ready.
   be checked. It found and closed a real unbounded page cost (migration 028).
   The numbers are synthetic rows on one machine; a benchmark against a real
   adopter workload still requires a real adopter.
+  The 2026-08-12 rerun kept Summary reads approximately flat but observed
+  increasing client latency for a 50-row Execution page at larger fan-out;
+  see [`docs/evidence/benchmark-remediation-2026-08-12.md`](evidence/benchmark-remediation-2026-08-12.md).
 - **No code-reduction claim exists, and none is fabricated.**
   `scripts/code-reduction.sh` measures an adopter repository between two refs
   and emits a report with the process, datastore and credential rows left

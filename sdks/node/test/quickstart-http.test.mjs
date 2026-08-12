@@ -124,6 +124,45 @@ test('app.http refuses to expose the cross-owner Workbench without a token', () 
   assert.throws(() => createApp().app.http({ operatorToken: '' }), /operatorToken/);
 });
 
+test('portable app exchanges the operator token for a scoped HttpOnly browser cookie', async () => {
+  const operatorToken = 'ops-secret';
+  const { tasks } = createApp();
+  const app = await createRhinoQApp({
+    pool: { async query() { return { rows: [] }; } },
+    tasks,
+    adapters: [createManualRuntimeAdapter('manual', 'reports')],
+    ownerFromRequest: () => 'owner-a',
+  });
+  const middleware = app.http({ operatorToken });
+
+  const form = await invoke(middleware, '/operator-login');
+  assert.equal(form.status, 200);
+  assert.match(form.body, /Operator sign in/);
+  assert.equal(form.body.includes(operatorToken), false);
+
+  const refused = await invoke(
+    middleware, '/operator-login', { 'content-type': 'application/x-www-form-urlencoded' },
+    'POST', 'token=wrong',
+  );
+  assert.equal(refused.status, 403);
+  assert.equal(refused.headers['set-cookie'], undefined);
+
+  const login = await invoke(
+    middleware, '/operator-login', { 'content-type': 'application/x-www-form-urlencoded' },
+    'POST', `token=${encodeURIComponent(operatorToken)}`,
+  );
+  assert.equal(login.status, 303);
+  assert.equal(login.headers.location, '/admin');
+  assert.match(login.headers['set-cookie'], /^rhinoq_operator_session=[^;]+; HttpOnly; SameSite=Strict; Path=\/admin$/);
+  assert.equal(login.headers['set-cookie'].includes(operatorToken), false);
+
+  const cookie = login.headers['set-cookie'].split(';', 1)[0];
+  const workbench = await invoke(middleware, '/admin', { cookie });
+  assert.equal(workbench.status, 200);
+  assert.match(workbench.body, /RhinoQ Workbench/);
+  await app.close();
+});
+
 test('owner and operator HTML never embed operator tokens or private result references', async () => {
   const privateReference = 'storage://private/report.csv?credential=do-not-leak';
   const operatorToken = 'operator-secret-do-not-render';

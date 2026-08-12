@@ -9,6 +9,7 @@ test('TaskListStore filters an inbox and never regresses entity versions', async
   await store.refresh(); await store.refresh();
   assert.equal(store.getSnapshot().tasks.length, 1);
   assert.equal(store.getSnapshot().tasks[0].entityVersion, 2);
+  assert.match(store.getSnapshot().lastAuthoritativeAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test('TaskListStore removes a task when a newer state leaves the filter', async () => {

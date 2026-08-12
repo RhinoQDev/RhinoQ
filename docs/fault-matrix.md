@@ -13,6 +13,12 @@ capacity release, authorization, provider timeout, lost repair response,
 dispatch/bind uncertainty, unsupported cancellation, secret redaction, tenant
 isolation and PostgreSQL/projector interruptions.
 
+The current remediation run and its negative evidence are recorded in
+[`evidence/remediation-campaign-2026-08-12.md`](./evidence/remediation-campaign-2026-08-12.md).
+The independently containerized PostgreSQL primary/standby promotion result is
+recorded in
+[`evidence/postgres-failover-2026-08-12.md`](./evidence/postgres-failover-2026-08-12.md).
+
 This is local deterministic and opt-in integration evidence. PostgreSQL and
 deployment-shaped cases may skip without their explicitly documented service
 configuration. Passing this matrix is not a production-readiness or reliability

@@ -135,4 +135,9 @@ forgets `tenant_id` then fails rather than silently writing into `tnt_system`.
   connection pool. Serving many tenants from one Agent needs per-request
   `SET LOCAL` inside a transaction-scoped handle, which the adapters do not
   currently take.
-- No cross-tenant test exercises the HTTP layer, only the storage layer.
+- The Node PostgreSQL integration harness exercises owner API reads across both
+  tenant and owner boundaries and requires 404 without metadata. The full Go
+  PostgreSQL harness separately runs storage enforcement through a
+  `NOSUPERUSER NOBYPASSRLS` application role. These are complementary checks;
+  the embedded Node Task profile enforces tenant predicates rather than the
+  full profile's RLS policies.

@@ -41,7 +41,7 @@ services:
       - -c
       - synchronous_commit=on
     ports:
-      - "55433:5432"
+      - "${RHINOQ_FAILOVER_PRIMARY_PORT:-55433}:5432"
     volumes:
       - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
@@ -58,7 +58,7 @@ services:
     environment:
       PGPASSWORD: replicator
     ports:
-      - "55434:5432"
+      - "${RHINOQ_FAILOVER_REPLICA_PORT:-55434}:5432"
     # The replica is built by pg_basebackup from the running primary rather
     # than by initdb, which is what makes it a real standby streaming real WAL
     # instead of a second empty database that happens to have the same schema.

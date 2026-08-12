@@ -18,6 +18,12 @@ export interface TaskListState {
   status: 'idle' | 'loading' | 'connected' | 'reconnecting' | 'stopped';
   error?: unknown;
   transport?: 'polling' | 'live' | 'polling_fallback';
+  /** Client-observed time of the newest accepted authoritative page/snapshot. */
+  lastAuthoritativeAt?: string;
+  /** Consecutive transport reconnects since the last live event. */
+  reconnectAttempts?: number;
+  /** Client-observed time of the most recent transport failure. */
+  lastErrorAt?: string;
 }
 
 export class TaskListStore {
@@ -52,7 +58,7 @@ export class TaskListStore {
     const filtered = page.filter((task) =>
       (!this.query.states?.length || this.query.states.includes(task.state)) &&
       (!this.query.types?.length || this.query.types.includes(task.type)));
-    this.set({ tasks: filtered, status: 'connected', error: undefined });
+    this.set({ ...this.state, tasks: filtered, status: 'connected', error: undefined, lastAuthoritativeAt: new Date().toISOString() });
     return this.state.tasks;
   }
 
@@ -60,7 +66,7 @@ export class TaskListStore {
     let failures = 0;
     while (!signal.aborted) {
       try { await this.refresh(); failures = 0; this.set({ ...this.state, transport: 'polling' }); }
-      catch (error) { failures++; this.set({ ...this.state, status: 'reconnecting', error }); }
+      catch (error) { failures++; this.set({ ...this.state, status: 'reconnecting', error, reconnectAttempts: failures, lastErrorAt: new Date().toISOString() }); }
       if (!(await delay(Math.min(30_000, this.pollIntervalMs * 2 ** Math.min(failures, 4)), signal))) return;
     }
   }
@@ -77,7 +83,7 @@ export class TaskListStore {
             const tasks = mergeNewestPage([], event.tasks).filter((task) =>
               (!this.query.states?.length || this.query.states.includes(task.state)) &&
               (!this.query.types?.length || this.query.types.includes(task.type)));
-            this.set({ tasks, status: 'connected', transport: 'live', error: undefined });
+            this.set({ tasks, status: 'connected', transport: 'live', error: undefined, lastAuthoritativeAt: new Date().toISOString(), reconnectAttempts: 0 });
             continue;
           }
           if (event.type !== 'task.snapshot' || 'executions' in event.task === false) continue;
@@ -85,14 +91,14 @@ export class TaskListStore {
           const filtered = tasks.filter((task) =>
             (!this.query.states?.length || this.query.states.includes(task.state)) &&
             (!this.query.types?.length || this.query.types.includes(task.type)));
-          this.set({ tasks: filtered, status: 'connected', transport: 'live', error: undefined });
+          this.set({ tasks: filtered, status: 'connected', transport: 'live', error: undefined, lastAuthoritativeAt: new Date().toISOString(), reconnectAttempts: 0 });
         }
         if (signal.aborted) return;
         throw new Error('Task inbox event stream ended');
       } catch (error) {
         if (signal.aborted) return;
         failures++;
-        this.set({ ...this.state, status: 'reconnecting', transport: 'polling_fallback', error });
+        this.set({ ...this.state, status: 'reconnecting', transport: 'polling_fallback', error, reconnectAttempts: failures, lastErrorAt: new Date().toISOString() });
         try { await this.refresh(); this.set({ ...this.state, transport: 'polling_fallback' }); } catch { /* retry stream */ }
         if (!(await delay(Math.min(30_000, this.pollIntervalMs * 2 ** Math.min(failures - 1, 4)), signal))) return;
       }

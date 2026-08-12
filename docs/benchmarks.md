@@ -40,6 +40,13 @@ throughput; 32 clients reduced throughput and sharply increased p99 create
 latency. This is a tuning signal for that machine, not a universal pool-size
 default.
 
+The latest remediation baseline is
+[`evidence/benchmark-remediation-2026-08-12.md`](./evidence/benchmark-remediation-2026-08-12.md).
+It confirms flat Task Summary reads across 100–5,000 synthetic Executions on
+that machine, but also records increasing Go client latency for a 50-row
+Execution page. The latter remains a deployment-shaped tuning signal rather
+than being hidden behind the Summary result.
+
 It deliberately does not claim HTTP, PostgreSQL, Redis, BullMQ worker or
 end-to-end throughput.
 

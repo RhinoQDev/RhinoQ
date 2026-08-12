@@ -115,6 +115,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Verify release documentation consistency
         run: node .github/scripts/verify-release-docs.mjs
+      - name: Verify compatibility matrix consistency
+        run: node .github/scripts/verify-compatibility.mjs
       - run: npm ci
         working-directory: sdks/node
       - run: npm test

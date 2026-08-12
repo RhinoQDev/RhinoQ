@@ -17,8 +17,11 @@ RHINOQ_DATABASE_URL='postgres://postgres:rhinoq@127.0.0.1:55433/fanout' npm run 
 npm start
 ```
 
-Open <http://localhost:3000> and press the button. The operator console is at
-`/admin/rhinoq` and expects the header `x-operator-token: let-me-in`.
+Open <http://localhost:3000> and press the button. Follow the operator sign-in
+link, enter `OPERATOR_TOKEN` (defaults to `let-me-in` for this local example),
+and the server exchanges it for an opaque HttpOnly, SameSite cookie scoped to
+`/admin/rhinoq`. Header authentication remains available for non-browser
+clients.
 
 Every batch fails one item in twelve on purpose, so the console has a real
 failure to show rather than a wall of green.
