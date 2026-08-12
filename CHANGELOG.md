@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed the release-documentation CI gate so branch builds validate against
+  the package manifest version instead of treating the branch name as a
+  release version. Tag builds and explicit release-version checks are
+  unchanged.
 - Mark Failure Lab output as simulated workflow evidence with no external
   provider call, and distinguish workflow verification from provider outcome.
 - Add deterministic runtime identity validation, machine-readable adoption

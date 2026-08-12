@@ -12,7 +12,8 @@ const rootReadme = await read('README.md');
 const packageReadme = await read('sdks/node/README.md');
 const aliasReadme = await read('sdks/rhinoq/README.md');
 
-const requested = process.argv[2] || process.env.GITHUB_REF_NAME;
+const requested = process.argv[2]
+  || (process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : undefined);
 const expected = requested ? requested.replace(/^v/, '') : manifest.version;
 const sdkVersion = gatewayTypes.match(/export const SDK_VERSION = '([^']+)'/)?.[1];
 
