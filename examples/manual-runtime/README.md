@@ -21,8 +21,11 @@ $env:DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5432/rhinoq_manual'
 npm start
 ```
 
-The printed Task should be `succeeded`, with `1/1` progress and one manual
-Execution. Replace `createManualRuntimeAdapter` with an application adapter that
+The printed Task is `succeeded`, with `1/1` progress and one manual Execution.
+The example then prints a focused Task Center URL and serves the same owner API
+and operator Workbench product surface as the BullMQ path. Press Ctrl+C to stop.
+
+Replace `createManualRuntimeAdapter` with an application adapter that
 implements the same portable contract. Runtime-specific retry inference,
 polling, cancellation and credentials stay in that adapter.
 

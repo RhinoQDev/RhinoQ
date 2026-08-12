@@ -125,6 +125,11 @@ projection by `createRhinoQ()`. The legacy `BullMQTaskBridge` remains a
 byte-compatible facade during the beta so existing lease, fan-out and
 settlement callers do not change underneath them.
 
+`createRhinoQApp()` is the runtime-neutral product composition above that
+primitive. It installs the isolated Task profile, starts configured adapters
+and mounts the owner Task API, Task Center and operator Workbench without
+moving transition correctness out of PostgreSQL/Application commands.
+
 Shadow Mode may resolve an unbound event into a complete Task create request,
 Execution ID and the exact same RuntimeRef. Binding commits before the original
 event is replayed. A missing resolver result is evidence of an identity gap and

@@ -134,9 +134,12 @@ jobs:
           cd "$root"
           npm init -y >/dev/null
           npm install --save-exact "@rhinoq/node@$version" "rhinoq@$version" pg
-          node --input-type=module -e "import('@rhinoq/node').then(m => { if (!m.ApplicationTaskClient) process.exit(1) })"
-          node -e "if (!require('@rhinoq/node').ApplicationTaskClient) process.exit(1)"
+          expected='["ApplicationTaskClient","createRhinoQ","createRhinoQApp","createManualRuntimeAdapter","RuntimeTaskProjector","runFailureLab","recoverFailureLab","createBullMQPortableIntegration"]'
+          EXPECTED="$expected" node --input-type=module -e "import('@rhinoq/node').then(m => { for (const name of JSON.parse(process.env.EXPECTED)) if (m[name] === undefined) throw new Error('missing ESM export '+name) })"
+          EXPECTED="$expected" node -e "const m=require('@rhinoq/node'); for(const name of JSON.parse(process.env.EXPECTED)) if(m[name]===undefined) throw new Error('missing CJS export '+name)"
           test "$(./node_modules/.bin/rhinoq --version)" = "$version"
+          ./node_modules/.bin/rhinoq --help | grep -F 'createRhinoQApp'
+          ./node_modules/.bin/rhinoq --help | grep -F 'lab run completed-but-missing-output --recover --confirm-disposable'
           ./node_modules/.bin/rhinoq-task-check --help >/dev/null
           npm audit signatures
 

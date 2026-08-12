@@ -46,7 +46,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /npx rhinoq init/);
   assert.match(help.stdout, /npx rhinoq adopt --mode single/);
-  assert.match(help.stdout, /lab run completed-but-missing-output --confirm-disposable/);
+  assert.match(help.stdout, /lab run completed-but-missing-output --recover --confirm-disposable/);
   const version = spawnSync(process.execPath, [developerCLI, '--version'], { encoding: 'utf8', env: {} });
   assert.equal(version.status, 0, version.stderr);
   assert.equal(version.stdout.trim(), packageVersion);
@@ -363,6 +363,25 @@ test('adopt preview explains missing prerequisites without failing', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /MISSING: install pg/);
     assert.match(result.stdout, /npm install @rhinoq\/node pg bullmq/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('observe adoption previews and generates a runtime-neutral fail-closed resolver workflow', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-adopt-observe-'));
+  try {
+    const preview = spawnSync(process.execPath, [developerCLI, 'adopt', '--adapter', 'custom', '--observe'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /observe-only adoption plan/);
+    assert.match(preview.stdout, /preview only/);
+    const apply = spawnSync(process.execPath, [developerCLI, 'adopt', '--adapter', 'custom', '--observe', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(apply.status, 0, apply.stderr);
+    const generated = readFileSync(join(cwd, 'rhinoq.observe.mjs'), 'utf8');
+    assert.match(generated, /createRhinoQApp/);
+    assert.match(generated, /PostgresAdoptionReportStore/);
+    assert.match(generated, /if \(!identity\) return undefined/);
+    assert.match(generated, /resolveIdentity\(event\.ref\)/);
+    const syntax = spawnSync(process.execPath, ['--check', join(cwd, 'rhinoq.observe.mjs')], { encoding: 'utf8' });
+    assert.equal(syntax.status, 0, syntax.stderr);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 

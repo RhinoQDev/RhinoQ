@@ -91,6 +91,7 @@ export class RuntimeTaskProjector {
         await this.ensureTask(execution.taskId, 'running');
         if (event.resultRef) await this.attachExecutionResult(execution.id, event.resultRef);
         if (this.terminalProjection === 'single-execution') {
+          await this.synchronizeSuccessfulProgress(execution.taskId);
           await this.ensureTask(execution.taskId, 'succeeded');
           if (event.resultRef) await this.attachTaskResult(execution.taskId, event.resultRef);
         }
@@ -205,6 +206,20 @@ export class RuntimeTaskProjector {
       const task = await this.client.getTask(taskId);
       if (task.hasResult) return task;
       return this.client.attachTaskResult(task.id, task.entityVersion, reference);
+    });
+  }
+
+  private synchronizeSuccessfulProgress(taskId: string): Promise<TaskSnapshot> {
+    return this.converge(async () => {
+      const task = await this.client.getTask(taskId);
+      if (task.state !== 'running' && task.state !== 'cancel_requested') return task;
+      const total = task.progress.total ?? Math.max(1, task.progress.completed);
+      if (task.progress.completed >= total) return task;
+      return this.client.reportTaskProgress(task.id, task.entityVersion, {
+        ...task.progress,
+        completed: total,
+        total,
+      });
     });
   }
 

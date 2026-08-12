@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RhinoQApp } from '../dist/index.js';
+import { RhinoQApp, createManualRuntimeAdapter, createRhinoQApp } from '../dist/index.js';
 
 function createApp(options = {}) {
   const snapshot = {
@@ -122,6 +122,28 @@ test('app.http exposes the complete default user and operator journey from one m
 
 test('app.http refuses to expose the cross-owner Workbench without a token', () => {
   assert.throws(() => createApp().app.http({ operatorToken: '' }), /operatorToken/);
+});
+
+test('createRhinoQApp gives a non-BullMQ adapter the same Task Center and Workbench surface', async () => {
+  const { tasks } = createApp();
+  const adapter = createManualRuntimeAdapter('manual', 'reports');
+  const app = await createRhinoQApp({
+    pool: { async query() { return { rows: [] }; } },
+    tasks,
+    adapters: [adapter],
+    ownerFromRequest: () => 'owner-a',
+  });
+  const middleware = app.http({ operatorToken: 'ops-secret' });
+
+  assert.equal((await invoke(middleware, '/task-center')).status, 200);
+  assert.equal((await invoke(middleware, '/tasks')).status, 200);
+  assert.equal((await invoke(middleware, '/admin')).status, 403);
+  assert.equal((await invoke(middleware, '/admin', { 'x-operator-token': 'ops-secret' })).status, 200);
+
+  const reports = await app.runtime.runtimeReports();
+  assert.equal(reports[0].name, 'manual');
+  assert.equal(reports[0].scope, 'reports');
+  await app.close();
 });
 
 test('app.http connects runtime evidence and job links through the authenticated operator journey', async () => {

@@ -27,12 +27,24 @@ test('manual adapter drives a Task lifecycle without importing BullMQ', async ()
 
   const task = await client.getTask('task-1');
   assert.equal(task.state, 'succeeded');
-  assert.deepEqual(task.progress, { completed: 1, total: 2, message: 'rendering' });
+  assert.deepEqual(task.progress, { completed: 2, total: 2, message: 'rendering' });
   assert.equal(task.hasResult, true);
   assert.equal((await client.getTaskExecution('execution-1')).state, 'succeeded');
   assert.equal(client.executionResults.get('execution-1'), 'object://report-1');
   assert.equal(client.taskResults.get('task-1'), 'object://report-1');
   await rhino.close();
+});
+
+test('single-execution success synchronizes default progress before the Task becomes terminal', async () => {
+  const client = new MemoryTaskClient();
+  const rhino = createRhinoQ({ client, terminalProjection: 'single-execution' });
+  await rhino.track({ task: taskRequest, executionId: 'execution-1', ref });
+  await rhino.observe({ type: 'succeeded', ref, occurredAt: now, attempt: 1, resultRef: 'object://report-1' });
+
+  const task = await client.getTask('task-1');
+  assert.equal(task.state, 'succeeded');
+  assert.deepEqual(task.progress, { completed: 1, total: 1 });
+  assert.equal(task.hasResult, true);
 });
 
 test('events for one runtime reference are serialized in arrival order', async () => {

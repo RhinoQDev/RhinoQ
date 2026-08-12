@@ -8,16 +8,12 @@ import type { RuntimeRef, RuntimeObservation, DispatchCommand, CancelResult, Run
 import { BullMQRuntimeAdapter } from './runtime-adapter.js';
 import type { BullMQEvent, BullMQQueue, BullMQQueueEvents, BullMQTaskObservation } from './task-bridge.js';
 
-export interface BullMQPortableIntegrationOptions {
+interface BullMQPortableIntegrationBaseOptions {
   pool: SqlPool;
   events: BullMQQueueEvents;
-  queue?: BullMQQueue & { getJob?: (id: string) => Promise<BullMQReadableJob | undefined> };
   tasks?: TaskClient;
   scope: string;
   mode: 'single' | 'fanout';
-  jobName?: string | ((command: DispatchCommand) => string);
-  jobId?: (command: DispatchCommand) => string;
-  jobOptions?: (command: DispatchCommand) => Record<string, unknown>;
   progress?: (event: BullMQEvent) => { completed: number; total?: number; message?: string } | undefined;
   terminalFailure?: (event: BullMQEvent) => Promise<boolean> | boolean;
   resultReference?: (event: BullMQEvent) => Promise<string | undefined> | string | undefined;
@@ -27,6 +23,23 @@ export interface BullMQPortableIntegrationOptions {
   adoptionStore?: AdoptionReportStore;
   adoptionReplicaId?: string;
 }
+
+export type BullMQPortableIntegrationOptions = BullMQPortableIntegrationBaseOptions & (
+  | {
+      /** Observe/track only. Dispatch is deliberately unavailable. */
+      queue?: never;
+      jobName?: never;
+      jobId?: never;
+      jobOptions?: never;
+    }
+  | {
+      /** Supplying a Queue enables dispatch, so stable job identity is mandatory. */
+      queue: BullMQQueue & { getJob?: (id: string) => Promise<BullMQReadableJob | undefined> };
+      jobName: string | ((command: DispatchCommand) => string);
+      jobId: (command: DispatchCommand) => string;
+      jobOptions?: (command: DispatchCommand) => Record<string, unknown>;
+    }
+);
 
 export interface BullMQPortableDispatch {
   task: { id: string; type: string; ownerId?: string; definitionVersion?: number };
@@ -69,6 +82,8 @@ export async function createBullMQPortableIntegration(
   if (!options.events || typeof options.events.on !== 'function') throw new TypeError('portable BullMQ integration requires QueueEvents');
   if (!options.scope?.trim()) throw new TypeError('portable BullMQ integration requires scope');
   if (options.mode !== 'single' && options.mode !== 'fanout') throw new TypeError("portable BullMQ integration requires mode: 'single' or 'fanout'");
+  if (options.queue && !options.jobName) throw new TypeError('portable BullMQ integration requires jobName when queue enables dispatch');
+  if (options.queue && !options.jobId) throw new TypeError('portable BullMQ integration requires jobId when queue enables dispatch');
   const tasks = options.tasks ?? await installPostgresTaskProfile(options.pool);
   const adapter = new BullMQRuntimeAdapter({
     scope: options.scope,

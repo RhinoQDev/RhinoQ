@@ -12,6 +12,10 @@ the same core without making BullMQ the product boundary.
 For custom runtimes, the development-preview `createRhinoQ()` API exposes
 Observe, Track and capability-gated Control over portable runtime events:
 
+> This portable surface is unreleased/main-only until `v0.1.0-beta.12` is
+> published and passes the installed-package smoke test. The latest verified
+> npm prerelease is still `v0.1.0-beta.11`.
+
 ```ts
 const adapter = createManualRuntimeAdapter('manual', 'reports');
 const app = createRhinoQ({
@@ -24,6 +28,18 @@ await app.track({ task, executionId, ref });
 await app.start();
 await adapter.emit({ type: 'started', ref, occurredAt: new Date().toISOString() });
 ```
+
+Use the product composition when the host also needs the owner API, Task Center
+and operator Workbench from the same mount:
+
+```ts
+const rhino = await createRhinoQApp({ pool, adapters: [adapter], ownerFromRequest });
+server.use(rhino.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN }));
+await rhino.runtime.track({ task, executionId, ref });
+```
+
+`createRhinoQ()` remains the lower-level runtime primitive;
+`createRhinoQApp()` is the generic golden path for every adapter.
 
 An adapter that implements `inspect` can reconcile one already-known reference
 without scanning its runtime:
@@ -63,6 +79,11 @@ Applications migrating the compatibility facade can use
 objects through `BullMQRuntimeAdapter -> createRhinoQ()`; the legacy
 `rhinoq()` preset remains available while its older lease/fan-out surface is
 kept byte-compatible.
+
+Passing `queue` enables dispatch and therefore requires both `jobName` and a
+stable `jobId` callback at compile time. Omit all three for an observe/track-only
+integration. A successful `single` execution synchronizes Task progress to a
+terminal value before the Task becomes `succeeded`.
 
 The SQS proof adapter is available from `@rhinoq/node/sqs`. It models
 `ApproximateReceiveCount` as an observed redelivery attempt, reports missing
@@ -118,15 +139,26 @@ multi-process idempotency fence.
 Run the completed-but-wrong rehearsal only against disposable resources:
 
 ```bash
-npx rhinoq lab run completed-but-missing-output --confirm-disposable
-npx rhinoq dev
+npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable
 ```
 
-The lab writes one additive fixture through the public Task client. It does not
-delete, drain, pause, retry or call an external provider. The returned incident
-model states what happened, why RhinoQ believes it, affected Task/item counts
-and a read-only `recheck-output` action. Missing confirmation is rejected before
-the CLI opens a database connection.
+The lab writes one additive fixture, previews and separately approves a guarded
+disposable repair, attaches simulated output evidence, records verified
+verification and post-checks the Task as `succeeded`. It prints the complete
+`break -> detect -> explain -> preview -> repair -> recheck -> verified` chain
+and a shareable JSON incident summary. It does not delete, drain, pause, retry
+or call an external provider. Omit `--recover` to stop at the incident.
+
+Generate observe-only adoption without taking runtime control:
+
+```bash
+npx rhinoq adopt --adapter custom --observe
+npx rhinoq adopt --adapter custom --observe --apply
+```
+
+The generated composition installs the durable adoption report and leaves
+application identity in an explicit `resolveIdentity(ref)` callback. Returning
+`undefined` is fail-closed and counted in `unresolvedEvents`.
 
 ### Incident Explainer
 

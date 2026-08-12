@@ -21,19 +21,40 @@ next recommended action. Generic failures never claim that retry is safe when
 RhinoQ has no evidence about the external result.
 
 The operator token is exchanged for an HttpOnly, SameSite cookie scoped to
-`/admin`; it is not embedded in the page or URL. The following is the
-runtime-neutral boundary; `tasks`, `runtimeAdapter` and `runtimeEvent` come
-from the application or its chosen adapter.
+`/admin`; it is not embedded in the page or URL. This complete manual-runtime
+example creates and finishes one durable Task without BullMQ:
+
+> [!IMPORTANT]
+> The runtime-neutral APIs below are currently **unreleased/main-only** and are
+> being prepared for `v0.1.0-beta.12`. The verified npm prerelease remains
+> `v0.1.0-beta.11`; do not expect `npm install @rhinoq/node@next` to contain a
+> main-branch API until the beta.12 registry smoke has passed.
+
+For the currently supported prerelease channel, always install explicitly:
+
+```bash
+npm install @rhinoq/node@next pg
+```
 
 ```js
-import { createRhinoQ } from '@rhinoq/node';
+import { createServer } from 'node:http';
+import { Pool } from 'pg';
+import { createManualRuntimeAdapter, createRhinoQApp } from '@rhinoq/node';
 
-const app = createRhinoQ({
-  client: tasks,
-  adapters: [runtimeAdapter], // BullMQ, SQS, manual or another adapter
-  terminalProjection: 'execution-only',
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adapter = createManualRuntimeAdapter('manual', 'reports');
+const ref = { runtime: 'manual', scope: 'reports', externalId: 'report-42' };
+const app = await createRhinoQApp({
+  pool, adapters: [adapter], ownerFromNodeRequest: () => 'demo',
 });
-await app.observe(runtimeEvent);
+await app.runtime.track({
+  task: { id: 'report-42', type: 'report.export', ownerId: 'demo', definitionVersion: 1 },
+  executionId: 'report-42:attempt-1', ref,
+});
+await adapter.emit({ type: 'succeeded', ref, occurredAt: new Date().toISOString() });
+const http = app.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN });
+createServer((req, res) => http(req, res)).listen(8787, '127.0.0.1');
+console.log('Task Center: http://127.0.0.1:8787/task-center/report-42');
 ```
 
 That small portable boundary replaces the generic plumbing around your business handler:
@@ -342,15 +363,15 @@ it binds to loopback and does not enable operator actions.
 To rehearse the completed-but-wrong hero flow on a disposable database:
 
 ```bash
-npx rhinoq lab run completed-but-missing-output --confirm-disposable
-npx rhinoq dev
+npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable
 ```
 
-Failure Lab creates one additive Task through public commands: its Execution is
-technically `succeeded`, no result evidence is attached, and the Task is
-`uncertain`. It prints deterministic evidence, affected scope and the only safe
-next action (`recheck-output`). The command refuses before connecting to
-PostgreSQL unless disposable-database confirmation is explicit.
+Failure Lab creates an additive completed-but-wrong Task, explains why it is
+`uncertain`, previews and separately approves a disposable repair, records
+output plus verified evidence, and post-checks the Task as
+`succeeded`. It prints the complete recovery chain and a JSON incident summary.
+The command refuses before connecting to PostgreSQL unless disposable-database
+confirmation is explicit; omit `--recover` to stop at the incident.
 
 Workbench Task detail now includes a deterministic Incident Explainer answering
 what happened, why, affected Task/item/owner scope and which next actions are

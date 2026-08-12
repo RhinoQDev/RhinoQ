@@ -357,7 +357,18 @@ function renderIncident(incident) {
   $('incidentTechnical').textContent = incident.technicalState;
   $('incidentAffected').textContent = 'Affected: ' + incident.affected.tasks + ' task(s), ' + incident.affected.items + ' item(s)' + (incident.affected.owners ? ', ' + incident.affected.owners + ' owner(s)' : '');
   $('incidentEvidence').innerHTML = (incident.evidence || []).map((item) => '<p><strong>' + esc(item.kind) + ':</strong> ' + esc(item.statement) + '</p>').join('');
-  $('incidentActions').textContent = 'Next actions: ' + (incident.recommendedActions || []).map((action) => action.label + ' [' + action.availability + ']').join(' · ');
+  $('incidentActions').textContent = 'Next actions: ' + (incident.recommendedActions || []).map((action) => {
+    if (action.id === 'request-cancellation' && action.availability === 'available') {
+      return action.label + (snap.actions ? ' [available here]' : ' [not configured: enable Workbench actions]');
+    }
+    if (action.id === 'inspect-runtime' && action.availability === 'available') {
+      return action.label + ($('detail').querySelector('.runtime-link') ? ' [open external tool]' : ' [not configured: add runtimeJobLink]');
+    }
+    if (action.id === 'recheck-evidence' && action.availability === 'available') {
+      return action.label + ' [not configured: register a verifier/recheck workflow]';
+    }
+    return action.label + ' [' + action.availability + ']';
+  }).join(' · ');
 }
 
 function renderFlightRecorder(recorder) {

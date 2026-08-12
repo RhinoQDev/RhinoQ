@@ -5,6 +5,8 @@ import pg from 'pg';
 
 import {
   BullMQTaskBridge,
+  createManualRuntimeAdapter,
+  createRhinoQApp,
   PostgresProjectorLease,
   PostgresProducer,
   installPostgresTaskProfile,
@@ -12,6 +14,32 @@ import {
 } from '../dist/index.js';
 
 const databaseUrl = process.env.RHINOQ_TEST_DATABASE_URL;
+
+test('runtime-neutral app composition projects a real PostgreSQL Task to terminal progress', {
+  skip: !databaseUrl,
+}, async () => {
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const adapter = createManualRuntimeAdapter('manual', 'postgres-e2e');
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const taskId = `portable-app-${suffix}`;
+  const ref = { runtime: 'manual', scope: 'postgres-e2e', externalId: `job-${suffix}` };
+  const app = await createRhinoQApp({ pool, adapters: [adapter], ownerFromRequest: () => 'owner-e2e' });
+  try {
+    await app.runtime.track({
+      task: { id: taskId, type: 'report.export', ownerId: 'owner-e2e', definitionVersion: 1 },
+      executionId: `execution-${suffix}`, ref,
+    });
+    await adapter.emit({ type: 'succeeded', ref, occurredAt: new Date().toISOString(), resultRef: `report://${suffix}` });
+    const task = await app.tasks.getTask(taskId);
+    assert.equal(task.state, 'succeeded');
+    assert.deepEqual(task.progress, { completed: 1, total: 1 });
+    assert.equal(task.hasResult, true);
+    assert.doesNotThrow(() => app.http({ operatorToken: 'e2e-token' }));
+  } finally {
+    await app.close();
+    await pool.end();
+  }
+});
 
 test('PostgresProducer works with pg and joins the caller transaction', {
   skip: !databaseUrl,

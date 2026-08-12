@@ -537,12 +537,15 @@
 - **Decision:** Failure Lab scenarios use public Task commands to create
   uniquely identified additive fixtures. The first scenario records one
   succeeded Execution with no result reference and transitions the Task to
-  `uncertain`. Its explanation and safe action are deterministic. The CLI
-  requires `--confirm-disposable` before resolving or opening a database.
+  `uncertain`. Its explanation and safe action are deterministic. Optional
+  `--recover` continues through GuardedRecovery preview, separate approval,
+  simulated disposable output, verified evidence and a mandatory
+  post-check. The CLI requires `--confirm-disposable` before resolving or
+  opening a database.
 - **Consequences:** teams can rehearse the hero flow without queue mutation,
-  provider calls, deletes or blind retry. The current lab proves explanation,
-  not recovery execution; guarded repair and post-repair verification remain a
-  separate milestone.
+  provider calls, deletes or blind retry. The lab repair is explicitly
+  simulated and disposable; it proves product composition, not correctness of
+  an application/provider-specific repair.
 - **Rollback:** remove the lab command/service; created Tasks remain ordinary
   additive Task history and require no schema rollback.
 - **Owner:** Node SDK + product

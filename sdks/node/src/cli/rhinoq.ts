@@ -20,7 +20,7 @@ import {
 import { sendTestNotification } from '../notify/sender.js';
 import { createNodeWorkbenchMiddleware } from '../workbench/handler.js';
 import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
-import { runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
+import { recoverFailureLab, runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Adopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nGeneric async demo:\n  npx rhinoq fixture async\n  npx rhinoq fixture failure\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --confirm-disposable\n');
+      console.log('Start from your goal:\n  npx rhinoq init                         # install the Task profile\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
@@ -108,6 +108,8 @@ async function init(): Promise<void> {
 
 async function adopt(args: string[]): Promise<void> {
   let apply = false;
+  let observe = false;
+  let adapter: 'manual' | 'sqs' | 'bullmq' | 'custom' | undefined;
   let localPostgres = false;
   let mode: 'single' | 'fanout' | undefined;
   let output: string | undefined;
@@ -120,10 +122,16 @@ async function adopt(args: string[]): Promise<void> {
   for (let index = 0; index < args.length; index += 1) {
     const raw = args[index]!;
     if (raw === '--apply') { apply = true; continue; }
+    if (raw === '--observe') { observe = true; continue; }
     if (raw === '--local-postgres') { localPostgres = true; continue; }
     const [key, inline] = raw.split('=', 2);
     const value = inline ?? args[++index];
-    if (key === '--mode') {
+    if (key === '--adapter') {
+      if (value !== 'manual' && value !== 'sqs' && value !== 'bullmq' && value !== 'custom') {
+        fail('--adapter must be manual, sqs, bullmq or custom', 'Run: npx rhinoq adopt --adapter custom --observe');
+      }
+      adapter = value;
+    } else if (key === '--mode') {
       if (value !== 'single' && value !== 'fanout') fail('--mode must be single or fanout', 'Run: npx rhinoq adopt --mode single');
       mode = value;
     } else if (key === '--out') output = resolve(requiredOption(key, value));
@@ -138,6 +146,10 @@ async function adopt(args: string[]): Promise<void> {
     else if (key === '--routes-path') routesPath = routePath(requiredOption(key, value));
     else if (key === '--task-center-path') taskCenterPath = routePath(requiredOption(key, value));
     else fail(`unknown adopt option ${JSON.stringify(key)}`, 'Run: npx rhinoq adopt --mode single [--apply]');
+  }
+  if (observe) {
+    await adoptObserve({ apply, adapter, output });
+    return;
   }
   if (verifyURL) { await verifyAdoptionRuntime(verifyURL, routesPath, taskCenterPath); return; }
   const detected = await detectPackages();
@@ -204,6 +216,70 @@ async function adopt(args: string[]): Promise<void> {
     console.log(`PASS generated ${output}`);
     console.log('NEXT call startRhinoQ({ pool, queue, queueEvents }) during startup, then run: npx rhinoq doctor');
   }
+}
+
+async function adoptObserve(options: {
+  apply: boolean;
+  adapter?: 'manual' | 'sqs' | 'bullmq' | 'custom';
+  output?: string;
+}): Promise<void> {
+  if (!options.adapter) fail('observe adoption requires --adapter', 'Run: npx rhinoq adopt --adapter custom --observe');
+  const output = options.output ?? resolve('rhinoq.observe.mjs');
+  console.log('RhinoQ observe-only adoption plan');
+  console.log(`  adapter            ${options.adapter}`);
+  console.log('  runtime ownership  observe only; no dispatch or cancellation');
+  console.log('  identity           application callback; unresolved events remain visible');
+  console.log('  report             durable PostgreSQL adoption facts across replicas');
+  console.log('  product surface    /tasks, /task-center and /admin through createRhinoQApp');
+  console.log(`  generate           ${output}`);
+  if (!options.apply) {
+    console.log('INFO preview only; nothing was written.');
+    console.log(`NEXT generate without overwriting: npx rhinoq adopt --adapter ${options.adapter} --observe --apply`);
+    return;
+  }
+  const written = await writeNew(output, observeIntegrationTemplate(options.adapter));
+  if (!written) { console.log('INFO no observe integration file was changed.'); return; }
+  console.log(`PASS generated ${output}`);
+  console.log('NEXT implement resolveIdentity(ref) from authenticated application data, then mount rhino.http({ operatorToken }).');
+  console.log('NEXT inspect await rhino.runtime.adoptionReport(); unresolvedEvents identifies identities still missing.');
+}
+
+function observeIntegrationTemplate(adapter: 'manual' | 'sqs' | 'bullmq' | 'custom'): string {
+  return `import {
+  PostgresAdoptionReportStore,
+  createRhinoQApp,
+  installAdoptionReportProfile,
+} from '@rhinoq/node';
+
+// Observe-only: the host constructs the ${adapter} adapter and retains runtime control.
+// Return undefined when identity is not proven; RhinoQ reports the gap instead of guessing.
+export async function startRhinoQObserve({ pool, runtimeAdapter, ownerFromRequest, resolveIdentity }) {
+  await installAdoptionReportProfile(pool);
+  const rhino = await createRhinoQApp({
+    pool,
+    adapters: [runtimeAdapter],
+    ownerFromRequest,
+    adoptionStore: new PostgresAdoptionReportStore(pool),
+    adoptionReplicaId: process.env.RHINOQ_REPLICA_ID || 'local',
+    resolveUnboundEvent: async (event) => {
+      const identity = await resolveIdentity(event.ref);
+      if (!identity) return undefined;
+      return {
+        task: {
+          id: identity.taskId,
+          type: identity.taskType,
+          ownerId: identity.ownerId,
+          definitionVersion: identity.definitionVersion || 1,
+        },
+        executionId: identity.executionId,
+        ...(identity.itemKey ? { itemKey: identity.itemKey } : {}),
+        ref: event.ref,
+      };
+    },
+  });
+  return rhino;
+}
+`;
 }
 
 function localPostgresTemplate(): string {
@@ -1230,7 +1306,8 @@ async function lab(args: string[]): Promise<void> {
   const action = args[0];
   const scenario = args[1] as FailureLabScenario | undefined;
   const confirmed = args.includes('--confirm-disposable');
-  const unknown = args.slice(2).filter((argument) => argument !== '--confirm-disposable');
+  const recover = args.includes('--recover');
+  const unknown = args.slice(2).filter((argument) => argument !== '--confirm-disposable' && argument !== '--recover');
   if (action !== 'run' || scenario !== 'completed-but-missing-output' || unknown.length > 0) {
     fail(
       'lab requires `run completed-but-missing-output`',
@@ -1252,7 +1329,14 @@ async function lab(args: string[]): Promise<void> {
     console.log(`WHY ${result.explanation.technicalState}`);
     console.log(`AFFECTED tasks=${result.explanation.affected.tasks} items=${result.explanation.affected.items}`);
     console.log(`SAFE NEXT ${result.explanation.recommendedActions[0]!.label}`);
-    console.log('NEXT inspect and rehearse recovery: npx rhinoq dev');
+    if (recover) {
+      const recovered = await recoverFailureLab(tasks, result.task.id);
+      console.log(`RECOVERY ${recovered.stages.join(' -> ')}`);
+      console.log(`VERIFIED task=${recovered.task.state} result=${recovered.task.hasResult} stage=${recovered.recovery.stage}`);
+      console.log(`SUMMARY ${recovered.incidentSummary}`);
+    } else {
+      console.log('NEXT complete the guarded loop with --recover, or inspect it with: npx rhinoq dev');
+    }
   } finally { await pool.end(); }
 }
 

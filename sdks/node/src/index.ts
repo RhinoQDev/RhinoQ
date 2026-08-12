@@ -20,6 +20,7 @@ export * from './observe/runtime-health.js';
 export * from './runtime/contracts.js';
 export * from './runtime/projector.js';
 export * from './runtime/integration.js';
+export * from './runtime/app.js';
 export * from './runtime/testkit.js';
 export * from './runtime/adoption.js';
 export * from './recovery/guarded.js';

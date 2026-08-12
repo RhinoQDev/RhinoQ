@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.1.0-beta.12
+
+- Added the runtime-neutral `createRhinoQApp()` composition root. It installs
+  the Task profile, starts portable adapters and mounts the owner Task API,
+  Task Center and operator Workbench from one middleware, including runtime
+  capability reports. The manual example now opens this same UI surface.
+- Completed the disposable Failure Lab loop with `--recover`: deterministic
+  preview, separate approval, guarded repair, simulated output evidence,
+  verified evidence, post-check and a shareable incident summary.
+- Added `rhinoq adopt --adapter <name> --observe` preview/apply. It generates a
+  non-overwriting generic composition with durable adoption facts and an
+  explicit identity resolver; unresolved identities remain visible.
+
+- Fixed the portable BullMQ public type contract: observe/track configuration
+  cannot supply a Queue, while dispatch configuration requires `queue`,
+  `jobName` and stable `jobId` together. Constructor errors now identify the
+  missing dispatch field instead of failing later with an adapter-level error.
+- Fixed runtime-neutral `single-execution` success projection so terminal Task
+  progress is synchronized before the Task becomes immutable. A successful
+  Task with no prior progress now reports `1/1`; an explicit total is completed
+  while retaining its progress message.
+- Reworked Node CLI help around user goals before adapter choice, and made
+  Workbench action labels distinguish actions available in the page, external
+  tool links and workflows that are not configured.
+- Marked main-only portable APIs explicitly in the repository and package
+  README until the prepared beta.12 artifact passes registry publication smoke.
+
 - Added the first public runtime-neutral Node adapter contracts for durable
   `(runtime, scope, externalId)` identity, portable lifecycle events,
   observations and capability-based optional operations. Boundary validators
