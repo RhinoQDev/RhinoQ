@@ -88,7 +88,12 @@ export class BullMQRuntimeAdapter implements RuntimeAdapter {
     const name = typeof this.options.jobName === 'function' ? this.options.jobName(command) : this.options.jobName;
     if (!name.trim()) throw new TypeError('BullMQRuntimeAdapter jobName must be non-empty');
     const result = await queue.add(name, command.payload, {
-      ...(this.options.jobOptions?.(command) ?? {}), jobId,
+      ...(this.options.jobOptions?.(command) ?? {}),
+      ...(command.retry ? {
+        attempts: command.retry.maxAttempts,
+        ...(command.retry.backoff ? { backoff: command.retry.backoff } : {}),
+      } : {}),
+      jobId,
     });
     const externalId = result?.id === undefined ? jobId : String(result.id);
     if (externalId !== jobId) {

@@ -101,6 +101,8 @@ export interface DispatchCommand {
   itemKey?: string;
   payload: unknown;
   idempotencyKey: string;
+  /** Adapter translates this bounded request; RhinoQ does not execute retries here. */
+  retry?: { maxAttempts: number; backoff?: { type: 'fixed' | 'exponential'; delayMs: number } };
 }
 
 export interface DispatchReceipt { ref: RuntimeRef }

@@ -45,3 +45,9 @@ code supplies the official Stripe SDK through `stripeProviderAdapter`.
 The Gateway refuses unregistered repair handlers. The callback URL and secret
 come from deployment configuration, not the browser, and arbitrary SQL is not
 part of the repair protocol.
+
+The embeddable Task components are initialized once in
+`app/rhinoq-task-components.tsx`. Pass them an authenticated
+`TaskBrowserClient` from the application owner API; they supply loading/error
+states, live SSE with polling fallback, actions and accessible progress without
+reimplementing that frontend plumbing.

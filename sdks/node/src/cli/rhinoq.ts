@@ -28,6 +28,7 @@ async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
   const args = process.argv.slice(3);
   switch (command) {
+    case 'setup': await setup(args); break;
     case 'init': await init(args); break;
     case 'adopt': await adopt(args); break;
     case 'verify': await verify(args); break;
@@ -40,10 +41,131 @@ async function main(): Promise<void> {
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Start from your goal:\n  npx rhinoq init                         # install the Task profile\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
+      console.log('Start from your goal:\n  npx rhinoq setup                        # preview the complete golden path\n  npx rhinoq setup --apply                # configure without overwriting\n  npx rhinoq init                         # install the Task profile only\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
+}
+
+type SetupRuntime = 'auto' | 'bullmq' | 'postgres' | 'manual';
+
+async function setup(args: string[]): Promise<void> {
+  let apply = false;
+  let runtime: SetupRuntime = 'auto';
+  let mode: 'single' | 'fanout' = 'single';
+  let ownerProperty: string | undefined;
+  let localPostgres = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === '--apply') { apply = true; continue; }
+    if (raw === '--local-postgres') { localPostgres = true; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--runtime') {
+      if (value !== 'auto' && value !== 'bullmq' && value !== 'postgres' && value !== 'manual') {
+        fail('--runtime must be auto, bullmq, postgres or manual', 'Run: npx rhinoq setup --runtime auto');
+      }
+      runtime = value;
+    } else if (key === '--mode') {
+      if (value !== 'single' && value !== 'fanout') fail('--mode must be single or fanout', 'Run: npx rhinoq setup --mode single');
+      mode = value;
+    } else if (key === '--owner-property') ownerProperty = ownerPropertyPath(requiredOption(key, value));
+    else fail(`unknown setup option ${JSON.stringify(key)}`, 'Run: npx rhinoq setup [--runtime auto|bullmq|postgres|manual] [--apply]');
+  }
+
+  const detected = await detectPackages();
+  const go = await pathExists(resolve('go.mod'));
+  const selected: Exclude<SetupRuntime, 'auto'> = runtime === 'auto'
+    ? detected.bullmq ? 'bullmq' : go ? 'postgres' : 'manual'
+    : runtime;
+  const resolved = database();
+  const generated = selected === 'bullmq'
+    ? detected.nest ? 'src/rhinoq.module.ts' : 'rhinoq.integration.mjs'
+    : selected === 'postgres' ? 'internal/rhinoqworker/worker.go' : 'rhinoq.app.mjs';
+
+  console.log('RhinoQ complete setup plan');
+  console.log(`  project             ${detected.nest ? 'NestJS' : go ? 'Go' : 'Node/framework-neutral'}`);
+  console.log(`  execution runtime   ${selected}${runtime === 'auto' ? ' (auto-selected)' : ''}`);
+  console.log(`  PostgreSQL          ${resolved ? `reuse ${resolved.source}` : localPostgres ? 'generate disposable local service' : 'configuration required'}`);
+  console.log(`  Task semantics      ${mode}`);
+  console.log(`  integration         ${generated}`);
+  console.log('  product surface     owner API + Task Center + Workbench + operator login');
+  console.log('  operations          health + readiness + metrics + reconciliation');
+  console.log('  validation          doctor + bounded eval fixture when PostgreSQL is configured');
+  if (selected === 'bullmq' && !detected.bullmq) console.log('  prerequisite        MISSING bullmq package');
+  if (selected === 'postgres' && !go) console.log('  prerequisite        MISSING go.mod for native Go worker');
+  if (!apply) {
+    console.log('INFO preview only; no schema or file was changed.');
+    console.log(`NEXT review the plan, then run: npx rhinoq setup --runtime ${selected} --mode ${mode}${localPostgres ? ' --local-postgres' : ''} --apply`);
+    return;
+  }
+  if (selected === 'bullmq' && !detected.bullmq) fail('BullMQ setup selected but bullmq is not installed', 'Install bullmq, or choose --runtime postgres/manual');
+  if (selected === 'postgres' && !go) fail('native PostgreSQL queue setup requires a Go project', 'Run go mod init, or choose --runtime manual/bullmq');
+
+  await init([]);
+  await mkdir(resolve('.rhinoq'), { recursive: true });
+  await writeNew(resolve('.rhinoq', 'setup.json'), `${JSON.stringify({ schemaVersion: 1, runtime: selected, mode, generated }, null, 2)}\n`);
+  await writeNew(resolve('.env.rhinoq.example'), setupEnvironmentTemplate(selected));
+
+  if (selected === 'bullmq') {
+    const adoptArgs = ['--mode', mode, '--apply'];
+    if (ownerProperty) adoptArgs.push('--owner-property', ownerProperty);
+    if (localPostgres) adoptArgs.push('--local-postgres');
+    await adopt(adoptArgs);
+  } else if (selected === 'postgres') {
+    const path = resolve(generated);
+    await mkdir(dirname(path), { recursive: true });
+    if (await writeNew(path, postgresWorkerTemplate())) console.log(`PASS generated ${path}`);
+  } else {
+    if (await writeNew(resolve(generated), manualAppTemplate())) console.log(`PASS generated ${resolve(generated)}`);
+  }
+
+  if (resolved) {
+    await doctor([]);
+    await evaluateProduct([]);
+  } else {
+    console.log('WARN doctor/eval deferred until PostgreSQL is configured.');
+  }
+  console.log('URL Task Center: /task-center');
+  console.log('URL Workbench sign in: /operator-login');
+  console.log('NEXT connect authenticated owner/tenant identity and your business Task handler; RhinoQ will not guess either.');
+}
+
+function setupEnvironmentTemplate(runtime: Exclude<SetupRuntime, 'auto'>): string {
+  return [
+    'RHINOQ_DATABASE_URL=postgresql://user:password@127.0.0.1:5432/app',
+    'RHINOQ_OPERATOR_TOKEN=replace-with-at-least-32-random-bytes',
+    'RHINOQ_REPLICA_ID=replace-with-stable-process-identity',
+    ...(runtime === 'bullmq' ? ['REDIS_URL=redis://127.0.0.1:6379'] : []),
+    '',
+  ].join('\n');
+}
+
+function postgresWorkerTemplate(): string {
+  return `package rhinoqworker
+
+import (
+  "context"
+  "github.com/madebyduy/RhinoQ/pkg/rhinoq"
+)
+
+// Register is the only application-owned part: connect each declared name to
+// business code. RhinoQ owns enqueue, leases, retry, recovery and inspection.
+func Register(queue *rhinoq.Client, runReport func(context.Context, rhinoq.Job) error) error {
+  return queue.Handle("reports", "report.export", runReport)
+}
+`;
+}
+
+function manualAppTemplate(): string {
+  return `import { createManualRuntimeAdapter, createRhinoQApp } from '@rhinoq/node';
+
+export async function startRhinoQ({ pool, ownerFromNodeRequest, tenantFromNodeRequest }) {
+  const runtime = createManualRuntimeAdapter('manual', 'application');
+  const app = await createRhinoQApp({ pool, adapters: [runtime], ownerFromNodeRequest, tenantFromNodeRequest });
+  return { app, http: app.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN }) };
+}
+`;
 }
 
 main().catch((error: unknown) => {
@@ -104,6 +226,9 @@ async function init(args: string[] = []): Promise<void> {
       '# PGPASSWORD=postgres',
       '# PGDATABASE=app',
       '# PGSSLMODE=require',
+      '',
+      'RHINOQ_OPERATOR_TOKEN=replace-with-at-least-32-random-bytes',
+      'RHINOQ_REPLICA_ID=replace-with-stable-process-identity',
       '',
       'REDIS_URL=redis://localhost:6379',
       '',
@@ -1626,6 +1751,7 @@ async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean; nest: b
   try { const pkg = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { dependencies?: Record<string,string>; devDependencies?: Record<string,string> }; const all={...pkg.dependencies,...pkg.devDependencies}; return {pg:Boolean(all.pg),bullmq:Boolean(all.bullmq),nest:Boolean(all['@nestjs/common'])}; }
   catch { return {pg:false,bullmq:false,nest:false}; }
 }
+async function pathExists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 async function writeNew(path: string, content: string): Promise<boolean> { try { await access(path); console.log(`KEEP ${path} already exists.`); return false; } catch { await writeFile(path, content, { flag:'wx' }); return true; } }
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }

@@ -10,6 +10,7 @@ import {
 } from '../tasks/adapters.js';
 import { createNodeWorkbenchMiddleware, type WorkbenchHandlerOptions } from '../workbench/handler.js';
 import type { RuntimeAdapter } from './contracts.js';
+import { defineRhinoQTask, type RhinoQDeclaredTask, type RhinoQTaskOptions } from '../tasks/declaration.js';
 import {
   createRhinoQ,
   type CreateRhinoQOptions,
@@ -67,6 +68,10 @@ export class RhinoQPortableApp {
     private readonly identity: Pick<CreateRhinoQAppOptions,
       'ownerFromRequest' | 'ownerFromNodeRequest' | 'tenantFromRequest' | 'tenantFromNodeRequest'>,
   ) {}
+
+  task<Input, Output>(options: RhinoQTaskOptions<Input, Output>): RhinoQDeclaredTask<Input, Output> {
+    return defineRhinoQTask(this.runtime, options);
+  }
 
   http(options: RhinoQAppHTTPOptions): RhinoQAppHTTPMiddleware {
     if (!options?.operatorToken?.trim()) {

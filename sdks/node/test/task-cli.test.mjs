@@ -91,6 +91,33 @@ test('init report-export generates a fail-closed consumer without overwriting', 
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
+test('setup previews one complete plan and generates a native PostgreSQL worker without overwriting', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-setup-'));
+  try {
+    writeFileSync(join(cwd, 'go.mod'), 'module example.com/app\n\ngo 1.25.0\n');
+    const preview = spawnSync(process.execPath, [developerCLI, 'setup'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /execution runtime\s+postgres \(auto-selected\)/);
+    assert.match(preview.stdout, /preview only; no schema or file was changed/);
+    assert.equal(readFileSync(join(cwd, 'go.mod'), 'utf8'), 'module example.com/app\n\ngo 1.25.0\n');
+
+    const apply = spawnSync(process.execPath, [developerCLI, 'setup', '--runtime', 'postgres', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(apply.status, 0, apply.stderr);
+    const worker = join(cwd, 'internal', 'rhinoqworker', 'worker.go');
+    assert.match(readFileSync(worker, 'utf8'), /queue\.Handle\("reports", "report\.export"/);
+    assert.match(apply.stdout, /doctor\/eval deferred/);
+    const setup = JSON.parse(readFileSync(join(cwd, '.rhinoq', 'setup.json'), 'utf8'));
+    assert.equal(setup.runtime, 'postgres');
+    assert.match(readFileSync(join(cwd, '.env.rhinoq.example'), 'utf8'), /RHINOQ_OPERATOR_TOKEN=/);
+
+    writeFileSync(worker, 'package rhinoqworker\n// user-owned\n');
+    const repeat = spawnSync(process.execPath, [developerCLI, 'setup', '--runtime', 'postgres', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(repeat.status, 0, repeat.stderr);
+    assert.equal(readFileSync(worker, 'utf8'), 'package rhinoqworker\n// user-owned\n');
+    assert.match(repeat.stdout, /KEEP/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('transport fallback demo labels simulated evidence', () => {
   const result = spawnSync(process.execPath, [developerCLI, 'demo', 'transport-fallback'], { encoding: 'utf8', env: {} });
   assert.equal(result.status, 0, result.stderr);

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added preview-first `npx rhinoq setup`, combining framework/database/runtime
+  detection, existing init/adopt flows, schema/evaluation checks and
+  non-overwriting integration/environment generation into one golden path.
+- Added `app.task()` / `defineRhinoQTask()` so one declaration drives dispatch,
+  a registered worker handler, progress and result metadata. Retry is disabled
+  by default and external effects require explicit safety policy.
+- Added dependency-injected React `RhinoQTaskList`, `RhinoQTaskDetail` and
+  `RhinoQProgress` components with accessible states, actions, theme tokens and
+  the existing SSE/polling fallback.
+
 - Reframe the product documentation around RhinoQ's complete, low-code async
   platform and automated setup path; keep outcome verification as the safety
   differentiator instead of presenting it as the product's only purpose.

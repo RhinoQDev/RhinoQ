@@ -1,5 +1,11 @@
 # RhinoQ CLI reference
 
+> Node application setup: `npx rhinoq setup` is the preview-first golden path
+> that composes the Node SDK's existing init, adopt, doctor and eval commands.
+> Run it once without `--apply`, review the plan, then apply. See
+> [one-command setup](./setup.md). The Go CLI described below remains the
+> authoritative full-runtime operations CLI.
+
 The RhinoQ CLI prepares the PostgreSQL schema, validates a deployment, exposes
 bounded operational reads, runs the Rule scheduler and opens the local
 Workbench. This page documents every command implemented by the current

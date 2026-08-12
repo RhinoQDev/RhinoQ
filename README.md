@@ -8,8 +8,9 @@ then supplies the durable state, retry/lease safety, Task API, realtime updates,
 Task Center, operator Workbench, health, metrics, reconciliation, notifications
 and guarded recovery around your business handler.
 
-The point is not to make every adopter assemble those pieces. `init`, `adopt`,
-`doctor` and `createRhinoQApp()` detect and configure the standard path, install
+The point is not to make every adopter assemble those pieces. `setup` joins the
+existing `init`, `adopt`, `doctor` and `createRhinoQApp()` capabilities into one
+preview-first golden path. They detect and configure the standard path, install
 or verify the schema, generate integration code without overwriting existing
 files, and mount the product surface together. The application keeps only the
 parts RhinoQ cannot safely invent: authentication, tenant identity, business
@@ -38,6 +39,58 @@ The shortest integration uses RhinoQ's public Task contract and one mounted
 HTTP surface. Existing applications can retain their endpoints through the
 lower-level clients, but doing so intentionally keeps more mapping code in the
 application.
+
+## One-command golden path
+
+Run setup without flags first. It detects Node, NestJS, Go, PostgreSQL and
+BullMQ, chooses a recommended execution path, and prints every proposed change:
+
+```bash
+npm install @rhinoq/node@next pg
+npx rhinoq setup
+npx rhinoq setup --apply
+```
+
+`setup` never writes during preview and never overwrites an existing file. On
+apply it reuses the existing init/adopt/doctor/eval implementation, creates the
+environment and integration shells, and prints the Task Center and Workbench
+URLs. Use `--runtime bullmq|postgres|manual` when auto-detection is not the
+desired choice. PostgreSQL queue execution remains in the authoritative Go
+worker; the generated Node/Go boundary does not duplicate lease or retry logic.
+See the [setup guide](./docs/setup.md).
+
+## Declare a Task once
+
+```ts
+const exportReport = app.task({
+  name: 'report.export', adapter: 'bullmq', runtime: 'bullmq', scope: 'reports',
+  retry: { mode: 'runtime', maxAttempts: 3,
+    backoff: { type: 'exponential', delayMs: 1000 } },
+  run: async ({ reportId }, context) => generateReport(reportId, context.progress),
+  result: ({ url }) => ({ ref: url, mediaType: 'application/pdf' }),
+});
+
+await exportReport.dispatch({
+  id: 'report-42', ownerId: user.id, payload: { reportId: '42' },
+});
+```
+
+The same declaration supplies the registered worker handler, dispatch envelope,
+progress and result metadata while existing runtime adapters retain lifecycle
+authority. Retry defaults to `never`; external effects require an explicit
+idempotency and confirmation policy. See [Task declaration](./docs/task-declaration.md).
+
+## Embed the UI
+
+```tsx
+const { RhinoQTaskList, RhinoQTaskDetail, RhinoQProgress } =
+  createRhinoQComponents(React);
+```
+
+These optional React components include loading/error/empty states, accessible
+progress, cancel/retry/result actions, theme tokens and the existing SSE to
+polling fallback. React is dependency-injected, so server-only installs do not
+pull it in. See [embeddable React UI](./docs/react-ui.md).
 
 ## New here? Get one green run first
 

@@ -5,6 +5,17 @@ package remains only for existing adopters during the prerelease migration.
 
 NestJS wiring for the embedded Node/BullMQ Task integration. It keeps the
 correctness engine in `@rhinoq/node` and only owns provider/lifecycle setup:
+
+For a new adoption, prefer the preview-first golden path:
+
+```bash
+npx rhinoq setup --runtime bullmq --mode single --owner-property user.id
+npx rhinoq setup --runtime bullmq --mode single --owner-property user.id --apply
+```
+
+It detects registered queues and delegates generation to the existing Nest
+adopter. Existing files are never overwritten; ambiguous multi-queue projects
+still require explicit queue/task selection.
 schema readiness, PostgreSQL projector lease, reconciliation schedule,
 framework-neutral Task middleware and health/metrics access.
 
