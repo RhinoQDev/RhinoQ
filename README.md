@@ -1,12 +1,24 @@
 # RhinoQ
 
-## Add a complete async-task platform without rebuilding the plumbing.
+## Open-source background jobs and async Tasks for Node.js, NestJS and Go
 
-RhinoQ is an installable async-task platform for Node.js and Go applications.
-It can use its native PostgreSQL queue or attach to the queue you already run,
-then supplies the durable state, retry/lease safety, Task API, realtime updates,
-Task Center, operator Workbench, health, metrics, reconciliation, notifications
-and guarded recovery around your business handler.
+RhinoQ is an open-source async Task and background-job platform for Node.js,
+NestJS and Go. Run jobs with RhinoQ's native PostgreSQL queue or keep an
+existing BullMQ runtime. RhinoQ adds durable Task state, progress tracking,
+retry history, cancellation, reconciliation, an owner-scoped Task API,
+realtime SSE with polling fallback, embeddable React components, a user Task
+Center and an operator Workbench around your business handler.
+
+[![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
+[![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
+![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white)
+![Status](https://img.shields.io/badge/status-public_beta-f59e0b)
+
+> [!WARNING]
+> RhinoQ is a public beta for evaluation and controlled pilots. It does not
+> claim a production SLA. Start with the [production status](./docs/production-readiness.md)
+> before deploying real workloads.
 
 The point is not to make every adopter assemble those pieces. `setup` joins the
 existing `init`, `adopt`, `doctor` and `createRhinoQApp()` capabilities into one
@@ -20,16 +32,16 @@ Outcome verification—catching a technically successful job whose real result
 is wrong—is the differentiating safety layer on top of that complete platform,
 not the only reason to install RhinoQ.
 
-## What one installation gives you
+## Why RhinoQ
 
 | Instead of building… | RhinoQ supplies… |
 |---|---|
-| queue infrastructure | native PostgreSQL queue, or adapters for an existing runtime |
+| queue infrastructure | native PostgreSQL job queue, or BullMQ/runtime adapters |
 | job/Task tables and state transitions | durable Tasks, Executions, attempts, progress and version fencing |
 | status, history, cancel and result endpoints | owner-scoped Task API |
-| browser polling and reconnect code | SSE with polling fallback and stale-snapshot rejection |
-| customer job-status screens | mountable Task Center |
-| internal support tooling | authenticated operator login and Workbench |
+| browser polling and reconnect code | realtime SSE with polling fallback and stale-snapshot rejection |
+| customer background-job screens | mountable Task Center and React components |
+| internal job dashboard | authenticated operator login and Workbench |
 | missed-event and stuck-job scripts | reconciliation, attention states and queue watchdog |
 | ad-hoc health endpoints | readiness, liveness and metrics |
 | unsafe manual repair runbooks | preview, separate approval, idempotent execution and post-check |
@@ -40,7 +52,7 @@ HTTP surface. Existing applications can retain their endpoints through the
 lower-level clients, but doing so intentionally keeps more mapping code in the
 application.
 
-## One-command golden path
+## Quick start: one-command setup
 
 Run setup without flags first. It detects Node, NestJS, Go, PostgreSQL and
 BullMQ, chooses a recommended execution path, and prints every proposed change:
@@ -59,7 +71,18 @@ desired choice. PostgreSQL queue execution remains in the authoritative Go
 worker; the generated Node/Go boundary does not duplicate lease or retry logic.
 See the [setup guide](./docs/setup.md).
 
-## Declare a Task once
+`setup` is for an existing repository. To create a disposable application that
+runs a real 50-item batch with PostgreSQL, Redis and BullMQ, use:
+
+```bash
+npx create-rhinoq-app@next my-batch
+cd my-batch
+npm start
+```
+
+Only Docker and Node.js 22+ are required for that generated evaluation app.
+
+## Background jobs for Node.js and NestJS: declare a Task once
 
 ```ts
 const exportReport = app.task({
@@ -80,7 +103,7 @@ progress and result metadata while existing runtime adapters retain lifecycle
 authority. Retry defaults to `never`; external effects require an explicit
 idempotency and confirmation policy. See [Task declaration](./docs/task-declaration.md).
 
-## Embed the UI
+## Realtime job progress with SSE and React
 
 ```tsx
 const { RhinoQTaskList, RhinoQTaskDetail, RhinoQProgress } =
@@ -91,6 +114,32 @@ These optional React components include loading/error/empty states, accessible
 progress, cancel/retry/result actions, theme tokens and the existing SSE to
 polling fallback. React is dependency-injected, so server-only installs do not
 pull it in. See [embeddable React UI](./docs/react-ui.md).
+
+## What RhinoQ is for
+
+RhinoQ fits long-running and failure-prone work such as report export, media
+processing, email delivery, data import, batch processing, provider operations
+and cross-system synchronization. It is useful when users need progress and
+results while operators need attempt history, failed-job recovery and evidence
+before retrying an external effect.
+
+RhinoQ is not a general workflow-language replacement. It does not invent
+business retry safety, authentication, tenant identity, provider credentials
+or the definition of a correct result. Those boundaries remain explicit in the
+application. See [what you still write](./docs/what-you-still-write.md).
+
+## PostgreSQL job queue without Redis
+
+The native queue stores enqueue, claim, fenced lease, retry, cancellation and
+recovery state in PostgreSQL. Go is the authoritative execution runtime for
+this path. Read the [native PostgreSQL queue guide](./docs/postgres-queue.md).
+
+## BullMQ dashboard and Task API
+
+Existing BullMQ applications keep their Queue, QueueEvents and workers. RhinoQ
+adds the durable owner-scoped Task API, progress aggregation, reconciliation,
+Task Center and operator Workbench without scanning or mutating application
+Redis. Start with the [BullMQ example](./examples/fanout-bullmq/README.md).
 
 ## New here? Get one green run first
 
@@ -224,12 +273,6 @@ about savings in real adopter repositories.
 Start with async task delivery. Later, add verification Rules when “the worker
 returned successfully” is not enough to prove the real-world effect happened.
 That second layer is optional on day one and uses the same operator workflow.
-
-[![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
-[![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
-![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
-![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white)
-![Status](https://img.shields.io/badge/status-prerelease-f59e0b)
 
 ## Release status
 

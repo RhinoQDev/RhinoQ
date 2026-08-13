@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reworked the repository entry point around the terms adopters actually use:
+  background jobs, async Tasks, PostgreSQL queue, BullMQ, Task API, realtime
+  SSE and job dashboards. Added matching npm discovery metadata without
+  changing the product's beta or production-readiness claims.
+
 - Fixed the compatibility gate on clean CI checkouts: it now reads the tracked,
   exactly pinned BullMQ example manifest instead of an intentionally ignored
   local lockfile.

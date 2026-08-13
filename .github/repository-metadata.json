@@ -1,0 +1,23 @@
+{
+  "description": "Open-source async Task platform for Node.js, NestJS and Go — PostgreSQL/BullMQ queue, Task API, realtime UI and safe recovery.",
+  "homepage": "https://github.com/madebyduy/RhinoQ/blob/main/docs/start-here.md",
+  "topics": [
+    "async-tasks",
+    "background-jobs",
+    "bullmq",
+    "developer-tools",
+    "distributed-systems",
+    "golang",
+    "job-dashboard",
+    "job-processing",
+    "job-queue",
+    "nestjs",
+    "nodejs",
+    "open-source",
+    "postgresql",
+    "postgresql-queue",
+    "reconciliation",
+    "sse",
+    "task-queue"
+  ]
+}

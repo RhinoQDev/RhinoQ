@@ -117,6 +117,8 @@ jobs:
         run: node .github/scripts/verify-release-docs.mjs
       - name: Verify compatibility matrix consistency
         run: node .github/scripts/verify-compatibility.mjs
+      - name: Verify repository discovery metadata
+        run: node .github/scripts/verify-discovery-metadata.mjs
       - run: npm ci
         working-directory: sdks/node
       - run: npm test

@@ -1,7 +1,22 @@
 {
   "name": "rhinoq",
   "version": "0.1.0-beta.12",
-  "description": "RhinoQ Node.js CLI and SDK distribution alias",
+  "description": "Open-source async Task platform for PostgreSQL queues and BullMQ with a Task API, realtime UI and safe recovery",
+  "keywords": [
+    "background-jobs",
+    "async-tasks",
+    "task-queue",
+    "job-queue",
+    "postgresql-queue",
+    "bullmq",
+    "nodejs",
+    "nestjs",
+    "job-progress",
+    "sse",
+    "job-dashboard",
+    "task-management",
+    "reconciliation"
+  ],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
