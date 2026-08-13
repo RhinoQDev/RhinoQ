@@ -2,11 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0-beta.13
+
 - Added direct npm package badges and links to the repository and packaged
   READMEs, and documented that `@rhinoq/node` is the canonical SDK while
   `rhinoq` is its synchronized short alias rather than a separate product.
-
-## 0.1.0-beta.13
 
 - Reworked the repository entry point around the terms adopters actually use:
   background jobs, async Tasks, PostgreSQL queue, BullMQ, Task API, realtime
