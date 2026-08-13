@@ -72,6 +72,25 @@ test('worker artifact helper uploads, hashes and registers one owner-safe artifa
   assert.equal(result.name, 'report.txt');
 });
 
+test('worker artifact helper streams without buffering and reports byte progress', async () => {
+  const chunks = [], registered = [], progress = [];
+  const task = defineRhinoQTask({ dispatch() {}, close() {} }, {
+    name: 'video.export', adapter: 'manual', runtime: 'manual', scope: 'video',
+    run: async (_input, context) => context.artifact.stream((async function* () {
+      yield new Uint8Array([1, 2]); yield new Uint8Array([3, 4]);
+    })(), { name: 'video.mp4', contentType: 'video/mp4', sizeBytes: 4, reportProgress: true }),
+  }, { artifacts: {
+    storage: { async put() { throw new Error('buffered path must not run'); }, async putStream(input) { for await (const chunk of input.source) chunks.push(...chunk); return { reference: 's3://bucket/video' }; } },
+    async register(_taskId, request) { registered.push(request); return request; },
+  } });
+  const output = await task.workerHandler()({ data: { taskName: 'video.export', definitionVersion: 1, taskId: 't1', executionId: 'e1', payload: {} }, updateProgress(value) { progress.push(value); } });
+  assert.deepEqual(chunks, [1, 2, 3, 4]);
+  assert.equal(registered[0].sizeBytes, 4);
+  assert.equal(registered[0].checksumSha256, '9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a');
+  assert.deepEqual(progress.map((value) => value.completed), [2, 4]);
+  assert.equal(output.reference, 's3://bucket/video');
+});
+
 test('worker context binds durable approval to the current Task automatically', async () => {
   const calls = [];
   const task = defineRhinoQTask({ async dispatch() {} }, {

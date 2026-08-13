@@ -7,6 +7,11 @@
   now connect private upload and short-lived owner download from one server
   configuration, with MIME/size/namespace guards. Task Center renders a
   responsive file panel with availability, expiry, size and checksum actions.
+- Added `context.artifact.stream()` and `filePath()` for large outputs. The
+  streaming path preserves backpressure, hashes while transferring, validates
+  byte counts, forwards cancellation and optionally reports byte progress;
+  S3-compatible and Cloudinary providers can delegate multipart/chunked upload
+  to their official SDK without buffering the entire object in worker memory.
 - Added migration 032 and durable five-field cron schedules with IANA
   timezones. Scheduler completion persists the domain-calculated next UTC run;
   spring-forward gaps are skipped and repeated fall-back wall minutes run once.

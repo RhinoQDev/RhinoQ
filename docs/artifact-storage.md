@@ -23,6 +23,42 @@ Configure one provider when the application starts. `artifactProvider` wires
 both `context.artifact.file()` and the existing owner-safe download endpoint;
 do not also pass the older low-level `artifactStorage` option.
 
+For multi-gigabyte video, archives, backups, datasets or model files, never put
+the bytes in a queue payload and do not use the buffered `file()` helper. Pass a
+private object reference in the Task input, stream the transformation, then
+stream the output:
+
+```ts
+const transcode = task({
+  name: 'video.transcode',
+  run: async ({ sourceKey }, context) => context.artifact.stream(
+    transcodeVideoAsStream(sourceKey, { signal: context.signal }),
+    {
+      name: 'output.mp4', contentType: 'video/mp4',
+      sizeBytes: expectedOutputBytes,
+      reportProgress: true,
+    },
+  ),
+});
+```
+
+`stream()` consumes an `AsyncIterable<Uint8Array>` with backpressure, calculates
+SHA-256 while bytes move, enforces the declared/final byte count, forwards Task
+cancellation and can publish byte progress through the existing SSE/polling UI.
+`filePath()` does the same for a regular file without reading it all into RAM:
+
+```ts
+return context.artifact.filePath('/work/output.mp4', {
+  name: 'output.mp4', contentType: 'video/mp4', reportProgress: true,
+});
+```
+
+For browser uploads, use the cloud provider's direct multipart/resumable upload
+flow: the authenticated application creates a short-lived upload session, the
+browser sends bytes directly to storage, and only the final private object key
+is dispatched to RhinoQ. Sending gigabytes through PostgreSQL/BullMQ or the
+RhinoQ API is intentionally unsupported.
+
 ## S3 and S3-compatible storage
 
 The adapter uses small structural callbacks, so AWS S3, Cloudflare R2, MinIO,
@@ -32,6 +68,7 @@ dependencies of every RhinoQ install.
 ```ts
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { Upload } from '@aws-sdk/lib-storage';
 import { createS3CompatibleArtifactProvider } from '@rhinoq/node/artifacts';
 
 const s3 = new S3Client({ region: process.env.AWS_REGION });
@@ -46,6 +83,17 @@ const artifactProvider = createS3CompatibleArtifactProvider({
       ChecksumSHA256: Buffer.from(checksumSha256, 'hex').toString('base64'),
       Metadata: metadata,
     }));
+  },
+  uploadStream: async ({ bucket, key, body, contentType, metadata, signal }) => {
+    const upload = new Upload({
+      client: s3,
+      params: { Bucket: bucket, Key: key, Body: body, ContentType: contentType, Metadata: metadata },
+      queueSize: 4,
+      partSize: 16 * 1024 * 1024,
+      leavePartsOnError: false,
+    });
+    if (signal) signal.addEventListener('abort', () => upload.abort(), { once: true });
+    await upload.done();
   },
   signGetObject: ({ bucket, key, expiresInSeconds, fileName, contentType }) =>
     getSignedUrl(s3, new GetObjectCommand({
@@ -69,6 +117,11 @@ does not change.
 Cloudinary SDK shapes differ between versions and delivery modes, so the
 adapter also accepts two explicit callbacks. Upload as an authenticated/private
 asset and return the exact `public_id` RhinoQ supplied.
+
+For large video, supply `uploadStream` using Cloudinary's chunked upload API.
+RhinoQ supplies the measured stream, stable public ID, byte count and abort
+signal; the application selects Cloudinary's chunk size and authenticated
+delivery mode.
 
 ```ts
 import { createCloudinaryArtifactProvider } from '@rhinoq/node/artifacts';

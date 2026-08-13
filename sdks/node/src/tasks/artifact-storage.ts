@@ -1,5 +1,6 @@
 import type { TaskArtifactRecord } from '../gateway/types.js';
 import type { RhinoQArtifactStorage } from './declaration.js';
+import type { RhinoQArtifactStreamInput } from './declaration.js';
 
 export interface RhinoQArtifactAccess { url: string; expiresAt?: string }
 export interface RhinoQArtifactProvider {
@@ -12,6 +13,8 @@ export interface S3CompatibleArtifactOptions extends ArtifactPolicy {
   bucket: string;
   prefix?: string;
   putObject(input: { bucket: string; key: string; body: Uint8Array; contentType: string; checksumSha256: string; metadata: Record<string, string> }): Promise<void>;
+  /** Use the provider's managed multipart uploader here (for example @aws-sdk/lib-storage Upload). */
+  uploadStream?(input: { bucket: string; key: string; body: AsyncIterable<Uint8Array>; contentType: string; sizeBytes?: number; metadata: Record<string, string>; signal?: AbortSignal }): Promise<void>;
   signGetObject(input: { bucket: string; key: string; expiresInSeconds: number; fileName: string; contentType: string }): Promise<string> | string;
   signedUrlExpiresInSeconds?: number;
 }
@@ -31,6 +34,12 @@ export function createS3CompatibleArtifactProvider(options: S3CompatibleArtifact
         await options.putObject({ bucket, key, body: input.data, contentType: input.contentType, checksumSha256: input.checksumSha256, metadata: { 'rhinoq-task-id': input.taskId, 'rhinoq-execution-id': input.executionId, 'rhinoq-sha256': input.checksumSha256 } });
         return { reference: `s3://${bucket}/${key}`, expiresAt: expiresAt(policy.expiresInMs) };
       },
+      ...(options.uploadStream ? { async putStream(input: RhinoQArtifactStreamInput) {
+        validateStream(input, policy);
+        const key = `${prefix}${safeSegment(input.taskId)}/${safeSegment(input.id)}/${encodeURIComponent(input.name)}`;
+        await options.uploadStream!({ bucket, key, body: limitStream(input.source, policy.maxBytes, input.signal), contentType: input.contentType, ...(input.sizeBytes === undefined ? {} : { sizeBytes: input.sizeBytes }), metadata: { 'rhinoq-task-id': input.taskId, 'rhinoq-execution-id': input.executionId }, ...(input.signal ? { signal: input.signal } : {}) });
+        return { reference: `s3://${bucket}/${key}`, expiresAt: expiresAt(policy.expiresInMs) };
+      } } : {}),
     },
     async resolve(artifact, _request, ownerId, tenantId) {
       requireAccess(ownerId, tenantId);
@@ -47,6 +56,8 @@ export interface CloudinaryArtifactOptions extends ArtifactPolicy {
   cloudName: string;
   folder?: string;
   upload(input: { publicId: string; data: Uint8Array; contentType: string; fileName: string; context: Record<string, string> }): Promise<{ publicId: string; resourceType?: string }>;
+  /** Optional provider-native chunked/resumable uploader for large media. */
+  uploadStream?(input: { publicId: string; source: AsyncIterable<Uint8Array>; contentType: string; fileName: string; sizeBytes?: number; context: Record<string, string>; signal?: AbortSignal }): Promise<{ publicId: string; resourceType?: string }>;
   signedDelivery(input: { cloudName: string; publicId: string; resourceType: string; expiresInSeconds: number; fileName: string }): Promise<string> | string;
   signedUrlExpiresInSeconds?: number;
 }
@@ -67,6 +78,13 @@ export function createCloudinaryArtifactProvider(options: CloudinaryArtifactOpti
         if (uploaded.publicId !== expected) throw new TypeError('Cloudinary upload returned a different publicId');
         return { reference: `cloudinary://${cloudName}/${uploaded.resourceType ?? 'raw'}/${uploaded.publicId}`, expiresAt: expiresAt(policy.expiresInMs) };
       },
+      ...(options.uploadStream ? { async putStream(input: RhinoQArtifactStreamInput) {
+        validateStream(input, policy);
+        const expected = `${folder}/${safeSegment(input.taskId)}/${safeSegment(input.id)}`;
+        const uploaded = await options.uploadStream!({ publicId: expected, source: limitStream(input.source, policy.maxBytes, input.signal), contentType: input.contentType, fileName: input.name, ...(input.sizeBytes === undefined ? {} : { sizeBytes: input.sizeBytes }), context: { rhinoq_task_id: input.taskId, rhinoq_execution_id: input.executionId }, ...(input.signal ? { signal: input.signal } : {}) });
+        if (uploaded.publicId !== expected) throw new TypeError('Cloudinary stream upload returned a different publicId');
+        return { reference: `cloudinary://${cloudName}/${uploaded.resourceType ?? 'video'}/${uploaded.publicId}`, expiresAt: expiresAt(policy.expiresInMs) };
+      } } : {}),
     },
     async resolve(artifact, _request, ownerId, tenantId) {
       requireAccess(ownerId, tenantId);
@@ -89,6 +107,19 @@ function artifactPolicy(options: ArtifactPolicy): Required<ArtifactPolicy> {
 function validateUpload(data: Uint8Array, contentType: string, policy: Required<ArtifactPolicy>): void {
   if (data.byteLength > policy.maxBytes) throw new RangeError(`artifact exceeds ${policy.maxBytes} bytes`);
   if (policy.allowedContentTypes.length && !policy.allowedContentTypes.includes(contentType)) throw new TypeError(`artifact content type ${JSON.stringify(contentType)} is not allowed`);
+}
+function validateStream(input: RhinoQArtifactStreamInput, policy: Required<ArtifactPolicy>): void {
+  if (input.sizeBytes !== undefined && input.sizeBytes > policy.maxBytes) throw new RangeError(`artifact exceeds ${policy.maxBytes} bytes`);
+  if (policy.allowedContentTypes.length && !policy.allowedContentTypes.includes(input.contentType)) throw new TypeError(`artifact content type ${JSON.stringify(input.contentType)} is not allowed`);
+}
+async function* limitStream(source: AsyncIterable<Uint8Array>, maxBytes: number, signal?: AbortSignal): AsyncIterable<Uint8Array> {
+  let total = 0;
+  for await (const chunk of source) {
+    if (signal?.aborted) throw signal.reason ?? new Error('artifact upload aborted');
+    total += chunk.byteLength;
+    if (total > maxBytes) throw new RangeError(`artifact exceeds ${maxBytes} bytes`);
+    yield chunk;
+  }
 }
 function expiresAt(ms: number): string { return new Date(Date.now() + ms).toISOString() }
 function cleanPrefix(value: string): string { const cleaned = value.replace(/^\/+/, '').replace(/\.{2}/g, ''); return cleaned.endsWith('/') ? cleaned : `${cleaned}/`; }

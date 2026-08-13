@@ -211,6 +211,12 @@ R2, MinIO, Spaces and similar services, or
 `createCloudinaryArtifactProvider()` for Cloudinary. See the
 [artifact storage guide](./docs/artifact-storage.md).
 
+Large outputs use `context.artifact.stream()` or `filePath()`: RhinoQ computes
+integrity and progress while the provider's multipart/chunked uploader consumes
+the stream with backpressure, so a multi-gigabyte video is not buffered in
+worker memory. Large browser inputs upload directly to private cloud storage;
+the queue carries only the object reference, never the file bytes.
+
 Interactive Tasks use the same handler context; RhinoQ binds the current Task,
 persists the checkpoint and exposes the already-mounted owner route and UI:
 

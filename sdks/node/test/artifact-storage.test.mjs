@@ -32,3 +32,22 @@ test('Cloudinary provider keeps publicId stable and rejects namespace substituti
   assert.match(access.url, /res\.cloudinary\.com/);
   await assert.rejects(() => provider.resolve(artifact('cloudinary://demo/raw/other/a1'), new Request('https://app.example'), 'owner', 'tenant'), /outside/);
 });
+
+test('S3-compatible provider streams large objects with backpressure and a hard byte policy', async () => {
+  const observed = [];
+  const provider = createS3CompatibleArtifactProvider({
+    bucket: 'large-files', maxBytes: 6,
+    async putObject() {},
+    async uploadStream({ body, sizeBytes }) {
+      if (sizeBytes !== undefined) assert.equal(sizeBytes, 6);
+      for await (const chunk of body) observed.push(...chunk);
+    },
+    signGetObject: () => 'https://storage.example/file',
+  });
+  const stored = await provider.storage.putStream({
+    ...upload, source: (async function* () { yield new Uint8Array([1, 2]); yield new Uint8Array([3, 4, 5, 6]); })(), sizeBytes: 6,
+  });
+  assert.equal(stored.reference, 's3://large-files/rhinoq/t1/a1/report.pdf');
+  assert.deepEqual(observed, [1, 2, 3, 4, 5, 6]);
+  await assert.rejects(() => provider.storage.putStream({ ...upload, source: (async function* () { yield new Uint8Array(7); })() }), /exceeds 6 bytes/);
+});

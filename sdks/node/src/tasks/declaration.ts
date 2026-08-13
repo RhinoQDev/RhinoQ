@@ -1,5 +1,7 @@
 import type { TaskSnapshot } from '../gateway/types.js';
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions, type WaitpointLifecycleClient, type WaitpointOutcome } from './waitpoint.js';
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
 
@@ -11,6 +13,8 @@ export interface RhinoQTaskRunContext {
   progress(completed: number, total?: number, message?: string): Promise<void> | void;
   artifact: {
     file(data: Uint8Array | string, options: RhinoQArtifactFileOptions): Promise<import('../gateway/types.js').TaskArtifact>;
+    stream(source: AsyncIterable<Uint8Array | string>, options: RhinoQArtifactStreamOptions): Promise<import('../gateway/types.js').TaskArtifact>;
+    filePath(path: string, options: Omit<RhinoQArtifactStreamOptions, 'sizeBytes'> & { sizeBytes?: number }): Promise<import('../gateway/types.js').TaskArtifact>;
   };
   waitForInput<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId'>): Promise<WaitpointOutcome<T>>;
   waitForApproval(options: Omit<WaitForInputOptions<boolean>, 'taskId' | 'kind' | 'parse'>): Promise<WaitpointOutcome<boolean>>;
@@ -25,8 +29,22 @@ export interface RhinoQArtifactFileOptions {
   lineage?: string[];
 }
 
+export interface RhinoQArtifactStreamOptions extends RhinoQArtifactFileOptions {
+  /** Expected byte count. Strongly recommended for multipart uploads and checked after transfer. */
+  sizeBytes?: number;
+  /** Report byte progress through the Task's existing progress channel. */
+  reportProgress?: boolean;
+}
+
+export interface RhinoQArtifactStreamInput {
+  id: string; taskId: string; executionId: string; name: string; contentType: string;
+  source: AsyncIterable<Uint8Array>; sizeBytes?: number; signal?: AbortSignal;
+}
+
 export interface RhinoQArtifactStorage {
   put(input: { id: string; taskId: string; executionId: string; name: string; contentType: string; data: Uint8Array; checksumSha256: string }): Promise<{ reference: string; expiresAt?: string }>;
+  /** Optional large-object path. Implementations must consume with backpressure and honor AbortSignal. */
+  putStream?(input: RhinoQArtifactStreamInput): Promise<{ reference: string; expiresAt?: string }>;
 }
 
 export interface RhinoQTaskServices {
@@ -225,7 +243,9 @@ export function defineRhinoQTask<Input, Output>(
             if (total !== undefined && (!Number.isFinite(total) || total < completed)) throw new RangeError('Task progress total must be at least completed');
             await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
           },
-          artifact: artifactHelper(services, envelope.taskId, envelope.executionId),
+          artifact: artifactHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
+            await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
+          }),
           ...waitpoints,
         }));
         return services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation();
@@ -248,24 +268,65 @@ function waitpointHelper(services: RhinoQTaskServices, taskId: string): Pick<Rhi
   };
 }
 
-function artifactHelper(services: RhinoQTaskServices, taskId: string, executionId: string): RhinoQTaskRunContext['artifact'] {
+function artifactHelper(
+  services: RhinoQTaskServices,
+  taskId: string,
+  executionId: string,
+  signal?: AbortSignal,
+  progress?: RhinoQTaskRunContext['progress'],
+): RhinoQTaskRunContext['artifact'] {
+  const identity = (options: RhinoQArtifactFileOptions) => {
+    const name = required(options?.name, 'artifact name');
+    const contentType = required(options?.contentType, 'artifact contentType');
+    const id = options.id?.trim() || `artifact-${createHash('sha256').update(`${taskId}\0${executionId}\0${name}`).digest('hex').slice(0, 32)}`;
+    return { id, name, contentType };
+  };
+  const register = async (options: RhinoQArtifactFileOptions, value: { id: string; name: string; contentType: string; sizeBytes: number; checksumSha256: string; reference: string; expiresAt?: string }) => {
+    const expiresAt = value.expiresAt ?? new Date(Date.now() + (options.expiresInMs ?? 3_600_000)).toISOString();
+    if (!Number.isFinite(Date.parse(expiresAt))) throw new TypeError('artifact storage expiresAt must be an ISO timestamp');
+    return services.artifacts!.register(taskId, {
+      id: value.id, executionId, name: value.name, contentType: value.contentType,
+      sizeBytes: value.sizeBytes, checksumSha256: value.checksumSha256,
+      reference: required(value.reference, 'artifact storage reference'), expiresAt,
+      ...(options.lineage ? { lineage: options.lineage } : {}),
+    });
+  };
   return Object.freeze({
     async file(data, options) {
-      if (!services.artifacts) throw new TypeError('context.artifact.file requires createRhinoQApp({ artifactStorage })');
-      const name = required(options?.name, 'artifact name');
-      const contentType = required(options?.contentType, 'artifact contentType');
+      if (!services.artifacts) throw new TypeError('context.artifact.file requires createRhinoQApp({ artifactProvider })');
+      const { id, name, contentType } = identity(options);
       const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
       const checksumSha256 = createHash('sha256').update(bytes).digest('hex');
-      const id = options.id?.trim() || `artifact-${createHash('sha256').update(`${taskId}\0${executionId}\0${name}`).digest('hex').slice(0, 32)}`;
       const stored = await services.artifacts.storage.put({ id, taskId, executionId, name, contentType, data: bytes, checksumSha256 });
-      const reference = required(stored?.reference, 'artifact storage reference');
-      const expiresAt = stored.expiresAt ?? new Date(Date.now() + (options.expiresInMs ?? 3_600_000)).toISOString();
-      if (!Number.isFinite(Date.parse(expiresAt))) throw new TypeError('artifact storage expiresAt must be an ISO timestamp');
-      return services.artifacts.register(taskId, {
-        id, executionId, name, contentType, sizeBytes: bytes.byteLength,
-        checksumSha256, reference, expiresAt,
-        ...(options.lineage ? { lineage: options.lineage } : {}),
-      });
+      return register(options, { id, name, contentType, sizeBytes: bytes.byteLength, checksumSha256, ...stored });
+    },
+    async stream(source, options) {
+      if (!services.artifacts?.storage.putStream) throw new TypeError('context.artifact.stream requires an artifactProvider with streaming upload support');
+      if (!source || typeof source[Symbol.asyncIterator] !== 'function') throw new TypeError('artifact stream must be an AsyncIterable');
+      if (options.sizeBytes !== undefined && (!Number.isSafeInteger(options.sizeBytes) || options.sizeBytes < 0)) throw new RangeError('artifact stream sizeBytes must be a non-negative safe integer');
+      const { id, name, contentType } = identity(options);
+      const hash = createHash('sha256');
+      let sizeBytes = 0;
+      const measured = (async function* () {
+        for await (const chunk of source) {
+          if (signal?.aborted) throw signal.reason ?? new Error('artifact upload aborted');
+          const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : new Uint8Array(chunk);
+          sizeBytes += bytes.byteLength;
+          if (options.sizeBytes !== undefined && sizeBytes > options.sizeBytes) throw new RangeError('artifact stream exceeded its declared sizeBytes');
+          hash.update(bytes);
+          if (options.reportProgress) await progress?.(sizeBytes, options.sizeBytes, `Uploading ${name}`);
+          yield bytes;
+        }
+      })();
+      const stored = await services.artifacts.storage.putStream({ id, taskId, executionId, name, contentType, source: measured, ...(options.sizeBytes === undefined ? {} : { sizeBytes: options.sizeBytes }), ...(signal ? { signal } : {}) });
+      if (options.sizeBytes !== undefined && sizeBytes !== options.sizeBytes) throw new RangeError(`artifact stream ended at ${sizeBytes} bytes; expected ${options.sizeBytes}`);
+      return register(options, { id, name, contentType, sizeBytes, checksumSha256: hash.digest('hex'), ...stored });
+    },
+    async filePath(path, options) {
+      const info = await stat(path);
+      if (!info.isFile()) throw new TypeError('artifact filePath must point to a regular file');
+      if (options.sizeBytes !== undefined && options.sizeBytes !== info.size) throw new RangeError(`artifact file size is ${info.size} bytes; expected ${options.sizeBytes}`);
+      return this.stream(createReadStream(path), { ...options, sizeBytes: info.size });
     },
   });
 }
