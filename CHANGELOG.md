@@ -12,6 +12,10 @@
   byte counts, forwards cancellation and optionally reports byte progress;
   S3-compatible and Cloudinary providers can delegate multipart/chunked upload
   to their official SDK without buffering the entire object in worker memory.
+- Added the high-level async `createAwsS3ArtifactProvider()` factory. Adopters
+  now provide a bucket plus standard S3 client configuration while RhinoQ owns
+  PutObject, multipart upload, abort cleanup and signed downloads; AWS packages
+  remain optional and lazily loaded.
 - Added migration 032 and durable five-field cron schedules with IANA
   timezones. Scheduler completion persists the domain-calculated next UTC run;
   spring-forward gaps are skipped and repeated fall-back wall minutes run once.

@@ -1,6 +1,7 @@
 import type { TaskArtifactRecord } from '../gateway/types.js';
 import type { RhinoQArtifactStorage } from './declaration.js';
 import type { RhinoQArtifactStreamInput } from './declaration.js';
+import { Readable } from 'node:stream';
 
 export interface RhinoQArtifactAccess { url: string; expiresAt?: string }
 export interface RhinoQArtifactProvider {
@@ -17,6 +18,49 @@ export interface S3CompatibleArtifactOptions extends ArtifactPolicy {
   uploadStream?(input: { bucket: string; key: string; body: AsyncIterable<Uint8Array>; contentType: string; sizeBytes?: number; metadata: Record<string, string>; signal?: AbortSignal }): Promise<void>;
   signGetObject(input: { bucket: string; key: string; expiresInSeconds: number; fileName: string; contentType: string }): Promise<string> | string;
   signedUrlExpiresInSeconds?: number;
+}
+
+export interface AwsS3ArtifactOptions extends ArtifactPolicy {
+  bucket: string;
+  prefix?: string;
+  /** Existing S3Client. When omitted RhinoQ creates one from clientConfig. */
+  client?: unknown;
+  clientConfig?: Record<string, unknown>;
+  signedUrlExpiresInSeconds?: number;
+  multipart?: { partSize?: number; queueSize?: number };
+}
+
+/**
+ * Batteries-included AWS S3 adapter. AWS packages remain optional and are
+ * loaded only when this factory is called.
+ */
+export async function createAwsS3ArtifactProvider(options: AwsS3ArtifactOptions): Promise<RhinoQArtifactProvider> {
+  const clientS3 = await optionalImport('@aws-sdk/client-s3');
+  const storage = await optionalImport('@aws-sdk/lib-storage');
+  const presigner = await optionalImport('@aws-sdk/s3-request-presigner');
+  const S3Client = callable(clientS3.S3Client, 'S3Client');
+  const PutObjectCommand = callable(clientS3.PutObjectCommand, 'PutObjectCommand');
+  const GetObjectCommand = callable(clientS3.GetObjectCommand, 'GetObjectCommand');
+  const Upload = callable(storage.Upload, 'Upload');
+  const getSignedUrl = functionExport(presigner.getSignedUrl, 'getSignedUrl');
+  const client = options.client ?? new S3Client(options.clientConfig ?? {});
+  const partSize = options.multipart?.partSize ?? 16 * 1024 * 1024;
+  const queueSize = options.multipart?.queueSize ?? 4;
+  if (!Number.isSafeInteger(partSize) || partSize < 5 * 1024 * 1024) throw new RangeError('S3 multipart partSize must be at least 5 MiB');
+  if (!Number.isInteger(queueSize) || queueSize < 1 || queueSize > 32) throw new RangeError('S3 multipart queueSize must be 1..32');
+  return createS3CompatibleArtifactProvider({
+    ...options,
+    async putObject({ bucket, key, body, contentType, checksumSha256, metadata }) {
+      await (client as { send(command: unknown): Promise<unknown> }).send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType, ChecksumSHA256: Buffer.from(checksumSha256, 'hex').toString('base64'), Metadata: metadata }));
+    },
+    async uploadStream({ bucket, key, body, contentType, metadata, signal }) {
+      const upload = new Upload({ client, params: { Bucket: bucket, Key: key, Body: Readable.from(body), ContentType: contentType, Metadata: metadata }, partSize, queueSize, leavePartsOnError: false });
+      const abort = () => upload.abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      try { await upload.done(); } finally { signal?.removeEventListener('abort', abort); }
+    },
+    signGetObject: ({ bucket, key, expiresInSeconds, fileName, contentType }) => getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentType: contentType, ResponseContentDisposition: `attachment; filename="${fileName.replace(/["\\]/g, '_')}"` }), { expiresIn: expiresInSeconds }) as Promise<string>,
+  });
 }
 
 export function createS3CompatibleArtifactProvider(options: S3CompatibleArtifactOptions): RhinoQArtifactProvider {
@@ -129,3 +173,15 @@ function requireAccess(ownerId: string, tenantId: string): void { required(owner
 function requireHTTPS(value: string): void { if (new URL(value).protocol !== 'https:') throw new TypeError('artifact signed URL must use HTTPS') }
 function parseS3Reference(reference: string): { bucket: string; key: string } { const url = new URL(reference); if (url.protocol !== 's3:') throw new TypeError('invalid S3 artifact reference'); return { bucket: url.hostname, key: url.pathname.slice(1) } }
 function parseCloudinaryReference(reference: string): { cloudName: string; resourceType: string; publicId: string } { const url = new URL(reference); if (url.protocol !== 'cloudinary:') throw new TypeError('invalid Cloudinary artifact reference'); const [resourceType, ...rest] = url.pathname.slice(1).split('/'); if (!resourceType || !rest.length) throw new TypeError('invalid Cloudinary artifact reference'); return { cloudName: url.hostname, resourceType, publicId: rest.join('/') } }
+async function optionalImport(specifier: string): Promise<Record<string, unknown>> {
+  try { return await import(specifier) as Record<string, unknown>; }
+  catch (error) { throw new Error(`createAwsS3ArtifactProvider requires ${specifier}; install @aws-sdk/client-s3 @aws-sdk/lib-storage @aws-sdk/s3-request-presigner`, { cause: error }); }
+}
+function callable(value: unknown, label: string): new (...args: any[]) => any {
+  if (typeof value !== 'function') throw new TypeError(`AWS SDK export ${label} is unavailable`);
+  return value as new (...args: any[]) => any;
+}
+function functionExport(value: unknown, label: string): (...args: any[]) => any {
+  if (typeof value !== 'function') throw new TypeError(`AWS SDK export ${label} is unavailable`);
+  return value as (...args: any[]) => any;
+}

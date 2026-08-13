@@ -206,8 +206,9 @@ const report = task({
 registers size/content type/expiry/lineage, and makes owner-safe metadata and
 short-lived download resolution available through the existing Task API and
 the file-card UI in Task Center. RhinoQ stores metadata and a private reference,
-not the binary itself. Use `createS3CompatibleArtifactProvider()` for AWS S3,
-R2, MinIO, Spaces and similar services, or
+not the binary itself. Use `createAwsS3ArtifactProvider({ bucket, clientConfig })`
+for a batteries-included AWS SDK integration; R2, MinIO and Spaces use the same
+factory with a custom endpoint. Use
 `createCloudinaryArtifactProvider()` for Cloudinary. See the
 [artifact storage guide](./docs/artifact-storage.md).
 

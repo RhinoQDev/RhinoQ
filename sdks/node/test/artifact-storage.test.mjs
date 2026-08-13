@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createCloudinaryArtifactProvider, createS3CompatibleArtifactProvider } from '../dist/artifacts-entry.js';
+import { createAwsS3ArtifactProvider, createCloudinaryArtifactProvider, createS3CompatibleArtifactProvider } from '../dist/artifacts-entry.js';
 
 const artifact = (reference) => ({ id: 'a1', taskId: 't1', name: 'report.pdf', contentType: 'application/pdf', reference });
 const upload = { id: 'a1', taskId: 't1', executionId: 'e1', name: 'report.pdf', contentType: 'application/pdf', data: new Uint8Array([1, 2, 3]), checksumSha256: 'a'.repeat(64) };
@@ -50,4 +50,8 @@ test('S3-compatible provider streams large objects with backpressure and a hard 
   assert.equal(stored.reference, 's3://large-files/rhinoq/t1/a1/report.pdf');
   assert.deepEqual(observed, [1, 2, 3, 4, 5, 6]);
   await assert.rejects(() => provider.storage.putStream({ ...upload, source: (async function* () { yield new Uint8Array(7); })() }), /exceeds 6 bytes/);
+});
+
+test('high-level AWS adapter explains its optional install when AWS SDK is absent', async () => {
+  await assert.rejects(() => createAwsS3ArtifactProvider({ bucket: 'private' }), /install @aws-sdk\/client-s3 @aws-sdk\/lib-storage @aws-sdk\/s3-request-presigner/);
 });

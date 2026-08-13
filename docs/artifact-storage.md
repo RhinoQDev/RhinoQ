@@ -61,46 +61,18 @@ RhinoQ API is intentionally unsupported.
 
 ## S3 and S3-compatible storage
 
-The adapter uses small structural callbacks, so AWS S3, Cloudflare R2, MinIO,
-DigitalOcean Spaces and other S3-compatible clients do not become mandatory
-dependencies of every RhinoQ install.
+Install the optional AWS packages, then provide only the bucket and client
+configuration. RhinoQ owns PutObject, multipart upload, abort cleanup, response
+headers and signed downloads:
 
 ```ts
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Upload } from '@aws-sdk/lib-storage';
-import { createS3CompatibleArtifactProvider } from '@rhinoq/node/artifacts';
+import { createAwsS3ArtifactProvider } from '@rhinoq/node/artifacts';
 
-const s3 = new S3Client({ region: process.env.AWS_REGION });
-const artifactProvider = createS3CompatibleArtifactProvider({
+const artifactProvider = await createAwsS3ArtifactProvider({
   bucket: process.env.ARTIFACT_BUCKET!,
-  prefix: 'rhinoq/',
-  maxBytes: 100 * 1024 * 1024,
-  allowedContentTypes: ['application/pdf', 'text/csv', 'image/png'],
-  putObject: async ({ bucket, key, body, contentType, checksumSha256, metadata }) => {
-    await s3.send(new PutObjectCommand({
-      Bucket: bucket, Key: key, Body: body, ContentType: contentType,
-      ChecksumSHA256: Buffer.from(checksumSha256, 'hex').toString('base64'),
-      Metadata: metadata,
-    }));
-  },
-  uploadStream: async ({ bucket, key, body, contentType, metadata, signal }) => {
-    const upload = new Upload({
-      client: s3,
-      params: { Bucket: bucket, Key: key, Body: body, ContentType: contentType, Metadata: metadata },
-      queueSize: 4,
-      partSize: 16 * 1024 * 1024,
-      leavePartsOnError: false,
-    });
-    if (signal) signal.addEventListener('abort', () => upload.abort(), { once: true });
-    await upload.done();
-  },
-  signGetObject: ({ bucket, key, expiresInSeconds, fileName, contentType }) =>
-    getSignedUrl(s3, new GetObjectCommand({
-      Bucket: bucket, Key: key,
-      ResponseContentType: contentType,
-      ResponseContentDisposition: `attachment; filename="${fileName.replace(/["\\]/g, '_')}"`,
-    }), { expiresIn: expiresInSeconds }),
+  clientConfig: { region: process.env.AWS_REGION },
+  maxBytes: 10 * 1024 * 1024 * 1024,
+  allowedContentTypes: ['application/pdf', 'video/mp4'],
 });
 
 const app = await createRhinoQApp({
@@ -108,9 +80,11 @@ const app = await createRhinoQApp({
 });
 ```
 
-For R2, MinIO or another S3-compatible service, configure its endpoint and
-path-style/region behavior on the application-owned `S3Client`; RhinoQ's code
-does not change.
+The factory lazily loads `@aws-sdk/client-s3`, `@aws-sdk/lib-storage` and
+`@aws-sdk/s3-request-presigner`; applications not using AWS do not install
+them. For R2, MinIO or another S3-compatible service, set `endpoint`,
+`credentials`, `region` and `forcePathStyle` in `clientConfig`. The lower-level
+`createS3CompatibleArtifactProvider()` remains available for another SDK.
 
 ## Cloudinary
 
