@@ -75,6 +75,30 @@ implementation. Contract inputs are included in build provenance hashing.
 `createRhinoQ()` remains the lower-level runtime primitive;
 `createRhinoQApp()` is the generic golden path for every adapter.
 
+Files produced by handlers can use one provider configuration instead of
+application-owned upload, metadata and download routes:
+
+```ts
+const app = await createRhinoQApp({
+  pool, adapters, ownerFromNodeRequest,
+  artifactProvider: createS3CompatibleArtifactProvider({
+    bucket, putObject, signGetObject,
+  }),
+});
+
+const exportTask = app.task({
+  name: 'report.export',
+  run: async (input, context) => context.artifact.file(await makePDF(input), {
+    name: 'report.pdf', contentType: 'application/pdf',
+  }),
+});
+```
+
+Import providers from `@rhinoq/node/artifacts`. S3-compatible storage covers
+AWS S3, R2, MinIO and Spaces through application-owned client callbacks;
+Cloudinary has an equivalent provider. Credentials remain server-side. Read
+the complete [artifact guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/artifact-storage.md).
+
 An adapter that implements `inspect` can reconcile one already-known reference
 without scanning its runtime:
 

@@ -189,7 +189,8 @@ pull it in. See [embeddable React UI](./docs/react-ui.md).
 
 ## Return files without building an artifact subsystem
 
-Configure one application-owned storage adapter, then use the handler context:
+Configure one application-owned S3-compatible or Cloudinary provider, then use
+the handler context:
 
 ```ts
 const report = task({
@@ -201,10 +202,14 @@ const report = task({
 });
 ```
 
-`context.artifact.file()` uploads through `artifactStorage`, computes SHA-256,
+`context.artifact.file()` uploads through `artifactProvider`, computes SHA-256,
 registers size/content type/expiry/lineage, and makes owner-safe metadata and
-download resolution available through the existing Task API and Task Center.
-RhinoQ stores metadata and a private reference, not the binary itself.
+short-lived download resolution available through the existing Task API and
+the file-card UI in Task Center. RhinoQ stores metadata and a private reference,
+not the binary itself. Use `createS3CompatibleArtifactProvider()` for AWS S3,
+R2, MinIO, Spaces and similar services, or
+`createCloudinaryArtifactProvider()` for Cloudinary. See the
+[artifact storage guide](./docs/artifact-storage.md).
 
 Interactive Tasks use the same handler context; RhinoQ binds the current Task,
 persists the checkpoint and exposes the already-mounted owner route and UI:

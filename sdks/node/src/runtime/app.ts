@@ -11,6 +11,7 @@ import {
 import { createNodeWorkbenchMiddleware, type WorkbenchHandlerOptions } from '../workbench/handler.js';
 import type { RuntimeAdapter } from './contracts.js';
 import { defineRhinoQTask, type RhinoQArtifactStorage, type RhinoQDeclaredTask, type RhinoQTaskOptions, type RhinoQTraceHooks } from '../tasks/declaration.js';
+import type { RhinoQArtifactProvider } from '../tasks/artifact-storage.js';
 import {
   createRhinoQ,
   type CreateRhinoQOptions,
@@ -31,6 +32,8 @@ export interface CreateRhinoQAppOptions {
   /** Primarily for composition tests or hosts that installed the profile already. */
   tasks?: PostgresTaskClient;
   artifactStorage?: RhinoQArtifactStorage;
+  /** One provider configures both private upload and owner-safe signed download. */
+  artifactProvider?: RhinoQArtifactProvider;
   trace?: RhinoQTraceHooks;
 }
 
@@ -70,6 +73,7 @@ export class RhinoQPortableApp {
     private readonly identity: Pick<CreateRhinoQAppOptions,
       'ownerFromRequest' | 'ownerFromNodeRequest' | 'tenantFromRequest' | 'tenantFromNodeRequest'>,
     private readonly artifactStorage?: RhinoQArtifactStorage,
+    private readonly artifactProvider?: RhinoQArtifactProvider,
     private readonly trace?: RhinoQTraceHooks,
   ) {}
 
@@ -77,7 +81,7 @@ export class RhinoQPortableApp {
     return defineRhinoQTask(this.runtime, options, {
       waitpoints: this.tasks,
       ...(this.trace ? { trace: this.trace } : {}),
-      ...(this.artifactStorage ? { artifacts: { storage: this.artifactStorage, register: (taskId, request) => this.tasks.registerTaskArtifact(taskId, request) } } : {}),
+      ...((this.artifactProvider?.storage ?? this.artifactStorage) ? { artifacts: { storage: (this.artifactProvider?.storage ?? this.artifactStorage)!, register: (taskId, request) => this.tasks.registerTaskArtifact(taskId, request) } } : {}),
     });
   }
 
@@ -103,7 +107,8 @@ export class RhinoQPortableApp {
       // outcome. Without that hook the honest product capability is false.
       cancel: Boolean(options.cancelTask),
       ...(options.resolveResult ? { resolveResult: options.resolveResult } : {}),
-      ...(options.resolveArtifact ? { resolveArtifact: options.resolveArtifact } : {}),
+      ...(options.resolveArtifact ? { resolveArtifact: options.resolveArtifact }
+        : this.artifactProvider ? { resolveArtifact: this.artifactProvider.resolve } : {}),
       ...(options.authorize ? { authorize: options.authorize } : {}),
       ...(options.requireTenantAuthorization !== undefined
         ? { requireTenantAuthorization: options.requireTenantAuthorization }
@@ -211,6 +216,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
     throw new TypeError('createRhinoQApp requires a PostgreSQL pool');
   }
   if (!Array.isArray(options.adapters)) throw new TypeError('createRhinoQApp requires adapters');
+  if (options.artifactStorage && options.artifactProvider) throw new TypeError('configure artifactProvider or artifactStorage, not both');
   const tasks = options.tasks ?? await installPostgresTaskProfile(options.pool);
   const runtime = createRhinoQ({
     client: tasks,
@@ -221,5 +227,5 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
     ...(options.adoptionReplicaId ? { adoptionReplicaId: options.adoptionReplicaId } : {}),
   });
   await runtime.start();
-  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, options.trace);
+  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, options.artifactProvider, options.trace);
 }

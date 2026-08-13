@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added `artifactProvider` composition and the optional
+  `@rhinoq/node/artifacts` entry point. S3-compatible and Cloudinary providers
+  now connect private upload and short-lived owner download from one server
+  configuration, with MIME/size/namespace guards. Task Center renders a
+  responsive file panel with availability, expiry, size and checksum actions.
 - Added migration 032 and durable five-field cron schedules with IANA
   timezones. Scheduler completion persists the domain-calculated next UTC run;
   spring-forward gaps are skipped and repeated fall-back wall minutes run once.
