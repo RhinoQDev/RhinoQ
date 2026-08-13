@@ -76,6 +76,8 @@ export interface RuntimeCapabilities {
   cancel: 'supported' | 'best_effort' | 'unsupported';
   progress: boolean;
   stableAttempts: boolean;
+  /** Dispatch policies the adapter proves it applies; absent means unsupported. */
+  dispatchPolicies?: { delay: boolean; priority: boolean };
 }
 
 export interface RuntimeObservation {
@@ -103,6 +105,8 @@ export interface DispatchCommand {
   idempotencyKey: string;
   /** Adapter translates this bounded request; RhinoQ does not execute retries here. */
   retry?: { maxAttempts: number; backoff?: { type: 'fixed' | 'exponential'; delayMs: number } };
+  delayMs?: number;
+  priority?: number;
 }
 
 export interface DispatchReceipt { ref: RuntimeRef }

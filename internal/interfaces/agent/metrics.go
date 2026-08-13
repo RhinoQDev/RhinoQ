@@ -36,6 +36,20 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	metric(&out, "rhinoq_jobs", "gauge", "Jobs by execution state.", lines...)
 
+	if schedules, configured, statsErr := s.client.RecurringTaskStats(r.Context()); statsErr != nil {
+		s.fail(w, statsErr)
+		return
+	} else if configured {
+		metric(&out, "rhinoq_recurring_schedules", "gauge", "Recurring Task schedules by operational state.",
+			fmt.Sprintf(`rhinoq_recurring_schedules{state="enabled"} %d`, schedules.Enabled),
+			fmt.Sprintf(`rhinoq_recurring_schedules{state="paused"} %d`, schedules.Paused),
+			fmt.Sprintf(`rhinoq_recurring_schedules{state="due"} %d`, schedules.Due),
+			fmt.Sprintf(`rhinoq_recurring_schedules{state="leased"} %d`, schedules.Leased),
+			fmt.Sprintf(`rhinoq_recurring_schedules{state="failed"} %d`, schedules.Failed))
+		metric(&out, "rhinoq_recurring_oldest_due_lag_seconds", "gauge", "Seconds the oldest due recurring schedule has waited past its scheduled time.",
+			fmt.Sprintf("rhinoq_recurring_oldest_due_lag_seconds %.3f", schedules.OldestDueLag.Seconds()))
+	}
+
 	metric(&out, "rhinoq_agent_jobs_accepted_total", "counter",
 		"Jobs enqueued or completed through this Agent since it started.",
 		fmt.Sprintf("rhinoq_agent_jobs_accepted_total %d", s.handled.Load()))

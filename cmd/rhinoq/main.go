@@ -269,6 +269,33 @@ func runDoctor(reportOnly bool) int {
 				}
 			}
 
+			fmt.Println("Recurring Tasks")
+			scheduleStore, scheduleErr := postgres.NewTaskScheduleStore(db)
+			if scheduleErr != nil {
+				failures++
+				fmt.Printf("  FAIL recurring schedule store: %v\n", scheduleErr)
+			} else if scheduleStats, statsErr := scheduleStore.TaskScheduleStats(dbCtx); statsErr != nil {
+				// A missing table normally means migration 031 is pending; keep the
+				// operational symptom visible even when migration output was overlooked.
+				failures++
+				fmt.Printf("  FAIL cannot inspect recurring schedules: %v\n", statsErr)
+				fmt.Println("       Fix: apply migration 031, then run `rhinoq doctor` again.")
+			} else {
+				fmt.Printf("  PASS enabled=%d paused=%d due=%d leased=%d failed=%d oldest_due_lag=%s\n",
+					scheduleStats.Enabled, scheduleStats.Paused, scheduleStats.Due,
+					scheduleStats.Leased, scheduleStats.Failed, scheduleStats.OldestDueLag)
+				if scheduleStats.Failed > 0 {
+					warnings++
+					fmt.Println("  WARN recurring schedules have a recorded dispatch failure")
+					fmt.Println("       Inspect scheduler logs and runtime health before clearing the error through a successful dispatch.")
+				}
+				if scheduleStats.OldestDueLag > c.LeaseDuration {
+					warnings++
+					fmt.Printf("  WARN oldest recurring schedule is late by %s, beyond one %s worker lease\n", scheduleStats.OldestDueLag, c.LeaseDuration)
+					fmt.Println("       Verify a recurring scheduler replica is running and can dispatch its configured Task names.")
+				}
+			}
+
 			// Reported separately from the role check above because the
 			// consequence is different in kind. A superuser evaluating Rules
 			// is a privilege wider than it needs to be. A superuser serving

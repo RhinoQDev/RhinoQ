@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/madebyduy/RhinoQ/internal/domain/authz"
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
@@ -23,6 +24,12 @@ const minTokenBytes = 32
 // Config wires one Agent process.
 type Config struct {
 	Client *rhinoq.Client
+	// TenantID binds this process and every credential it accepts to one
+	// PostgreSQL tenant. Empty keeps the upgrade-compatible system tenant.
+	TenantID string
+	// Role is the operator/runtime token's tenant role. Empty preserves the
+	// beta-compatible owner role; deployments should configure it explicitly.
+	Role string
 	// Token authenticates every call except the liveness probe. It is required
 	// unless AllowUnauthenticated is set, because an Agent without one lets
 	// anybody enqueue, cancel and replay work.
@@ -49,17 +56,20 @@ type Config struct {
 }
 
 type TaskCredential struct {
-	OwnerID string `json:"ownerId"`
-	Token   string `json:"token"`
+	OwnerID  string `json:"ownerId"`
+	TenantID string `json:"tenantId,omitempty"`
+	Token    string `json:"token"`
 }
 
 type taskCredential struct {
 	ownerID   string
+	tenantID  string
 	tokenHash [sha256.Size]byte
 }
 
 type taskPrincipal struct {
 	ownerID  string
+	tenantID string
 	operator bool
 }
 
@@ -77,6 +87,8 @@ type Server struct {
 	version           string
 	limiter           *requestLimiter
 	repairs           *rhinoq.RepairRegistry
+	tenantID          string
+	role              authz.Role
 
 	// draining flips on shutdown so readiness fails before liveness does: an
 	// orchestrator should stop sending traffic, not restart the process.
@@ -97,9 +109,28 @@ func New(config Config) (*Server, error) {
 		return nil, fmt.Errorf("agent token must be at least %d bytes", minTokenBytes)
 	}
 	operatorHash := sha256.Sum256([]byte(config.Token))
+	tenantID := strings.TrimSpace(config.TenantID)
+	if tenantID == "" {
+		tenantID = authz.SystemTenant.String()
+	}
+	role := authz.RoleOwner
+	if strings.TrimSpace(config.Role) != "" {
+		var ok bool
+		role, ok = authz.ParseRole(config.Role)
+		if !ok || role == authz.RoleTaskOwner {
+			return nil, errors.New("Agent role must be owner, admin, operator, developer or viewer")
+		}
+	}
 	credentials := make([]taskCredential, 0, len(config.TaskCredentials))
 	for _, credential := range config.TaskCredentials {
 		ownerID := strings.TrimSpace(credential.OwnerID)
+		credentialTenant := strings.TrimSpace(credential.TenantID)
+		if credentialTenant == "" {
+			credentialTenant = tenantID
+		}
+		if credentialTenant != tenantID {
+			return nil, errors.New("task credential tenant must match the Agent tenant")
+		}
 		if ownerID == "" || len(credential.Token) < minTokenBytes {
 			return nil, fmt.Errorf(
 				"task credential requires a non-empty owner and token of at least %d bytes",
@@ -116,7 +147,7 @@ func New(config Config) (*Server, error) {
 				return nil, errors.New("one task credential token cannot belong to multiple owners")
 			}
 		}
-		credentials = append(credentials, taskCredential{ownerID: ownerID, tokenHash: tokenHash})
+		credentials = append(credentials, taskCredential{ownerID: ownerID, tenantID: credentialTenant, tokenHash: tokenHash})
 	}
 	if config.HeartbeatInterval <= 0 {
 		config.HeartbeatInterval = 10 * time.Second
@@ -142,8 +173,10 @@ func New(config Config) (*Server, error) {
 		open:              config.AllowUnauthenticated,
 		heartbeatInterval: config.HeartbeatInterval, maxPayloadBytes: config.MaxPayloadBytes,
 		maxRequestBytes: config.MaxRequestBytes, version: config.Version,
-		limiter: newRequestLimiter(config.RequestsPerSecond, config.RequestBurst),
-		repairs: config.RepairRegistry,
+		limiter:  newRequestLimiter(config.RequestsPerSecond, config.RequestBurst),
+		repairs:  config.RepairRegistry,
+		tenantID: tenantID,
+		role:     role,
 	}
 	server.routes()
 	return server, nil
@@ -222,6 +255,9 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /v1/queues/{name}/pause", s.guard(s.handlePause))
 	mux.HandleFunc("POST /v1/queues/{name}/resume", s.guard(s.handleResume))
 	mux.HandleFunc("GET /v1/attention", s.guard(s.handleAttention))
+	mux.HandleFunc("GET /v1/recurring-schedules", s.guard(s.handleListRecurringSchedules))
+	mux.HandleFunc("POST /v1/recurring-schedules/{id}/pause", s.guard(s.handlePauseRecurringSchedule))
+	mux.HandleFunc("POST /v1/recurring-schedules/{id}/resume", s.guard(s.handleResumeRecurringSchedule))
 	mux.HandleFunc("POST /v1/findings/observe", s.guard(s.handleObserveFinding))
 	mux.HandleFunc("POST /v1/repairs", s.guard(s.handleProposeRepair))
 	mux.HandleFunc("POST /v1/repairs/{id}/preview", s.guard(s.handlePreviewRepair))
@@ -357,8 +393,81 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 		if !s.allow(w) {
 			return
 		}
+		permission, ok := agentPermission(r)
+		if !ok {
+			writeJSON(w, http.StatusForbidden, errorResponse{Error: ErrorBody{Code: "RHINOQ_AUTHORIZATION_DENIED", Message: "This Agent route has no authorization policy and is denied by default."}})
+			return
+		}
+		decision := authz.Authorize(authz.Subject{
+			PrincipalID: "agent-token", Kind: authz.PrincipalService,
+			TenantID: authz.TenantID(s.tenantID), Role: s.role, TenantStatus: authz.TenantActive,
+		}, permission, authz.Target{TenantID: authz.TenantID(s.tenantID)})
+		if !decision.Allowed {
+			writeJSON(w, http.StatusForbidden, errorResponse{Error: ErrorBody{Code: "RHINOQ_AUTHORIZATION_DENIED", Message: "The Agent credential role does not grant " + permission.String() + "."}})
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
 		next(w, r)
+	}
+}
+
+func agentPermission(r *http.Request) (authz.Permission, bool) {
+	path := r.URL.Path
+	permission := func(resource authz.Resource, mutation authz.Action) (authz.Permission, bool) {
+		if r.Method == http.MethodGet {
+			return authz.Permission{Resource: resource, Action: authz.ActionRead}, true
+		}
+		return authz.Permission{Resource: resource, Action: mutation}, true
+	}
+	switch {
+	case path == "/metrics":
+		return permission(authz.ResourceQueue, authz.ActionRead)
+	case path == "/v1/handshake":
+		return permission(authz.ResourceJob, authz.ActionOperate)
+	case strings.HasPrefix(path, "/v1/tasks") || strings.HasPrefix(path, "/v1/task-executions"):
+		return permission(authz.ResourceTask, authz.ActionWrite)
+	case strings.HasPrefix(path, "/v1/jobs"):
+		action := authz.ActionWrite
+		if strings.Contains(path, "/cancel") || strings.Contains(path, "/replay") {
+			action = authz.ActionOperate
+		}
+		return permission(authz.ResourceJob, action)
+	case path == "/v1/claim" || strings.HasPrefix(path, "/v1/leases/") || strings.HasPrefix(path, "/v1/effects/"):
+		return permission(authz.ResourceJob, authz.ActionOperate)
+	case strings.HasPrefix(path, "/v1/provider-operations"):
+		action := authz.ActionWrite
+		if strings.Contains(path, "/accept") || strings.Contains(path, "/resolve") || strings.Contains(path, "/retry") {
+			action = authz.ActionOperate
+		}
+		return permission(authz.ResourceProviderOperation, action)
+	case strings.HasPrefix(path, "/v1/queues/"):
+		return permission(authz.ResourceQueue, authz.ActionOperate)
+	case path == "/v1/attention":
+		return permission(authz.ResourceFinding, authz.ActionRead)
+	case strings.HasPrefix(path, "/v1/recurring-schedules"):
+		return permission(authz.ResourceTask, authz.ActionOperate)
+	case strings.HasPrefix(path, "/v1/findings"):
+		return permission(authz.ResourceFinding, authz.ActionWrite)
+	case strings.HasPrefix(path, "/v1/repairs"):
+		action := authz.ActionWrite
+		if strings.Contains(path, "/preview") {
+			return authz.Permission{Resource: authz.ResourceRepair, Action: authz.ActionRead}, true
+		} else if strings.Contains(path, "/approve") {
+			action = authz.ActionApprove
+		} else if strings.Contains(path, "/execute") {
+			action = authz.ActionOperate
+		}
+		return permission(authz.ResourceRepair, action)
+	case strings.HasPrefix(path, "/v1/rules"):
+		action := authz.ActionWrite
+		if strings.Contains(path, "/explain") {
+			return authz.Permission{Resource: authz.ResourceRule, Action: authz.ActionRead}, true
+		} else if r.Method == http.MethodDelete || strings.Contains(path, "/enable") || strings.Contains(path, "/disable") || strings.Contains(path, "/evaluate") {
+			action = authz.ActionOperate
+		}
+		return permission(authz.ResourceRule, action)
+	default:
+		return authz.Permission{}, false
 	}
 }
 
@@ -442,16 +551,16 @@ func (s *Server) authorized(r *http.Request) bool {
 
 func (s *Server) taskPrincipal(r *http.Request) (taskPrincipal, bool) {
 	if s.open {
-		return taskPrincipal{operator: true}, true
+		return taskPrincipal{tenantID: s.tenantID, operator: true}, true
 	}
 	presented := bearerToken(r)
 	presentedHash := sha256.Sum256([]byte(presented))
 	if subtle.ConstantTimeCompare(presentedHash[:], s.tokenHash[:]) == 1 {
-		return taskPrincipal{operator: true}, true
+		return taskPrincipal{tenantID: s.tenantID, operator: true}, true
 	}
 	for _, credential := range s.taskCredentials {
 		if subtle.ConstantTimeCompare(presentedHash[:], credential.tokenHash[:]) == 1 {
-			return taskPrincipal{ownerID: credential.ownerID}, true
+			return taskPrincipal{ownerID: credential.ownerID, tenantID: credential.tenantID}, true
 		}
 	}
 	return taskPrincipal{}, false
@@ -945,6 +1054,66 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "resumed"})
+}
+
+type recurringScheduleCommand struct {
+	TenantID string `json:"tenantId"`
+	Version  int64  `json:"version"`
+}
+
+func (s *Server) handleListRecurringSchedules(w http.ResponseWriter, r *http.Request) {
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenantId"))
+	limit := intParam(r.URL.Query().Get("limit"), 100)
+	records, err := s.client.ListRecurringTasks(r.Context(), tenantID, limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	type summary struct {
+		ID        string        `json:"id"`
+		TaskName  string        `json:"taskName"`
+		OwnerID   string        `json:"ownerId"`
+		TenantID  string        `json:"tenantId"`
+		Every     time.Duration `json:"every"`
+		Cron      string        `json:"cron,omitempty"`
+		Timezone  string        `json:"timezone,omitempty"`
+		Enabled   bool          `json:"enabled"`
+		NextRunAt time.Time     `json:"nextRunAt"`
+		Version   int64         `json:"version"`
+	}
+	items := make([]summary, len(records))
+	for i, item := range records {
+		items[i] = summary{ID: item.ID, TaskName: item.TaskName, OwnerID: item.OwnerID, TenantID: item.TenantID, Every: item.Every, Cron: item.Cron, Timezone: item.Timezone, Enabled: item.Enabled, NextRunAt: item.NextRunAt, Version: item.Version}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"schedules": items})
+}
+
+func (s *Server) recurringScheduleCommand(w http.ResponseWriter, r *http.Request, enabled bool) {
+	var command recurringScheduleCommand
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, s.maxRequestBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&command); err != nil {
+		s.fail(w, errors.New("recurring schedule command requires tenantId and version"))
+		return
+	}
+	var record rhinoq.RecurringTaskSchedule
+	var err error
+	if enabled {
+		record, err = s.client.ResumeRecurringTask(r.Context(), command.TenantID, r.PathValue("id"), command.Version)
+	} else {
+		record, err = s.client.PauseRecurringTask(r.Context(), command.TenantID, r.PathValue("id"), command.Version)
+	}
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+func (s *Server) handlePauseRecurringSchedule(w http.ResponseWriter, r *http.Request) {
+	s.recurringScheduleCommand(w, r, false)
+}
+func (s *Server) handleResumeRecurringSchedule(w http.ResponseWriter, r *http.Request) {
+	s.recurringScheduleCommand(w, r, true)
 }
 
 func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {

@@ -44,6 +44,49 @@ func TestNewRejectsTaskCredentialPrivilegeCollisions(t *testing.T) {
 	}
 }
 
+func TestNewRejectsTaskCredentialFromAnotherTenant(t *testing.T) {
+	_, err := New(Config{
+		Client: rhinoq.NewInMemory(), Token: securityTestToken, TenantID: "tenant-a",
+		TaskCredentials: []TaskCredential{{
+			TenantID: "tenant-b", OwnerID: "owner-1",
+			Token: "owner-token-that-is-at-least-thirty-two-bytes",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must match") {
+		t.Fatalf("cross-tenant credential must be rejected at startup: %v", err)
+	}
+}
+
+func TestAgentRoleDeniesMutationAndAllowsRead(t *testing.T) {
+	server, err := New(Config{Client: rhinoq.NewInMemory(), Token: securityTestToken, TenantID: "tenant-a", Role: "viewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := httptest.NewRequest(http.MethodGet, "/v1/jobs?limit=1", nil)
+	read.Header.Set("Authorization", "Bearer "+securityTestToken)
+	readResponse := httptest.NewRecorder()
+	server.ServeHTTP(readResponse, read)
+	if readResponse.Code == http.StatusForbidden {
+		t.Fatalf("viewer read was denied: %s", readResponse.Body.String())
+	}
+
+	mutation := httptest.NewRequest(http.MethodPost, "/v1/queues/reports/pause", nil)
+	mutation.Header.Set("Authorization", "Bearer "+securityTestToken)
+	mutationResponse := httptest.NewRecorder()
+	server.ServeHTTP(mutationResponse, mutation)
+	if mutationResponse.Code != http.StatusForbidden || !strings.Contains(mutationResponse.Body.String(), "queue:operate") {
+		t.Fatalf("viewer queue mutation was not role-denied: %d %s", mutationResponse.Code, mutationResponse.Body.String())
+	}
+}
+
+func TestNewRejectsUnknownAgentRole(t *testing.T) {
+	_, err := New(Config{Client: rhinoq.NewInMemory(), Token: securityTestToken, Role: "superuser"})
+	if err == nil {
+		t.Fatal("unknown Agent role must fail startup")
+	}
+}
+
 func TestDecodeRejectsTrailingJSON(t *testing.T) {
 	server, err := New(Config{
 		Client: rhinoq.NewInMemory(),

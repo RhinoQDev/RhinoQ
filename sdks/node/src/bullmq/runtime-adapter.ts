@@ -50,6 +50,7 @@ export class BullMQRuntimeAdapter implements RuntimeAdapter {
       cancel: options.cancel ? 'best_effort' as const : 'unsupported' as const,
       progress: Boolean(options.progress),
       stableAttempts: false,
+      dispatchPolicies: { delay: true, priority: true },
     };
   }
 
@@ -93,6 +94,8 @@ export class BullMQRuntimeAdapter implements RuntimeAdapter {
         attempts: command.retry.maxAttempts,
         ...(command.retry.backoff ? { backoff: command.retry.backoff } : {}),
       } : {}),
+      ...(command.delayMs === undefined ? {} : { delay: command.delayMs }),
+      ...(command.priority === undefined ? {} : { priority: command.priority }),
       jobId,
     });
     const externalId = result?.id === undefined ? jobId : String(result.id);

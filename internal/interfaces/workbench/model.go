@@ -28,6 +28,25 @@ type Reader interface {
 	SubjectDetail(context.Context, SubjectRef) (SubjectDetail, error)
 }
 
+// RecurringReader is optional so existing read-only Workbench compositions
+// remain compatible while recurring visibility is wired deliberately.
+type RecurringReader interface {
+	ListRecurringSchedules(context.Context, string, int) ([]RecurringSchedule, error)
+}
+
+type RecurringSchedule struct {
+	ID        string        `json:"id"`
+	TaskName  string        `json:"taskName"`
+	OwnerID   string        `json:"ownerId"`
+	TenantID  string        `json:"tenantId"`
+	Every     time.Duration `json:"every"`
+	Cron      string        `json:"cron,omitempty"`
+	Timezone  string        `json:"timezone,omitempty"`
+	Enabled   bool          `json:"enabled"`
+	NextRunAt time.Time     `json:"nextRunAt"`
+	Version   int64         `json:"version"`
+}
+
 // Operator exposes only application use cases that are safe to call from the
 // loopback Workbench. Implementations must never execute arbitrary SQL.
 type Operator interface {
@@ -36,6 +55,10 @@ type Operator interface {
 	PreviewRepair(context.Context, string) (RepairPlan, error)
 	ApproveRepair(context.Context, string, string, string) (RepairPlan, error)
 	ExecuteRepair(context.Context, string) (RepairPlan, error)
+}
+
+type RecurringOperator interface {
+	SetRecurringScheduleEnabled(context.Context, string, string, int64, bool) (RecurringSchedule, error)
 }
 
 type ActionResult struct {

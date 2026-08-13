@@ -23,6 +23,8 @@ const app = {
   paletteIndex: 0,
   paletteCommands: [],
   refreshTimer: null,
+  recurring: [],
+  recurringTenant: "",
 };
 
 const viewDefinitions = {
@@ -52,6 +54,13 @@ const viewDefinitions = {
   },
 };
 
+viewDefinitions.recurring = {
+  eyebrow: "AUTOMATE",
+  title: "Recurring schedules",
+  description: "Inspect and safely pause or resume durable task schedules.",
+  placeholder: "Search schedule, task or owner...",
+};
+
 const elements = {};
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -59,6 +68,7 @@ document.addEventListener("DOMContentLoaded", () => {
   restorePreferences();
   configurePlatformKeys();
   app.queue = new URLSearchParams(window.location.search).get("queue") || "";
+  app.recurringTenant = new URLSearchParams(window.location.search).get("tenant") || "";
   bindEvents();
   renderPalette();
   loadSnapshot({ initial: true });
@@ -67,12 +77,12 @@ document.addEventListener("DOMContentLoaded", () => {
 function cacheElements() {
   [
     "source-label", "source-mode", "connection-label", "jobs-count", "attention-count",
-    "findings-count", "rules-count", "queue-list", "clear-queue", "view-eyebrow",
+    "findings-count", "rules-count", "recurring-count", "queue-list", "clear-queue", "view-eyebrow",
     "view-title", "view-description", "refresh-button", "flow-commit", "flow-run",
     "flow-verify", "flow-recover", "search-input", "state-filters", "density-button",
     "density-menu", "columns-button", "columns-menu", "active-context",
     "active-context-copy", "clear-context", "table-scroll", "data-table", "table-head",
-    "table-body", "table-loading", "table-empty", "empty-clear", "row-summary",
+    "table-body", "table-loading", "table-empty", "table-empty-title", "table-empty-copy", "empty-clear", "row-summary",
     "generated-at", "evidence-rail", "rail-empty", "rail-content", "rail-queue",
     "rail-title", "rail-close", "rail-id", "copy-job-id", "truth-request",
     "truth-request-copy", "truth-effect", "truth-effect-copy", "truth-outcome",
@@ -305,7 +315,7 @@ function renderQueueList() {
 function setView(view, options = {}) {
   if (!viewDefinitions[view]) return;
   app.view = view;
-  const resetQueue = app.queue && (view === "findings" || view === "rules");
+  const resetQueue = app.queue && (view === "findings" || view === "rules" || view === "recurring");
   if (resetQueue) {
     app.queue = "";
     syncURLQuery();
@@ -320,9 +330,28 @@ function setView(view, options = {}) {
   closeMobileLayers();
   if (resetQueue) {
     loadSnapshot();
+  } else {
+    renderCurrentView();
+  }
+  if (view === "recurring") loadRecurring();
+}
+
+async function loadRecurring() {
+  if (!app.recurringTenant) {
+    app.recurring = [];
+    elements["recurring-count"].textContent = "--";
+    renderCurrentView();
+    showToast("Add ?tenant=<tenant-id> to inspect recurring schedules");
     return;
   }
-  renderCurrentView();
+  try {
+    const params = new URLSearchParams({ tenantId: app.recurringTenant, limit: "150" });
+    app.recurring = await fetchJSON(`/api/v1/recurring-schedules?${params}`);
+    elements["recurring-count"].textContent = compactNumber(app.recurring.length);
+    renderCurrentView();
+  } catch (error) {
+    showToast(error.message);
+  }
 }
 
 function renderCurrentView() {
@@ -338,7 +367,7 @@ function renderCurrentView() {
   document.querySelectorAll("[data-state]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.state === app.stateFilter);
   });
-  elements["state-filters"].hidden = app.view === "rules";
+  elements["state-filters"].hidden = app.view === "rules" || app.view === "recurring";
 
   const rows = filterRows(sourceRowsForView());
   app.visibleRows = rows;
@@ -348,6 +377,16 @@ function renderCurrentView() {
   elements["table-head"].innerHTML = tableHeadForView(app.view);
   elements["table-body"].innerHTML = rows.map((row, index) => tableRowForView(app.view, row, index)).join("");
   elements["table-empty"].hidden = rows.length > 0;
+  if (app.view === "recurring" && !app.recurringTenant) {
+    elements["table-empty-title"].textContent = "Choose a tenant to inspect schedules";
+    elements["table-empty-copy"].textContent = "Open Workbench with ?tenant=<tenant-id>. RhinoQ never guesses a tenant for operator actions.";
+  } else if (app.view === "recurring") {
+    elements["table-empty-title"].textContent = "No recurring schedules in this tenant";
+    elements["table-empty-copy"].textContent = "Create a durable interval schedule or search another tenant.";
+  } else {
+    elements["table-empty-title"].textContent = "No rows match this lens";
+    elements["table-empty-copy"].textContent = "Clear the filter or search another correlation id.";
+  }
   elements["row-summary"].textContent = `${rows.length} ${rows.length === 1 ? "row" : "rows"} · bounded local read`;
   renderActiveContext();
 }
@@ -357,6 +396,7 @@ function sourceRowsForView() {
     case "attention": return app.snapshot.attention;
     case "findings": return app.snapshot.findings;
     case "rules": return app.snapshot.rules;
+    case "recurring": return app.recurring;
     default: return app.snapshot.jobs;
   }
 }
@@ -391,6 +431,16 @@ function searchableText(row) {
 }
 
 function tableHeadForView(view) {
+  if (view === "recurring") {
+    return `<tr>
+      <th style="width:25%">Task / schedule</th>
+      <th style="width:14%">State</th>
+      <th style="width:14%">Interval</th>
+      <th style="width:20%">Next run</th>
+      <th style="width:12%">Version</th>
+      <th style="width:15%">Action</th>
+    </tr>`;
+  }
   if (view === "attention") {
     return `<tr>
       <th style="width:18%">Kind</th>
@@ -434,6 +484,19 @@ function tableHeadForView(view) {
 
 function tableRowForView(view, row, index) {
   const selected = row.id && row.id === app.selectedJobId;
+  if (view === "recurring") {
+    const state = row.enabled ? "enabled" : "disabled";
+    const action = row.enabled ? "pause" : "resume";
+    const disabled = app.snapshot?.source?.readOnly ? "disabled" : "";
+    return `<tr data-row-index="${index}">
+      <td><div class="cell-stack"><strong>${escapeHTML(row.taskName)}</strong><small title="${escapeAttribute(row.id)}">${escapeHTML(row.id)} · ${escapeHTML(row.ownerId)}</small></div></td>
+      <td>${stateBadge(state)}</td>
+      <td><span class="mono">${row.cron ? `${escapeHTML(row.cron)} · ${escapeHTML(row.timezone)}` : formatDuration(row.every)}</span></td>
+      <td title="${escapeAttribute(formatDate(row.nextRunAt))}">${relativeTime(row.nextRunAt)}</td>
+      <td><span class="mono">v${row.version}</span></td>
+      <td><button class="secondary-button" type="button" data-recurring-action="${action}" ${disabled}>${humanize(action)}</button></td>
+    </tr>`;
+  }
   if (view === "attention") {
     const reference = row.jobId || row.referenceId || "—";
     return `<tr data-row-index="${index}" data-job-id="${escapeAttribute(row.jobId || "")}" class="${row.jobId === app.selectedJobId ? "is-selected" : ""}">
@@ -541,6 +604,11 @@ function onTableClick(event) {
   const index = Number(rowElement.dataset.rowIndex);
   app.selectedIndex = index;
   const row = app.visibleRows[index];
+  const recurringAction = event.target.closest("[data-recurring-action]");
+  if (app.view === "recurring" && recurringAction && row) {
+    changeRecurring(row, recurringAction.dataset.recurringAction, recurringAction);
+    return;
+  }
   const jobID = app.view === "jobs" ? row?.id : app.view === "attention" ? row?.jobId : "";
   if (jobID) {
     selectJob(jobID);
@@ -548,6 +616,24 @@ function onTableClick(event) {
     selectSubject({ type: row.subjectType, id: row.subjectId });
   } else if (app.view === "rules") {
     showToast("Rule details remain read-only in Workbench v0.");
+  }
+}
+
+async function changeRecurring(schedule, action, button) {
+  const verb = action === "pause" ? "pause" : "resume";
+  if (!window.confirm(`${humanize(verb)} recurring schedule ${schedule.id}?`)) return;
+  button.disabled = true;
+  try {
+    const updated = await fetchJSON(`/api/v1/recurring-schedules/${encodeURIComponent(schedule.id)}/${verb}`, {
+      method: "POST",
+      body: { tenantId: app.recurringTenant, version: schedule.version },
+    });
+    app.recurring = app.recurring.map((item) => item.id === updated.id ? updated : item);
+    renderCurrentView();
+    showToast(`Schedule ${verb === "pause" ? "paused" : "resumed"}`);
+  } catch (error) {
+    button.disabled = false;
+    showToast(error.message);
   }
 }
 
@@ -780,6 +866,7 @@ function paletteCommandDefinitions() {
     { id: "attention", group: "Navigate", label: "Needs attention", detail: "Open the bounded recovery inbox", icon: "04", run: () => setView("attention") },
     { id: "findings", group: "Navigate", label: "Integrity findings", detail: "Review persistent business drift", icon: "03", run: () => setView("findings") },
     { id: "rules", group: "Navigate", label: "Rules", detail: "Review deterministic invariant checks", icon: "R", run: () => setView("rules") },
+    { id: "recurring", group: "Navigate", label: "Recurring schedules", detail: "Inspect, pause or resume durable schedules", icon: "S", run: () => setView("recurring") },
     { id: "refresh", group: "Actions", label: "Refresh local evidence", detail: "Read the bounded snapshot again", icon: "↻", run: () => loadSnapshot() },
     { id: "search", group: "Actions", label: "Focus table search", detail: "Search the current view", icon: "/", run: () => elements["search-input"].focus() },
     { id: "density", group: "Preferences", label: "Toggle table density", detail: "Switch compact and comfortable rows", icon: "≡", run: toggleDensity },

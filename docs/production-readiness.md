@@ -60,7 +60,12 @@ page explains why those gates exist.
   authorises with one operator token plus a list of per-owner Task credentials;
   the full Go Gateway does not yet have equivalent tenant-wide HTTP coverage.
   One Go process also serves one tenant, because the tenant is a property of
-  the connection pool. See [`docs/tenancy.md`](tenancy.md).
+  the connection pool. The process now declares that boundary with
+  `RHINOQ_TENANT_ID`, and startup rejects owner credentials naming a different
+  tenant. `RHINOQ_AGENT_ROLE` now maps every protected Agent route through the
+  shared role matrix with deny-by-default behavior. Persistent membership and
+  credential rotation remain deployment/application concerns, so this is still
+  not a public multi-tenant control plane. See [`docs/tenancy.md`](tenancy.md).
 - **Isolation is off by default on a common setup, and RhinoQ now says so.**
   PostgreSQL exempts superusers and `BYPASSRLS` roles from row-level security,
   and the official `postgres` image makes `POSTGRES_USER` a superuser.

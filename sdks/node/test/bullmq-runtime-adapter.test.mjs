@@ -49,11 +49,12 @@ test('BullMQ adapter dispatch reserves an explicit safe job identity', async () 
   const receipt = await adapter.dispatch({
     taskId: 'task-1', payload: { reportId: 1 }, idempotencyKey: 'report-1',
     retry: { maxAttempts: 4, backoff: { type: 'exponential', delayMs: 1000 } },
+    delayMs: 5000, priority: 2,
   });
   assert.deepEqual(receipt.ref, { runtime: 'bullmq', scope: 'reports', externalId: 'rhinoq-report-1' });
   assert.deepEqual(added, [{
     name: 'report.export', payload: { reportId: 1 },
-    options: { attempts: 4, backoff: { type: 'exponential', delayMs: 1000 }, jobId: 'rhinoq-report-1' },
+    options: { attempts: 4, backoff: { type: 'exponential', delayMs: 1000 }, delay: 5000, priority: 2, jobId: 'rhinoq-report-1' },
   }]);
 });
 

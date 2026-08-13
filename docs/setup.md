@@ -4,6 +4,11 @@
 It composes RhinoQ's existing init, adopt, doctor and eval capabilities; it does
 not create a second runtime.
 
+For framework-neutral/manual execution, the generated integration uses
+`defineRhinoQApplication()`: add Tasks to one typed registry, inherit the
+selected execution profile, and mount the owner API, Task Center and Workbench
+from the returned application. Existing files are still never overwritten.
+
 ## Preview, then apply
 
 ```bash

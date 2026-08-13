@@ -1,6 +1,7 @@
 # Declare a Task once
 
-Create the RhinoQ application normally, then declare each business handler once:
+For one Task or a gradual migration, create the RhinoQ application normally,
+then declare each business handler once:
 
 ```ts
 const exportReport = app.task({
@@ -41,3 +42,8 @@ reconciliation and durable state.
 RhinoQ deliberately does not infer whether charging, emailing, refunding or
 publishing is safe to repeat. Unknown external outcomes remain subject to the
 existing fail-closed/uncertain contracts.
+
+For a new integration, prefer the typed registry in the
+[Task application compiler](./application-compiler.md). It removes repeated
+adapter/runtime/scope fields and collects declarations into one manifest; this
+lower-level API remains available and compatible.

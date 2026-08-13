@@ -369,7 +369,8 @@ type Client struct {
 	handlers *worker.HandlerRegistry
 	// retry is the policy applied to failures reported through the remote
 	// worker API, where no in-process worker owns a policy.
-	retry retry.Policy
+	retry         retry.Policy
+	taskSchedules ports.TaskScheduleStore
 }
 
 // SetRetryPolicy configures how failures reported by remote workers are
@@ -490,6 +491,10 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	taskSchedules, err := postgres.NewTaskScheduleStore(db)
+	if err != nil {
+		return nil, err
+	}
 	client := &Client{
 		store: store, effects: effects, outcomes: outcomes, recovery: recoveryStore,
 		tasks: taskService,
@@ -508,7 +513,8 @@ func NewPostgres(db *sql.DB) (*Client, error) {
 			notificationDeliveries: notificationDeliveries,
 		},
 
-		handlers: worker.NewHandlerRegistry(),
+		handlers:      worker.NewHandlerRegistry(),
+		taskSchedules: taskSchedules,
 	}
 	client.markTaskUncertain = taskUncertainMarker(taskService)
 	return client, nil

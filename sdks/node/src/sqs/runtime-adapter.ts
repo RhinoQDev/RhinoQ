@@ -29,6 +29,8 @@ export interface SQSRuntimeAdapterOptions {
   /** Optional application-owned readback; SQS itself cannot inspect by MessageId. */
   inspect?: (ref: RuntimeRef) => Promise<SQSReceiveObservation | undefined>;
   health?: () => Promise<RuntimeHealth>;
+  /** Declare only policies the application-owned send callback actually applies. */
+  dispatchPolicies?: { delay?: boolean; priority?: boolean };
 }
 
 /**
@@ -53,6 +55,10 @@ export class SQSRuntimeAdapter implements RuntimeAdapter {
       cancel: 'unsupported' as const,
       progress: true,
       stableAttempts: false,
+      dispatchPolicies: {
+        delay: options.dispatchPolicies?.delay === true,
+        priority: options.dispatchPolicies?.priority === true,
+      },
     };
   }
 

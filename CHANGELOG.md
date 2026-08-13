@@ -2,6 +2,94 @@
 
 ## Unreleased
 
+- Added migration 032 and durable five-field cron schedules with IANA
+  timezones. Scheduler completion persists the domain-calculated next UTC run;
+  spring-forward gaps are skipped and repeated fall-back wall minutes run once.
+  Agent and Workbench list views expose cron/timezone without payloads.
+- Added `context.artifact.file()` for declared Node Tasks. One configured
+  storage adapter now handles upload while RhinoQ computes SHA-256 and registers
+  artifact identity, size, content type, expiry and lineage for the existing
+  owner API and Task Center.
+- Added `context.waitForInput()`, `context.waitForApproval()` and
+  `context.waitForWebhook()` to declared Task handlers. They bind the current
+  Task automatically and reuse the durable PostgreSQL waitpoint, owner routes
+  and Task Center UI without holding a worker lease open.
+- Added dependency-free optional trace hooks to `createRhinoQApp`. RhinoQ emits
+  dispatch/run spans and carries a bounded string trace carrier through the
+  runtime envelope, allowing an OpenTelemetry adapter without forcing telemetry
+  dependencies on every SDK install.
+- Added conservative `rhinoqPresets.exportFile`, `importData` and `external`
+  helpers. They remove mechanical progress/artifact wiring while retaining
+  no-retry defaults and requiring explicit effect safety for provider work.
+- Added `application.runWorker()`, which installs the compiled fail-closed Task
+  router, handles AbortSignal/SIGINT/SIGTERM and bounds runtime worker shutdown
+  without duplicating adapter lease or retry logic.
+- Bound the Go Agent and owner Task credentials to one explicit tenant through
+  `RHINOQ_TENANT_ID` / credential `tenantId`; a credential for another tenant
+  now fails startup instead of being silently loaded into the process.
+- Added `RHINOQ_AGENT_ROLE` and a deny-by-default route policy that maps Agent
+  Task, Job, Queue, Rule, Finding, Repair and ProviderOperation requests through
+  the existing tenant role matrix before any handler executes.
+- Began the durable recurring-Task engine behind an unexported boundary: bounded
+  interval definitions, deterministic occurrence IDs, owner/epoch lease
+  validation and a claim/dispatch/complete scheduler with failure backoff. It is
+  not advertised as public until PostgreSQL storage and failover tests land.
+- Added migration 031, tenant-scoped PostgreSQL schedule storage, database-time
+  `SKIP LOCKED` claims, fenced complete/failure backoff and the experimental Go
+  `CreateRecurringTask` / `RunRecurringTaskScheduler` facade. Occurrence IDs are
+  deterministic across lease takeover; production promotion still requires the
+  real-PostgreSQL failover gate and schedule lifecycle controls.
+- Added bounded get/list and version-fenced pause, resume, interval/next-run
+  update and delete for recurring schedules. Lifecycle changes clear stale
+  leases and concurrent stale versions fail instead of overwriting an operator.
+- Added a real-PostgreSQL recurring scheduler gate proving live leases are not
+  stolen, expired leases are taken over with a higher epoch, occurrence identity
+  survives takeover, stale completion is fenced, and failure backoff preserves
+  the original occurrence.
+- Added bounded recurring schedule aggregates and Prometheus
+  `rhinoq_recurring_schedules{state=...}` gauges for enabled, paused, due,
+  leased and failed schedules without reading payloads.
+- Added `rhinoq_recurring_oldest_due_lag_seconds`, distinguishing a momentary
+  due schedule from a scheduler backlog that has been late for minutes or hours.
+- Extended the Go `rhinoq doctor` database gate with migration/store visibility,
+  bounded recurring counts, recorded-dispatch-failure warnings and a backlog
+  warning when the oldest due schedule exceeds one configured worker lease.
+- Added operator-token-protected Agent endpoints to list recurring schedules
+  without payloads and pause/resume them with tenant and version fencing.
+- Added optional Workbench recurring reader/operator contracts and bounded
+  no-store list plus version-fenced pause/resume endpoints. Existing Workbench
+  compositions remain compatible until they opt into the capability.
+- Wired the live Go Workbench composition directly to the public recurring
+  facade, removing application-owned mapping for list and fenced pause/resume.
+- Added a payload-free Recurring schedules view to the Go Workbench with tenant
+  selection through `?tenant=`, bounded search, next-run/interval visibility and
+  confirmed version-fenced pause/resume actions.
+- Added `NativeRecurringDispatcher`, removing native PostgreSQL enqueue
+  boilerplate while preserving explicit Task-to-queue routing and using the
+  deterministic occurrence ID as the queue idempotency key.
+- Added `defineRhinoQApplication()` and execution profiles: one typed Task
+  registry now produces bound dispatchers/worker handlers, a stable manifest
+  and one owner API + Task Center + Workbench mount without moving execution
+  correctness out of the Go engine/runtime adapters.
+- Added generated worker handler maps and a fail-closed multi-Task worker router,
+  removing another registration switch while preserving declaration/version
+  envelope checks.
+- Added bounded `task.batch()` / `dispatchBatch()` with unique item keys and
+  deterministic execution/idempotency identities, plus `task.external()` that
+  requires effect safety policy at the type and runtime boundary.
+- Added capability-gated delayed and priority dispatch policies. BullMQ applies
+  both; SQS/custom adapters must explicitly advertise support or dispatch fails
+  before reserving work.
+- Added `dispatchAfter()` and `dispatchAt()` for one-off scheduled work without
+  asking applications to calculate delay values or introducing a process-local
+  recurring timer.
+- Added `RhinoQModule.forApplicationAsync()` so NestJS starts/closes one compiled
+  application and injects its typed Tasks, manifest and combined HTTP surface.
+- Added `rhinoq measure --before --after [--out]` to report reproducible
+  consumer-owned source reduction without presenting LOC as reliability or
+  throughput evidence.
+- Updated generated manual setup code to use the application compiler while
+  keeping `createRhinoQApp()` and `app.task()` compatible.
 - Refined Task Center and Workbench presentation without changing their
   structure or behavior: clearer visual sections, readable UI/monospace type
   hierarchy, stronger panel depth and a restrained blue graphite palette.

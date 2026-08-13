@@ -27,6 +27,12 @@ or dark preference.
 > claim a production SLA. Start with the [production status](./docs/production-readiness.md)
 > before deploying real workloads.
 
+The Go Agent remains one-tenant-per-process. Set `RHINOQ_TENANT_ID` and
+`RHINOQ_AGENT_ROLE`; owner Task
+credentials may include the same `tenantId`, and startup fails if a credential
+belongs to another tenant. This is a fail-closed deployment boundary, not a
+claim that the Agent is already a public multi-tenant control plane.
+
 The point is not to make every adopter assemble those pieces. `setup` joins the
 existing `init`, `adopt`, `doctor` and `createRhinoQApp()` capabilities into one
 preview-first golden path. They detect and configure the standard path, install
@@ -99,26 +105,75 @@ npm start
 
 Only Docker and Node.js 22+ are required for that generated evaluation app.
 
-## Background jobs for Node.js and NestJS: declare a Task once
+## Background jobs for Node.js and NestJS: compile one Task application
 
 ```ts
-const exportReport = app.task({
-  name: 'report.export', adapter: 'bullmq', runtime: 'bullmq', scope: 'reports',
-  retry: { mode: 'runtime', maxAttempts: 3,
-    backoff: { type: 'exponential', delayMs: 1000 } },
-  run: async ({ reportId }, context) => generateReport(reportId, context.progress),
-  result: ({ url }) => ({ ref: url, mediaType: 'application/pdf' }),
+const rhinoq = defineRhinoQApplication({
+  profile: { name: 'reports', adapters: [bullmqAdapter] },
+  tasks: (task) => ({
+    exportReport: task({
+      name: 'report.export',
+      retry: { mode: 'runtime', maxAttempts: 3 },
+      run: async ({ reportId }, context) => generateReport(reportId, context.progress),
+      result: ({ url }) => ({ ref: url, mediaType: 'application/pdf' }),
+    }),
+  }),
 });
 
-await exportReport.dispatch({
+const application = await rhinoq.start({
+  pool, ownerFromNodeRequest,
+  http: { operatorToken: process.env.RHINOQ_OPERATOR_TOKEN },
+});
+await application.tasks.exportReport.dispatch({
   id: 'report-42', ownerId: user.id, payload: { reportId: '42' },
 });
 ```
 
-The same declaration supplies the registered worker handler, dispatch envelope,
-progress and result metadata while existing runtime adapters retain lifecycle
-authority. Retry defaults to `never`; external effects require an explicit
-idempotency and confirmation policy. See [Task declaration](./docs/task-declaration.md).
+The typed registry supplies dispatchers, worker handlers, a static manifest and
+one middleware mounting the owner API, Task Center and Workbench. Its execution
+profile removes repeated adapter/runtime/scope fields. Existing runtime adapters
+retain lifecycle authority; retry defaults to `never`, and external effects
+still require explicit idempotency and confirmation policy. The lower-level
+`app.task()` remains supported. See [Task application compiler](./docs/application-compiler.md).
+
+For a shared runtime worker, the registry also removes the handwritten routing
+switch while continuing to reject undeclared names and mismatched versions:
+
+```ts
+const worker = new Worker('reports', application.workerHandler(), connection);
+```
+
+For a dedicated worker process, RhinoQ can also own signal handling and the
+bounded close lifecycle:
+
+```ts
+await application.runWorker({
+  create: (handler) => new Worker('reports', handler, { connection }),
+});
+```
+
+`runWorker()` routes only registered Task names, handles SIGINT/SIGTERM and
+waits for `close()` with a configurable deadline. Queue lease/retry correctness
+still belongs to the selected runtime adapter.
+
+Bounded fan-out uses the same declaration instead of a second batch wrapper:
+
+```ts
+const resizeImages = task.batch({
+  name: 'image.resize', maxItems: 500,
+  run: async ({ imageId, width }, context) => resize(imageId, width, context.progress),
+});
+await application.tasks.resizeImages.dispatchBatch({
+  id: batchId, ownerId: user.id,
+  items: images.map((image) => ({ itemKey: image.id, payload: image })),
+});
+```
+
+Measure consumer-owned source before making a code-reduction claim:
+
+```bash
+npx rhinoq measure --before ./before --after ./with-rhinoq --out ./rhinoq-measure.json
+```
 
 ## Realtime job progress with SSE and React
 
@@ -132,6 +187,52 @@ progress, cancel/retry/result actions, theme tokens and the existing SSE to
 polling fallback. React is dependency-injected, so server-only installs do not
 pull it in. See [embeddable React UI](./docs/react-ui.md).
 
+## Return files without building an artifact subsystem
+
+Configure one application-owned storage adapter, then use the handler context:
+
+```ts
+const report = task({
+  name: 'report.export',
+  run: async ({ reportId }, context) => context.artifact.file(
+    await generateReport(reportId),
+    { name: `${reportId}.pdf`, contentType: 'application/pdf' },
+  ),
+});
+```
+
+`context.artifact.file()` uploads through `artifactStorage`, computes SHA-256,
+registers size/content type/expiry/lineage, and makes owner-safe metadata and
+download resolution available through the existing Task API and Task Center.
+RhinoQ stores metadata and a private reference, not the binary itself.
+
+Interactive Tasks use the same handler context; RhinoQ binds the current Task,
+persists the checkpoint and exposes the already-mounted owner route and UI:
+
+```ts
+const approval = await context.waitForApproval({
+  id: `approve-${invoiceId}`,
+  key: 'finance-approval',
+  payloadVersion: 1,
+  deadline: new Date(Date.now() + 86_400_000).toISOString(),
+});
+if (approval.status !== 'resolved') return approval;
+```
+
+`waitForInput()` and `waitForWebhook()` follow the same durable re-entry
+contract; no worker lease remains open while the Task waits.
+
+Optional `trace` hooks on `createRhinoQApp` wrap `rhinoq.task.dispatch` and
+`rhinoq.task.run` and propagate a bounded string carrier through the runtime
+envelope. An application may bridge these hooks to OpenTelemetry; RhinoQ does
+not add a mandatory telemetry dependency or treat a trace as correctness data.
+
+For repeated mechanical patterns, `rhinoqPresets.exportFile()` supplies staged
+progress, artifact upload and result metadata, while `importData()` supplies a
+safe no-retry baseline. `rhinoqPresets.external()` is available for email,
+webhook or provider work but refuses construction without explicit idempotency
+and confirmation policy; presets never guess whether a business effect is safe.
+
 ## What RhinoQ is for
 
 RhinoQ fits long-running and failure-prone work such as report export, media
@@ -144,12 +245,67 @@ RhinoQ is not a general workflow-language replacement. It does not invent
 business retry safety, authentication, tenant identity, provider credentials
 or the definition of a correct result. Those boundaries remain explicit in the
 application. See [what you still write](./docs/what-you-still-write.md).
+The [async Task capability map](./docs/async-task-capabilities.md) distinguishes
+implemented behavior from recurring/DAG work that still requires durable engine
+state and fault evidence.
 
 ## PostgreSQL job queue without Redis
 
 The native queue stores enqueue, claim, fenced lease, retry, cancellation and
 recovery state in PostgreSQL. Go is the authoritative execution runtime for
 this path. Read the [native PostgreSQL queue guide](./docs/postgres-queue.md).
+
+### Durable recurring Tasks (experimental)
+
+Migration 031 adds interval schedules claimed with PostgreSQL database time,
+`SKIP LOCKED` and owner/epoch leases. Each occurrence has a deterministic,
+tenant-scoped identity so dispatch callbacks can enqueue idempotently across
+replica takeover:
+
+```go
+client.CreateRecurringTask(ctx, rhinoq.RecurringTaskRequest{
+    ID: "daily-report", TaskName: "report.export",
+    TenantID: tenantID, OwnerID: ownerID,
+    Payload: payload, Every: 24 * time.Hour,
+})
+
+client.CreateRecurringTask(ctx, rhinoq.RecurringTaskRequest{
+    ID: "weekday-report", TaskName: "report.export",
+    TenantID: tenantID, OwnerID: ownerID, Payload: payload,
+    Cron: "0 8 * * 1-5", Timezone: "Asia/Ho_Chi_Minh",
+})
+
+dispatch, err := client.NativeRecurringDispatcher(rhinoq.NativeRecurringDispatchConfig{
+    QueueForTask: map[string]string{"report.export": "reports"},
+})
+if err != nil { return err }
+client.RunRecurringTaskScheduler(ctx, rhinoq.RecurringTaskSchedulerConfig{
+    Owner: replicaID, Dispatch: dispatch,
+})
+```
+
+The native dispatcher uses `OccurrenceID` as its idempotency identity and fails
+closed when a Task has no explicit queue mapping. Custom runtime callbacks must
+preserve the same identity. Get/list, version-fenced pause/resume/update/delete
+are available on the same `Client`.
+Interval scheduling and real-PostgreSQL lease takeover are tested. The Go
+Workbench exposes a payload-free recurring-schedule table at
+`/?tenant=<tenant-id>` with version-fenced pause/resume controls when actions
+are enabled. Five-field cron expressions use IANA timezones. Spring-forward
+gaps are skipped and repeated fall-back wall minutes run once; migration 032
+persists the calendar contract and the scheduler calculates the next UTC run
+before its fenced completion. The surface remains beta pending adopter evidence.
+
+The authenticated Agent `/metrics` endpoint exports bounded
+`rhinoq_recurring_schedules{state="enabled|paused|due|leased|failed"}` gauges;
+the aggregate query never reads schedule payloads.
+`rhinoq_recurring_oldest_due_lag_seconds` reports how long the oldest due
+schedule has waited beyond its intended dispatch time; zero means no due backlog.
+The Go `rhinoq doctor` command reports the same aggregate and warns when a
+dispatch error is recorded or the oldest due schedule is later than one worker
+lease, so dashboards and deployment checks use one database calculation.
+The Agent operator surface provides bounded `GET /v1/recurring-schedules` and
+version-fenced pause/resume commands. List responses intentionally omit payloads.
 
 ## BullMQ dashboard and Task API
 

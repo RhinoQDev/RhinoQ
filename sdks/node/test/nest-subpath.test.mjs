@@ -21,3 +21,15 @@ test('Nest supports isolated integration tokens for multi-queue modules', () => 
   const integration = dynamic.providers.find((provider) => provider.provide === token);
   assert.ok(integration, 'custom integration provider was not registered');
 });
+
+test('Nest Application Compiler module exports one started registry and HTTP surface', async () => {
+  const { RhinoQModule, RHINOQ_APPLICATION, RHINOQ_TASKS, RHINOQ_MANIFEST, RHINOQ_HTTP } = await import('../dist/nest.js');
+  const compiler = { manifest() { return { schemaVersion: 1, profile: 'test', tasks: [] }; }, async start(options) {
+    return { tasks: { one: true }, manifest: this.manifest(), http: options.http ? () => {} : undefined, async close() {} };
+  } };
+  const module = RhinoQModule.forApplicationAsync({ compiler, useFactory: async () => ({ pool: {}, http: { operatorToken: 'test' } }) });
+  assert.deepEqual(module.exports, [RHINOQ_APPLICATION, RHINOQ_TASKS, RHINOQ_MANIFEST, RHINOQ_HTTP]);
+  const applicationProvider = module.providers.find((provider) => provider.provide === RHINOQ_APPLICATION);
+  const application = await applicationProvider.useFactory({ pool: {}, http: { operatorToken: 'test' } });
+  assert.deepEqual(application.tasks, { one: true });
+});

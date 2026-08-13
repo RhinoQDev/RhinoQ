@@ -1,4 +1,6 @@
 import type { TaskSnapshot } from '../gateway/types.js';
+import { createHash } from 'node:crypto';
+import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions, type WaitpointLifecycleClient, type WaitpointOutcome } from './waitpoint.js';
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
 
 export interface RhinoQTaskRunContext {
@@ -7,6 +9,38 @@ export interface RhinoQTaskRunContext {
   itemKey?: string;
   signal?: AbortSignal;
   progress(completed: number, total?: number, message?: string): Promise<void> | void;
+  artifact: {
+    file(data: Uint8Array | string, options: RhinoQArtifactFileOptions): Promise<import('../gateway/types.js').TaskArtifact>;
+  };
+  waitForInput<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId'>): Promise<WaitpointOutcome<T>>;
+  waitForApproval(options: Omit<WaitForInputOptions<boolean>, 'taskId' | 'kind' | 'parse'>): Promise<WaitpointOutcome<boolean>>;
+  waitForWebhook<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId' | 'kind'>): Promise<WaitpointOutcome<T>>;
+}
+
+export interface RhinoQArtifactFileOptions {
+  id?: string;
+  name: string;
+  contentType: string;
+  expiresInMs?: number;
+  lineage?: string[];
+}
+
+export interface RhinoQArtifactStorage {
+  put(input: { id: string; taskId: string; executionId: string; name: string; contentType: string; data: Uint8Array; checksumSha256: string }): Promise<{ reference: string; expiresAt?: string }>;
+}
+
+export interface RhinoQTaskServices {
+  artifacts?: {
+    storage: RhinoQArtifactStorage;
+    register(taskId: string, request: import('../gateway/types.js').TaskArtifactCreateRequest): Promise<import('../gateway/types.js').TaskArtifact>;
+  };
+  waitpoints?: WaitpointLifecycleClient;
+  trace?: RhinoQTraceHooks;
+}
+
+export interface RhinoQTraceHooks {
+  inject?(): Record<string, string>;
+  run<T>(name: string, attributes: Record<string, string>, carrier: Record<string, string> | undefined, operation: () => Promise<T>): Promise<T>;
 }
 
 export type RhinoQTaskRetryPolicy =
@@ -29,6 +63,10 @@ export interface RhinoQTaskOptions<Input, Output> {
   /** Required when the handler mutates an external system. */
   effect?: RhinoQTaskEffectPolicy;
   externalEffect?: boolean;
+  /** Enables bounded fan-out through the same declaration. Dispatch is ordered and visibly partial on runtime failure. */
+  batch?: { maxItems?: number };
+  /** Applied only by an adapter that explicitly advertises the policy. */
+  execution?: { delayMs?: number; priority?: number };
   run(input: Input, context: RhinoQTaskRunContext): Promise<Output> | Output;
   result?(output: Output): { ref: string; mediaType?: string; size?: number } | undefined;
 }
@@ -41,6 +79,7 @@ export interface RhinoQTaskDispatch<Input> {
   idempotencyKey?: string;
   executionId?: string;
   itemKey?: string;
+  execution?: { delayMs?: number; priority?: number };
 }
 
 export interface RhinoQDeclaredTask<Input, Output> {
@@ -49,9 +88,19 @@ export interface RhinoQDeclaredTask<Input, Output> {
   readonly retry: RhinoQTaskRetryPolicy;
   readonly effect?: RhinoQTaskEffectPolicy;
   dispatch(request: RhinoQTaskDispatch<Input>): Promise<TaskSnapshot>;
+  dispatchAfter(request: RhinoQTaskDispatch<Input>, delayMs: number): Promise<TaskSnapshot>;
+  dispatchAt(request: RhinoQTaskDispatch<Input>, runAt: Date | string, now?: Date): Promise<TaskSnapshot>;
+  dispatchBatch(request: RhinoQTaskBatchDispatch<Input>): Promise<TaskSnapshot>;
   execute(input: Input, context: RhinoQTaskRunContext): Promise<Output>;
   workerHandler(): (job: { data: unknown; updateProgress?(progress: { completed: number; total?: number; message?: string }): Promise<unknown> | unknown; signal?: AbortSignal }) => Promise<Output>;
   resultMetadata(output: Output): { ref: string; mediaType?: string; size?: number } | undefined;
+}
+
+export interface RhinoQTaskBatchDispatch<Input> {
+  id: string;
+  ownerId: string;
+  tenantId?: string;
+  items: Array<{ itemKey: string; payload: Input; idempotencyKey?: string; executionId?: string }>;
 }
 
 /**
@@ -62,6 +111,7 @@ export interface RhinoQDeclaredTask<Input, Output> {
 export function defineRhinoQTask<Input, Output>(
   integration: RhinoQRuntimeIntegration,
   options: RhinoQTaskOptions<Input, Output>,
+  services: RhinoQTaskServices = {},
 ): RhinoQDeclaredTask<Input, Output> {
   if (!integration?.dispatch) throw new TypeError('RhinoQ runtime integration is required');
   const name = required(options?.name, 'task name');
@@ -81,6 +131,12 @@ export function defineRhinoQTask<Input, Output>(
   if (options.externalEffect && !options.effect) {
     throw new TypeError('external-effect Task requires explicit idempotency and confirmation policy');
   }
+  if (options.execution?.delayMs !== undefined && (!Number.isInteger(options.execution.delayMs) || options.execution.delayMs < 0)) {
+    throw new RangeError('Task execution delayMs must be a non-negative integer');
+  }
+  if (options.execution?.priority !== undefined && !Number.isInteger(options.execution.priority)) {
+    throw new RangeError('Task execution priority must be an integer');
+  }
 
   const declaration: RhinoQDeclaredTask<Input, Output> = {
     name,
@@ -92,7 +148,10 @@ export function defineRhinoQTask<Input, Output>(
       const ownerId = required(request?.ownerId, 'Task ownerId');
       const executionId = request.executionId?.trim() || `${id}:attempt:1`;
       const idempotencyKey = request.idempotencyKey?.trim() || id;
-      return integration.dispatch(adapter, {
+      const execution = { ...options.execution, ...request.execution };
+      validateExecution(execution);
+      const trace = services.trace?.inject?.();
+      const operation = () => integration.dispatch(adapter, {
         task: {
           id, type: name, ownerId, definitionVersion: version,
           ...(request.tenantId?.trim() ? { tenantId: request.tenantId.trim() } : {}),
@@ -107,20 +166,57 @@ export function defineRhinoQTask<Input, Output>(
           maxAttempts: retry.maxAttempts,
           ...(retry.backoff ? { backoff: retry.backoff } : {}),
         },
+        ...(execution.delayMs === undefined ? {} : { delayMs: execution.delayMs }),
+        ...(execution.priority === undefined ? {} : { priority: execution.priority }),
         payload: {
           taskName: name, taskId: id, executionId,
           definitionVersion: version,
           retry,
           payload: request.payload,
           ...(options.effect ? { effect: options.effect } : {}),
+          ...(trace ? { trace } : {}),
         },
       });
+      return services.trace ? services.trace.run('rhinoq.task.dispatch', { 'rhinoq.task.name': name, 'rhinoq.task.id': id }, trace, operation) : operation();
+    },
+    dispatchAfter(request, delayMs) {
+      validateExecution({ delayMs });
+      return declaration.dispatch({ ...request, execution: { ...request.execution, delayMs } });
+    },
+    dispatchAt(request, runAt, now = new Date()) {
+      const target = runAt instanceof Date ? runAt : new Date(runAt);
+      if (!Number.isFinite(target.getTime()) || !Number.isFinite(now.getTime())) throw new TypeError('Task dispatchAt requires valid dates');
+      const delayMs = Math.max(0, target.getTime() - now.getTime());
+      return declaration.dispatchAfter(request, delayMs);
+    },
+    async dispatchBatch(request) {
+      const id = required(request?.id, 'Task id');
+      const ownerId = required(request?.ownerId, 'Task ownerId');
+      if (!Array.isArray(request.items) || request.items.length === 0) throw new RangeError('Task batch requires at least one item');
+      const maximum = options.batch?.maxItems ?? 1_000;
+      if (!Number.isInteger(maximum) || maximum < 1 || maximum > 10_000) throw new RangeError('Task batch maxItems must be 1..10000');
+      if (request.items.length > maximum) throw new RangeError(`Task batch contains ${request.items.length} items; maxItems is ${maximum}`);
+      const keys = new Set<string>();
+      let snapshot: TaskSnapshot | undefined;
+      for (const item of request.items) {
+        const itemKey = required(item?.itemKey, 'Task batch itemKey');
+        if (keys.has(itemKey)) throw new TypeError(`duplicate Task batch itemKey ${JSON.stringify(itemKey)}`);
+        keys.add(itemKey);
+        snapshot = await declaration.dispatch({
+          id, ownerId, payload: item.payload, itemKey,
+          ...(request.tenantId?.trim() ? { tenantId: request.tenantId.trim() } : {}),
+          executionId: item.executionId?.trim() || `${id}:${itemKey}:attempt:1`,
+          idempotencyKey: item.idempotencyKey?.trim() || `${id}:${itemKey}`,
+        });
+      }
+      return snapshot!;
     },
     execute(input, context) { return Promise.resolve(options.run(input, context)); },
     workerHandler() {
       return async (job) => {
         const envelope = taskEnvelope<Input>(job?.data, name, version);
-        return options.run(envelope.payload, {
+        const waitpoints = waitpointHelper(services, envelope.taskId);
+        const operation = () => Promise.resolve(options.run(envelope.payload, {
           taskId: envelope.taskId,
           executionId: envelope.executionId,
           signal: job.signal,
@@ -129,7 +225,10 @@ export function defineRhinoQTask<Input, Output>(
             if (total !== undefined && (!Number.isFinite(total) || total < completed)) throw new RangeError('Task progress total must be at least completed');
             await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
           },
-        });
+          artifact: artifactHelper(services, envelope.taskId, envelope.executionId),
+          ...waitpoints,
+        }));
+        return services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation();
       };
     },
     resultMetadata(output) { return options.result?.(output); },
@@ -137,20 +236,66 @@ export function defineRhinoQTask<Input, Output>(
   return Object.freeze(declaration);
 }
 
-function taskEnvelope<Input>(value: unknown, name: string, version: number): { taskId: string; executionId: string; payload: Input } {
+function waitpointHelper(services: RhinoQTaskServices, taskId: string): Pick<RhinoQTaskRunContext, 'waitForInput' | 'waitForApproval' | 'waitForWebhook'> {
+  const client = () => {
+    if (!services.waitpoints) throw new TypeError('Task waitpoints require the PostgreSQL Task profile');
+    return services.waitpoints;
+  };
+  return {
+    waitForInput: (options) => waitForInput(client(), { ...options, taskId }),
+    waitForApproval: (options) => waitForApproval(client(), { ...options, taskId }),
+    waitForWebhook: (options) => waitForWebhook(client(), { ...options, taskId }),
+  };
+}
+
+function artifactHelper(services: RhinoQTaskServices, taskId: string, executionId: string): RhinoQTaskRunContext['artifact'] {
+  return Object.freeze({
+    async file(data, options) {
+      if (!services.artifacts) throw new TypeError('context.artifact.file requires createRhinoQApp({ artifactStorage })');
+      const name = required(options?.name, 'artifact name');
+      const contentType = required(options?.contentType, 'artifact contentType');
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
+      const checksumSha256 = createHash('sha256').update(bytes).digest('hex');
+      const id = options.id?.trim() || `artifact-${createHash('sha256').update(`${taskId}\0${executionId}\0${name}`).digest('hex').slice(0, 32)}`;
+      const stored = await services.artifacts.storage.put({ id, taskId, executionId, name, contentType, data: bytes, checksumSha256 });
+      const reference = required(stored?.reference, 'artifact storage reference');
+      const expiresAt = stored.expiresAt ?? new Date(Date.now() + (options.expiresInMs ?? 3_600_000)).toISOString();
+      if (!Number.isFinite(Date.parse(expiresAt))) throw new TypeError('artifact storage expiresAt must be an ISO timestamp');
+      return services.artifacts.register(taskId, {
+        id, executionId, name, contentType, sizeBytes: bytes.byteLength,
+        checksumSha256, reference, expiresAt,
+        ...(options.lineage ? { lineage: options.lineage } : {}),
+      });
+    },
+  });
+}
+
+function taskEnvelope<Input>(value: unknown, name: string, version: number): { taskId: string; executionId: string; payload: Input; trace?: Record<string, string> } {
   if (!value || typeof value !== 'object') throw new TypeError('RhinoQ Task worker received an invalid envelope');
-  const envelope = value as { taskName?: unknown; definitionVersion?: unknown; taskId?: unknown; executionId?: unknown; payload?: Input };
+  const envelope = value as { taskName?: unknown; definitionVersion?: unknown; taskId?: unknown; executionId?: unknown; payload?: Input; trace?: unknown };
   if (envelope.taskName !== name || envelope.definitionVersion !== version) {
     throw new TypeError(`RhinoQ Task worker refuses an undeclared Task envelope; expected ${name}@${version}`);
   }
   if (typeof envelope.taskId !== 'string' || !envelope.taskId.trim() || typeof envelope.executionId !== 'string' || !envelope.executionId.trim()) {
     throw new TypeError('RhinoQ Task envelope requires taskId and executionId');
   }
-  return { taskId: envelope.taskId, executionId: envelope.executionId, payload: envelope.payload as Input };
+  const trace = envelope.trace && typeof envelope.trace === 'object'
+    ? Object.fromEntries(Object.entries(envelope.trace).filter((entry): entry is [string, string] => typeof entry[1] === 'string').slice(0, 32))
+    : undefined;
+  return { taskId: envelope.taskId, executionId: envelope.executionId, payload: envelope.payload as Input, ...(trace ? { trace } : {}) };
 }
 
 function required(value: string | undefined, label: string): string {
   const result = value?.trim();
   if (!result) throw new TypeError(`${label} is required`);
   return result;
+}
+
+function validateExecution(execution: { delayMs?: number; priority?: number }): void {
+  if (execution.delayMs !== undefined && (!Number.isInteger(execution.delayMs) || execution.delayMs < 0)) {
+    throw new RangeError('Task execution delayMs must be a non-negative integer');
+  }
+  if (execution.priority !== undefined && !Number.isInteger(execution.priority)) {
+    throw new RangeError('Task execution priority must be an integer');
+  }
 }

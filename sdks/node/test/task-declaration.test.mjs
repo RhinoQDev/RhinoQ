@@ -49,3 +49,94 @@ test('Task declaration defaults to no retry and refuses undeclared external effe
     externalEffect: true, run: async () => undefined,
   }), /explicit idempotency and confirmation policy/);
 });
+
+test('worker artifact helper uploads, hashes and registers one owner-safe artifact', async () => {
+  const uploads = [];
+  const registrations = [];
+  const task = defineRhinoQTask({ async dispatch() {} }, {
+    name: 'report.export', adapter: 'manual', runtime: 'manual', scope: 'reports',
+    run: async (_input, context) => context.artifact.file('report body', {
+      name: 'report.txt', contentType: 'text/plain', expiresInMs: 60_000,
+    }),
+  }, { artifacts: {
+    storage: { async put(input) { uploads.push(input); return { reference: `storage://${input.id}`, expiresAt: '2026-08-13T01:00:00.000Z' }; } },
+    async register(taskId, request) { registrations.push({ taskId, request }); return { schemaVersion: 1, entityVersion: 1, taskId, ...request }; },
+  } });
+  const result = await task.workerHandler()({ data: {
+    taskName: 'report.export', definitionVersion: 1, taskId: 'task-1', executionId: 'execution-1', payload: {},
+  } });
+  assert.equal(uploads.length, 1);
+  assert.equal(uploads[0].checksumSha256, 'fc54daf6865cec6354a8ada602faade2a408b3acbe4d2357274d21f7cd0cb9e1');
+  assert.equal(registrations[0].request.reference, `storage://${result.id}`);
+  assert.equal(registrations[0].request.sizeBytes, 11);
+  assert.equal(result.name, 'report.txt');
+});
+
+test('worker context binds durable approval to the current Task automatically', async () => {
+  const calls = [];
+  const task = defineRhinoQTask({ async dispatch() {} }, {
+    name: 'invoice.publish', adapter: 'manual', runtime: 'manual', scope: 'billing',
+    run: async (_input, context) => context.waitForApproval({ id: 'approval-1', key: 'finance', payloadVersion: 1, deadline: '2026-08-14T00:00:00.000Z' }),
+  }, { waitpoints: { async createTaskWaitpoint(taskId, request) {
+    calls.push({ taskId, request });
+    return { id: request.id, taskId, kind: request.kind, state: 'resolved', resolution: { approved: true }, entityVersion: 2 };
+  } } });
+  const outcome = await task.workerHandler()({ data: {
+    taskName: 'invoice.publish', definitionVersion: 1, taskId: 'task-approval', executionId: 'execution-1', payload: {},
+  } });
+  assert.deepEqual(outcome.status, 'resolved');
+  assert.equal(outcome.value, true);
+  assert.equal(calls[0].taskId, 'task-approval');
+  assert.equal(calls[0].request.kind, 'approval');
+});
+
+test('optional trace hooks propagate a bounded carrier from dispatch to handler', async () => {
+  let command;
+  const spans = [];
+  const trace = {
+    inject: () => ({ traceparent: '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01' }),
+    async run(name, attributes, carrier, operation) { spans.push({ name, attributes, carrier }); return operation(); },
+  };
+  const task = defineRhinoQTask({ async dispatch(_adapter, value) { command = value; return {}; } }, {
+    name: 'trace.task', adapter: 'manual', runtime: 'manual', scope: 'trace', run: async () => 'ok',
+  }, { trace });
+  await task.dispatch({ id: 'task-trace', ownerId: 'owner', payload: {} });
+  assert.equal(command.payload.trace.traceparent, trace.inject().traceparent);
+  await task.workerHandler()({ data: command.payload });
+  assert.deepEqual(spans.map((span) => span.name), ['rhinoq.task.dispatch', 'rhinoq.task.run']);
+  assert.equal(spans[1].carrier.traceparent, trace.inject().traceparent);
+});
+
+test('Task declaration dispatches a bounded fan-out with stable item identity', async () => {
+  const calls = [];
+  const integration = { async dispatch(adapter, command) {
+    calls.push({ adapter, command });
+    return { id: command.task.id, type: command.task.type, ownerId: command.task.ownerId,
+      state: 'queued', entityVersion: calls.length, schemaVersion: 1, progress: { completed: 0 },
+      hasResult: false, executions: [], createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z' };
+  } };
+  const task = defineRhinoQTask(integration, {
+    name: 'image.resize', adapter: 'manual', runtime: 'manual', scope: 'images', batch: { maxItems: 2 },
+    execution: { delayMs: 500, priority: 3 },
+    run: async (input) => input,
+  });
+  const result = await task.dispatchBatch({ id: 'batch-1', ownerId: 'owner-a', items: [
+    { itemKey: 'small', payload: { size: 320 } }, { itemKey: 'large', payload: { size: 1280 } },
+  ] });
+  assert.equal(result.entityVersion, 2);
+  assert.deepEqual(calls.map(({ command }) => ({ executionId: command.executionId, itemKey: command.itemKey, idempotencyKey: command.idempotencyKey })), [
+    { executionId: 'batch-1:small:attempt:1', itemKey: 'small', idempotencyKey: 'batch-1:small' },
+    { executionId: 'batch-1:large:attempt:1', itemKey: 'large', idempotencyKey: 'batch-1:large' },
+  ]);
+  assert.ok(calls.every(({ command }) => command.delayMs === 500 && command.priority === 3));
+  await assert.rejects(() => task.dispatchBatch({ id: 'batch-2', ownerId: 'owner-a', items: [
+    { itemKey: 'a', payload: {} }, { itemKey: 'b', payload: {} }, { itemKey: 'c', payload: {} },
+  ] }), /maxItems is 2/);
+  await task.dispatchAt(
+    { id: 'scheduled-1', ownerId: 'owner-a', payload: { size: 640 }, execution: { priority: 9 } },
+    '2026-08-13T00:01:00.000Z',
+    new Date('2026-08-13T00:00:00.000Z'),
+  );
+  assert.equal(calls.at(-1).command.delayMs, 60_000);
+  assert.equal(calls.at(-1).command.priority, 9);
+});

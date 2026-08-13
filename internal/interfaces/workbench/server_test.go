@@ -3,11 +3,13 @@ package workbench
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEmbeddedWorkbenchStaysInsideItsFrontendBudget(t *testing.T) {
@@ -52,6 +54,36 @@ func (*testOperator) ApproveRepair(context.Context, string, string, string) (Rep
 }
 func (*testOperator) ExecuteRepair(context.Context, string) (RepairPlan, error) {
 	return RepairPlan{ID: "repair_1", State: "succeeded", Version: 5}, nil
+}
+func (*testOperator) SetRecurringScheduleEnabled(_ context.Context, tenantID, id string, version int64, enabled bool) (RecurringSchedule, error) {
+	return RecurringSchedule{ID: id, TenantID: tenantID, Version: version + 1, Enabled: enabled}, nil
+}
+
+type recurringTestReader struct{ Reader }
+
+func (recurringTestReader) ListRecurringSchedules(_ context.Context, tenantID string, _ int) ([]RecurringSchedule, error) {
+	return []RecurringSchedule{{ID: "daily", TenantID: tenantID, TaskName: "report.export", Every: time.Hour, Enabled: true, Version: 2}}, nil
+}
+
+func TestWorkbenchRecurringSurfaceOmitsPayloadAndFencesActions(t *testing.T) {
+	handler, err := NewHandler(recurringTestReader{Reader: NewDemoReader()}, Options{Operator: &testOperator{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := localRequest(http.MethodGet, "/api/v1/recurring-schedules?tenantId=tenant-a&limit=10")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"taskName":"report.export"`) || strings.Contains(response.Body.String(), "payload") {
+		t.Fatalf("list=%d %s", response.Code, response.Body.String())
+	}
+	request = localRequest(http.MethodPost, "/api/v1/recurring-schedules/daily/pause")
+	request.Header.Set("Content-Type", "application/json")
+	request.Body = io.NopCloser(strings.NewReader(`{"tenantId":"tenant-a","version":2}`))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"version":3`) {
+		t.Fatalf("pause=%d %s", response.Code, response.Body.String())
+	}
 }
 
 func TestWorkbenchActionsRequireExplicitOperatorAndSameOrigin(t *testing.T) {

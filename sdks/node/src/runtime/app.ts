@@ -10,7 +10,7 @@ import {
 } from '../tasks/adapters.js';
 import { createNodeWorkbenchMiddleware, type WorkbenchHandlerOptions } from '../workbench/handler.js';
 import type { RuntimeAdapter } from './contracts.js';
-import { defineRhinoQTask, type RhinoQDeclaredTask, type RhinoQTaskOptions } from '../tasks/declaration.js';
+import { defineRhinoQTask, type RhinoQArtifactStorage, type RhinoQDeclaredTask, type RhinoQTaskOptions, type RhinoQTraceHooks } from '../tasks/declaration.js';
 import {
   createRhinoQ,
   type CreateRhinoQOptions,
@@ -30,6 +30,8 @@ export interface CreateRhinoQAppOptions {
   adoptionReplicaId?: string;
   /** Primarily for composition tests or hosts that installed the profile already. */
   tasks?: PostgresTaskClient;
+  artifactStorage?: RhinoQArtifactStorage;
+  trace?: RhinoQTraceHooks;
 }
 
 export interface RhinoQAppHTTPOptions {
@@ -67,10 +69,16 @@ export class RhinoQPortableApp {
     readonly runtime: RhinoQRuntimeIntegration,
     private readonly identity: Pick<CreateRhinoQAppOptions,
       'ownerFromRequest' | 'ownerFromNodeRequest' | 'tenantFromRequest' | 'tenantFromNodeRequest'>,
+    private readonly artifactStorage?: RhinoQArtifactStorage,
+    private readonly trace?: RhinoQTraceHooks,
   ) {}
 
   task<Input, Output>(options: RhinoQTaskOptions<Input, Output>): RhinoQDeclaredTask<Input, Output> {
-    return defineRhinoQTask(this.runtime, options);
+    return defineRhinoQTask(this.runtime, options, {
+      waitpoints: this.tasks,
+      ...(this.trace ? { trace: this.trace } : {}),
+      ...(this.artifactStorage ? { artifacts: { storage: this.artifactStorage, register: (taskId, request) => this.tasks.registerTaskArtifact(taskId, request) } } : {}),
+    });
   }
 
   http(options: RhinoQAppHTTPOptions): RhinoQAppHTTPMiddleware {
@@ -213,5 +221,5 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
     ...(options.adoptionReplicaId ? { adoptionReplicaId: options.adoptionReplicaId } : {}),
   });
   await runtime.start();
-  return new RhinoQPortableApp(tasks, runtime, options);
+  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, options.trace);
 }

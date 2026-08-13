@@ -499,6 +499,44 @@
   stored Task data unchanged.
 - **Owner:** Node SDK + product
 
+## ADR-0034A — Task application compilation is explicit composition
+
+- **Status:** accepted
+- **Context:** `app.task()` removed duplicated producer/worker declarations but
+  each Task still repeated adapter/runtime/scope, applications kept their own
+  registries and mounts, and source-scanning discovery would execute or parse
+  application code inconsistently across TypeScript build systems.
+- **Decision:** Node exposes an explicit typed Task registry and execution
+  profile. It compiles only application-facing bindings, a serializable manifest
+  and the existing combined HTTP middleware. It does not own or reproduce lease,
+  retry, effect-ledger, reconciliation or state-machine correctness. External
+  effects and bounded retry policy remain explicit.
+- **Consequences:** TypeScript infers dispatch inputs from one registry and
+  standard integrations remove repeated wiring. Discovery is deterministic and
+  does not scan/import arbitrary files. The lower-level APIs remain compatible.
+- **Rollback:** applications can return to `createRhinoQApp()` and `app.task()`;
+  no stored schema, wire contract or runtime behavior changes.
+- **Owner:** Node SDK + architecture
+
+## ADR-0034B — Recurring Tasks require deterministic occurrences and fenced leases
+
+- **Status:** accepted, implementation in progress
+- **Context:** process-local timers duplicate or lose recurring work during
+  replica overlap, restart and clock skew. Adapter retry identity is not a
+  substitute for durable schedule ownership.
+- **Decision:** recurring business Tasks start with bounded interval schedules.
+  Every due time produces an identity derived from schedule ID plus the UTC
+  occurrence. Stores claim using owner/epoch leases and database time; dispatch
+  success advances the schedule only through the same fence, while dispatch
+  failure releases it with bounded backoff. Cron/timezone syntax waits for a
+  separate DST contract.
+- **Consequences:** the runtime scheduler can be tested independently of a queue
+  and cannot invent duplicate occurrence identity after takeover. The feature is
+  not public until PostgreSQL storage, migration, facade and failover tests land.
+- **Rollback:** remove the unexported domain/runtime packages; no schema or public
+  contract currently depends on them.
+- **Owner:** Go engine + architecture
+
 ## ADR-0035 — Recovery and adoption evidence use explicit durable fences
 
 - **Status:** accepted

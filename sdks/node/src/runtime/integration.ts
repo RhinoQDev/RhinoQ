@@ -213,6 +213,12 @@ export function createRhinoQ(options: CreateRhinoQOptions): RhinoQRuntimeIntegra
       if (!adapter.capabilities.dispatch || !adapter.dispatch) {
         throw new TypeError(`runtime adapter ${JSON.stringify(adapterName)} does not support dispatch`);
       }
+      if (command.delayMs !== undefined && !adapter.capabilities.dispatchPolicies?.delay) {
+        throw new TypeError(`runtime adapter ${JSON.stringify(adapterName)} does not support delayed dispatch`);
+      }
+      if (command.priority !== undefined && !adapter.capabilities.dispatchPolicies?.priority) {
+        throw new TypeError(`runtime adapter ${JSON.stringify(adapterName)} does not support priority dispatch`);
+      }
       await reserve(options.client, command);
       const receipt = await adapter.dispatch(command);
       validateRuntimeRef(receipt.ref);

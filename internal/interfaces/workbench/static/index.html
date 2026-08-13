@@ -59,6 +59,11 @@
             <span>Rules</span>
             <span class="nav-count" id="rules-count">—</span>
           </button>
+          <button class="nav-item" type="button" data-view="recurring">
+            <span class="nav-symbol nav-symbol-jobs" aria-hidden="true"></span>
+            <span>Recurring schedules</span>
+            <span class="nav-count" id="recurring-count">--</span>
+          </button>
         </nav>
 
         <div class="sidebar-section">
@@ -187,8 +192,8 @@
           </div>
           <div class="table-state" id="table-empty" hidden>
             <span class="empty-mark" aria-hidden="true">Q</span>
-            <strong>No rows match this lens</strong>
-            <small>Clear the filter or search another correlation id.</small>
+            <strong id="table-empty-title">No rows match this lens</strong>
+            <small id="table-empty-copy">Clear the filter or search another correlation id.</small>
             <button class="secondary-button" id="empty-clear" type="button">Clear filters</button>
           </div>
         </div>

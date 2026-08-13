@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, extname, relative, resolve } from 'node:path';
 import { Pool } from 'pg';
 import { installPostgresTaskProfile } from '../postgres/task-client.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
@@ -36,18 +36,80 @@ async function main(): Promise<void> {
     case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
     case 'eval': await evaluateProduct(args); break;
+    case 'measure': await measure(args); break;
     case 'lab': await lab(args); break;
     case 'demo': await demo(args); break;
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Start from your goal:\n  npx rhinoq setup                        # preview the complete golden path\n  npx rhinoq setup --apply                # configure without overwriting\n  npx rhinoq init                         # install the Task profile only\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use createRhinoQApp({ adapters, ownerFromRequest }) for manual, SQS, BullMQ, or custom adapters.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
+      console.log('Start from your goal:\n  npx rhinoq setup                        # preview the complete golden path\n  npx rhinoq setup --apply                # configure without overwriting\n  npx rhinoq init                         # install the Task profile only\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq measure --before old --after new # measure consumer-owned source\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use defineRhinoQApplication() for a typed registry, shared execution profile and one HTTP mount.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
 }
 
 type SetupRuntime = 'auto' | 'bullmq' | 'postgres' | 'manual';
+
+interface SourceCount { frontend: number; backend: number; sql: number; integration: number; total: number }
+
+async function measure(args: string[]): Promise<void> {
+  let before: string | undefined;
+  let after: string | undefined;
+  let output: string | undefined;
+  for (let index = 0; index < args.length; index += 1) {
+    const [key, inline] = args[index]!.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--before') before = requiredOption(key, value);
+    else if (key === '--after') after = requiredOption(key, value);
+    else if (key === '--out') output = requiredOption(key, value);
+    else fail(`unknown measure option ${JSON.stringify(key)}`, 'Run: npx rhinoq measure --before <baseline-dir> --after <rhinoq-dir> [--out report.json]');
+  }
+  if (!before || !after) fail('measure requires --before and --after directories', 'Run: npx rhinoq measure --before <baseline-dir> --after <rhinoq-dir>');
+  const baseline = await countConsumerSource(resolve(before));
+  const rhinoq = await countConsumerSource(resolve(after));
+  if (!baseline.total || !rhinoq.total) fail('both directories need countable consumer source', 'Add .js/.ts/.tsx/.sql/.go source; tests, generated files and lock files are excluded');
+  const removed = baseline.total - rhinoq.total;
+  const report = {
+    schemaVersion: 1,
+    methodology: 'nonblank noncomment consumer source; generated/test/lock/vendor files excluded',
+    before: baseline,
+    after: rhinoq,
+    delta: { lines: -removed, percent: Number(((removed / baseline.total) * 100).toFixed(1)) },
+  };
+  const serialized = `${JSON.stringify(report, null, 2)}\n`;
+  if (output) {
+    const path = resolve(output);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, serialized, 'utf8');
+    console.log(`PASS wrote ${path}`);
+  }
+  console.log(serialized.trimEnd());
+}
+
+async function countConsumerSource(directory: string): Promise<SourceCount> {
+  const count: SourceCount = { frontend: 0, backend: 0, sql: 0, integration: 0, total: 0 };
+  const visit = async (path: string): Promise<void> => {
+    for (const item of await readdir(path, { withFileTypes: true })) {
+      const child = resolve(path, item.name);
+      if (item.isDirectory()) {
+        if (!/^(node_modules|vendor|dist|build|coverage|generated|test|tests|__tests__)$/i.test(item.name)) await visit(child);
+        continue;
+      }
+      if (/\.(test|spec)\.|(?:package-lock|pnpm-lock|yarn\.lock)/i.test(item.name)) continue;
+      const extension = extname(item.name);
+      if (!['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.sql', '.go'].includes(extension)) continue;
+      const lines = (await readFile(child, 'utf8')).split(/\r?\n/)
+        .filter((line) => line.trim() && !/^\s*(\/\/|\/\*|\*|--)/.test(line)).length;
+      const category: Exclude<keyof SourceCount, 'total'> = extension === '.sql' ? 'sql'
+        : ['.tsx', '.jsx'].includes(extension) || /[\\/]web[\\/]/i.test(child) ? 'frontend'
+          : /rhinoq|integration/i.test(child) ? 'integration' : 'backend';
+      count[category] += lines;
+      count.total += lines;
+    }
+  };
+  await visit(directory);
+  return count;
+}
 
 async function setup(args: string[]): Promise<void> {
   let apply = false;
@@ -158,12 +220,22 @@ func Register(queue *rhinoq.Client, runReport func(context.Context, rhinoq.Job) 
 }
 
 function manualAppTemplate(): string {
-  return `import { createManualRuntimeAdapter, createRhinoQApp } from '@rhinoq/node';
+  return `import { createManualRuntimeAdapter, defineRhinoQApplication } from '@rhinoq/node';
+
+const runtime = createManualRuntimeAdapter('manual', 'application');
+export const rhinoq = defineRhinoQApplication({
+  profile: { name: 'application', adapters: [runtime] },
+  tasks: (task) => ({
+    // Add business Tasks here. The profile supplies adapter/runtime/scope.
+    example: task({ name: 'example.run', run: async (input) => input }),
+  }),
+});
 
 export async function startRhinoQ({ pool, ownerFromNodeRequest, tenantFromNodeRequest }) {
-  const runtime = createManualRuntimeAdapter('manual', 'application');
-  const app = await createRhinoQApp({ pool, adapters: [runtime], ownerFromNodeRequest, tenantFromNodeRequest });
-  return { app, http: app.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN }) };
+  return rhinoq.start({
+    pool, ownerFromNodeRequest, tenantFromNodeRequest,
+    http: { operatorToken: process.env.RHINOQ_OPERATOR_TOKEN },
+  });
 }
 `;
 }

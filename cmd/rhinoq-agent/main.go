@@ -85,7 +85,7 @@ Verify
 	}
 
 	server, err := agent.New(agent.Config{
-		Client: client, Token: token, AllowUnauthenticated: open,
+		Client: client, Token: token, TenantID: os.Getenv("RHINOQ_TENANT_ID"), Role: os.Getenv("RHINOQ_AGENT_ROLE"), AllowUnauthenticated: open,
 		TaskCredentials:   taskCredentials,
 		HeartbeatInterval: durationOr("RHINOQ_AGENT_HEARTBEAT", 10*time.Second),
 		MaxPayloadBytes:   intOr("RHINOQ_MAX_PAYLOAD_BYTES", 1<<20),

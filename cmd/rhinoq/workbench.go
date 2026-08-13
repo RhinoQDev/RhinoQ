@@ -198,6 +198,17 @@ type liveWorkbenchOperator struct {
 	repairs *rhinoq.RepairRegistry
 }
 
+func (o *liveWorkbenchOperator) SetRecurringScheduleEnabled(ctx context.Context, tenantID, id string, version int64, enabled bool) (workbench.RecurringSchedule, error) {
+	var record rhinoq.RecurringTaskSchedule
+	var err error
+	if enabled {
+		record, err = o.client.ResumeRecurringTask(ctx, tenantID, id, version)
+	} else {
+		record, err = o.client.PauseRecurringTask(ctx, tenantID, id, version)
+	}
+	return publicRecurringSchedule(record), err
+}
+
 func (o *liveWorkbenchOperator) Recheck(ctx context.Context, subject workbench.SubjectRef, ruleID string) (workbench.ActionResult, error) {
 	evaluation, err := o.client.EvaluateRule(ctx, ruleID, subject.ID, "")
 	if err != nil {
@@ -263,6 +274,21 @@ func workbenchRepair(record rhinoq.RepairRecord) workbench.RepairPlan {
 type liveWorkbenchReader struct {
 	client *rhinoq.Client
 	source string
+}
+
+func (r *liveWorkbenchReader) ListRecurringSchedules(ctx context.Context, tenantID string, limit int) ([]workbench.RecurringSchedule, error) {
+	records, err := r.client.ListRecurringTasks(ctx, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]workbench.RecurringSchedule, len(records))
+	for i, item := range records {
+		result[i] = publicRecurringSchedule(item)
+	}
+	return result, nil
+}
+func publicRecurringSchedule(item rhinoq.RecurringTaskSchedule) workbench.RecurringSchedule {
+	return workbench.RecurringSchedule{ID: item.ID, TaskName: item.TaskName, OwnerID: item.OwnerID, TenantID: item.TenantID, Every: item.Every, Cron: item.Cron, Timezone: item.Timezone, Enabled: item.Enabled, NextRunAt: item.NextRunAt, Version: item.Version}
 }
 
 func (r *liveWorkbenchReader) Snapshot(

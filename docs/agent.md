@@ -185,6 +185,9 @@ Các biến cấu hình Gateway:
 | `RHINOQ_DATABASE_DRIVER` | `pgx` | tên driver `database/sql`; custom driver cần custom build |
 | `RHINOQ_AGENT_ADDRESS` | `127.0.0.1:8080` | địa chỉ HTTP lắng nghe |
 | `RHINOQ_AGENT_TOKEN` | empty | bearer token tối thiểu 32 byte cho mọi endpoint được bảo vệ |
+| `RHINOQ_TENANT_ID` | `tnt_system` | tenant duy nhất mà process Agent này phục vụ; credential Task có `tenantId` khác sẽ làm startup thất bại |
+| `RHINOQ_AGENT_ROLE` | `owner` | role của bearer token chính: `owner`, `admin`, `operator`, `developer` hoặc `viewer`; route không có policy bị deny mặc định |
+| `RHINOQ_TASK_CREDENTIALS_JSON` | empty | mảng credential owner `{tenantId, ownerId, token}`; `tenantId` bỏ trống kế thừa tenant của Agent |
 | `RHINOQ_AGENT_ALLOW_UNAUTHENTICATED` | false | cho phép không token, chỉ dành cho local development |
 | `RHINOQ_AGENT_HEARTBEAT` | `10s` | heartbeat interval trả cho SDK khi handshake |
 | `RHINOQ_AGENT_SHUTDOWN_GRACE` | `20s` | thời gian drain HTTP khi dừng |

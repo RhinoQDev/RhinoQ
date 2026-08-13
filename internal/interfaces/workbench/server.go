@@ -66,6 +66,8 @@ func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case r.URL.Path == "/api/v1/snapshot":
 		s.snapshot(w, r)
+	case r.URL.Path == "/api/v1/recurring-schedules":
+		s.recurringSchedules(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/subjects/"):
 		s.subjectDetail(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/jobs/"):
@@ -120,9 +122,71 @@ func (s *server) action(w http.ResponseWriter, r *http.Request) {
 		s.proposeRepair(w, r)
 	case strings.HasPrefix(path, "api/v1/repairs/"):
 		s.repairAction(w, r)
+	case strings.HasPrefix(path, "api/v1/recurring-schedules/"):
+		s.recurringScheduleAction(w, r)
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "Workbench action endpoint not found")
 	}
+}
+
+func (s *server) recurringSchedules(w http.ResponseWriter, r *http.Request) {
+	reader, ok := s.reader.(RecurringReader)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "recurring_not_configured", "Recurring schedule reader is not configured")
+		return
+	}
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenantId"))
+	limit := DefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > MaxLimit {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be between 1 and 250")
+			return
+		}
+		limit = parsed
+	}
+	items, err := reader.ListRecurringSchedules(r.Context(), tenantID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "recurring_read_failed", err.Error())
+		return
+	}
+	if items == nil {
+		items = []RecurringSchedule{}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"schedules": items})
+}
+
+func (s *server) recurringScheduleAction(w http.ResponseWriter, r *http.Request) {
+	operator, ok := s.operator.(RecurringOperator)
+	if !ok {
+		writeError(w, http.StatusMethodNotAllowed, "recurring_actions_disabled", "Recurring schedule actions are not configured")
+		return
+	}
+	rest := strings.TrimPrefix(strings.Trim(r.URL.Path, "/"), "api/v1/recurring-schedules/")
+	id, verb, found := strings.Cut(rest, "/")
+	if !found || strings.TrimSpace(id) == "" || (verb != "pause" && verb != "resume") {
+		writeError(w, http.StatusBadRequest, "invalid_recurring_action", "schedule id and pause/resume action are required")
+		return
+	}
+	id, err := url.PathUnescape(id)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_schedule", "schedule id is invalid")
+		return
+	}
+	var request struct {
+		TenantID string `json:"tenantId"`
+		Version  int64  `json:"version"`
+	}
+	if !decodeAction(w, r, &request) {
+		return
+	}
+	record, err := operator.SetRecurringScheduleEnabled(r.Context(), request.TenantID, id, request.Version, verb == "resume")
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "recurring_action_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
 }
 
 func (s *server) recheck(w http.ResponseWriter, r *http.Request) {
