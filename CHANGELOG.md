@@ -16,6 +16,10 @@
   now provide a bucket plus standard S3 client configuration while RhinoQ owns
   PutObject, multipart upload, abort cleanup and signed downloads; AWS packages
   remain optional and lazily loaded.
+- Added `artifacts: 's3'` environment composition, MIME/name inference and
+  `context.output.video/pdf/archive/files/zip` helpers. Multiple files are
+  bounded and may remain separate or be streamed into one ZIP through the
+  optional `archiver` package without buffering the complete archive.
 - Added migration 032 and durable five-field cron schedules with IANA
   timezones. Scheduler completion persists the domain-calculated next UTC run;
   spring-forward gaps are skipped and repeated fall-back wall minutes run once.

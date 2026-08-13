@@ -2,6 +2,8 @@ import type { TaskSnapshot } from '../gateway/types.js';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { basename, extname } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions, type WaitpointLifecycleClient, type WaitpointOutcome } from './waitpoint.js';
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
 
@@ -14,11 +16,21 @@ export interface RhinoQTaskRunContext {
   artifact: {
     file(data: Uint8Array | string, options: RhinoQArtifactFileOptions): Promise<import('../gateway/types.js').TaskArtifact>;
     stream(source: AsyncIterable<Uint8Array | string>, options: RhinoQArtifactStreamOptions): Promise<import('../gateway/types.js').TaskArtifact>;
-    filePath(path: string, options: Omit<RhinoQArtifactStreamOptions, 'sizeBytes'> & { sizeBytes?: number }): Promise<import('../gateway/types.js').TaskArtifact>;
+    filePath(path: string, options?: Omit<RhinoQArtifactStreamOptions, 'sizeBytes' | 'name' | 'contentType'> & { sizeBytes?: number; name?: string; contentType?: string }): Promise<import('../gateway/types.js').TaskArtifact>;
   };
+  output: RhinoQTaskOutputHelpers;
   waitForInput<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId'>): Promise<WaitpointOutcome<T>>;
   waitForApproval(options: Omit<WaitForInputOptions<boolean>, 'taskId' | 'kind' | 'parse'>): Promise<WaitpointOutcome<boolean>>;
   waitForWebhook<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId' | 'kind'>): Promise<WaitpointOutcome<T>>;
+}
+
+export interface RhinoQTaskOutputHelpers {
+  file(path: string, options?: { name?: string; contentType?: string; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
+  video(path: string, options?: { name?: string; contentType?: string; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
+  pdf(path: string, options?: { name?: string; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
+  archive(path: string, options?: { name?: string; contentType?: string; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
+  files(paths: string[], options?: { maxItems?: number }): Promise<import('../gateway/types.js').TaskArtifact[]>;
+  zip(paths: string[], options?: { name?: string; maxItems?: number; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
 }
 
 export interface RhinoQArtifactFileOptions {
@@ -246,6 +258,9 @@ export function defineRhinoQTask<Input, Output>(
           artifact: artifactHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
             await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
           }),
+          output: outputHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
+            await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
+          }),
           ...waitpoints,
         }));
         return services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation();
@@ -325,11 +340,56 @@ function artifactHelper(
     async filePath(path, options) {
       const info = await stat(path);
       if (!info.isFile()) throw new TypeError('artifact filePath must point to a regular file');
-      if (options.sizeBytes !== undefined && options.sizeBytes !== info.size) throw new RangeError(`artifact file size is ${info.size} bytes; expected ${options.sizeBytes}`);
-      return this.stream(createReadStream(path), { ...options, sizeBytes: info.size });
+      if (options?.sizeBytes !== undefined && options.sizeBytes !== info.size) throw new RangeError(`artifact file size is ${info.size} bytes; expected ${options.sizeBytes}`);
+      const name = options?.name?.trim() || basename(path);
+      const contentType = options?.contentType?.trim() || contentTypeFor(name);
+      return this.stream(createReadStream(path), { ...options, name, contentType, sizeBytes: info.size });
     },
   });
 }
+
+function outputHelper(services: RhinoQTaskServices, taskId: string, executionId: string, signal?: AbortSignal, progress?: RhinoQTaskRunContext['progress']): RhinoQTaskOutputHelpers {
+  type FileOptions = { name?: string; contentType?: string; lineage?: string[] };
+  type ZipOptions = { name?: string; maxItems?: number; lineage?: string[] };
+  const artifact = artifactHelper(services, taskId, executionId, signal, progress);
+  const file = (path: string, options: FileOptions = {}) => artifact.filePath(path, { ...options, reportProgress: true });
+  const paths = (values: string[], maximum = 100) => {
+    if (!Array.isArray(values) || values.length === 0) throw new RangeError('output files requires at least one path');
+    if (!Number.isInteger(maximum) || maximum < 1 || maximum > 1_000) throw new RangeError('output maxItems must be 1..1000');
+    if (values.length > maximum) throw new RangeError(`output contains ${values.length} files; maxItems is ${maximum}`);
+    const names = values.map((value) => basename(required(value, 'output file path')));
+    if (new Set(names).size !== names.length) throw new TypeError('output file basenames must be unique');
+    return values;
+  };
+  return Object.freeze({
+    file,
+    video: (path: string, options: FileOptions = {}) => file(path, { ...options, contentType: options.contentType ?? videoTypeFor(options.name ?? path) }),
+    pdf: (path: string, options: Omit<FileOptions, 'contentType'> = {}) => file(path, { ...options, contentType: 'application/pdf' }),
+    archive: (path: string, options: FileOptions = {}) => file(path, { ...options, contentType: options.contentType ?? archiveTypeFor(options.name ?? path) }),
+    files: (values: string[], options: { maxItems?: number } = {}) => Promise.all(paths(values, options.maxItems).map((path) => file(path))),
+    async zip(values: string[], options: ZipOptions = {}) {
+      const selected = paths(values, options.maxItems);
+      const module = await optionalTaskImport('archiver');
+      const createArchive = (module.default ?? module) as (format: string, options: Record<string, unknown>) => { pipe(target: NodeJS.WritableStream): unknown; file(path: string, options: { name: string }): unknown; finalize(): Promise<void>; abort(): unknown; on(event: string, listener: (error: Error) => void): unknown };
+      if (typeof createArchive !== 'function') throw new TypeError('archiver default export is unavailable');
+      const zip = createArchive('zip', { zlib: { level: 6 } });
+      const stream = new PassThrough();
+      zip.pipe(stream);
+      for (const path of selected) zip.file(path, { name: basename(path) });
+      const abort = () => { zip.abort(); stream.destroy(signal?.reason instanceof Error ? signal.reason : new Error('ZIP output aborted')); };
+      signal?.addEventListener('abort', abort, { once: true });
+      zip.on('error', (error) => stream.destroy(error));
+      void zip.finalize().catch((error) => stream.destroy(error)).finally(() => signal?.removeEventListener('abort', abort));
+      return artifact.stream(stream, { name: options.name?.trim() || 'files.zip', contentType: 'application/zip', reportProgress: true, ...(options.lineage ? { lineage: options.lineage } : {}) });
+    },
+  });
+}
+
+const CONTENT_TYPES: Record<string, string> = { '.pdf':'application/pdf','.zip':'application/zip','.tar':'application/x-tar','.gz':'application/gzip','.mp4':'video/mp4','.mov':'video/quicktime','.webm':'video/webm','.mkv':'video/x-matroska','.csv':'text/csv','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg' };
+function contentTypeFor(path: string): string { return CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream'; }
+function videoTypeFor(path: string): string { const value = contentTypeFor(path); if (!value.startsWith('video/')) throw new TypeError('output.video requires a known video extension or explicit contentType'); return value; }
+function archiveTypeFor(path: string): string { const value = contentTypeFor(path); if (!['application/zip','application/x-tar','application/gzip'].includes(value)) throw new TypeError('output.archive requires .zip, .tar, .gz or explicit contentType'); return value; }
+async function optionalTaskImport(specifier: string): Promise<Record<string, unknown>> { try { return await import(specifier) as Record<string, unknown>; } catch (error) { throw new Error(`context.output.zip requires ${specifier}; install archiver`, { cause: error }); } }
 
 function taskEnvelope<Input>(value: unknown, name: string, version: number): { taskId: string; executionId: string; payload: Input; trace?: Record<string, string> } {
   if (!value || typeof value !== 'object') throw new TypeError('RhinoQ Task worker received an invalid envelope');

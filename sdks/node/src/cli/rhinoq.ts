@@ -302,6 +302,12 @@ async function init(args: string[] = []): Promise<void> {
       'RHINOQ_OPERATOR_TOKEN=replace-with-at-least-32-random-bytes',
       'RHINOQ_REPLICA_ID=replace-with-stable-process-identity',
       '',
+      '# Optional: enable createRhinoQApp({ artifacts: "s3" })',
+      'RHINOQ_ARTIFACT_BUCKET=',
+      'RHINOQ_ARTIFACT_REGION=',
+      'RHINOQ_ARTIFACT_MAX_BYTES=10737418240',
+      'RHINOQ_ARTIFACT_CONTENT_TYPES=video/mp4,application/pdf,application/zip',
+      '',
       'REDIS_URL=redis://localhost:6379',
       '',
     ].join('\n'));
@@ -319,7 +325,7 @@ async function initReportExportExample(): Promise<void> {
   await mkdir(root, { recursive: true });
   const files: Record<string, string> = {
     'package.json': `${JSON.stringify({ name: 'rhinoq-report-export', private: true, type: 'module', scripts: { start: 'node app.mjs' }, dependencies: { '@rhinoq/node': '^0.1.0-beta.15', pg: '^8.22.0' } }, null, 2)}\n`,
-    '.env.example': 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app\nRHINOQ_OPERATOR_TOKEN=replace-me\n',
+    '.env.example': 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app\nRHINOQ_OPERATOR_TOKEN=replace-me\n# Optional S3 artifact golden path\nRHINOQ_ARTIFACT_BUCKET=\nRHINOQ_ARTIFACT_REGION=\nRHINOQ_ARTIFACT_MAX_BYTES=10737418240\n',
     '.rhinoq/product-surface.json': `${JSON.stringify({ owner: true, tenant: true, result: false, verifier: false, runtimeIdentity: true, durableStore: false }, null, 2)}\n`,
     'app.mjs': reportExportAppTemplate(),
     'README.md': '# RhinoQ report-export consumer\n\nRun `npm install`, configure `DATABASE_URL`, then `npm start`.\n\nDemo sessions are server-side and stable: `owner-a-session` and `owner-b-session`. Replace them with real authentication before deployment. Result and verifier callbacks intentionally remain fail-closed until configured; run `npx rhinoq doctor --product-surface` in this directory.\n',

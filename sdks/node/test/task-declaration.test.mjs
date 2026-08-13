@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { defineRhinoQTask } from '../dist/index.js';
 
 test('one Task declaration drives stable dispatch identity and the worker handler', async () => {
@@ -89,6 +92,25 @@ test('worker artifact helper streams without buffering and reports byte progress
   assert.equal(registered[0].checksumSha256, '9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a');
   assert.deepEqual(progress.map((value) => value.completed), [2, 4]);
   assert.equal(output.reference, 's3://bucket/video');
+});
+
+test('output helpers infer file names and MIME types while bounding multiple files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'rhinoq-output-'));
+  try {
+    const first = join(root, 'report.pdf'), second = join(root, 'clip.mp4');
+    await writeFile(first, 'pdf'); await writeFile(second, 'video');
+    const registered = [];
+    const task = defineRhinoQTask({ dispatch() {}, close() {} }, {
+      name: 'export.files', adapter: 'manual', runtime: 'manual', scope: 'files',
+      run: async (_input, context) => context.output.files([first, second]),
+    }, { artifacts: {
+      storage: { async put() { throw new Error('buffered path must not run'); }, async putStream(input) { for await (const _ of input.source) {} return { reference: `s3://bucket/${input.name}` }; } },
+      async register(_taskId, request) { registered.push(request); return request; },
+    } });
+    await task.workerHandler()({ data: { taskName: 'export.files', definitionVersion: 1, taskId: 't1', executionId: 'e1', payload: {} } });
+    assert.deepEqual(registered.map((item) => [item.name, item.contentType]), [['report.pdf', 'application/pdf'], ['clip.mp4', 'video/mp4']]);
+    await assert.rejects(() => task.execute({}, { output: {}, artifact: {}, taskId: 't', executionId: 'e', progress() {}, waitForInput() {}, waitForApproval() {}, waitForWebhook() {} }), /context\.output/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('worker context binds durable approval to the current Task automatically', async () => {

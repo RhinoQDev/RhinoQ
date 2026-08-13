@@ -117,11 +117,13 @@
     "@aws-sdk/client-s3": ">=3.600.0",
     "@aws-sdk/lib-storage": ">=3.600.0",
     "@aws-sdk/s3-request-presigner": ">=3.600.0",
+    "archiver": ">=7.0.0",
     "pg": ">=8.11.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-s3": { "optional": true },
     "@aws-sdk/lib-storage": { "optional": true },
-    "@aws-sdk/s3-request-presigner": { "optional": true }
+    "@aws-sdk/s3-request-presigner": { "optional": true },
+    "archiver": { "optional": true }
   }
 }

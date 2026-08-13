@@ -23,6 +23,28 @@ Configure one provider when the application starts. `artifactProvider` wires
 both `context.artifact.file()` and the existing owner-safe download endpoint;
 do not also pass the older low-level `artifactStorage` option.
 
+The shortest S3 setup reads a dedicated, documented environment namespace:
+
+```ts
+const app = await createRhinoQApp({
+  pool, adapters, ownerFromNodeRequest,
+  artifacts: 's3',
+});
+```
+
+```env
+RHINOQ_ARTIFACT_BUCKET=my-private-files
+RHINOQ_ARTIFACT_REGION=ap-southeast-1
+RHINOQ_ARTIFACT_MAX_BYTES=10737418240
+# Optional for R2/MinIO/Spaces:
+RHINOQ_ARTIFACT_ENDPOINT=
+RHINOQ_ARTIFACT_FORCE_PATH_STYLE=false
+RHINOQ_ARTIFACT_CONTENT_TYPES=video/mp4,application/pdf,application/zip
+```
+
+Environment credentials continue to use the AWS SDK's normal credential chain;
+RhinoQ does not parse, persist or expose access keys.
+
 For multi-gigabyte video, archives, backups, datasets or model files, never put
 the bytes in a queue payload and do not use the buffered `file()` helper. Pass a
 private object reference in the Task input, stream the transformation, then
@@ -49,9 +71,36 @@ cancellation and can publish byte progress through the existing SSE/polling UI.
 
 ```ts
 return context.artifact.filePath('/work/output.mp4', {
-  name: 'output.mp4', contentType: 'video/mp4', reportProgress: true,
+  reportProgress: true,
 });
 ```
+
+`filePath()` infers the file name and common MIME types. For standard output
+types the shorter helpers also turn on progress automatically:
+
+```ts
+return context.output.video('/work/output.mp4');
+return context.output.pdf('/work/report.pdf');
+return context.output.archive('/work/export.zip');
+```
+
+Multiple output files can remain separately downloadable:
+
+```ts
+return context.output.files(['/work/front.jpg', '/work/back.jpg']);
+```
+
+Or install the optional `archiver` package and stream one ZIP directly to the
+configured provider—without holding the ZIP or its input files in memory:
+
+```ts
+return context.output.zip(paths, { name: 'all-results.zip', maxItems: 500 });
+```
+
+`files()` and `zip()` default to 100 inputs, reject duplicate basenames and
+allow an explicit bound up to 1,000. ZIP creation forwards cancellation and
+inherits the provider's upload size/MIME policy. RhinoQ deliberately does not
+accept an unbounded directory glob.
 
 For browser uploads, use the cloud provider's direct multipart/resumable upload
 flow: the authenticated application creates a short-lived upload session, the

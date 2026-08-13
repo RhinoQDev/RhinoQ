@@ -11,7 +11,7 @@ import {
 import { createNodeWorkbenchMiddleware, type WorkbenchHandlerOptions } from '../workbench/handler.js';
 import type { RuntimeAdapter } from './contracts.js';
 import { defineRhinoQTask, type RhinoQArtifactStorage, type RhinoQDeclaredTask, type RhinoQTaskOptions, type RhinoQTraceHooks } from '../tasks/declaration.js';
-import type { RhinoQArtifactProvider } from '../tasks/artifact-storage.js';
+import { createAwsS3ArtifactProviderFromEnv, type RhinoQArtifactProvider } from '../tasks/artifact-storage.js';
 import {
   createRhinoQ,
   type CreateRhinoQOptions,
@@ -34,6 +34,8 @@ export interface CreateRhinoQAppOptions {
   artifactStorage?: RhinoQArtifactStorage;
   /** One provider configures both private upload and owner-safe signed download. */
   artifactProvider?: RhinoQArtifactProvider;
+  /** Zero-boilerplate provider selection using RHINOQ_ARTIFACT_* environment variables. */
+  artifacts?: 's3';
   trace?: RhinoQTraceHooks;
 }
 
@@ -216,7 +218,10 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
     throw new TypeError('createRhinoQApp requires a PostgreSQL pool');
   }
   if (!Array.isArray(options.adapters)) throw new TypeError('createRhinoQApp requires adapters');
-  if (options.artifactStorage && options.artifactProvider) throw new TypeError('configure artifactProvider or artifactStorage, not both');
+  const artifactChoices = [options.artifactStorage, options.artifactProvider, options.artifacts].filter(Boolean).length;
+  if (artifactChoices > 1) throw new TypeError('configure only one of artifacts, artifactProvider or artifactStorage');
+  if (options.artifacts !== undefined && options.artifacts !== 's3') throw new TypeError('artifacts must be "s3"');
+  const artifactProvider = options.artifactProvider ?? (options.artifacts === 's3' ? await createAwsS3ArtifactProviderFromEnv() : undefined);
   const tasks = options.tasks ?? await installPostgresTaskProfile(options.pool);
   const runtime = createRhinoQ({
     client: tasks,
@@ -227,5 +232,5 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
     ...(options.adoptionReplicaId ? { adoptionReplicaId: options.adoptionReplicaId } : {}),
   });
   await runtime.start();
-  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, options.artifactProvider, options.trace);
+  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace);
 }

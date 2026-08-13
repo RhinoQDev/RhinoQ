@@ -218,6 +218,13 @@ the stream with backpressure, so a multi-gigabyte video is not buffered in
 worker memory. Large browser inputs upload directly to private cloud storage;
 the queue carries only the object reference, never the file bytes.
 
+For the shortest path, set `artifacts: 's3'` and the documented
+`RHINOQ_ARTIFACT_*` variables, then return
+`context.output.video(path)`, `pdf(path)`, `archive(path)`, `files(paths)` or
+`zip(paths)`. File name, common MIME types, byte progress and streaming are
+automatic; explicit provider and low-level stream APIs remain available when
+an application needs custom policy.
+
 Interactive Tasks use the same handler context; RhinoQ binds the current Task,
 persists the checkpoint and exposes the already-mounted owner route and UI:
 

@@ -109,6 +109,7 @@ test('setup previews one complete plan and generates a native PostgreSQL worker 
     const setup = JSON.parse(readFileSync(join(cwd, '.rhinoq', 'setup.json'), 'utf8'));
     assert.equal(setup.runtime, 'postgres');
     assert.match(readFileSync(join(cwd, '.env.rhinoq.example'), 'utf8'), /RHINOQ_OPERATOR_TOKEN=/);
+    assert.match(readFileSync(join(cwd, '.env.rhinoq.example'), 'utf8'), /RHINOQ_ARTIFACT_BUCKET=/);
 
     writeFileSync(worker, 'package rhinoqworker\n// user-owned\n');
     const repeat = spawnSync(process.execPath, [developerCLI, 'setup', '--runtime', 'postgres', '--apply'], { cwd, encoding: 'utf8', env: {} });
