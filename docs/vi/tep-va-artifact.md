@@ -114,7 +114,7 @@ tenant và quyền sở hữu Task. Nếu kết quả complete không chắc ch�
 `uncertain`, không báo thành công và không retry mù. Gọi resume rồi complete lại
 để chỉ xác minh readback, không gửi multipart complete lần hai. Phiên upload
 mặc định 24 giờ; artifact mặc định 7 ngày. Với Task-bound upload, helper tự tính
-SHA-256 theo từng khối 4 MiB, không nạp cả file vào RAM. Chỉ truyền
+SHA-256 song song với upload theo từng khối 256 KiB, không nạp cả file vào RAM. Chỉ truyền
 `checksumSha256` nếu ứng dụng đã có checksum đáng tin cậy.
 
 ## Xóa file hết hạn và xử lý video

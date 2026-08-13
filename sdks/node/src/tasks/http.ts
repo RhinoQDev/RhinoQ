@@ -229,7 +229,7 @@ export function createTaskRequestHandler(
         }
         const body = await request.json().catch(() => ({})) as any;
         if (request.method === 'POST' && relative.length === 3 && relative[2] === 'parts') return json(await options.uploads.recordPart(uploadId, ownerId, tenantId, Number(body.expectedVersion), body.part));
-        if (request.method === 'POST' && relative.length === 3 && relative[2] === 'complete') return json(await options.uploads.complete(uploadId, ownerId, tenantId, Number(body.expectedVersion)));
+        if (request.method === 'POST' && relative.length === 3 && relative[2] === 'complete') return json(await options.uploads.complete(uploadId, ownerId, tenantId, Number(body.expectedVersion), body.checksumSha256));
         if (request.method === 'POST' && relative.length === 3 && relative[2] === 'abort') return json(await options.uploads.abort(uploadId, ownerId, tenantId, Number(body.expectedVersion)));
         return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
       }
@@ -566,7 +566,7 @@ export class ApplicationTaskClient {
   resumeArtifactUpload(id:string):Promise<ArtifactUploadSession>{return this.send('GET',`/_uploads/${path(id)}`);}
   signArtifactUploadPart(id:string,partNumber:number):Promise<{url:string;expiresAt:string}>{return this.send('POST',`/_uploads/${path(id)}/parts/${partNumber}`);}
   recordArtifactUploadPart(id:string,expectedVersion:number,part:ArtifactUploadPart):Promise<ArtifactUploadSession>{return this.send('POST',`/_uploads/${path(id)}/parts`,{expectedVersion,part});}
-  completeArtifactUpload(id:string,expectedVersion:number):Promise<{session:ArtifactUploadSession;artifact?:import('../gateway/types.js').TaskArtifact}>{return this.send('POST',`/_uploads/${path(id)}/complete`,{expectedVersion});}
+  completeArtifactUpload(id:string,expectedVersion:number,checksumSha256?:string):Promise<{session:ArtifactUploadSession;artifact?:import('../gateway/types.js').TaskArtifact}>{return this.send('POST',`/_uploads/${path(id)}/complete`,{expectedVersion,...(checksumSha256?{checksumSha256}:{})});}
   abortArtifactUpload(id:string,expectedVersion:number):Promise<ArtifactUploadSession>{return this.send('POST',`/_uploads/${path(id)}/abort`,{expectedVersion});}
 
   listAtRiskTasks(limit = 50): Promise<{

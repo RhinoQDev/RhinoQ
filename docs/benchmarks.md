@@ -6,6 +6,20 @@ time, throughput and RSS. The sink is in-memory, so it measures only
 stream/hash/planning overhead; it excludes provider/network latency and is not
 production throughput evidence.
 
+`npm --prefix sdks/node run lab:artifacts` adds checksum parity, event-loop
+delay and 1,000-session adaptive-planning load evidence. It compares RhinoQ's
+portable incremental browser implementation with Node's native OpenSSL only as
+a lower-bound reference; the report explicitly does not claim JavaScript is
+faster than native hashing.
+
+With temporary least-privilege AWS credentials, run `test:s3` and
+`test:s3:fault`. The second command uploads one part, recreates the provider as
+if the process restarted, recovers provider part state, completes readback and
+deletes the object. Both runners isolate random keys and cleanup in `finally`.
+
+Recorded results and their limitations are in
+[`evidence/artifact-production-lab-2026-08-13.md`](./evidence/artifact-production-lab-2026-08-13.md).
+
 RhinoQ keeps benchmarks separate from correctness tests. Results vary with the
 CPU, Node/Go version, operating system, PostgreSQL configuration and background
 load, so one local run is evidence about that environment—not a production

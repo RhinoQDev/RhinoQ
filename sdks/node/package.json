@@ -101,6 +101,8 @@
     "benchmark:postgres": "npm run build && node bench/postgres-benchmark.mjs",
     "benchmark:artifacts": "npm run build && node bench/artifact-benchmark.mjs",
     "test:s3": "npm run build && node bench/s3-e2e.mjs",
+    "test:s3:fault": "npm run build && node bench/s3-fault-lab.mjs",
+    "lab:artifacts": "npm run build && node bench/artifact-production-lab.mjs",
     "prepack": "npm run build",
     "pack": "node scripts/pack.mjs",
     "pack:check": "npm pack --dry-run",

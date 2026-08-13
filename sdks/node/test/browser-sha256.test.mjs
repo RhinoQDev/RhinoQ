@@ -16,3 +16,9 @@ test('browser Blob checksum honors cancellation before reading', async () => {
   const controller = new AbortController(); controller.abort(new Error('stop'));
   await assert.rejects(() => sha256Blob(new Blob(['abc']), { signal: controller.signal }), /stop/);
 });
+
+test('browser checksum yields between chunks so timers and UI work can run', async () => {
+  let timerRan=false;setTimeout(()=>{timerRan=true;},0);
+  await sha256Blob(new Blob([new Uint8Array(3*1024*1024)]),{chunkBytes:1024*1024});
+  assert.equal(timerRan,true);
+});

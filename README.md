@@ -248,7 +248,7 @@ multipart session and signed part URLs, so multi-GB bytes travel directly to
 AWS S3 instead of through the Node server. It resumes from provider state,
 adapts its multipart plan to a memory budget, verifies the completed object,
 and only then registers the Task artifact. Task-bound uploads automatically
-compute SHA-256 in bounded Blob slices, with progress and cancellation; callers
+compute SHA-256 concurrently with upload in bounded Blob slices, with progress and cancellation; callers
 may supply a trusted digest to avoid the extra read. RhinoQ never invents
 integrity evidence. Session expiry and
 artifact retention are separate, and cleanup requires preview plus an explicit

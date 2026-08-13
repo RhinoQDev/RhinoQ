@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- Task-bound browser upload now computes SHA-256 in bounded Blob slices with
+- Added a reproducible Artifact Production Lab covering incremental checksum
+  parity/responsiveness, bounded 1,000-session planning load, owner/tenant and
+  part-shape security failures, and live S3 process-restart reconciliation with
+  cleanup-safe random objects.
+
+- Task-bound browser upload now computes SHA-256 concurrently with multipart
+  upload in bounded, event-loop-yielding Blob slices with
   progress and cancellation. Added a non-root FFmpeg worker base image and
   runtime readiness inspection for exact encoders and minimum free workspace,
   plus a cleanup-safe live S3 multipart verification runner.

@@ -73,7 +73,6 @@ export class ArtifactUploadService {
     const name = required(request.name, 'upload name'), contentType = required(request.contentType, 'upload contentType');
     if (!Number.isSafeInteger(request.sizeBytes) || request.sizeBytes < 1) throw new RangeError('upload sizeBytes must be a positive safe integer');
     if (request.checksumSha256 && !/^[0-9a-f]{64}$/.test(request.checksumSha256)) throw new TypeError('upload checksumSha256 must be lowercase SHA-256');
-    if (request.taskId && !request.checksumSha256) throw new TypeError('task-bound direct upload requires checksumSha256');
     if (request.taskId) {
       if (!this.authorizeTask) throw new Error('task-bound direct upload authorization is not configured');
       await this.authorizeTask(request.taskId.trim(), ownerId, tenantId);
@@ -98,8 +97,15 @@ export class ArtifactUploadService {
     if (parts.reduce((total,value) => total+value.sizeBytes,0) > session.sizeBytes) throw new RangeError('recorded upload parts exceed declared size');
     const saved=await this.store.save({ ...session, parts }, expectedVersion);this.metrics?.increment('rhinoq_artifact_upload_part_recorded_total',{provider:this.direct.name});return saved;
   }
-  async complete(id: string, ownerId: string, tenantId: string, expectedVersion: number): Promise<{ session: ArtifactUploadSession; artifact?: TaskArtifact }> {
+  async complete(id: string, ownerId: string, tenantId: string, expectedVersion: number, checksumSha256?: string): Promise<{ session: ArtifactUploadSession; artifact?: TaskArtifact }> {
     let session = await this.store.getForOwner(id, ownerId, tenantId);
+    if (checksumSha256 !== undefined) {
+      if (!/^[0-9a-f]{64}$/.test(checksumSha256)) throw new TypeError('upload checksumSha256 must be lowercase SHA-256');
+      if (session.checksumSha256 && session.checksumSha256 !== checksumSha256) throw new Error('RHINOQ_ARTIFACT_UPLOAD_CHECKSUM_CONFLICT');
+      if (!session.checksumSha256) session = await this.store.save({ ...session, checksumSha256 }, session.version);
+      expectedVersion = session.version;
+    }
+    if (session.taskId && !session.checksumSha256) throw new TypeError('task-bound direct upload requires checksumSha256 before completion');
     if (session.state === 'uncertain') {
       if (session.version !== expectedVersion) throw new Error('RHINOQ_ARTIFACT_UPLOAD_VERSION_CONFLICT');
       try {

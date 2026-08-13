@@ -28,12 +28,12 @@ test('durable direct upload records parts, verifies readback and registers one a
   assert.equal(completed.session.state,'completed');assert.deepEqual(events,[['complete',2],['verify']]);assert.deepEqual(authorized,[['task','owner','tenant']]);assert.equal(registered[0].reference,'fake://private/key');assert.notEqual(registered[0].expiresAt,completed.session.expiresAt);
 });
 
-test('task-bound upload fails before provider access without checksum or authorization',async()=>{
+test('task-bound upload authorizes before provider access and requires checksum at completion',async()=>{
   let creates=0;const store=new MemoryStore();const provider={storage:{put(){}},resolve(){},direct:{name:'fake',async create(){creates++;return{uploadId:'u',reference:'fake://key'};},async signPart(){},async listParts(){return[];},async complete(){},async abort(){},async verify(){return{sizeBytes:1};}}};
   const service=new ArtifactUploadService(provider,store,undefined,undefined,async()=>{throw new Error('not owner');});
-  await assert.rejects(()=>service.create({ownerId:'o',taskId:'t',name:'x',contentType:'x/test',sizeBytes:1}),/checksumSha256/);
-  await assert.rejects(()=>service.create({ownerId:'o',taskId:'t',name:'x',contentType:'x/test',sizeBytes:1,checksumSha256:'a'.repeat(64)}),/not owner/);
+  await assert.rejects(()=>service.create({ownerId:'o',taskId:'t',name:'x',contentType:'x/test',sizeBytes:1}),/not owner/);
   assert.equal(creates,0);
+  const allowed=new ArtifactUploadService(provider,store,undefined,undefined,async()=>{});let {session}=await allowed.create({ownerId:'o',taskId:'t',name:'x',contentType:'x/test',sizeBytes:1});session=await allowed.recordPart(session.id,'o','default',session.version,{partNumber:1,etag:'e',sizeBytes:1});await assert.rejects(()=>allowed.complete(session.id,'o','default',session.version),/checksumSha256 before completion/);
 });
 
 test('unknown multipart completion fails closed as uncertain',async()=>{
@@ -52,4 +52,18 @@ test('retention requires preview and explicit deletion',async()=>{
   const deleted=[];const store={async previewExpired(){return[{id:'a',reference:'fake://a',expiresAt:new Date().toISOString()}];},async claimExpired(){return[{id:'a',reference:'fake://a',expiresAt:new Date().toISOString()}];},async complete(){deleted.push('metadata');},async fail(){}};
   const provider={storage:{put(){}},resolve(){},direct:{name:'fake',async delete({reference}){deleted.push(reference);}}};const retention=new ArtifactRetentionService(provider,store,'owner');
   assert.equal((await retention.preview()).length,1);await assert.rejects(()=>retention.sweep({delete:false}),/delete: true/);assert.deepEqual(await retention.sweep({delete:true}),{deleted:1,failed:0});assert.deepEqual(deleted,['fake://a','metadata']);
+});
+
+test('upload sessions are owner and tenant fenced',async()=>{
+  const store=new MemoryStore(),provider={storage:{put(){}},resolve(){},direct:{name:'fake',async create(){return{uploadId:'u',reference:'fake://key'};},async signPart(){return{url:'https://upload.invalid',expiresAt:new Date().toISOString()};},async listParts(){return[];},async complete(){},async abort(){},async verify(input){return{sizeBytes:input.expectedSizeBytes};}}};
+  const service=new ArtifactUploadService(provider,store);const {session}=await service.create({ownerId:'owner-a',tenantId:'tenant-a',name:'x',contentType:'x/test',sizeBytes:1});
+  await assert.rejects(()=>service.resume(session.id,'owner-b','tenant-a'),/not found/);
+  await assert.rejects(()=>service.resume(session.id,'owner-a','tenant-b'),/not found/);
+});
+
+test('recorded parts reject invalid shape and declared-size overflow',async()=>{
+  const store=new MemoryStore(),provider={storage:{put(){}},resolve(){},direct:{name:'fake',async create(){return{uploadId:'u',reference:'fake://key'};},async signPart(){return{url:'https://upload.invalid',expiresAt:new Date().toISOString()};},async listParts(){return[];},async complete(){},async abort(){},async verify(input){return{sizeBytes:input.expectedSizeBytes};}}};
+  const service=new ArtifactUploadService(provider,store);const {session}=await service.create({ownerId:'o',name:'x',contentType:'x/test',sizeBytes:1});
+  await assert.rejects(()=>service.recordPart(session.id,'o','default',session.version,{partNumber:0,etag:'e',sizeBytes:1}),/requires/);
+  await assert.rejects(()=>service.recordPart(session.id,'o','default',session.version,{partNumber:1,etag:'e',sizeBytes:2}),/exceed/);
 });

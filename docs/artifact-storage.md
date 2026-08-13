@@ -210,7 +210,8 @@ ownership is checked before provider access. Lost completion/readback becomes
 `uncertain`, never success or a blind retry. Resume and complete again to run
 readback-only reconciliation; RhinoQ does not send multipart complete twice.
 Session expiry defaults to 24 hours; artifact expiry defaults to seven days.
-The helper computes SHA-256 in bounded 4 MiB Blob slices and never buffers the
+The helper computes SHA-256 concurrently with upload in bounded 256 KiB Blob
+slices, yielding between chunks, and never buffers the
 whole file. Supply `checksumSha256` only when the application already has a
 trusted digest and wants to avoid reading the file once before upload.
 

@@ -1,6 +1,6 @@
 /** Incremental SHA-256 for browser Blobs. Reads bounded slices; never buffers the whole file. */
 export async function sha256Blob(blob: Blob, options: { chunkBytes?: number; signal?: AbortSignal; onProgress?: (hashedBytes: number, totalBytes: number) => void } = {}): Promise<string> {
-  const chunkBytes = options.chunkBytes ?? 4 * 1024 * 1024;
+  const chunkBytes = options.chunkBytes ?? 256 * 1024;
   if (!Number.isInteger(chunkBytes) || chunkBytes < 64 * 1024 || chunkBytes > 64 * 1024 * 1024) throw new RangeError('checksum chunkBytes must be 65536..67108864');
   const hash = new Sha256();
   for (let offset = 0; offset < blob.size; offset += chunkBytes) {
@@ -8,6 +8,8 @@ export async function sha256Blob(blob: Blob, options: { chunkBytes?: number; sig
     const bytes = new Uint8Array(await blob.slice(offset, Math.min(blob.size, offset + chunkBytes)).arrayBuffer());
     hash.update(bytes);
     options.onProgress?.(Math.min(blob.size, offset + bytes.byteLength), blob.size);
+    // Give rendering/input a chance between CPU-bound chunks on the main thread.
+    if (offset + bytes.byteLength < blob.size) await new Promise<void>((resolve) => setTimeout(resolve, 0));
   }
   return hash.digestHex();
 }

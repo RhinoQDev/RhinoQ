@@ -15,6 +15,20 @@ For direct/large artifacts also verify the following in a staging bucket:
 The synthetic artifact benchmark is not an S3 capacity result. Measure the
 actual provider, region, file-size distribution and concurrency before sizing.
 
+Artifact evidence commands:
+
+```bash
+npm --prefix sdks/node run lab:artifacts
+npm --prefix sdks/node run test:s3
+npm --prefix sdks/node run test:s3:fault
+```
+
+For FFmpeg, build `sdks/node/Dockerfile.media-worker`, verify readiness with
+`inspectRhinoQMediaRuntime()`, then exercise invalid input, missing codec,
+timeout/cancellation and the deployment's actual disk quota. The checked-in
+image proves required packages and non-root defaults; quota enforcement remains
+an orchestrator/storage responsibility.
+
 This is the deployment go/no-go list. RhinoQ is still a prerelease, so passing
 this checklist means **your deployment has accepted and tested its risks**; it
 does not turn the project into a generally production-ready release.
