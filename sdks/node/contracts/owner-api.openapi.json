@@ -1,6 +1,6 @@
 {
   "openapi": "3.1.0",
-  "info": { "title": "RhinoQ Owner Task API", "version": "0.1.0-beta.12", "description": "Owner- and tenant-scoped Task product surface. Host authentication supplies identity." },
+  "info": { "title": "RhinoQ Owner Task API", "version": "0.1.0-beta.13", "description": "Owner- and tenant-scoped Task product surface. Host authentication supplies identity." },
   "servers": [{ "url": "/tasks" }],
   "paths": {
     "/": { "get": { "operationId": "listTasks", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Offset" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },

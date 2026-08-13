@@ -39,7 +39,7 @@ go run ./cmd/rhinoq workbench --demo
 ```
 
 Prebuilt CLI binaries are attached to the
-[beta.12 prerelease](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.12).
+[beta.13 prerelease](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.13).
 Node.js users run the same Go CLI binary; Workbench does not require a Node.js
 frontend server.
 

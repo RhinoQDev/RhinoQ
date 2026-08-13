@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-beta.13
+
 - Reworked the repository entry point around the terms adopters actually use:
   background jobs, async Tasks, PostgreSQL queue, BullMQ, Task API, realtime
   SSE and job dashboards. Added matching npm discovery metadata without

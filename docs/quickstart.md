@@ -5,7 +5,7 @@ application code. In about five minutes you will start a disposable PostgreSQL
 database and ask RhinoQ to create and read a real durable Task.
 
 RhinoQ is currently a prerelease for evaluation and controlled pilots. The
-commands below pin the verified `0.1.0-beta.12` release.
+commands below pin the verified `0.1.0-beta.13` release.
 
 ## What you need
 
@@ -54,7 +54,7 @@ Continue only after it prints `accepting connections`.
 mkdir rhinoq-first-run
 cd rhinoq-first-run
 npm init -y
-npm install @rhinoq/node@0.1.0-beta.12 pg
+npm install @rhinoq/node@0.1.0-beta.13 pg
 ```
 
 Using an empty directory keeps the tour separate from your application. No
@@ -128,4 +128,4 @@ Do not copy the quickstart database credentials into staging or production.
 | port `55432` is already allocated | Choose another host port and change the port in `RHINOQ_DATABASE_URL` to match. |
 | `RHINOQ_DATABASE_URL is empty` | Set it again in the same terminal. |
 | connection refused | Run the `pg_isready` command from step 1 and check the URL and port. |
-| npm selects another release | Keep the exact `@rhinoq/node@0.1.0-beta.12` version shown above. |
+| npm selects another release | Keep the exact `@rhinoq/node@0.1.0-beta.13` version shown above. |

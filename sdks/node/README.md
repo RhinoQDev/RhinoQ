@@ -1,9 +1,28 @@
 # RhinoQ for Node.js
 
-A runtime-independent Task reliability layer for async work: progress,
-cancellation, per-attempt history, recovery, a user Task Center and an operator
-Workbench. Your execution runtime and business logic stay yours; the Task
-platform does not replace them.
+Open-source background jobs and async Tasks for Node.js and NestJS. Add durable
+Task state, progress, retry history, cancellation, realtime SSE, embeddable
+React components, a user Task Center and an operator Workbench without building
+that application plumbing yourself.
+
+RhinoQ can keep your existing BullMQ workers or run its native PostgreSQL queue
+through the authoritative Go worker. Your execution runtime and business logic
+stay yours; RhinoQ does not invent authentication, tenant identity, provider
+credentials or business retry safety.
+
+## Install and get one working path
+
+```bash
+npm install @rhinoq/node@next pg
+npx rhinoq setup
+npx rhinoq setup --apply
+```
+
+`setup` previews before writing, detects Node.js/NestJS/Go, PostgreSQL and
+BullMQ, recommends a runtime path, generates non-overwriting integration files,
+checks the schema and prints the Task Center and Workbench URLs. Start with the
+[five-minute quickstart](https://github.com/madebyduy/RhinoQ/blob/main/docs/quickstart.md)
+if you want a guided first green run.
 
 The Node SDK exposes one portable adapter contract. BullMQ currently has the
 deepest Node coverage; manual/custom adapters and the SQS proof adapter exercise
@@ -12,11 +31,11 @@ the same core without making BullMQ the product boundary.
 For custom runtimes, the development-preview `createRhinoQ()` API exposes
 Observe, Track and capability-gated Control over portable runtime events:
 
-> This portable surface is available in the verified `v0.1.0-beta.12`
+> This portable surface is available in the verified `v0.1.0-beta.13`
 > prerelease. Install the `next` channel or pin that exact version; the stable
 > `latest` channel may still point to an older release.
 
-Latest verified npm prerelease: `v0.1.0-beta.12`.
+Latest verified npm prerelease: `v0.1.0-beta.13`.
 
 ```ts
 const adapter = createManualRuntimeAdapter('manual', 'reports');
@@ -265,7 +284,7 @@ authentication has populated it. It mounts `/tasks`, `/tasks/*` and
 `/task-center`. RhinoQ refuses owner middleware without an explicit resolver;
 it never trusts an owner header by default.
 
-The Node `init` path creates the isolated Task profile. `beta.12` is the current
+The Node `init` path creates the isolated Task profile. `beta.13` is the current
 release that contains the complete Verified Rule loop; an older tarball answers
 `FAIL verify requires 'add <rule-name>'`. For Verified Rules, start the full Go
 Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32 bytes, then run:
@@ -361,7 +380,7 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. The beta.12 release workflow publishes
+This package is a development preview. The beta.13 release workflow publishes
 the prerelease on `next`; `latest` may remain on an older release. Pin an exact
 version after publication if that matters to you. The preview targets Node.js
 22+.
@@ -388,7 +407,7 @@ Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.12.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.13.tgz pg
 ```
 
 #### Confirm what the application actually installed
@@ -411,7 +430,7 @@ For an application evaluation without a source checkout, install from npm and
 pin the exact version rather than a moving tag:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.12 pg
+npm install @rhinoq/node@0.1.0-beta.13 pg
 ```
 
 A published copy carries the same provenance a locally packed one does. It is
