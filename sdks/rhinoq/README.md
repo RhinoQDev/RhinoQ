@@ -1,5 +1,9 @@
 # RhinoQ
 
+[View `rhinoq` on npm](https://www.npmjs.com/package/rhinoq) ·
+[Canonical `@rhinoq/node` package](https://www.npmjs.com/package/@rhinoq/node) ·
+[GitHub repository](https://github.com/madebyduy/RhinoQ)
+
 Open-source background jobs and async Tasks for Node.js and NestJS. RhinoQ
 adds durable Task state, progress, retry history, cancellation, realtime SSE,
 an embeddable React UI and safe recovery around work executed by PostgreSQL or
@@ -7,7 +11,8 @@ BullMQ.
 
 `rhinoq` is the short, unscoped distribution alias for `@rhinoq/node`. Both
 commands install the same Node.js SDK and CLI. New applications can use either
-name; library authors normally prefer the scoped package.
+name; library authors normally prefer the scoped package. Do not install both:
+the alias already depends on and re-exports the matching canonical release.
 
 Latest verified npm prerelease: `v0.1.0-beta.13`.
 

@@ -1,5 +1,8 @@
 # RhinoQ for Node.js
 
+[View `@rhinoq/node` on npm](https://www.npmjs.com/package/@rhinoq/node) ·
+[GitHub repository](https://github.com/madebyduy/RhinoQ)
+
 Open-source background jobs and async Tasks for Node.js and NestJS. Add durable
 Task state, progress, retry history, cancellation, realtime SSE, embeddable
 React components, a user Task Center and an operator Workbench without building

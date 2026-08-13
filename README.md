@@ -11,6 +11,8 @@ Center and an operator Workbench around your business handler.
 
 [![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
 [![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
+[![npm @rhinoq/node](https://img.shields.io/npm/v/%40rhinoq%2Fnode/next?label=%40rhinoq%2Fnode)](https://www.npmjs.com/package/@rhinoq/node)
+[![npm rhinoq](https://img.shields.io/npm/v/rhinoq/next?label=rhinoq)](https://www.npmjs.com/package/rhinoq)
 ![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white)
 ![Status](https://img.shields.io/badge/status-public_beta-f59e0b)
@@ -53,6 +55,16 @@ lower-level clients, but doing so intentionally keeps more mapping code in the
 application.
 
 ## Quick start: one-command setup
+
+`@rhinoq/node` is the canonical package: it contains the Node.js SDK, CLI,
+framework integrations and exported subpaths such as `/react`, `/nest` and
+`/bullmq`. `rhinoq` is only the short unscoped alias. It depends on and
+re-exports the exact same `@rhinoq/node` release, and forwards its CLI commands;
+it is not a second implementation. Prefer `@rhinoq/node` for application code.
+Use `rhinoq` when you specifically want the shorter install or CLI name.
+
+View them on npm: [@rhinoq/node](https://www.npmjs.com/package/@rhinoq/node) ·
+[rhinoq](https://www.npmjs.com/package/rhinoq).
 
 Run setup without flags first. It detects Node, NestJS, Go, PostgreSQL and
 BullMQ, chooses a recommended execution path, and prints every proposed change:
@@ -360,8 +372,8 @@ finished batch at a stale aggregate such as `49/50`.
 
 | Package | Install from | For |
 |---|---|---|
-| `@rhinoq/node` | npm | the Node SDK. This is the one you want. |
-| `rhinoq` | npm | a distribution alias for the same code, so `npm install rhinoq` works |
+| [`@rhinoq/node`](https://www.npmjs.com/package/@rhinoq/node) | npm | canonical Node SDK and CLI, including `/react`, `/nest`, `/bullmq`, `/sqs`, `/browser` and `/server` exports; recommended for application imports |
+| [`rhinoq`](https://www.npmjs.com/package/rhinoq) | npm | short alias that depends on and re-exports the matching `@rhinoq/node`; useful for `npm install rhinoq` and the same CLI commands |
 | `@rhinoq/nest` | **not published** — `npm install ./sdks/nest` from a checkout | an optional NestJS module |
 | `rhinoq` (Go CLI) | `go build ./cmd/rhinoq` | Rules, Findings, the Gateway, full migrations |
 
@@ -369,6 +381,10 @@ The Node SDK and the Go engine are two planes, not two versions of one thing.
 The Node SDK owns portable runtime adapters, Tasks and the Workbench; the Go
 engine owns Rules, Findings and ProviderOperation. Node talks to those Go-owned
 capabilities through the Gateway when an application needs them.
+
+Do not install both npm packages in one application: that adds no capability.
+Their versions are released together so the alias always targets the matching
+canonical SDK version.
 
 The Node package also exports a development-preview, runtime-neutral adapter
 contract, `RuntimeTaskProjector` and `createRhinoQ()` integration for Observe,
