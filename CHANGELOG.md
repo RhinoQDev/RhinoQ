@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Task-bound browser upload now computes SHA-256 in bounded Blob slices with
+  progress and cancellation. Added a non-root FFmpeg worker base image and
+  runtime readiness inspection for exact encoders and minimum free workspace,
+  plus a cleanup-safe live S3 multipart verification runner.
+
 - Added owner-fenced direct S3 multipart upload with signed browser parts,
   durable resume/reconciliation, adaptive planning, readback verification and
   fail-closed `uncertain` completion. Upload and artifact expiry are separate;

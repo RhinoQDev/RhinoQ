@@ -198,8 +198,8 @@ import { uploadArtifactFile } from '@rhinoq/node/browser';
 
 await uploadArtifactFile(taskClient, file, {
   taskId,
-  checksumSha256, // required for a Task-bound artifact
   concurrency: 4,
+  onChecksumProgress: ({ hashedBytes, totalBytes }) => renderHash(hashedBytes / totalBytes),
   onProgress: ({ uploadedBytes, totalBytes }) => renderProgress(uploadedBytes / totalBytes),
 });
 ```
@@ -209,9 +209,10 @@ resume. RhinoQ lists provider parts and skips those already present. Task
 ownership is checked before provider access. Lost completion/readback becomes
 `uncertain`, never success or a blind retry. Resume and complete again to run
 readback-only reconciliation; RhinoQ does not send multipart complete twice.
-Session expiry defaults to 24 hours; artifact expiry defaults to seven days. The helper deliberately does not
-hash a multi-GB Blob in memory, so callers provide lowercase SHA-256 when
-attaching it to a Task.
+Session expiry defaults to 24 hours; artifact expiry defaults to seven days.
+The helper computes SHA-256 in bounded 4 MiB Blob slices and never buffers the
+whole file. Supply `checksumSha256` only when the application already has a
+trusted digest and wants to avoid reading the file once before upload.
 
 ## Retention cleanup
 
@@ -235,3 +236,18 @@ return context.media.transcode('/work/input.mov', '/work/output.mp4', {
 path. RhinoQ handles cancellation, timeout, bounded stderr, exit/output checks
 and artifact registration. The application still chooses codecs, retention and
 business retry.
+
+Use [`sdks/node/Dockerfile.media-worker`](../sdks/node/Dockerfile.media-worker)
+as a production base. Call `inspectRhinoQMediaRuntime({ requiredEncoders,
+workDirectory, minimumFreeBytes })` from startup/readiness to verify the exact
+binary, codecs and free volume space. Docker/Kubernetes/storage must enforce
+the hard disk quota; an image cannot impose a runtime volume quota itself.
+
+## Live S3 verification
+
+After exporting temporary, least-privilege AWS credentials, run
+`npm --prefix sdks/node run test:s3`. The runner creates an 11 MiB multipart
+object under the configured RhinoQ prefix, uploads signed parts, lists/resumes,
+completes, performs HEAD readback and deletes the object in `finally`. It never
+prints credentials. `AWS_S3_BUCKET`/`AWS_REGION` are accepted aliases for
+`RHINOQ_ARTIFACT_BUCKET`/`RHINOQ_ARTIFACT_REGION`.

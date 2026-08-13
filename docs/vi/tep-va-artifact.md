@@ -103,8 +103,8 @@ trước khi báo hoàn tất.
 ```ts
 await uploadArtifactFile(taskClient, file, {
   taskId,
-  checksumSha256, // bắt buộc khi gắn vào Task
   concurrency: 4,
+  onChecksumProgress: ({ hashedBytes, totalBytes }) => capNhatHash(hashedBytes, totalBytes),
   onProgress: ({ uploadedBytes, totalBytes }) => capNhat(uploadedBytes, totalBytes),
 });
 ```
@@ -113,7 +113,9 @@ Lưu ID phiên và truyền lại bằng `sessionId` để resume. RhinoQ kiểm
 tenant và quyền sở hữu Task. Nếu kết quả complete không chắc chắn, trạng thái là
 `uncertain`, không báo thành công và không retry mù. Gọi resume rồi complete lại
 để chỉ xác minh readback, không gửi multipart complete lần hai. Phiên upload
-mặc định 24 giờ; artifact mặc định 7 ngày.
+mặc định 24 giờ; artifact mặc định 7 ngày. Với Task-bound upload, helper tự tính
+SHA-256 theo từng khối 4 MiB, không nạp cả file vào RAM. Chỉ truyền
+`checksumSha256` nếu ứng dụng đã có checksum đáng tin cậy.
 
 ## Xóa file hết hạn và xử lý video
 
@@ -123,3 +125,8 @@ giữ lại để kiểm tra. Khi worker đã cài FFmpeg, dùng
 `context.media.transcode()` hoặc `context.media.thumbnail()`. RhinoQ lo timeout,
 cancel, kiểm tra output và đăng ký artifact; ứng dụng vẫn chọn codec, retention
 và business retry.
+
+Image mẫu `sdks/node/Dockerfile.media-worker` cài FFmpeg và chạy non-root. Gọi
+`inspectRhinoQMediaRuntime()` trong readiness để kiểm tra binary, codec và dung
+lượng trống của `/work`. Quota cứng phải cấu hình ở Docker/Kubernetes/volume;
+RhinoQ chỉ kiểm tra ngưỡng trống và có thể từ chối readiness.

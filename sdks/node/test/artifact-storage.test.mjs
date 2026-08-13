@@ -52,13 +52,20 @@ test('S3-compatible provider streams large objects with backpressure and a hard 
   await assert.rejects(() => provider.storage.putStream({ ...upload, source: (async function* () { yield new Uint8Array(7); })() }), /exceeds 6 bytes/);
 });
 
-test('high-level AWS adapter explains its optional install when AWS SDK is absent', async () => {
-  await assert.rejects(() => createAwsS3ArtifactProvider({ bucket: 'private' }), /install @aws-sdk\/client-s3 @aws-sdk\/lib-storage @aws-sdk\/s3-request-presigner/);
+test('high-level AWS adapter composes storage and direct multipart support', async () => {
+  const provider = await createAwsS3ArtifactProvider({ bucket: 'private', clientConfig: { region: 'us-east-1', credentials: { accessKeyId: 'test', secretAccessKey: 'test' } } });
+  assert.equal(provider.direct?.name, 's3');
+  assert.equal(typeof provider.storage.putStream, 'function');
 });
 
 test('environment S3 setup validates its short golden-path configuration first', async () => {
   await assert.rejects(() => createAwsS3ArtifactProviderFromEnv({}), /RHINOQ_ARTIFACT_BUCKET/);
   await assert.rejects(() => createAwsS3ArtifactProviderFromEnv({ RHINOQ_ARTIFACT_BUCKET: 'files', RHINOQ_ARTIFACT_MAX_BYTES: 'many' }), /positive integer/);
+});
+
+test('environment S3 setup accepts standard AWS bucket and region aliases', async () => {
+  const provider = await createAwsS3ArtifactProviderFromEnv({ AWS_S3_BUCKET: 'private-bucket', AWS_REGION: 'us-east-1', AWS_ACCESS_KEY_ID: 'test', AWS_SECRET_ACCESS_KEY: 'test' });
+  assert.equal(provider.direct?.name, 's3');
 });
 
 test('S3 provider performs readback before returning stored metadata',async()=>{let verified=0;const provider=createS3CompatibleArtifactProvider({bucket:'private',async putObject(){},async verifyObject(input){verified++;assert.equal(input.expectedSizeBytes,3);return{sizeBytes:3,contentType:input.contentType};},signGetObject:()=> 'https://storage.invalid/file'});await provider.storage.put(upload);assert.equal(verified,1);assert.ok(planMultipartUpload(10*1024**3).estimatedParts<9500);});

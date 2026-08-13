@@ -5,7 +5,8 @@ For direct/large artifacts also verify the following in a staging bucket:
 - owner/tenant isolation and Task ownership rejection before URL signing;
 - multipart interruption followed by resume without re-uploading known parts;
 - completion readback mismatch/lost response remains `uncertain`;
-- real SHA-256 is supplied for every Task-bound browser upload;
+- incremental SHA-256 completes for every Task-bound browser upload (or a
+  trusted precomputed digest is supplied);
 - upload-session expiry and artifact retention match business policy;
 - retention is previewed, bounded, scheduled and alerts on `failed` cleanup;
 - FFmpeg version/codecs, worker disk quota, cancellation and timeout are tested

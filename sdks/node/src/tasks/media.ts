@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { stat, statfs } from 'node:fs/promises';
 import type { RhinoQTaskOutputHelpers } from './declaration.js';
 import type { TaskArtifact } from '../gateway/types.js';
 
@@ -9,6 +9,20 @@ export interface RhinoQMediaContext {
 }
 export interface RhinoQTranscodeOptions { videoCodec?: 'libx264' | 'libx265' | 'copy'; audioCodec?: 'aac' | 'copy'; preset?: 'fast' | 'balanced' | 'quality'; timeoutMs?: number }
 export interface RhinoQThumbnailOptions { atSeconds?: number; width?: number; timeoutMs?: number }
+export interface RhinoQMediaRuntimeReport { ffmpegPath: string; version: string; requiredEncoders: string[]; missingEncoders: string[]; workDirectory: string; freeBytes: number; minimumFreeBytes: number; ready: boolean }
+
+/** Startup/readiness check for the exact FFmpeg binary, codecs and worker volume. */
+export async function inspectRhinoQMediaRuntime(options: { ffmpegPath?: string; requiredEncoders?: string[]; workDirectory?: string; minimumFreeBytes?: number } = {}): Promise<RhinoQMediaRuntimeReport> {
+  const ffmpegPath = options.ffmpegPath ?? process.env.RHINOQ_FFMPEG_PATH ?? 'ffmpeg';
+  const requiredEncoders = options.requiredEncoders ?? ['libx264', 'aac'];
+  const workDirectory = options.workDirectory ?? process.env.RHINOQ_MEDIA_WORK_DIR ?? '/work';
+  const minimumFreeBytes = options.minimumFreeBytes ?? 10 * 1024 * 1024 * 1024;
+  if (!Number.isSafeInteger(minimumFreeBytes) || minimumFreeBytes < 1) throw new RangeError('media minimumFreeBytes must be a positive safe integer');
+  const [versionOutput, encoderOutput, filesystem] = await Promise.all([capture(ffmpegPath, ['-version']), capture(ffmpegPath, ['-hide_banner', '-encoders']), statfs(workDirectory)]);
+  const missingEncoders = requiredEncoders.filter((codec) => !new RegExp(`\\b${escapeRegExp(codec)}\\b`).test(encoderOutput));
+  const freeBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
+  return { ffmpegPath, version: versionOutput.split(/\r?\n/, 1)[0] ?? '', requiredEncoders, missingEncoders, workDirectory, freeBytes, minimumFreeBytes, ready: missingEncoders.length === 0 && freeBytes >= minimumFreeBytes };
+}
 
 export function createRhinoQMediaContext(output: RhinoQTaskOutputHelpers, signal?: AbortSignal, ffmpegPath = process.env.RHINOQ_FFMPEG_PATH || 'ffmpeg'): RhinoQMediaContext {
   return Object.freeze({
@@ -48,3 +62,5 @@ async function run(command:string,args:string[],signal?:AbortSignal,timeoutMs=30
 }
 async function verifyOutput(path:string):Promise<void>{const info=await stat(path);if(!info.isFile()||info.size<1)throw new Error('media processor produced no non-empty output');}
 function required(value:string,label:string):string{const result=value?.trim();if(!result)throw new TypeError(`${label} is required`);return result;}
+async function capture(command:string,args:string[]):Promise<string>{return new Promise((resolve,reject)=>{const child=spawn(command,args,{stdio:['ignore','pipe','pipe'],windowsHide:true});let output='',error='';child.stdout.on('data',chunk=>{output=(output+String(chunk)).slice(-1024*1024);});child.stderr.on('data',chunk=>{error=(error+String(chunk)).slice(-8192);});child.on('error',reject);child.on('exit',code=>code===0?resolve(output):reject(new Error(`ffmpeg inspection failed (${code}): ${error.trim()}`)));});}
+function escapeRegExp(value:string):string{return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}

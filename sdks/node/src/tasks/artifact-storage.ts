@@ -122,7 +122,7 @@ export async function createAwsS3ArtifactProvider(options: AwsS3ArtifactOptions)
 }
 
 export async function createAwsS3ArtifactProviderFromEnv(env: NodeJS.ProcessEnv = process.env): Promise<RhinoQArtifactProvider> {
-  const bucket = required(env.RHINOQ_ARTIFACT_BUCKET, 'RHINOQ_ARTIFACT_BUCKET');
+  const bucket = required(env.RHINOQ_ARTIFACT_BUCKET ?? env.AWS_S3_BUCKET, 'RHINOQ_ARTIFACT_BUCKET or AWS_S3_BUCKET');
   const maxBytes = env.RHINOQ_ARTIFACT_MAX_BYTES === undefined ? 10 * 1024 * 1024 * 1024 : positiveInteger(env.RHINOQ_ARTIFACT_MAX_BYTES, 'RHINOQ_ARTIFACT_MAX_BYTES');
   const allowedContentTypes = env.RHINOQ_ARTIFACT_CONTENT_TYPES?.split(',').map((value) => value.trim()).filter(Boolean);
   return createAwsS3ArtifactProvider({
@@ -131,7 +131,7 @@ export async function createAwsS3ArtifactProviderFromEnv(env: NodeJS.ProcessEnv 
     maxBytes,
     ...(allowedContentTypes?.length ? { allowedContentTypes } : {}),
     clientConfig: {
-      ...(env.RHINOQ_ARTIFACT_REGION ? { region: env.RHINOQ_ARTIFACT_REGION } : {}),
+      ...((env.RHINOQ_ARTIFACT_REGION ?? env.AWS_REGION) ? { region: env.RHINOQ_ARTIFACT_REGION ?? env.AWS_REGION } : {}),
       ...(env.RHINOQ_ARTIFACT_ENDPOINT ? { endpoint: env.RHINOQ_ARTIFACT_ENDPOINT } : {}),
       ...(env.RHINOQ_ARTIFACT_FORCE_PATH_STYLE ? { forcePathStyle: env.RHINOQ_ARTIFACT_FORCE_PATH_STYLE === 'true' } : {}),
     },

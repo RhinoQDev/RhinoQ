@@ -100,6 +100,7 @@
     "benchmark": "npm run build && node bench/task-benchmark.mjs",
     "benchmark:postgres": "npm run build && node bench/postgres-benchmark.mjs",
     "benchmark:artifacts": "npm run build && node bench/artifact-benchmark.mjs",
+    "test:s3": "npm run build && node bench/s3-e2e.mjs",
     "prepack": "npm run build",
     "pack": "node scripts/pack.mjs",
     "pack:check": "npm pack --dry-run",
@@ -109,6 +110,9 @@
     "release:check": "node scripts/verify-release.mjs"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1109.0",
+    "@aws-sdk/lib-storage": "^3.1109.0",
+    "@aws-sdk/s3-request-presigner": "^3.1109.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.15.0",
     "pg": "^8.22.0",
@@ -122,9 +126,17 @@
     "pg": ">=8.11.0"
   },
   "peerDependenciesMeta": {
-    "@aws-sdk/client-s3": { "optional": true },
-    "@aws-sdk/lib-storage": { "optional": true },
-    "@aws-sdk/s3-request-presigner": { "optional": true },
-    "archiver": { "optional": true }
+    "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "@aws-sdk/lib-storage": {
+      "optional": true
+    },
+    "@aws-sdk/s3-request-presigner": {
+      "optional": true
+    },
+    "archiver": {
+      "optional": true
+    }
   }
 }
