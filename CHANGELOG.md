@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added `context.io.download()` for HTTPS-host-allowlisted, bounded, timed,
+  checksummed streaming downloads; opt-in per-execution workspaces with capacity
+  checks and guaranteed cleanup; and `context.media.probe()` via bounded
+  FFprobe JSON. Added an explicit ecosystem coverage matrix.
+
 - Added a reproducible Artifact Production Lab covering incremental checksum
   parity/responsiveness, bounded 1,000-session planning load, owner/tenant and
   part-shape security failures, and live S3 process-restart reconciliation with

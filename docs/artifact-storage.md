@@ -238,6 +238,30 @@ path. RhinoQ handles cancellation, timeout, bounded stderr, exit/output checks
 and artifact registration. The application still chooses codecs, retention and
 business retry.
 
+For remote inputs, opt into an isolated workspace and use the allowlisted
+streaming downloader. Partial files are removed on failure and the workspace is
+removed in `finally`:
+
+```ts
+task({
+  name: 'video.process',
+  workspace: { minimumFreeBytes: 20 * 1024 ** 3 },
+  run: async ({ url }, context) => {
+    const input = context.workspace!.path('input.mp4');
+    await context.workspace!.assertCapacity(5 * 1024 ** 3);
+    await context.io.download(url, input, {
+      allowedHosts: ['media.example.com'], maxBytes: 5 * 1024 ** 3,
+    });
+    const metadata = await context.media.probe(input);
+    return context.media.transcode(input, context.workspace!.path('output.mp4'));
+  },
+});
+```
+
+Every redirect is checked against the HTTPS host allowlist; credentials in URLs
+are refused. Applications should use hosts they control, because an allowlist
+alone is not a substitute for network egress policy against DNS rebinding.
+
 Use [`sdks/node/Dockerfile.media-worker`](../sdks/node/Dockerfile.media-worker)
 as a production base. Call `inspectRhinoQMediaRuntime({ requiredEncoders,
 workDirectory, minimumFreeBytes })` from startup/readiness to verify the exact

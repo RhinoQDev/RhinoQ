@@ -49,6 +49,10 @@ not the only reason to install RhinoQ.
 
 ## Why RhinoQ
 
+See the [async ecosystem coverage matrix](./docs/async-capability-coverage.md)
+for an explicit mapping of processing concerns RhinoQ handles, integrates, or
+intentionally leaves to a specialist/runtime provider.
+
 | Instead of building… | RhinoQ supplies… |
 |---|---|
 | queue infrastructure | native PostgreSQL job queue, or BullMQ/runtime adapters |

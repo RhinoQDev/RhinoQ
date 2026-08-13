@@ -26,6 +26,8 @@ export * from './tasks/presets.js';
 export * from './tasks/artifact-storage.js';
 export * from './tasks/artifact-upload.js';
 export * from './tasks/media.js';
+export * from './tasks/task-io.js';
+export * from './tasks/workspace.js';
 export * from './tasks/direct-upload-client.js';
 export * from './runtime/testkit.js';
 export * from './runtime/adoption.js';

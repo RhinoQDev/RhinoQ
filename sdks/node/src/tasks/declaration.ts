@@ -5,6 +5,8 @@ import { stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { createRhinoQMediaContext, type RhinoQMediaContext } from './media.js';
+import { createRhinoQTaskIO, type RhinoQTaskIO } from './task-io.js';
+import { createTaskWorkspace, type RhinoQTaskWorkspace } from './workspace.js';
 import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions, type WaitpointLifecycleClient, type WaitpointOutcome } from './waitpoint.js';
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
 
@@ -21,6 +23,9 @@ export interface RhinoQTaskRunContext {
   };
   output: RhinoQTaskOutputHelpers;
   media: RhinoQMediaContext;
+  io: RhinoQTaskIO;
+  /** Present when the Task declaration opts into an isolated auto-cleaned workspace. */
+  workspace?: RhinoQTaskWorkspace;
   waitForInput<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId'>): Promise<WaitpointOutcome<T>>;
   waitForApproval(options: Omit<WaitForInputOptions<boolean>, 'taskId' | 'kind' | 'parse'>): Promise<WaitpointOutcome<boolean>>;
   waitForWebhook<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId' | 'kind'>): Promise<WaitpointOutcome<T>>;
@@ -99,6 +104,8 @@ export interface RhinoQTaskOptions<Input, Output> {
   batch?: { maxItems?: number };
   /** Applied only by an adapter that explicitly advertises the policy. */
   execution?: { delayMs?: number; priority?: number };
+  /** Creates one isolated directory per execution and removes it in finally. */
+  workspace?: { parent?: string; minimumFreeBytes?: number };
   run(input: Input, context: RhinoQTaskRunContext): Promise<Output> | Output;
   result?(output: Output): { ref: string; mediaType?: string; size?: number } | undefined;
 }
@@ -248,7 +255,7 @@ export function defineRhinoQTask<Input, Output>(
       return async (job) => {
         const envelope = taskEnvelope<Input>(job?.data, name, version);
         const waitpoints = waitpointHelper(services, envelope.taskId);
-        const operation = () => Promise.resolve(options.run(envelope.payload, {
+        const operation = async () => { const workspace=options.workspace?await createTaskWorkspace({parent:options.workspace.parent,minimumFreeBytes:options.workspace.minimumFreeBytes,prefix:`rhinoq-${safeWorkspaceSegment(envelope.taskId)}-`}):undefined;try{return await Promise.resolve(options.run(envelope.payload, {
           taskId: envelope.taskId,
           executionId: envelope.executionId,
           signal: job.signal,
@@ -266,8 +273,10 @@ export function defineRhinoQTask<Input, Output>(
           media: createRhinoQMediaContext(outputHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
             await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
           }), job.signal),
+          io: createRhinoQTaskIO(job.signal),
+          ...(workspace?{workspace}:{}),
           ...waitpoints,
-        }));
+        }));}finally{await workspace?.cleanup();}};
         return services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation();
       };
     },
@@ -435,3 +444,4 @@ function validateExecution(execution: { delayMs?: number; priority?: number }): 
     throw new RangeError('Task execution priority must be an integer');
   }
 }
+function safeWorkspaceSegment(value:string):string{return value.replace(/[^a-zA-Z0-9_-]/g,'_').slice(0,64)||'task';}

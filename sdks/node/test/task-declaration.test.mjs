@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { defineRhinoQTask } from '../dist/index.js';
@@ -181,3 +181,5 @@ test('Task declaration dispatches a bounded fan-out with stable item identity', 
   assert.equal(calls.at(-1).command.delayMs, 60_000);
   assert.equal(calls.at(-1).command.priority, 9);
 });
+
+test('opt-in Task workspace is isolated and cleaned even when the handler fails',async()=>{let root;const task=defineRhinoQTask({async dispatch(){return{};}},{name:'workspace.task',adapter:'manual',runtime:'manual',scope:'workspace',workspace:{minimumFreeBytes:1},run:async(_input,context)=>{root=context.workspace.root;await writeFile(context.workspace.path('partial.bin'),'partial');assert.throws(()=>context.workspace.path('../escape'),/escapes/);throw new Error('handler failed');}});await assert.rejects(()=>task.workerHandler()({data:{taskName:'workspace.task',definitionVersion:1,taskId:'task/workspace',executionId:'e1',payload:{}}}),/handler failed/);await assert.rejects(()=>access(root));});
