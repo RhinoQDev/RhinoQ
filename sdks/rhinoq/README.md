@@ -14,7 +14,7 @@ commands install the same Node.js SDK and CLI. New applications can use either
 name; library authors normally prefer the scoped package. Do not install both:
 the alias already depends on and re-exports the matching canonical release.
 
-Latest verified npm prerelease: `v0.1.0-beta.13`.
+Latest verified npm prerelease: `v0.1.0-beta.14`.
 
 ## Start in an existing application
 

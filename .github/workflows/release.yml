@@ -104,6 +104,20 @@ jobs:
     name: Verify packages from npm registry
     runs-on: ubuntu-latest
     needs: node-publish-alias
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rhinoq
+          POSTGRES_PASSWORD: rhinoq
+          POSTGRES_DB: rhinoq_release
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rhinoq -d rhinoq_release"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
     steps:
       - uses: actions/setup-node@v4
         with:
@@ -143,10 +157,16 @@ jobs:
           test "$(node -p "require('./node_modules/@rhinoq/node/dist/build-info.json').version")" = "$version"
           test "$(node -p "require('@rhinoq/node/openapi.json').info.version")" = "$version"
           test "$(node -p "require('@rhinoq/node/openapi.json').openapi")" = "3.1.0"
-          VERSION="$version" node --input-type=module -e "import { readFile } from 'node:fs/promises'; const readme = await readFile('./node_modules/@rhinoq/node/README.md', 'utf8'); const tick = String.fromCharCode(96); const marker = 'Latest verified npm prerelease: ' + tick + 'v' + process.env.VERSION + tick + '.'; if (!readme.includes(marker)) throw new Error('installed package README is missing '+marker)"
+          VERSION="$version" node --input-type=module -e "import { readFile } from 'node:fs/promises'; const readme = await readFile('./node_modules/@rhinoq/node/README.md', 'utf8'); const tick = String.fromCharCode(96); const marker = 'Latest verified npm prerelease: ' + tick + 'v' + process.env.VERSION + tick + '.'; if (!readme.includes(marker)) throw new Error('installed package README is missing '+marker); if (!readme.includes('https://www.npmjs.com/package/@rhinoq/node')) throw new Error('installed package README is missing its npm link')"
+          VERSION="$version" node --input-type=module -e "import { readFile } from 'node:fs/promises'; const readme = await readFile('./node_modules/rhinoq/README.md', 'utf8'); const tick = String.fromCharCode(96); const marker = 'Latest verified npm prerelease: ' + tick + 'v' + process.env.VERSION + tick + '.'; if (!readme.includes(marker)) throw new Error('installed alias README is missing '+marker); if (!readme.includes('canonical release')) throw new Error('installed alias README does not explain the canonical package')"
           ./node_modules/.bin/rhinoq --help | grep -F 'createRhinoQApp'
           ./node_modules/.bin/rhinoq --help | grep -F 'lab run completed-but-missing-output --recover --confirm-disposable'
           ./node_modules/.bin/rhinoq-task-check --help >/dev/null
+          RHINOQ_DATABASE_URL='postgres://rhinoq:rhinoq@127.0.0.1:5432/rhinoq_release?sslmode=disable' \
+            ./node_modules/.bin/rhinoq eval | tee eval.txt
+          grep -F 'PASS' eval.txt
+          grep -F 'Task Center:' eval.txt
+          grep -F 'Workbench:' eval.txt
           npm audit signatures
 
   node-release-asset:

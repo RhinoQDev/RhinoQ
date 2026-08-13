@@ -6,15 +6,21 @@ tag/release:
 - `@rhinoq/node` — authoritative Node SDK and CLIs;
 - `rhinoq` — unscoped compatibility alias.
 
-`0.1.0-beta.13` is the latest verified public prerelease. `0.1.0-beta.10` was
+`0.1.0-beta.14` is the latest verified public prerelease. `0.1.0-beta.10` was
 partially published before a fan-out progress race was fixed, so it is
 superseded and is not a verified public release. A candidate is complete
 only when the tag workflow has published both packages, registry smoke has
 passed, the GitHub prerelease contains the Node/Go artifacts, and
 provenance/signature verification has passed.
 
-Prereleases publish to `next`; stable versions publish to `latest`. A dist-tag
-is an installation pointer, not a stability claim.
+During the public beta, prereleases publish to `next` through trusted
+publishing. After the full release workflow is green, a maintainer also moves
+`latest` to the same verified beta so an unqualified install cannot select an
+older, known-superseded beta. npm trusted publishing currently authenticates
+`publish`, not `dist-tag`, so that second pointer change requires the
+maintainer's interactive npm authentication. Once RhinoQ has a stable release,
+`latest` will stay on stable versions and `next` will identify prereleases. A
+dist-tag is an installation pointer, not a stability claim.
 
 ## One-time npm owner setup
 
@@ -41,11 +47,11 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    npm test
    npm run pack:check
    cd ../..
-   node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.13
+   node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.14
    ```
 
 3. Commit the candidate, then create and push the matching annotated tag:
-   `v0.1.0-beta.13`.
+   `v0.1.0-beta.14`.
 4. The Release workflow fails closed in this order:
 
    ```text
@@ -59,22 +65,28 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
 5. Verify the resulting state independently:
 
    ```bash
-   npm view @rhinoq/node@0.1.0-beta.13 version dist.integrity dist.attestations
-   npm view rhinoq@0.1.0-beta.13 version dist.integrity dist.attestations
+   npm view @rhinoq/node@0.1.0-beta.14 version dist.integrity dist.attestations
+   npm view rhinoq@0.1.0-beta.14 version dist.integrity dist.attestations
    npm dist-tag ls @rhinoq/node
    npm dist-tag ls rhinoq
-   gh release view v0.1.0-beta.13
+   gh release view v0.1.0-beta.14
    ```
 
-   For a prerelease, each package must map `next` to the exact candidate;
-   `latest` must not be moved by this workflow.
+   For a public beta, each package must map `next` to the exact candidate. Only
+   after every release job is green, move the default install pointer using an
+   interactive maintainer session:
+
+   ```bash
+   npm dist-tag add @rhinoq/node@0.1.0-beta.14 latest
+   npm dist-tag add rhinoq@0.1.0-beta.14 latest
+   ```
 
 6. Verify the keyless checksum bundle:
 
    ```bash
    cosign verify-blob checksums.txt \
      --bundle checksums.txt.sigstore.json \
-     --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.13" \
+     --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.14" \
      --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
    ```
 

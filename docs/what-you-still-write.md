@@ -50,9 +50,14 @@ records what happened; it does not decide how many times.
 Whether one that has not moved in three days should be failed, re-dispatched, or
 left for a person is a business decision and RhinoQ will not guess it.
 
-**Tenancy at the HTTP edge.** The tenant boundary is enforced in PostgreSQL
-(`docs/tenancy.md`). The HTTP surface is not yet wired to it. `ownerFromRequest`
-is your application's auth, and it is the only thing scoping the read API today.
+**Authentication and tenant authorization at the HTTP edge.** RhinoQ carries
+the tenant and owner selected by `tenantFromRequest` and `ownerFromRequest`
+through every owner-scoped Task SQL predicate, and can require an explicit
+deny-by-default `authorize` hook. Your application must still derive those
+identities from its authenticated session and decide tenant membership; RhinoQ
+does not authenticate end users or invent organization/RBAC policy. The full Go
+Gateway remains a separate operator boundary and is not a public tenant-wide
+RBAC surface. See `docs/tenancy.md`.
 
 ## Things that used to be on this list
 

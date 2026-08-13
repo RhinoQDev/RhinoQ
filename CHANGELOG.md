@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+## 0.1.0-beta.14
+
 - Fixed the installed-package registry smoke to resolve the exported OpenAPI
   contract through the package export map instead of a nonexistent root file.
+- Corrected release-status and tenancy documentation, documented the temporary
+  prerelease dist-tag policy, and synchronized repository discovery metadata.
+- Extended registry smoke to run the published CLI against PostgreSQL and
+  verify the installed package READMEs, Task Center and Workbench entry points.
 
 ## 0.1.0-beta.13
 
