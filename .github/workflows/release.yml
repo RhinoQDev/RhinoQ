@@ -141,8 +141,8 @@ jobs:
           EXPECTED="$expected" node -e "const m=require('@rhinoq/node'); for(const name of JSON.parse(process.env.EXPECTED)) if(m[name]===undefined) throw new Error('missing CJS export '+name)"
           test "$(./node_modules/.bin/rhinoq --version)" = "$version"
           test "$(node -p "require('./node_modules/@rhinoq/node/dist/build-info.json').version")" = "$version"
-          test "$(node -p "require('./node_modules/@rhinoq/node/openapi.json').info.version")" = "$version"
-          test "$(node -p "require('./node_modules/@rhinoq/node/openapi.json').openapi")" = "3.1.0"
+          test "$(node -p "require('@rhinoq/node/openapi.json').info.version")" = "$version"
+          test "$(node -p "require('@rhinoq/node/openapi.json').openapi")" = "3.1.0"
           VERSION="$version" node --input-type=module -e "import { readFile } from 'node:fs/promises'; const readme = await readFile('./node_modules/@rhinoq/node/README.md', 'utf8'); const tick = String.fromCharCode(96); const marker = 'Latest verified npm prerelease: ' + tick + 'v' + process.env.VERSION + tick + '.'; if (!readme.includes(marker)) throw new Error('installed package README is missing '+marker)"
           ./node_modules/.bin/rhinoq --help | grep -F 'createRhinoQApp'
           ./node_modules/.bin/rhinoq --help | grep -F 'lab run completed-but-missing-output --recover --confirm-disposable'

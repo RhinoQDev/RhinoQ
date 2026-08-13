@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed the installed-package registry smoke to resolve the exported OpenAPI
+  contract through the package export map instead of a nonexistent root file.
+
 ## 0.1.0-beta.13
 
 - Added direct npm package badges and links to the repository and packaged
