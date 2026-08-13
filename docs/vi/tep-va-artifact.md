@@ -130,3 +130,26 @@ Image mẫu `sdks/node/Dockerfile.media-worker` cài FFmpeg và chạy non-root.
 `inspectRhinoQMediaRuntime()` trong readiness để kiểm tra binary, codec và dung
 lượng trống của `/work`. Quota cứng phải cấu hình ở Docker/Kubernetes/volume;
 RhinoQ chỉ kiểm tra ngưỡng trống và có thể từ chối readiness.
+
+## Tải nguồn an toàn, workspace tự dọn và FFprobe
+
+```ts
+task({
+  name: 'video.process',
+  workspace: { minimumFreeBytes: 20 * 1024 ** 3 },
+  run: async ({ url }, context) => {
+    const input = context.workspace!.path('input.mp4');
+    await context.io.download(url, input, {
+      allowedHosts: ['media.example.com'], maxBytes: 5 * 1024 ** 3,
+    });
+    await context.media.probe(input);
+    return context.media.transcode(input, context.workspace!.path('output.mp4'));
+  },
+});
+```
+
+RhinoQ chỉ cho HTTPS và host đã allowlist, kiểm tra redirect, giới hạn byte,
+timeout, cancel, tính SHA-256 và xóa file dở. Workspace riêng cho từng execution,
+chặn `../`, kiểm tra dung lượng và luôn cleanup trong `finally`. `probe()` trả
+codec, stream, kích thước, duration và format. Ứng dụng vẫn phải chọn host tin
+cậy và áp dụng network egress policy để chống DNS rebinding.

@@ -69,7 +69,7 @@ owners, provider readback and unsupported cancellation without Task mutation.
 
 Frontend and framework integrations can load the packaged OpenAPI 3.1 owner
 contract from `@rhinoq/node/openapi.json`. The build fails if its version,
-complete 25-operation inventory or capability fields drift from the package
+complete operation inventory or capability fields drift from the package
 implementation. Contract inputs are included in build provenance hashing.
 
 `createRhinoQ()` remains the lower-level runtime primitive;
@@ -96,6 +96,29 @@ download and Task Center. `output.video()`, `archive()`, `files()` and `zip()`
 cover common outputs; explicit S3-compatible and Cloudinary providers remain
 available from `@rhinoq/node/artifacts`. Credentials remain server-side. Read
 the complete [artifact guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/artifact-storage.md).
+
+Large remote inputs use the same Task context without hand-written stream,
+temporary-file and FFprobe glue:
+
+```ts
+const processVideo = app.task({
+  name: 'video.process',
+  workspace: { minimumFreeBytes: 20 * 1024 ** 3 },
+  run: async ({ url }, context) => {
+    const input = context.workspace!.path('input.mp4');
+    await context.io.download(url, input, {
+      allowedHosts: ['media.example.com'], maxBytes: 5 * 1024 ** 3,
+    });
+    await context.media.probe(input);
+    return context.media.transcode(input, context.workspace!.path('output.mp4'));
+  },
+});
+```
+
+The downloader is HTTPS-only, redirect-allowlisted, bounded, timed,
+checksummed and cancellation-aware. The workspace checks capacity and is
+removed in `finally`; `probe()` uses bounded FFprobe JSON. Network egress policy
+and business retry remain application-owned.
 
 An adapter that implements `inspect` can reconcile one already-known reference
 without scanning its runtime:

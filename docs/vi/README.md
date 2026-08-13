@@ -9,6 +9,7 @@ Nếu mới dùng RhinoQ, hãy đọc theo thứ tự này:
 3. [File, video lớn, nhiều file và ZIP](./tep-va-artifact.md)
 4. [API, SSE và giao diện](./api-va-giao-dien.md)
 5. [Checklist trước khi chạy production](./production-checklist.md)
+6. [Ma trận bao phủ hệ sinh thái async (English)](../async-capability-coverage.md)
 
 ## RhinoQ giải quyết việc gì?
 
