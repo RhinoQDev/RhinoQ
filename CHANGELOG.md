@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0-beta.15
+
+- Corrected the published-package evaluation assertions to match the CLI's
+  stable checklist output after beta.14 proved the PostgreSQL evaluation path
+  passed but the release gate searched for URL labels that command does not
+  print.
+
 ## 0.1.0-beta.14
 
 - Fixed the installed-package registry smoke to resolve the exported OpenAPI

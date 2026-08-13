@@ -165,8 +165,8 @@ jobs:
           RHINOQ_DATABASE_URL='postgres://rhinoq:rhinoq@127.0.0.1:5432/rhinoq_release?sslmode=disable' \
             ./node_modules/.bin/rhinoq eval | tee eval.txt
           grep -F 'PASS' eval.txt
-          grep -F 'Task Center:' eval.txt
-          grep -F 'Workbench:' eval.txt
+          grep -F 'PASS         Task Center' eval.txt
+          grep -F 'PASS         Workbench' eval.txt
           npm audit signatures
 
   node-release-asset:
