@@ -138,3 +138,11 @@ Không chạy đua DAG, durable workflow replay, generic AI token streaming hay
 hosted dashboard với Temporal, Restate, Inngest và Trigger.dev. Đó là lợi thế
 cốt lõi của họ. RhinoQ phải thắng ở chi phí overlay thấp, Task contract cho
 người dùng và bằng chứng outcome sau khi runtime báo hoàn thành.
+# Lưu ý trạng thái
+
+Tài liệu này là snapshot kế hoạch ngày 10/08/2026. Các dòng cũ ghi artifact,
+multiple artifacts hoặc batch ZIP là "chưa có" đã được thay thế bởi contract
+hiện tại: `context.artifact.file/stream/filePath`, `context.output.files/zip`,
+metadata/checksum/lineage, owner API và Task Center. Xem trạng thái authoritative
+tại [bản đồ capability](./async-task-capabilities.md) và hướng dẫn mới tại
+[file/artifact](./artifact-storage.md) hoặc [bản tiếng Việt](./vi/tep-va-artifact.md).

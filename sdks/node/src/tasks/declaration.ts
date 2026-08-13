@@ -29,7 +29,7 @@ export interface RhinoQTaskOutputHelpers {
   video(path: string, options?: { name?: string; contentType?: string; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
   pdf(path: string, options?: { name?: string; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
   archive(path: string, options?: { name?: string; contentType?: string; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
-  files(paths: string[], options?: { maxItems?: number }): Promise<import('../gateway/types.js').TaskArtifact[]>;
+  files(paths: string[], options?: { maxItems?: number; concurrency?: number }): Promise<import('../gateway/types.js').TaskArtifact[]>;
   zip(paths: string[], options?: { name?: string; maxItems?: number; lineage?: string[] }): Promise<import('../gateway/types.js').TaskArtifact>;
 }
 
@@ -353,9 +353,9 @@ function outputHelper(services: RhinoQTaskServices, taskId: string, executionId:
   type ZipOptions = { name?: string; maxItems?: number; lineage?: string[] };
   const artifact = artifactHelper(services, taskId, executionId, signal, progress);
   const file = (path: string, options: FileOptions = {}) => artifact.filePath(path, { ...options, reportProgress: true });
-  const paths = (values: string[], maximum = 100) => {
+  const paths = (values: string[], maximum = 100, hardMaximum = 1_000) => {
     if (!Array.isArray(values) || values.length === 0) throw new RangeError('output files requires at least one path');
-    if (!Number.isInteger(maximum) || maximum < 1 || maximum > 1_000) throw new RangeError('output maxItems must be 1..1000');
+    if (!Number.isInteger(maximum) || maximum < 1 || maximum > hardMaximum) throw new RangeError(`output maxItems must be 1..${hardMaximum}`);
     if (values.length > maximum) throw new RangeError(`output contains ${values.length} files; maxItems is ${maximum}`);
     const names = values.map((value) => basename(required(value, 'output file path')));
     if (new Set(names).size !== names.length) throw new TypeError('output file basenames must be unique');
@@ -366,9 +366,19 @@ function outputHelper(services: RhinoQTaskServices, taskId: string, executionId:
     video: (path: string, options: FileOptions = {}) => file(path, { ...options, contentType: options.contentType ?? videoTypeFor(options.name ?? path) }),
     pdf: (path: string, options: Omit<FileOptions, 'contentType'> = {}) => file(path, { ...options, contentType: 'application/pdf' }),
     archive: (path: string, options: FileOptions = {}) => file(path, { ...options, contentType: options.contentType ?? archiveTypeFor(options.name ?? path) }),
-    files: (values: string[], options: { maxItems?: number } = {}) => Promise.all(paths(values, options.maxItems).map((path) => file(path))),
+    async files(values: string[], options: { maxItems?: number; concurrency?: number } = {}) {
+      const selected = paths(values, options.maxItems, 100);
+      const concurrency = options.concurrency ?? 4;
+      if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) throw new RangeError('output files concurrency must be 1..16');
+      const results = new Array<import('../gateway/types.js').TaskArtifact>(selected.length);
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, async () => {
+        while (next < selected.length) { const index = next++; results[index] = await file(selected[index]!); }
+      }));
+      return results;
+    },
     async zip(values: string[], options: ZipOptions = {}) {
-      const selected = paths(values, options.maxItems);
+      const selected = paths(values, options.maxItems, 1_000);
       const module = await optionalTaskImport('archiver');
       const createArchive = (module.default ?? module) as (format: string, options: Record<string, unknown>) => { pipe(target: NodeJS.WritableStream): unknown; file(path: string, options: { name: string }): unknown; finalize(): Promise<void>; abort(): unknown; on(event: string, listener: (error: Error) => void): unknown };
       if (typeof createArchive !== 'function') throw new TypeError('archiver default export is unavailable');

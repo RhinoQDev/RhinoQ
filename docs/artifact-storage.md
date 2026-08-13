@@ -87,7 +87,9 @@ return context.output.archive('/work/export.zip');
 Multiple output files can remain separately downloadable:
 
 ```ts
-return context.output.files(['/work/front.jpg', '/work/back.jpg']);
+return context.output.files(['/work/front.jpg', '/work/back.jpg'], {
+  concurrency: 4,
+});
 ```
 
 Or install the optional `archiver` package and stream one ZIP directly to the
@@ -97,10 +99,12 @@ configured provider—without holding the ZIP or its input files in memory:
 return context.output.zip(paths, { name: 'all-results.zip', maxItems: 500 });
 ```
 
-`files()` and `zip()` default to 100 inputs, reject duplicate basenames and
-allow an explicit bound up to 1,000. ZIP creation forwards cancellation and
-inherits the provider's upload size/MIME policy. RhinoQ deliberately does not
-accept an unbounded directory glob.
+Both helpers reject duplicate basenames and do not accept an unbounded directory
+glob. `files()` defaults to at most 100 outputs—the same bound used by the
+owner API and Task Center—and limits concurrent uploads to 4 (configurable
+from 1 to 16). `zip()` defaults to 100 inputs and allows an explicit bound up
+to 1,000 because it registers only one final artifact. ZIP creation forwards
+cancellation and inherits the provider's upload size/MIME policy.
 
 For browser uploads, use the cloud provider's direct multipart/resumable upload
 flow: the authenticated application creates a short-lived upload session, the

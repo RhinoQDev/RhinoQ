@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added a Vietnamese beginner documentation path covering first run, one Task
+  declaration, large files/ZIP, API/SSE/UI and production checks. Rebuilt the
+  documentation index and linked both languages from the root README.
+- Aligned multiple-file output with the mounted product surface: separate
+  artifacts now share the owner API/Task Center bound of 100 and use bounded
+  upload concurrency, while a ZIP may stream up to 1,000 inputs into one
+  artifact. This removes an earlier contract/UI mismatch found in integration
+  review.
 - Added `artifactProvider` composition and the optional
   `@rhinoq/node/artifacts` entry point. S3-compatible and Cloudinary providers
   now connect private upload and short-lived owner download from one server
@@ -20,6 +28,9 @@
   `context.output.video/pdf/archive/files/zip` helpers. Multiple files are
   bounded and may remain separate or be streamed into one ZIP through the
   optional `archiver` package without buffering the complete archive.
+  Separate-file upload is capped to the owner API's 100-artifact view and uses
+  bounded configurable concurrency; ZIP may accept up to 1,000 inputs because
+  it produces one registered artifact.
 - Added migration 032 and durable five-field cron schedules with IANA
   timezones. Scheduler completion persists the domain-calculated next UTC run;
   spring-forward gaps are skipped and repeated fall-back wall minutes run once.

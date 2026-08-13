@@ -1,5 +1,7 @@
 # RhinoQ
 
+Documentation: **English** · [Tiếng Việt](./docs/vi/README.md)
+
 ## Open-source background jobs and async Tasks for Node.js, NestJS and Go
 
 RhinoQ is an open-source async Task and background-job platform for Node.js,
@@ -224,6 +226,22 @@ For the shortest path, set `artifacts: 's3'` and the documented
 `zip(paths)`. File name, common MIME types, byte progress and streaming are
 automatic; explicit provider and low-level stream APIs remain available when
 an application needs custom policy.
+
+```ts
+const app = await createRhinoQApp({
+  pool, adapters, ownerFromNodeRequest,
+  artifacts: 's3',
+});
+
+return context.output.video('/work/output.mp4');
+return context.output.files(paths, { concurrency: 4 });
+return context.output.zip(paths, { name: 'all-results.zip', maxItems: 500 });
+```
+
+`files()` registers up to 100 separately downloadable artifacts with bounded
+concurrency, matching the owner API and Task Center view. `zip()` can stream up
+to 1,000 bounded inputs into one artifact through the optional `archiver`
+package. Neither path puts file bytes in PostgreSQL, BullMQ or Redis.
 
 Interactive Tasks use the same handler context; RhinoQ binds the current Task,
 persists the checkpoint and exposes the already-mounted owner route and UI:

@@ -81,22 +81,20 @@ application-owned upload, metadata and download routes:
 ```ts
 const app = await createRhinoQApp({
   pool, adapters, ownerFromNodeRequest,
-  artifactProvider: createS3CompatibleArtifactProvider({
-    bucket, putObject, signGetObject,
-  }),
+  artifacts: 's3',
 });
 
 const exportTask = app.task({
   name: 'report.export',
-  run: async (input, context) => context.artifact.file(await makePDF(input), {
-    name: 'report.pdf', contentType: 'application/pdf',
-  }),
+  run: async (input, context) => context.output.pdf(await makePDFOnDisk(input)),
 });
 ```
 
-Import providers from `@rhinoq/node/artifacts`. S3-compatible storage covers
-AWS S3, R2, MinIO and Spaces through application-owned client callbacks;
-Cloudinary has an equivalent provider. Credentials remain server-side. Read
+Set `RHINOQ_ARTIFACT_BUCKET`, region and policy variables. RhinoQ wires
+streaming/multipart upload, checksum, progress, metadata, owner API, signed
+download and Task Center. `output.video()`, `archive()`, `files()` and `zip()`
+cover common outputs; explicit S3-compatible and Cloudinary providers remain
+available from `@rhinoq/node/artifacts`. Credentials remain server-side. Read
 the complete [artifact guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/artifact-storage.md).
 
 An adapter that implements `inspect` can reconcile one already-known reference

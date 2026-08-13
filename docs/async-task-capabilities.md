@@ -13,7 +13,7 @@ field or process-local timer is not counted as a production capability.
 | Delay and priority | capability-advertising adapter | explicit execution policy |
 | Progress | runtime event projection | handler context and SSE/polling UI |
 | Cancellation | capability-advertising adapter | mounted API/UI |
-| Result/artifact access | Task profile + private S3-compatible/Cloudinary provider | `context.artifact.file()` + mounted API/file UI |
+| Result/artifact access | Task profile + private S3-compatible/Cloudinary provider | buffered/stream/filePath + output presets + mounted API/file UI |
 | Human/input/webhook waits | durable PostgreSQL waitpoints | existing waitpoint helpers/UI |
 | External-effect safety | effect/provider evidence | `task.external()` requires policy |
 | Worker registration | selected runtime | generated map or fail-closed router |
