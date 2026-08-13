@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { createRhinoQMediaContext, type RhinoQMediaContext } from './media.js';
 import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions, type WaitpointLifecycleClient, type WaitpointOutcome } from './waitpoint.js';
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
 
@@ -19,6 +20,7 @@ export interface RhinoQTaskRunContext {
     filePath(path: string, options?: Omit<RhinoQArtifactStreamOptions, 'sizeBytes' | 'name' | 'contentType'> & { sizeBytes?: number; name?: string; contentType?: string }): Promise<import('../gateway/types.js').TaskArtifact>;
   };
   output: RhinoQTaskOutputHelpers;
+  media: RhinoQMediaContext;
   waitForInput<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId'>): Promise<WaitpointOutcome<T>>;
   waitForApproval(options: Omit<WaitForInputOptions<boolean>, 'taskId' | 'kind' | 'parse'>): Promise<WaitpointOutcome<boolean>>;
   waitForWebhook<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId' | 'kind'>): Promise<WaitpointOutcome<T>>;
@@ -261,6 +263,9 @@ export function defineRhinoQTask<Input, Output>(
           output: outputHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
             await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
           }),
+          media: createRhinoQMediaContext(outputHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
+            await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
+          }), job.signal),
           ...waitpoints,
         }));
         return services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation();

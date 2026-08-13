@@ -99,6 +99,7 @@
     "test": "npm run build && node --test test/*.test.mjs test/*.test.cjs",
     "benchmark": "npm run build && node bench/task-benchmark.mjs",
     "benchmark:postgres": "npm run build && node bench/postgres-benchmark.mjs",
+    "benchmark:artifacts": "npm run build && node bench/artifact-benchmark.mjs",
     "prepack": "npm run build",
     "pack": "node scripts/pack.mjs",
     "pack:check": "npm pack --dry-run",

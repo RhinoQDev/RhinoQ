@@ -1,5 +1,11 @@
 # Reproducible benchmarks
 
+Run `npm --prefix sdks/node run benchmark:artifacts` for the synthetic
+large-artifact benchmark. It reports bytes, adaptive multipart plan, elapsed
+time, throughput and RSS. The sink is in-memory, so it measures only
+stream/hash/planning overhead; it excludes provider/network latency and is not
+production throughput evidence.
+
 RhinoQ keeps benchmarks separate from correctness tests. Results vary with the
 CPU, Node/Go version, operating system, PostgreSQL configuration and background
 load, so one local run is evidence about that environment—not a production

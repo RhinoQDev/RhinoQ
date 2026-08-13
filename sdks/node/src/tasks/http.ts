@@ -13,6 +13,8 @@ import type {
 import type { PostgresTaskClient } from '../postgres/task-client.js';
 import { parseTaskEventStream, taskEventResponse, taskListEventResponse, type TaskSSEOptions, type TaskStreamEvent } from './sse.js';
 import { failedTaskItems, taskGroupManifest } from './group.js';
+import type { ArtifactUploadService, CreateArtifactUploadRequest } from './artifact-upload.js';
+import type { ArtifactUploadPart, ArtifactUploadSession } from './artifact-upload.js';
 
 
 export interface TaskRequestHandlerOptions {
@@ -68,6 +70,8 @@ export interface TaskRequestHandlerOptions {
   riskPolicy?: TaskRiskPolicy;
   /** Set false to disable SSE. Snapshots remain authoritative. */
   stream?: TaskSSEOptions | false;
+  /** Optional durable direct-to-storage multipart owner surface. */
+  uploads?: ArtifactUploadService;
 }
 
 export interface TaskRiskPolicy {
@@ -75,7 +79,7 @@ export interface TaskRiskPolicy {
   stuckAfterMs: number;
 }
 
-export type TaskAuthorizationAction = 'task:read' | 'task:write' | 'task:cancel' | 'task:retry' | 'waitpoint:write' | 'artifact:read';
+export type TaskAuthorizationAction = 'task:read' | 'task:write' | 'task:cancel' | 'task:retry' | 'waitpoint:write' | 'artifact:read' | 'artifact:write';
 export interface TaskAuthorizationInput {
   request: Request;
   ownerId: string;
@@ -96,6 +100,7 @@ export interface TaskSurfaceCapabilities {
   tenant: boolean;
   verifications: true;
   artifacts: boolean;
+  artifactUploads?: boolean;
   authorization: boolean;
 }
 
@@ -173,6 +178,7 @@ export function createTaskRequestHandler(
           tenant: typeof options.tenantFromRequest === 'function',
           verifications: true,
           artifacts: typeof options.resolveArtifact === 'function',
+          ...(options.uploads ? { artifactUploads: true } : {}),
           authorization: typeof options.authorize === 'function',
         };
         return json(capabilities);
@@ -208,6 +214,24 @@ export function createTaskRequestHandler(
           return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'waitpoint limit must be 1..100' }, 400);
         }
         return json({ waitpoints: await options.tasks.listWaitingTaskWaitpointsForOwner(ownerId, limit, tenantId) });
+      }
+      if (relative[0] === '_uploads') {
+        if (!options.uploads) return json({ code: 'RHINOQ_ARTIFACT_UPLOAD_NOT_CONFIGURED' }, 501);
+        if (request.method === 'POST' && relative.length === 1) {
+          const body = await request.json() as Omit<CreateArtifactUploadRequest, 'ownerId' | 'tenantId'>;
+          return json(await options.uploads.create({ ...body, ownerId, tenantId }), 201);
+        }
+        const uploadId = relative[1];
+        if (!uploadId) return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
+        if (request.method === 'GET' && relative.length === 2) return json(await options.uploads.resume(uploadId,ownerId,tenantId));
+        if (request.method === 'POST' && relative.length === 4 && relative[2] === 'parts' && /^\d+$/.test(relative[3]!)) {
+          return json(await options.uploads.signPart(uploadId, ownerId, tenantId, Number(relative[3])));
+        }
+        const body = await request.json().catch(() => ({})) as any;
+        if (request.method === 'POST' && relative.length === 3 && relative[2] === 'parts') return json(await options.uploads.recordPart(uploadId, ownerId, tenantId, Number(body.expectedVersion), body.part));
+        if (request.method === 'POST' && relative.length === 3 && relative[2] === 'complete') return json(await options.uploads.complete(uploadId, ownerId, tenantId, Number(body.expectedVersion)));
+        if (request.method === 'POST' && relative.length === 3 && relative[2] === 'abort') return json(await options.uploads.abort(uploadId, ownerId, tenantId, Number(body.expectedVersion)));
+        return json({ code: 'RHINOQ_NOT_FOUND' }, 404);
       }
       const taskId = relative[0];
       if (!taskId) {
@@ -538,6 +562,13 @@ export class ApplicationTaskClient {
     return this.send('POST', `/${path(taskId)}/artifacts/${path(artifactId)}/refresh`, request);
   }
 
+  createArtifactUpload(request: Omit<CreateArtifactUploadRequest, 'ownerId' | 'tenantId'>): Promise<{ session: ArtifactUploadSession; plan: import('./artifact-storage.js').MultipartPlan }> { return this.send('POST','/_uploads',request); }
+  resumeArtifactUpload(id:string):Promise<ArtifactUploadSession>{return this.send('GET',`/_uploads/${path(id)}`);}
+  signArtifactUploadPart(id:string,partNumber:number):Promise<{url:string;expiresAt:string}>{return this.send('POST',`/_uploads/${path(id)}/parts/${partNumber}`);}
+  recordArtifactUploadPart(id:string,expectedVersion:number,part:ArtifactUploadPart):Promise<ArtifactUploadSession>{return this.send('POST',`/_uploads/${path(id)}/parts`,{expectedVersion,part});}
+  completeArtifactUpload(id:string,expectedVersion:number):Promise<{session:ArtifactUploadSession;artifact?:import('../gateway/types.js').TaskArtifact}>{return this.send('POST',`/_uploads/${path(id)}/complete`,{expectedVersion});}
+  abortArtifactUpload(id:string,expectedVersion:number):Promise<ArtifactUploadSession>{return this.send('POST',`/_uploads/${path(id)}/abort`,{expectedVersion});}
+
   listAtRiskTasks(limit = 50): Promise<{
     policy: TaskRiskPolicy;
     tasks: Array<TaskSummary & { risk: 'at_risk' | 'stuck'; idleForMs: number }>;
@@ -699,6 +730,7 @@ function normalizeRiskPolicy(policy?: TaskRiskPolicy): TaskRiskPolicy | undefine
 }
 
 function taskAuthorizationAction(method: string, relative: string[]): TaskAuthorizationAction {
+  if (relative[0] === '_uploads') return 'artifact:write';
   if (method === 'GET') {
     return relative[1] === 'artifacts' || relative[3] === 'download' ? 'artifact:read' : 'task:read';
   }

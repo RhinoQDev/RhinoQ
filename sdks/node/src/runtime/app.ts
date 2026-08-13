@@ -12,6 +12,8 @@ import { createNodeWorkbenchMiddleware, type WorkbenchHandlerOptions } from '../
 import type { RuntimeAdapter } from './contracts.js';
 import { defineRhinoQTask, type RhinoQArtifactStorage, type RhinoQDeclaredTask, type RhinoQTaskOptions, type RhinoQTraceHooks } from '../tasks/declaration.js';
 import { createAwsS3ArtifactProviderFromEnv, type RhinoQArtifactProvider } from '../tasks/artifact-storage.js';
+import { ArtifactRetentionService, ArtifactUploadService, PostgresArtifactRetentionStore, PostgresArtifactUploadSessionStore } from '../tasks/artifact-upload.js';
+import type { TaskMetrics } from '../observe/metrics.js';
 import {
   createRhinoQ,
   type CreateRhinoQOptions,
@@ -37,6 +39,7 @@ export interface CreateRhinoQAppOptions {
   /** Zero-boilerplate provider selection using RHINOQ_ARTIFACT_* environment variables. */
   artifacts?: 's3';
   trace?: RhinoQTraceHooks;
+  metrics?: TaskMetrics;
 }
 
 export interface RhinoQAppHTTPOptions {
@@ -77,6 +80,8 @@ export class RhinoQPortableApp {
     private readonly artifactStorage?: RhinoQArtifactStorage,
     private readonly artifactProvider?: RhinoQArtifactProvider,
     private readonly trace?: RhinoQTraceHooks,
+    readonly artifacts?: ArtifactUploadService,
+    readonly artifactRetention?: ArtifactRetentionService,
   ) {}
 
   task<Input, Output>(options: RhinoQTaskOptions<Input, Output>): RhinoQDeclaredTask<Input, Output> {
@@ -111,6 +116,7 @@ export class RhinoQPortableApp {
       ...(options.resolveResult ? { resolveResult: options.resolveResult } : {}),
       ...(options.resolveArtifact ? { resolveArtifact: options.resolveArtifact }
         : this.artifactProvider ? { resolveArtifact: this.artifactProvider.resolve } : {}),
+      ...(this.artifacts ? { uploads: this.artifacts } : {}),
       ...(options.authorize ? { authorize: options.authorize } : {}),
       ...(options.requireTenantAuthorization !== undefined
         ? { requireTenantAuthorization: options.requireTenantAuthorization }
@@ -232,5 +238,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
     ...(options.adoptionReplicaId ? { adoptionReplicaId: options.adoptionReplicaId } : {}),
   });
   await runtime.start();
-  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace);
+  const uploads = artifactProvider?.direct ? new ArtifactUploadService(artifactProvider, new PostgresArtifactUploadSessionStore(options.pool), (taskId, request) => tasks.registerTaskArtifact(taskId, request), options.metrics, async (taskId, ownerId, tenantId) => { await tasks.getTaskForOwner(taskId, ownerId, tenantId); }) : undefined;
+  const retention = artifactProvider?.direct?.delete ? new ArtifactRetentionService(artifactProvider, new PostgresArtifactRetentionStore(options.pool), undefined, options.metrics) : undefined;
+  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, uploads, retention);
 }

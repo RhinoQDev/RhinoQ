@@ -7,3 +7,4 @@ export * from './tasks/ui.js';
 export * from './tasks/watch.js';
 export * from './tasks/http.js';
 export * from './tasks/sse.js';
+export * from './tasks/direct-upload-client.js';

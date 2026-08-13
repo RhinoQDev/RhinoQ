@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAwsS3ArtifactProvider, createAwsS3ArtifactProviderFromEnv, createCloudinaryArtifactProvider, createS3CompatibleArtifactProvider } from '../dist/artifacts-entry.js';
+import { createAwsS3ArtifactProvider, createAwsS3ArtifactProviderFromEnv, createCloudinaryArtifactProvider, createS3CompatibleArtifactProvider, planMultipartUpload } from '../dist/artifacts-entry.js';
 
 const artifact = (reference) => ({ id: 'a1', taskId: 't1', name: 'report.pdf', contentType: 'application/pdf', reference });
 const upload = { id: 'a1', taskId: 't1', executionId: 'e1', name: 'report.pdf', contentType: 'application/pdf', data: new Uint8Array([1, 2, 3]), checksumSha256: 'a'.repeat(64) };
@@ -60,3 +60,5 @@ test('environment S3 setup validates its short golden-path configuration first',
   await assert.rejects(() => createAwsS3ArtifactProviderFromEnv({}), /RHINOQ_ARTIFACT_BUCKET/);
   await assert.rejects(() => createAwsS3ArtifactProviderFromEnv({ RHINOQ_ARTIFACT_BUCKET: 'files', RHINOQ_ARTIFACT_MAX_BYTES: 'many' }), /positive integer/);
 });
+
+test('S3 provider performs readback before returning stored metadata',async()=>{let verified=0;const provider=createS3CompatibleArtifactProvider({bucket:'private',async putObject(){},async verifyObject(input){verified++;assert.equal(input.expectedSizeBytes,3);return{sizeBytes:3,contentType:input.contentType};},signGetObject:()=> 'https://storage.invalid/file'});await provider.storage.put(upload);assert.equal(verified,1);assert.ok(planMultipartUpload(10*1024**3).estimatedParts<9500);});

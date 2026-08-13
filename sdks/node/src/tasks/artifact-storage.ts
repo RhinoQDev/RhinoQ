@@ -7,6 +7,17 @@ export interface RhinoQArtifactAccess { url: string; expiresAt?: string }
 export interface RhinoQArtifactProvider {
   storage: RhinoQArtifactStorage;
   resolve(artifact: TaskArtifactRecord, request: Request, ownerId: string, tenantId: string): Promise<RhinoQArtifactAccess>;
+  direct?: RhinoQArtifactDirectUpload;
+}
+export interface RhinoQArtifactDirectUpload {
+  name: string;
+  create(input: { sessionId: string; artifactId: string; name: string; contentType: string; sizeBytes: number; partSize: number; ownerId: string; tenantId: string }): Promise<{ uploadId: string; reference: string }>;
+  signPart(input: { uploadId: string; reference: string; partNumber: number }): Promise<{ url: string; expiresAt: string }>;
+  listParts(input: { uploadId: string; reference: string }): Promise<Array<{ partNumber: number; etag: string; sizeBytes: number }>>;
+  complete(input: { uploadId: string; reference: string; parts: Array<{ partNumber: number; etag: string }> }): Promise<void>;
+  abort(input: { uploadId: string; reference: string }): Promise<void>;
+  verify(input: { reference: string; expectedSizeBytes: number; contentType: string }): Promise<{ sizeBytes: number; contentType?: string }>;
+  delete?(input: { reference: string }): Promise<void>;
 }
 export interface ArtifactPolicy { maxBytes?: number; allowedContentTypes?: string[]; expiresInMs?: number }
 
@@ -16,6 +27,7 @@ export interface S3CompatibleArtifactOptions extends ArtifactPolicy {
   putObject(input: { bucket: string; key: string; body: Uint8Array; contentType: string; checksumSha256: string; metadata: Record<string, string> }): Promise<void>;
   /** Use the provider's managed multipart uploader here (for example @aws-sdk/lib-storage Upload). */
   uploadStream?(input: { bucket: string; key: string; body: AsyncIterable<Uint8Array>; contentType: string; sizeBytes?: number; metadata: Record<string, string>; signal?: AbortSignal }): Promise<void>;
+  verifyObject?(input: { bucket: string; key: string; expectedSizeBytes?: number; contentType: string }): Promise<{ sizeBytes: number; contentType?: string }>;
   signGetObject(input: { bucket: string; key: string; expiresInSeconds: number; fileName: string; contentType: string }): Promise<string> | string;
   signedUrlExpiresInSeconds?: number;
 }
@@ -28,6 +40,19 @@ export interface AwsS3ArtifactOptions extends ArtifactPolicy {
   clientConfig?: Record<string, unknown>;
   signedUrlExpiresInSeconds?: number;
   multipart?: { partSize?: number; queueSize?: number };
+  /** Defaults to true. A HEAD mismatch fails before artifact metadata is registered. */
+  readback?: boolean;
+}
+
+export interface MultipartPlan { partSize: number; queueSize: number; estimatedParts: number; memoryBudgetBytes: number }
+export function planMultipartUpload(sizeBytes: number | undefined, memoryBudgetBytes = 64 * 1024 * 1024): MultipartPlan {
+  if (sizeBytes !== undefined && (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0)) throw new RangeError('multipart sizeBytes must be a non-negative safe integer');
+  if (!Number.isSafeInteger(memoryBudgetBytes) || memoryBudgetBytes < 10 * 1024 * 1024) throw new RangeError('multipart memory budget must be at least 10 MiB');
+  const minimum = 5 * 1024 * 1024;
+  const required = sizeBytes ? Math.ceil(sizeBytes / 9_500) : 16 * 1024 * 1024;
+  const partSize = Math.max(minimum, Math.ceil(required / minimum) * minimum);
+  const queueSize = Math.max(1, Math.min(8, Math.floor(memoryBudgetBytes / partSize)));
+  return { partSize, queueSize, estimatedParts: sizeBytes ? Math.ceil(sizeBytes / partSize) : 0, memoryBudgetBytes };
 }
 
 /**
@@ -41,26 +66,59 @@ export async function createAwsS3ArtifactProvider(options: AwsS3ArtifactOptions)
   const S3Client = callable(clientS3.S3Client, 'S3Client');
   const PutObjectCommand = callable(clientS3.PutObjectCommand, 'PutObjectCommand');
   const GetObjectCommand = callable(clientS3.GetObjectCommand, 'GetObjectCommand');
+  const HeadObjectCommand = callable(clientS3.HeadObjectCommand, 'HeadObjectCommand');
+  const CreateMultipartUploadCommand = callable(clientS3.CreateMultipartUploadCommand, 'CreateMultipartUploadCommand');
+  const UploadPartCommand = callable(clientS3.UploadPartCommand, 'UploadPartCommand');
+  const CompleteMultipartUploadCommand = callable(clientS3.CompleteMultipartUploadCommand, 'CompleteMultipartUploadCommand');
+  const ListPartsCommand = callable(clientS3.ListPartsCommand, 'ListPartsCommand');
+  const AbortMultipartUploadCommand = callable(clientS3.AbortMultipartUploadCommand, 'AbortMultipartUploadCommand');
+  const DeleteObjectCommand = callable(clientS3.DeleteObjectCommand, 'DeleteObjectCommand');
   const Upload = callable(storage.Upload, 'Upload');
   const getSignedUrl = functionExport(presigner.getSignedUrl, 'getSignedUrl');
   const client = options.client ?? new S3Client(options.clientConfig ?? {});
-  const partSize = options.multipart?.partSize ?? 16 * 1024 * 1024;
-  const queueSize = options.multipart?.queueSize ?? 4;
-  if (!Number.isSafeInteger(partSize) || partSize < 5 * 1024 * 1024) throw new RangeError('S3 multipart partSize must be at least 5 MiB');
-  if (!Number.isInteger(queueSize) || queueSize < 1 || queueSize > 32) throw new RangeError('S3 multipart queueSize must be 1..32');
-  return createS3CompatibleArtifactProvider({
+  const configuredPartSize = options.multipart?.partSize;
+  const configuredQueueSize = options.multipart?.queueSize;
+  if (configuredPartSize !== undefined && (!Number.isSafeInteger(configuredPartSize) || configuredPartSize < 5 * 1024 * 1024)) throw new RangeError('S3 multipart partSize must be at least 5 MiB');
+  if (configuredQueueSize !== undefined && (!Number.isInteger(configuredQueueSize) || configuredQueueSize < 1 || configuredQueueSize > 32)) throw new RangeError('S3 multipart queueSize must be 1..32');
+  const provider = createS3CompatibleArtifactProvider({
     ...options,
     async putObject({ bucket, key, body, contentType, checksumSha256, metadata }) {
       await (client as { send(command: unknown): Promise<unknown> }).send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType, ChecksumSHA256: Buffer.from(checksumSha256, 'hex').toString('base64'), Metadata: metadata }));
     },
-    async uploadStream({ bucket, key, body, contentType, metadata, signal }) {
-      const upload = new Upload({ client, params: { Bucket: bucket, Key: key, Body: Readable.from(body), ContentType: contentType, Metadata: metadata }, partSize, queueSize, leavePartsOnError: false });
+    async uploadStream({ bucket, key, body, contentType, metadata, signal, sizeBytes }) {
+      const plan = planMultipartUpload(sizeBytes);
+      const upload = new Upload({ client, params: { Bucket: bucket, Key: key, Body: Readable.from(body), ContentType: contentType, Metadata: metadata }, partSize: configuredPartSize ?? plan.partSize, queueSize: configuredQueueSize ?? plan.queueSize, leavePartsOnError: false });
       const abort = () => upload.abort();
       signal?.addEventListener('abort', abort, { once: true });
       try { await upload.done(); } finally { signal?.removeEventListener('abort', abort); }
     },
+    ...(options.readback === false ? {} : { async verifyObject({ bucket, key, expectedSizeBytes, contentType }) {
+      const head = await (client as { send(command: unknown): Promise<{ ContentLength?: number; ContentType?: string }> }).send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      if (!Number.isSafeInteger(head.ContentLength) || head.ContentLength! < 0) throw new TypeError('S3 HEAD response has no valid ContentLength');
+      if (expectedSizeBytes !== undefined && head.ContentLength !== expectedSizeBytes) throw new Error(`S3 readback size mismatch: expected ${expectedSizeBytes}, got ${head.ContentLength}`);
+      if (head.ContentType && head.ContentType !== contentType) throw new Error(`S3 readback content type mismatch: expected ${contentType}, got ${head.ContentType}`);
+      return { sizeBytes: head.ContentLength!, ...(head.ContentType ? { contentType: head.ContentType } : {}) };
+    } }),
     signGetObject: ({ bucket, key, expiresInSeconds, fileName, contentType }) => getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentType: contentType, ResponseContentDisposition: `attachment; filename="${fileName.replace(/["\\]/g, '_')}"` }), { expiresIn: expiresInSeconds }) as Promise<string>,
   });
+  const bucket = required(options.bucket, 'S3 bucket'), prefix = cleanPrefix(options.prefix ?? 'rhinoq/');
+  const parse = (reference: string) => { const value = parseS3Reference(reference); if (value.bucket !== bucket || !value.key.startsWith(prefix)) throw new TypeError('direct upload reference is outside configured S3 namespace'); return value; };
+  provider.direct = {
+    name: 's3',
+    async create(input) {
+      const key = `${prefix}${safeSegment(input.tenantId)}/${safeSegment(input.ownerId)}/${safeSegment(input.artifactId)}/${encodeURIComponent(input.name)}`;
+      const result = await (client as { send(command: unknown): Promise<{ UploadId?: string }> }).send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: input.contentType, Metadata: { 'rhinoq-session-id': input.sessionId, 'rhinoq-artifact-id': input.artifactId } }));
+      if (!result.UploadId) throw new Error('S3 did not return multipart UploadId');
+      return { uploadId: result.UploadId, reference: `s3://${bucket}/${key}` };
+    },
+    async signPart(input) { const { key } = parse(input.reference); const seconds = 900; const url = await getSignedUrl(client, new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: input.uploadId, PartNumber: input.partNumber }), { expiresIn: seconds }); requireHTTPS(url); return { url, expiresAt: new Date(Date.now()+seconds*1000).toISOString() }; },
+    async listParts(input) { const { key }=parse(input.reference);const parts=[];let marker: number|undefined;do{const page=await (client as {send(command:unknown):Promise<{Parts?:Array<{PartNumber?:number;ETag?:string;Size?:number}>;IsTruncated?:boolean;NextPartNumberMarker?:number}>}).send(new ListPartsCommand({Bucket:bucket,Key:key,UploadId:input.uploadId,...(marker?{PartNumberMarker:marker}:{})}));for(const part of page.Parts??[]){if(Number.isInteger(part.PartNumber)&&part.ETag&&Number.isSafeInteger(part.Size))parts.push({partNumber:part.PartNumber!,etag:part.ETag,sizeBytes:part.Size!});}marker=page.IsTruncated?page.NextPartNumberMarker:undefined;}while(marker);return parts; },
+    async complete(input) { const { key } = parse(input.reference); await (client as { send(command: unknown): Promise<unknown> }).send(new CompleteMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: input.uploadId, MultipartUpload: { Parts: input.parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) } })); },
+    async abort(input) { const { key } = parse(input.reference); await (client as { send(command: unknown): Promise<unknown> }).send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: input.uploadId })); },
+    async verify(input) { const { key } = parse(input.reference); const head = await (client as { send(command: unknown): Promise<{ ContentLength?: number; ContentType?: string }> }).send(new HeadObjectCommand({ Bucket: bucket, Key: key })); if (!Number.isSafeInteger(head.ContentLength)) throw new TypeError('S3 HEAD has no ContentLength'); if(head.ContentLength!==input.expectedSizeBytes)throw new Error('S3 direct upload size mismatch'); if(head.ContentType&&head.ContentType!==input.contentType)throw new Error('S3 direct upload content type mismatch'); return { sizeBytes:head.ContentLength!,...(head.ContentType?{contentType:head.ContentType}:{}) }; },
+    async delete(input) { const { key } = parse(input.reference); await (client as { send(command: unknown): Promise<unknown> }).send(new DeleteObjectCommand({ Bucket: bucket, Key: key })); },
+  };
+  return provider;
 }
 
 export async function createAwsS3ArtifactProviderFromEnv(env: NodeJS.ProcessEnv = process.env): Promise<RhinoQArtifactProvider> {
@@ -93,12 +151,14 @@ export function createS3CompatibleArtifactProvider(options: S3CompatibleArtifact
         validateUpload(input.data, input.contentType, policy);
         const key = `${prefix}${safeSegment(input.taskId)}/${safeSegment(input.id)}/${encodeURIComponent(input.name)}`;
         await options.putObject({ bucket, key, body: input.data, contentType: input.contentType, checksumSha256: input.checksumSha256, metadata: { 'rhinoq-task-id': input.taskId, 'rhinoq-execution-id': input.executionId, 'rhinoq-sha256': input.checksumSha256 } });
+        await verifyS3(options, bucket, key, input.data.byteLength, input.contentType);
         return { reference: `s3://${bucket}/${key}`, expiresAt: expiresAt(policy.expiresInMs) };
       },
       ...(options.uploadStream ? { async putStream(input: RhinoQArtifactStreamInput) {
         validateStream(input, policy);
         const key = `${prefix}${safeSegment(input.taskId)}/${safeSegment(input.id)}/${encodeURIComponent(input.name)}`;
         await options.uploadStream!({ bucket, key, body: limitStream(input.source, policy.maxBytes, input.signal), contentType: input.contentType, ...(input.sizeBytes === undefined ? {} : { sizeBytes: input.sizeBytes }), metadata: { 'rhinoq-task-id': input.taskId, 'rhinoq-execution-id': input.executionId }, ...(input.signal ? { signal: input.signal } : {}) });
+        await verifyS3(options, bucket, key, input.sizeBytes, input.contentType);
         return { reference: `s3://${bucket}/${key}`, expiresAt: expiresAt(policy.expiresInMs) };
       } } : {}),
     },
@@ -203,3 +263,8 @@ function functionExport(value: unknown, label: string): (...args: any[]) => any 
   return value as (...args: any[]) => any;
 }
 function positiveInteger(value: string, label: string): number { const parsed = Number(value); if (!Number.isSafeInteger(parsed) || parsed < 1) throw new RangeError(`${label} must be a positive integer`); return parsed; }
+async function verifyS3(options: S3CompatibleArtifactOptions, bucket: string, key: string, expectedSizeBytes: number | undefined, contentType: string): Promise<void> {
+  if (!options.verifyObject) return;
+  const result = await options.verifyObject({ bucket, key, ...(expectedSizeBytes === undefined ? {} : { expectedSizeBytes }), contentType });
+  if (!Number.isSafeInteger(result.sizeBytes) || result.sizeBytes < 0) throw new TypeError('artifact readback returned an invalid size');
+}

@@ -186,3 +186,52 @@ browser.
 The Task Center displays name, MIME type, human-readable size, expiry and a
 checksum-copy action. Clicking Download asks the server for a new signed URL,
 so no cloud credential or signing secret is placed in frontend code.
+
+## Direct resumable browser upload
+
+The AWS S3 provider supports durable multipart upload. Bytes travel directly
+from browser to S3; the owner API only creates, signs and reconciles the
+session.
+
+```ts
+import { uploadArtifactFile } from '@rhinoq/node/browser';
+
+await uploadArtifactFile(taskClient, file, {
+  taskId,
+  checksumSha256, // required for a Task-bound artifact
+  concurrency: 4,
+  onProgress: ({ uploadedBytes, totalBytes }) => renderProgress(uploadedBytes / totalBytes),
+});
+```
+
+Persist the session ID while uploading and pass it back as `sessionId` to
+resume. RhinoQ lists provider parts and skips those already present. Task
+ownership is checked before provider access. Lost completion/readback becomes
+`uncertain`, never success or a blind retry. Resume and complete again to run
+readback-only reconciliation; RhinoQ does not send multipart complete twice.
+Session expiry defaults to 24 hours; artifact expiry defaults to seven days. The helper deliberately does not
+hash a multi-GB Blob in memory, so callers provide lowercase SHA-256 when
+attaching it to a Task.
+
+## Retention cleanup
+
+When provider deletion is available, call
+`app.artifactRetention.preview(25)` before the explicit
+`app.artifactRetention.sweep({ delete: true, limit: 25 })`. Rows are leased
+with `SKIP LOCKED`; provider deletion precedes metadata deletion and the Task
+snapshot advances. Failed deletion remains visible for operator review.
+
+## Media presets
+
+With FFmpeg on `PATH` (or `RHINOQ_FFMPEG_PATH`):
+
+```ts
+return context.media.transcode('/work/input.mov', '/work/output.mp4', {
+  videoCodec: 'libx264', preset: 'balanced', timeoutMs: 30 * 60_000,
+});
+```
+
+`context.media.thumbnail(input, output, { atSeconds, width })` follows the same
+path. RhinoQ handles cancellation, timeout, bounded stderr, exit/output checks
+and artifact registration. The application still chooses codecs, retention and
+business retry.

@@ -31,6 +31,13 @@ export type TaskMetricName =
   | 'rhinoq_reconciler_lease_not_acquired_total'
   | 'rhinoq_reconciler_lease_lost_total'
   | 'rhinoq_bridge_version_conflict_total'
+  | 'rhinoq_artifact_upload_session_created_total'
+  | 'rhinoq_artifact_upload_part_recorded_total'
+  | 'rhinoq_artifact_upload_completed_total'
+  | 'rhinoq_artifact_upload_uncertain_total'
+  | 'rhinoq_artifact_upload_aborted_total'
+  | 'rhinoq_artifact_retention_deleted_total'
+  | 'rhinoq_artifact_retention_failed_total'
   /**
    * A projector lease lost without being released — a database failover or a
    * killed session. Non-zero means some window had no owner for that scope,

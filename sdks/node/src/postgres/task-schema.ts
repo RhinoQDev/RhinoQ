@@ -1,7 +1,8 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 10;
-export const TASK_SCHEMA_NAME = '010_durable_task_notifications';
+export const TASK_SCHEMA_VERSION = 11;
+export const TASK_SCHEMA_NAME = '011_durable_artifact_upload_sessions';
+const TASK_SCHEMA_V10_NAME = '010_durable_task_notifications';
 const TASK_SCHEMA_V9_NAME = '009_tenant_verification_artifacts';
 
 /**
@@ -1729,6 +1730,44 @@ CREATE INDEX IF NOT EXISTS notification_outbox_task_idx
   ON rhinoq_task.notification_outbox(task_id, created_at, id);
 `;
 
+const TASK_SCHEMA_V11_SQL = String.raw`
+ALTER TABLE rhinoq_task.artifacts ADD COLUMN IF NOT EXISTS cleanup_state text NOT NULL DEFAULT 'active';
+ALTER TABLE rhinoq_task.artifacts ADD COLUMN IF NOT EXISTS cleanup_owner text;
+ALTER TABLE rhinoq_task.artifacts ADD COLUMN IF NOT EXISTS cleanup_lease_until timestamptz;
+ALTER TABLE rhinoq_task.artifacts DROP CONSTRAINT IF EXISTS artifacts_cleanup_state_check;
+ALTER TABLE rhinoq_task.artifacts ADD CONSTRAINT artifacts_cleanup_state_check CHECK (cleanup_state IN ('active','leased','failed'));
+CREATE INDEX IF NOT EXISTS artifacts_cleanup_ready_idx ON rhinoq_task.artifacts(cleanup_state,expires_at,id);
+CREATE TABLE IF NOT EXISTS rhinoq_task.artifact_upload_sessions (
+  id text PRIMARY KEY CHECK (btrim(id) <> ''),
+  tenant_id text NOT NULL CHECK (btrim(tenant_id) <> ''),
+  owner_id text NOT NULL CHECK (btrim(owner_id) <> ''),
+  task_id text REFERENCES rhinoq_task.tasks(id) ON DELETE CASCADE,
+  execution_id text,
+  artifact_id text NOT NULL CHECK (btrim(artifact_id) <> ''),
+  provider text NOT NULL CHECK (btrim(provider) <> ''),
+  provider_upload_id text NOT NULL CHECK (btrim(provider_upload_id) <> ''),
+  reference text NOT NULL CHECK (btrim(reference) <> ''),
+  name text NOT NULL CHECK (btrim(name) <> ''),
+  content_type text NOT NULL CHECK (btrim(content_type) <> ''),
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+  part_size bigint NOT NULL CHECK (part_size >= 5242880),
+  parts jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(parts)='array'),
+  state text NOT NULL DEFAULT 'uploading' CHECK (state IN ('uploading','completing','completed','aborted','expired','uncertain')),
+    checksum_sha256 text CHECK (checksum_sha256 IS NULL OR checksum_sha256 ~ '^[0-9a-f]{64}$'),
+    last_error text CHECK (length(COALESCE(last_error,'')) <= 2048),
+    artifact_expires_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+  version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (tenant_id, owner_id, artifact_id)
+);
+CREATE INDEX IF NOT EXISTS artifact_upload_sessions_owner_idx
+  ON rhinoq_task.artifact_upload_sessions(tenant_id,owner_id,created_at,id);
+CREATE INDEX IF NOT EXISTS artifact_upload_sessions_cleanup_idx
+  ON rhinoq_task.artifact_upload_sessions(state,expires_at,id);
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
@@ -1739,7 +1778,8 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 7, name: '007_actionable_conflicts_and_late_starts', sql: TASK_SCHEMA_V7_SQL },
   { version: 8, name: '008_durable_waitpoints', sql: TASK_SCHEMA_V8_SQL },
   { version: 9, name: TASK_SCHEMA_V9_NAME, sql: TASK_SCHEMA_V9_SQL },
-  { version: 10, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V10_SQL },
+  { version: 10, name: TASK_SCHEMA_V10_NAME, sql: TASK_SCHEMA_V10_SQL },
+  { version: 11, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V11_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {

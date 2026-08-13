@@ -20,6 +20,8 @@ const expectedOperations = [
   'createTaskWaitpoint', 'getTaskWaitpoint', 'resolveTaskWaitpoint',
   'listTaskVerifications', 'listTaskArtifacts', 'downloadTaskArtifact',
   'refreshTaskArtifact',
+  'createArtifactUpload', 'resumeArtifactUpload', 'signArtifactUploadPart',
+  'recordArtifactUploadPart', 'completeArtifactUpload', 'abortArtifactUpload',
 ];
 const operations = Object.values(source.paths ?? {}).flatMap((path) =>
   Object.values(path).map((operation) => operation.operationId),
@@ -38,6 +40,7 @@ const implementationMarkers = [
   "relative[1] === 'verifications'", "relative[1] === 'artifacts'", "relative[1] === 'result'",
   "relative[1] === 'cancel'", "relative[1] === 'retry'", "relative[3] === 'download'",
   "relative[3] === 'refresh'",
+  "relative[0] === '_uploads'",
 ];
 for (const marker of implementationMarkers) {
   if (!implementation.includes(marker)) throw new Error(`owner API implementation is missing ${marker}`);

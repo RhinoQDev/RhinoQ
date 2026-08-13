@@ -795,3 +795,23 @@
 - **Rollback:** stop rendering/exposing the derived explanation. Durable Task,
   verification and provider records are unchanged.
 - **Owner:** Node SDK + product
+
+## ADR-0035 — Direct multipart bytes bypass the Task queue
+
+- **Status:** accepted
+- **Context:** multi-GB browser files cannot safely be buffered by the Node API
+  or carried in PostgreSQL/BullMQ. Multipart completion may lose its response,
+  and retention deletion can race across replicas.
+- **Decision:** persist owner/tenant-fenced upload sessions and sign direct
+  provider parts. Reconcile provider parts on resume, require a real checksum
+  for Task attachment, verify readback, and map unknown completion to
+  `uncertain`. Keep session/artifact expiry separate. Cleanup is bounded,
+  leased and explicit; delete provider bytes before metadata. The queue carries
+  only an opaque reference.
+- **Consequences:** server memory does not grow with file size while bucket
+  policy, checksum production, codecs and business retry remain application
+  decisions. This additive Node surface does not move job correctness out of
+  the Go engine.
+- **Rollback:** stop mounting upload routes and cleanup scheduling. Abort stored
+  incomplete provider sessions before dropping the additive table/columns.
+- **Owner:** Node SDK + product

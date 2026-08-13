@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added owner-fenced direct S3 multipart upload with signed browser parts,
+  durable resume/reconciliation, adaptive planning, readback verification and
+  fail-closed `uncertain` completion. Upload and artifact expiry are separate;
+  retention deletion is preview-first and leased.
+- Added `context.media.transcode()`/`thumbnail()` with bounded FFmpeg process
+  handling and automatic artifact registration, plus an explicitly synthetic
+  artifact benchmark.
+
 - Added a Vietnamese beginner documentation path covering first run, one Task
   declaration, large files/ZIP, API/SSE/UI and production checks. Rebuilt the
   documentation index and linked both languages from the root README.

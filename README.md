@@ -243,6 +243,21 @@ concurrency, matching the owner API and Task Center view. `zip()` can stream up
 to 1,000 bounded inputs into one artifact through the optional `archiver`
 package. Neither path puts file bytes in PostgreSQL, BullMQ or Redis.
 
+For browser inputs, `uploadArtifactFile()` uses an owner-scoped durable
+multipart session and signed part URLs, so multi-GB bytes travel directly to
+AWS S3 instead of through the Node server. It resumes from provider state,
+adapts its multipart plan to a memory budget, verifies the completed object,
+and only then registers the Task artifact. Task-bound uploads require a real
+SHA-256 checksum; RhinoQ never invents integrity evidence. Session expiry and
+artifact retention are separate, and cleanup requires preview plus an explicit
+`sweep({ delete: true })`.
+
+Declared Tasks also receive `context.media.transcode()` and
+`context.media.thumbnail()`: bounded FFmpeg wrappers with cancellation,
+timeouts, output validation and automatic artifact registration. FFmpeg stays
+an application-installed runtime dependency. See the
+[artifact storage guide](./docs/artifact-storage.md#direct-resumable-browser-upload).
+
 Interactive Tasks use the same handler context; RhinoQ binds the current Task,
 persists the checkpoint and exposes the already-mounted owner route and UI:
 

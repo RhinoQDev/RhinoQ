@@ -92,3 +92,34 @@ tiếp vào private storage, sau đó dispatch Task với `sourceKey`. Worker đ
 - provider readback để xác nhận kết quả quan trọng.
 
 Xem contract đầy đủ bằng tiếng Anh tại [artifact-storage.md](../artifact-storage.md).
+
+## Upload trực tiếp file vài GB và resume
+
+Với AWS S3, dùng `uploadArtifactFile` từ `@rhinoq/node/browser`. File đi thẳng
+từ trình duyệt lên S3, không qua RAM server Node. RhinoQ tự tạo phiên multipart,
+ký URL từng part, ghi ETag, đối chiếu part ở S3 khi resume và xác minh object
+trước khi báo hoàn tất.
+
+```ts
+await uploadArtifactFile(taskClient, file, {
+  taskId,
+  checksumSha256, // bắt buộc khi gắn vào Task
+  concurrency: 4,
+  onProgress: ({ uploadedBytes, totalBytes }) => capNhat(uploadedBytes, totalBytes),
+});
+```
+
+Lưu ID phiên và truyền lại bằng `sessionId` để resume. RhinoQ kiểm tra owner,
+tenant và quyền sở hữu Task. Nếu kết quả complete không chắc chắn, trạng thái là
+`uncertain`, không báo thành công và không retry mù. Gọi resume rồi complete lại
+để chỉ xác minh readback, không gửi multipart complete lần hai. Phiên upload
+mặc định 24 giờ; artifact mặc định 7 ngày.
+
+## Xóa file hết hạn và xử lý video
+
+Xem trước bằng `app.artifactRetention.preview(25)`, rồi mới chủ động gọi
+`sweep({ delete: true })`. RhinoQ xóa object trước metadata; lỗi provider được
+giữ lại để kiểm tra. Khi worker đã cài FFmpeg, dùng
+`context.media.transcode()` hoặc `context.media.thumbnail()`. RhinoQ lo timeout,
+cancel, kiểm tra output và đăng ký artifact; ứng dụng vẫn chọn codec, retention
+và business retry.
