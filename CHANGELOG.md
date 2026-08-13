@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Refined Task Center and Workbench presentation without changing their
+  structure or behavior: clearer visual sections, readable UI/monospace type
+  hierarchy, stronger panel depth and a restrained blue graphite palette.
+
 ## 0.1.0-beta.15
 
 - Corrected the published-package evaluation assertions to match the CLI's

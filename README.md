@@ -9,6 +9,11 @@ retry history, cancellation, reconciliation, an owner-scoped Task API,
 realtime SSE with polling fallback, embeddable React components, a user Task
 Center and an operator Workbench around your business handler.
 
+Task Center and Workbench keep the same lightweight, self-contained product
+surface while using clearly separated panels, high-contrast typography and a
+responsive blue/graphite console theme that follows the operating-system light
+or dark preference.
+
 [![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
 [![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
 [![npm @rhinoq/node](https://img.shields.io/npm/v/%40rhinoq%2Fnode/next?label=%40rhinoq%2Fnode)](https://www.npmjs.com/package/@rhinoq/node)

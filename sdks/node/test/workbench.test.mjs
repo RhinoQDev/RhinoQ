@@ -104,6 +104,9 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.match(html, /Operator workspace/);
   assert.match(html, /Async work, explained/);
   assert.match(html, /workspace-intro/);
+  assert.match(html, /--accent-strong/);
+  assert.match(html, /--mono/);
+  assert.match(html, /#4f8cff/);
   assert.match(html, /focus-visible/);
   assert.match(html, /snap\?\.runtimeHealth/);
   assert.ok(!html.includes("fetch(base + '/api/runtime-health'"), 'runtime health must share the Workbench snapshot');
