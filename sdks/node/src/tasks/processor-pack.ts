@@ -7,6 +7,7 @@ import {
   type RhinoQTranscodeOptions,
 } from './media.js';
 import type { RhinoQTaskRunContext } from './declaration.js';
+import { createRhinoQModule, type RhinoQLifecycleModule } from '../runtime/modules.js';
 
 export type RhinoQProcessorErrorClass =
   | 'cancelled'
@@ -39,6 +40,73 @@ export function listRhinoQProcessorPackCatalog(): readonly RhinoQProcessorPackCa
   return RHINOQ_PROCESSOR_PACK_CATALOG;
 }
 
+/**
+ * Minimal image-provider boundary for adopters that already run Sharp. The
+ * SDK does not bundle the native package, credentials or a second worker
+ * process; the application injects those choices and owns their lifecycle.
+ */
+export interface RhinoQSharpRuntime {
+  version?: string;
+  available(): Promise<boolean> | boolean;
+  metadata(inputPath: string): Promise<Record<string, unknown>> | Record<string, unknown>;
+  resize(inputPath: string, outputPath: string, options?: RhinoQSharpResizeOptions): Promise<void> | void;
+}
+
+export interface RhinoQSharpResizeOptions {
+  width?: number;
+  height?: number;
+  format?: string;
+}
+
+export interface RhinoQSharpProcessorInput {
+  operation: 'metadata' | 'resize';
+  inputPath: string;
+  outputPath?: string;
+  resize?: RhinoQSharpResizeOptions;
+}
+
+export type RhinoQSharpProcessorOutput = TaskArtifact | Record<string, unknown>;
+
+/** Provider-demand adapter: package installation and image policy stay application-owned. */
+export function createRhinoQSharpProcessorPack(
+  runtime: RhinoQSharpRuntime,
+  options: { requiresWorkspace?: boolean } = {},
+): RhinoQProcessorPack<RhinoQSharpProcessorInput, RhinoQSharpProcessorOutput> {
+  if (!runtime || typeof runtime.available !== 'function' || typeof runtime.metadata !== 'function' || typeof runtime.resize !== 'function') {
+    throw new TypeError('Sharp processor pack requires an injected runtime with available, metadata and resize');
+  }
+  const inspect = async (): Promise<RhinoQProcessorPackReadiness> => {
+    const ready = await runtime.available();
+    return {
+      schemaVersion: 1,
+      name: 'sharp',
+      version: 1,
+      ready: ready === true,
+      checkedAt: new Date().toISOString(),
+      requirements: ['application-provided Sharp-compatible runtime'],
+      missing: ready === true ? [] : ['Sharp-compatible runtime'],
+      warnings: runtime.version ? [] : ['provider version was not supplied'],
+    };
+  };
+  return createRhinoQProcessorPack({
+    name: 'sharp',
+    version: 1,
+    requiresWorkspace: options.requiresWorkspace ?? true,
+    inspect,
+    process: async (input, context) => {
+      if (!input || !['metadata', 'resize'].includes(input.operation)) throw new TypeError('Sharp processor operation must be metadata or resize');
+      const inputPath = required(input.inputPath, 'processor inputPath');
+      if (input.operation === 'metadata') return runtime.metadata(inputPath);
+      const outputPath = required(input.outputPath, 'processor outputPath');
+      const resize = input.resize ?? {};
+      for (const value of [resize.width, resize.height]) if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new RangeError('Sharp resize dimensions must be positive integers');
+      if (resize.format !== undefined && (!resize.format.trim() || resize.format.length > 32)) throw new TypeError('Sharp resize format must be a short non-empty string');
+      await runtime.resize(inputPath, outputPath, resize);
+      return context.output.file(outputPath, { contentType: resize.format ? `image/${resize.format.toLowerCase()}` : undefined });
+    },
+  });
+}
+
 export interface RhinoQProcessorPackReadiness {
   schemaVersion: 1;
   name: string;
@@ -62,6 +130,8 @@ export interface RhinoQProcessorPack<Input, Output> {
   readonly name: string;
   readonly version: number;
   readonly requiresWorkspace: boolean;
+  /** Provider lifecycle boundary; Task correctness remains outside the pack. */
+  readonly module: RhinoQLifecycleModule;
   inspect(): Promise<RhinoQProcessorPackReadiness>;
   run(input: Input, context: RhinoQProcessorPackContext): Promise<Output>;
   classify(error: unknown): RhinoQProcessorErrorClass;
@@ -104,15 +174,26 @@ export function createRhinoQProcessorPack<Input, Output>(
   if (typeof options.process !== 'function') throw new TypeError('processor pack process is required');
   const requiresWorkspace = options.requiresWorkspace === true;
   const classify = options.classify ?? classifyRhinoQProcessorError;
+  let readinessForValidation: RhinoQProcessorPackReadiness | undefined;
+  const module = createRhinoQModule({
+    descriptor: { id: `processor/${name}`, namespace: 'processor', version, contractVersion: 1 },
+    validate: () => {
+      if (!readinessForValidation || readinessForValidation.schemaVersion !== 1
+        || readinessForValidation.name !== name || readinessForValidation.version !== version) {
+        throw new TypeError(`processor pack ${name} returned an invalid readiness report`);
+      }
+    },
+  });
   return Object.freeze({
     name,
     version,
     requiresWorkspace,
+    module,
     async inspect() {
+      await module.provision();
       const report = await options.inspect();
-      if (!report || report.schemaVersion !== 1 || report.name !== name || report.version !== version) {
-        throw new TypeError(`processor pack ${name} returned an invalid readiness report`);
-      }
+      readinessForValidation = report;
+      await module.validate();
       return report;
     },
     async run(input: Input, context: RhinoQProcessorPackContext): Promise<Output> {

@@ -26,6 +26,11 @@ supporting Task/runtime layers from the detect-investigate-repair loop.
 These are planning estimates, not product KPIs. A capability only advances when
 its code, tests, documentation and evidence agree.
 
+The Node SDK now exposes a canonical read-only plan and a capability ledger:
+`npx rhinoq capabilities --json`. The ledger separates implementation status
+from technical, integration, external and business evidence; it is not a
+production-readiness score.
+
 ## Known debt
 
 - Attempt history is append-only but has no partition/retention policy and does

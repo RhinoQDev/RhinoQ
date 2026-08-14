@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { inspectRhinoQPlan } from '../dist/index.js';
+import { adaptRhinoQPlanJson, inspectRhinoQPlan } from '../dist/index.js';
 
 test('Plan Inspector keeps compiled capsules bounded and separates Needs decision', () => {
   const ready = inspectRhinoQPlan({
@@ -43,4 +43,17 @@ test('Plan Inspector reports an explicit not-configured state', () => {
   assert.equal(report.status, 'not-configured');
   assert.equal(report.tasks.length, 0);
   assert.match(report.needsDecision[0], /typed application compiler/);
+});
+
+test('plan JSON adapter reports confidence and refuses unsupported input without mutation', () => {
+  const legacy = adaptRhinoQPlanJson({ schemaVersion: 1, profile: 'reports', tasks: [] });
+  assert.equal(legacy.source, 'legacy-manifest');
+  assert.equal(legacy.confidence, 'medium');
+  assert.equal(legacy.plan.profile, 'reports');
+  assert.match(legacy.warnings[0], /projected/);
+
+  const invalid = adaptRhinoQPlanJson({ schemaVersion: 2, profile: 'future', tasks: [] });
+  assert.equal(invalid.confidence, 'low');
+  assert.equal(invalid.plan, undefined);
+  assert.equal(invalid.unsupported[0], 'invalid or unsupported plan input');
 });

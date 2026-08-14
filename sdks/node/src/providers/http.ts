@@ -3,6 +3,7 @@ import type {
   ProviderOperationOptions,
   ProviderOperationRecord,
 } from '../gateway/types.js';
+import type { RhinoQLifecycleModule } from '../runtime/modules.js';
 
 export interface HttpProviderRequest {
   input: RequestInfo | URL;
@@ -10,6 +11,7 @@ export interface HttpProviderRequest {
 }
 
 export interface HttpReferenceAdapter<T> {
+  module?: RhinoQLifecycleModule;
   /** Builds the provider request. The key is injected into the headers below. */
   request(idempotencyKey: string): HttpProviderRequest;
   /** Parses a successful response into the provider's result shape. */
@@ -47,7 +49,7 @@ export class HttpProviderError extends Error {
  */
 export function httpProviderAdapter<T>(
   adapter: HttpReferenceAdapter<T>,
-): Pick<ProviderOperationOptions<T>, 'execute' | 'confirm' | 'providerId' | 'evidence'> {
+): Pick<ProviderOperationOptions<T>, 'execute' | 'confirm' | 'providerId' | 'evidence' | 'module'> {
   if (!adapter || typeof adapter.request !== 'function' || typeof adapter.parse !== 'function' ||
     typeof adapter.confirm !== 'function') {
     throw new TypeError('HTTP provider adapter requires request, parse and confirm callbacks');
@@ -58,6 +60,7 @@ export function httpProviderAdapter<T>(
   }
 
   return {
+    ...(adapter.module ? { module: adapter.module } : {}),
     execute: async (idempotencyKey) => {
       const request = adapter.request(idempotencyKey);
       if (!request || request.input === undefined || request.input === null) {

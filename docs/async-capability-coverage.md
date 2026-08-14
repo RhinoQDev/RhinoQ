@@ -19,6 +19,7 @@ Kubernetes and a CDN are deployment choices, not checkboxes inside a Task SDK.
 | Image/PDF/Office/AI processing | integration-ready | business handler chooses Sharp/LibreOffice/model provider; outputs use artifacts |
 | SSE, polling and embedded UI | implemented | SSE is primary; polling fallback; WebSocket not required for one-way progress |
 | Durable input/approval/webhook wait | implemented | versioned PostgreSQL waitpoints |
+| Selective execution resume | bounded opt-in contract | checksum/handler-version-fenced PostgreSQL checkpoints; not a workflow engine or effect ledger |
 | Outbound notifications | implemented | signed webhook/Slack delivery ledger; email/SMS provider remains application-owned |
 | Effect confirmation and business verification | implemented | explicit idempotency + readback/webhook/predicate; unknown is `uncertain` |
 | Outbox and repair | implemented | durable engine paths and guarded operator workflow |

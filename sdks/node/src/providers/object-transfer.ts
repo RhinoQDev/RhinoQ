@@ -3,6 +3,7 @@ import type {
   ProviderOperationOptions,
   ProviderOperationRecord,
 } from '../gateway/types.js';
+import type { RhinoQLifecycleModule } from '../runtime/modules.js';
 
 /**
  * The identity of an object at the destination, as a readback reports it.
@@ -23,6 +24,7 @@ export interface TransferredObject {
 }
 
 export interface ObjectTransferReferenceAdapter {
+  module?: RhinoQLifecycleModule;
   /**
    * Performs the transfer — download from the source, write to the
    * destination. It must be safe to repeat for one idempotency key: use it as
@@ -71,8 +73,9 @@ export interface ObjectTransferReferenceAdapter {
  */
 export function objectTransferProviderAdapter(
   adapter: ObjectTransferReferenceAdapter,
-): Pick<ProviderOperationOptions<TransferredObject>, 'execute' | 'confirm' | 'providerId' | 'evidence'> {
+): Pick<ProviderOperationOptions<TransferredObject>, 'execute' | 'confirm' | 'providerId' | 'evidence' | 'module'> {
   return {
+    ...(adapter.module ? { module: adapter.module } : {}),
     execute: (key) => adapter.transfer(key),
     providerId: (result) => result.versionId ?? result.key,
     evidence: describeObject,

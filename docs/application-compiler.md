@@ -93,6 +93,31 @@ TypeScript infers every input and output from the registry. `manifest()` is a
 stable, serializable description suitable for tests, diagnostics and build
 metadata. It contains no handler source or payload data.
 
+`plan()` is the canonical read-only projection when an operator or release
+check needs more than the legacy manifest:
+
+```ts
+const plan = rhinoq.plan();
+// plan.fingerprint: stable non-secret identity of the compiled plan
+// plan.needsDecision: capacity/provider facts that were not proven
+// plan.limitations: boundaries that remain application/provider-owned
+```
+
+The plan is deterministic and contains no credentials, handler source or
+payload. Persist it explicitly when a release process needs a diff, then use
+the read-only CLI flow:
+
+```bash
+npx rhinoq plan --from manifest.json --output .rhinoq/plan.json
+npx rhinoq plan --from .rhinoq/plan.json
+npx rhinoq plan validate --from .rhinoq/plan.json
+npx rhinoq plan diff --from .rhinoq/plan.json --against .rhinoq/plan.previous.json
+```
+
+The CLI reads JSON artifacts only; it does not import arbitrary application
+source or change runtime configuration. `needs-decision` is a deliberate
+blocker for the validate command, not an inferred provider success.
+
 When `start({ http })` is used, the same bounded manifest is available to the
 operator Workbench's read-only [Plan Inspector](./plan-inspector.md) at
 `/admin/api/plan`. It shows the factory marker, compiled runtime capsule and

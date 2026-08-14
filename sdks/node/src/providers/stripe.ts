@@ -3,6 +3,7 @@ import type {
   ProviderOperationOptions,
   ProviderOperationRecord,
 } from '../gateway/types.js';
+import type { RhinoQLifecycleModule } from '../runtime/modules.js';
 
 export interface StripeOperationResult {
   id: string;
@@ -10,6 +11,7 @@ export interface StripeOperationResult {
 }
 
 export interface StripeReferenceAdapter<T extends StripeOperationResult> {
+  module?: RhinoQLifecycleModule;
   execute(idempotencyKey: string): Promise<T>;
   /** May retrieve by provider id or reconcile by application metadata/key. */
   retrieve(operation: ProviderOperationRecord): Promise<T | undefined>;
@@ -23,10 +25,11 @@ export interface StripeReferenceAdapter<T extends StripeOperationResult> {
  */
 export function stripeProviderAdapter<T extends StripeOperationResult>(
   adapter: StripeReferenceAdapter<T>,
-): Pick<ProviderOperationOptions<T>, 'execute' | 'confirm' | 'providerId' | 'evidence'> {
+): Pick<ProviderOperationOptions<T>, 'execute' | 'confirm' | 'providerId' | 'evidence' | 'module'> {
   const confirmed = new Set(adapter.confirmedStatuses ?? ['succeeded', 'paid', 'complete']);
   const failed = new Set(adapter.failedStatuses ?? ['failed', 'canceled', 'cancelled']);
   return {
+    ...(adapter.module ? { module: adapter.module } : {}),
     execute: (key) => adapter.execute(key),
     providerId: (result) => result.id,
     evidence: (result) => `${result.id}:${result.status ?? 'accepted'}`,

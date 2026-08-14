@@ -26,8 +26,11 @@ import type {
 	TaskWaitpoint,
 	TaskWaitpointCreateRequest,
 	TaskWaitpointResolveRequest,
+  TaskCheckpoint,
+  TaskCheckpointSaveRequest,
 } from '../gateway/types.js';
 import type { TaskClient } from '../tasks/client.js';
+import { sha256RhinoQCheckpointInput } from '../tasks/checkpoint.js';
 import type { SqlExecutor } from './producer.js';
 import { migrateTaskSchema } from './task-schema.js';
 import type { SqlConnection, SqlPool } from './task-schema.js';
@@ -89,6 +92,13 @@ interface WaitpointRow {
   id: string; task_id: string; key: string; kind: TaskWaitpoint['kind']; state: TaskWaitpoint['state'];
   payload_version: number; deadline: Date | string | null; resolution: unknown; resolved_by: string | null;
   resolved_at: Date | string | null; version: string | number; created_at: Date | string; updated_at: Date | string;
+}
+
+interface CheckpointRow {
+  id: string; task_id: string; execution_id: string; checkpoint_key: string;
+  handler_version: number; input_checksum: string; state: unknown;
+  completed: boolean; version: string | number;
+  created_at: Date | string; updated_at: Date | string;
 }
 
 interface VerificationRow {
@@ -302,6 +312,47 @@ export class PostgresTaskClient implements TaskClient {
   async expireTaskWaitpoints(limit = 100): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new RangeError('waitpoint expiry limit must be 1..500');
     const result = await this.execute<{ count: number | string }>(`SELECT rhinoq_task.expire_waitpoints($1) AS count`, [limit]);
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  /**
+   * Saves one bounded deterministic cursor for an Execution. The SQL command
+   * owns compatibility and version fencing; an identical replay is idempotent
+   * after a lost response, while a changed cursor needs expectedVersion.
+   */
+  async saveTaskCheckpoint(executionId: string, key: string, request: TaskCheckpointSaveRequest): Promise<TaskCheckpoint> {
+    validateCheckpointRequest(executionId, key, request);
+    const encoded = JSON.stringify(request.state);
+    if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > 65_536) {
+      throw new RangeError('checkpoint state must be JSON up to 64 KiB');
+    }
+    const id = `checkpoint-${(await sha256RhinoQCheckpointInput(`${request.taskId}\0${executionId}\0${key}`)).slice(0, 32)}`;
+    await this.execute(
+      `SELECT rhinoq_task.upsert_checkpoint($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)`,
+      [id, request.taskId, executionId, key, request.handlerVersion, request.inputChecksum,
+        encoded, request.completed === true, request.expectedVersion ?? null],
+    );
+    const saved = await this.getTaskCheckpoint(executionId, key);
+    if (!saved) throw new RhinoQError('RHINOQ_CHECKPOINT_NOT_FOUND', 'Checkpoint was not returned after save', false);
+    return saved;
+  }
+
+  async getTaskCheckpoint(executionId: string, key: string): Promise<TaskCheckpoint | undefined> {
+    if (!executionId?.trim() || !key?.trim()) throw new TypeError('checkpoint executionId and key are required');
+    const result = await this.execute<CheckpointRow>(
+      `SELECT id,task_id,execution_id,checkpoint_key,handler_version,input_checksum,state,completed,version,created_at,updated_at
+       FROM rhinoq_task.checkpoints WHERE execution_id=$1 AND checkpoint_key=$2`,
+      [executionId, key],
+    );
+    const row = result.rows[0];
+    return row ? mapCheckpoint(row) : undefined;
+  }
+
+  async deleteTaskCheckpoints(executionId: string): Promise<number> {
+    if (!executionId?.trim()) throw new TypeError('checkpoint executionId is required');
+    const result = await this.execute<{ count: number | string }>(
+      `SELECT rhinoq_task.delete_execution_checkpoints($1) AS count`, [executionId],
+    );
     return Number(result.rows[0]?.count ?? 0);
   }
 
@@ -1162,6 +1213,36 @@ function mapWaitpoint(row: WaitpointRow): TaskWaitpoint {
     ...(row.resolved_by ? { resolvedBy: row.resolved_by } : {}),
     ...(row.resolved_at ? { resolvedAt: timestamp(row.resolved_at) } : {}),
     createdAt: timestamp(row.created_at), updatedAt: timestamp(row.updated_at) };
+}
+
+function mapCheckpoint(row: CheckpointRow): TaskCheckpoint {
+  return {
+    schemaVersion: 1,
+    id: row.id,
+    taskId: row.task_id,
+    executionId: row.execution_id,
+    key: row.checkpoint_key,
+    handlerVersion: Number(row.handler_version),
+    inputChecksum: row.input_checksum,
+    state: row.state,
+    completed: row.completed,
+    version: Number(row.version),
+    createdAt: timestamp(row.created_at),
+    updatedAt: timestamp(row.updated_at),
+  };
+}
+
+function validateCheckpointRequest(executionId: string, key: string, request: TaskCheckpointSaveRequest): void {
+  if (!executionId?.trim() || !key?.trim() || !request?.taskId?.trim() ||
+      !Number.isSafeInteger(request.handlerVersion) || request.handlerVersion < 1 ||
+      !/^[0-9a-f]{64}$/.test(request.inputChecksum)) {
+    throw new TypeError('checkpoint requires task, execution, key, handlerVersion and a lowercase SHA-256 inputChecksum');
+  }
+  if (key.length > 256) throw new RangeError('checkpoint key must be at most 256 characters');
+  if (request.expectedVersion !== undefined &&
+      (!Number.isSafeInteger(request.expectedVersion) || request.expectedVersion < 1)) {
+    throw new RangeError('checkpoint expectedVersion must be a positive integer');
+  }
 }
 
 function mapVerification(row: VerificationRow): TaskVerificationRecord {

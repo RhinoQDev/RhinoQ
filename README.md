@@ -110,6 +110,23 @@ application.
 - **Specialist lifecycle without hidden correctness.** Processor packs provide
   readiness, workspace, cleanup and error classification; Go/runtime adapters
   still own leases, retries and Task state.
+- **Selective resumability and guarded tuning.** Large deterministic handlers
+  can opt into bounded, checksum/version-fenced checkpoints. Autopilot can
+  execute only an explicitly approved application-owned canary with an
+  observation gate and rollback; it never mutates Task state or business
+  outcomes. A Sharp-compatible processor boundary is available when the
+  application injects its own provider package.
+- **One canonical read-only plan.** `compiler.plan()` exposes a deterministic
+  fingerprint, task requirements, provider/runtime limitations and explicit
+  `needs-decision` items. The CLI can show, validate and diff a JSON plan
+  artifact without importing application source or changing configuration.
+- **Replaceable modules with explicit lifecycle.** Runtime and processor
+  boundaries can expose load/provision/validate/cleanup state. Native provider
+  packages remain application-owned, and module lifecycle never owns leases,
+  retries, effects or Task state.
+- **Evidence-aware capability ledger.** `npx rhinoq capabilities --json`
+  separates implemented behavior from bounded/provider-required/roadmap status
+  and records the evidence level and remaining limit beside each claim.
 
 The next product step is not a larger collection of queue adapters. The
 [canonical low-code upgrade plan](./docs/ke-hoach-nang-cap-rhinoq.md) requires a
@@ -117,10 +134,13 @@ positive net reduction in adopter-owned code/config/process. Short capability
 factories, automatic realtime/progress paths, evidence passports, the first
 data-path compiler slice, a read-only Integration Eraser preview and a
 read-only Plan Inspector in Workbench are implemented and tested. Project
-profile auto-mount, bounded Autopilot observe/recommend/simulate/canary contracts
-and processor-pack catalog boundaries now also exist and are tested; Autopilot
-automatic actions, a complete multi-provider pack implementation, auto-patching
-and a multi-cluster Control Plane remain evidence-gated roadmap work.
+profile auto-mount, selective checkpoints, a bounded Autopilot executor and
+processor-pack catalog boundaries now also exist and are tested; Autopilot
+automatic actions, provider-specific runtime evidence, auto-patching and a
+multi-cluster Control Plane remain evidence-gated roadmap work.
+
+The extension contract is documented in [module lifecycle](./docs/module-lifecycle.md);
+the capability ledger is available from `npx rhinoq capabilities --json`.
 
 ## Quick start: one-command setup
 
@@ -192,6 +212,24 @@ profile removes repeated adapter/runtime/scope fields. Existing runtime adapters
 retain lifecycle authority; retry defaults to `never`, and external effects
 still require explicit idempotency and confirmation policy. The lower-level
 `app.task()` remains supported. See [Task application compiler](./docs/application-compiler.md).
+
+For a deterministic large unit, opt into a bounded checkpoint without moving
+Task state-machine authority into the handler:
+
+```ts
+run: async (input, context) => {
+  const inputChecksum = await sha256RhinoQCheckpointInput(input);
+  const prior = await context.checkpoint.load<{ offset: number }>('segments');
+  const offset = prior?.state.offset ?? 0;
+  // Process one deterministic segment, then persist only bounded resume state.
+  await processSegment(input, offset);
+  await context.checkpoint.save('segments', { offset: offset + 1 }, { inputChecksum });
+}
+```
+
+Checkpoint state is version/checksum fenced, capped at 64 KiB and separate from
+external-effect confirmation. Delete or retain it according to the adopter's
+cleanup policy after the execution is terminal.
 
 For the shortest project setup, bind the shared composition once:
 

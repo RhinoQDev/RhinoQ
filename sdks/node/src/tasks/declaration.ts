@@ -11,6 +11,7 @@ import { createRhinoQProgressCoalescer } from './progress.js';
 import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions, type WaitpointLifecycleClient, type WaitpointOutcome } from './waitpoint.js';
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
 import type { RhinoQDataPathOverrides } from './data-path.js';
+import { createRhinoQTaskCheckpoint, type RhinoQTaskCheckpoint, type RhinoQTaskCheckpointClient } from './checkpoint.js';
 
 export interface RhinoQTaskRunContext {
   taskId: string;
@@ -31,6 +32,8 @@ export interface RhinoQTaskRunContext {
   waitForInput<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId'>): Promise<WaitpointOutcome<T>>;
   waitForApproval(options: Omit<WaitForInputOptions<boolean>, 'taskId' | 'kind' | 'parse'>): Promise<WaitpointOutcome<boolean>>;
   waitForWebhook<T = unknown>(options: Omit<WaitForInputOptions<T>, 'taskId' | 'kind'>): Promise<WaitpointOutcome<T>>;
+  /** Selective resumable state for deterministic large-work units. */
+  checkpoint: RhinoQTaskCheckpoint;
 }
 
 export interface RhinoQTaskOutputHelpers {
@@ -74,6 +77,7 @@ export interface RhinoQTaskServices {
     register(taskId: string, request: import('../gateway/types.js').TaskArtifactCreateRequest): Promise<import('../gateway/types.js').TaskArtifact>;
   };
   waitpoints?: WaitpointLifecycleClient;
+  checkpoints?: RhinoQTaskCheckpointClient;
   trace?: RhinoQTraceHooks;
   /** Read-only notification hook; realtime delivery must never change Task correctness. */
   onMutation?(mutation: RhinoQTaskMutation): Promise<void> | void;
@@ -324,6 +328,7 @@ export function defineRhinoQTask<Input, Output>(
               output: outputHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress),
               media: createRhinoQMediaContext(outputHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress), job.signal),
               io: createRhinoQTaskIO(job.signal),
+              checkpoint: createRhinoQTaskCheckpoint(services.checkpoints, envelope.taskId, envelope.executionId, version),
               ...(workspace ? { workspace } : {}),
               ...waitpoints,
             }));

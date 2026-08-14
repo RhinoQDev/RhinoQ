@@ -1,9 +1,10 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 11;
-export const TASK_SCHEMA_NAME = '011_durable_artifact_upload_sessions';
+export const TASK_SCHEMA_VERSION = 12;
+export const TASK_SCHEMA_NAME = '012_selective_execution_checkpoints';
 const TASK_SCHEMA_V10_NAME = '010_durable_task_notifications';
 const TASK_SCHEMA_V9_NAME = '009_tenant_verification_artifacts';
+const TASK_SCHEMA_V11_NAME = '011_durable_artifact_upload_sessions';
 
 /**
  * Task-only PostgreSQL profile.
@@ -1768,6 +1769,120 @@ CREATE INDEX IF NOT EXISTS artifact_upload_sessions_cleanup_idx
   ON rhinoq_task.artifact_upload_sessions(state,expires_at,id);
 `;
 
+const TASK_SCHEMA_V12_SQL = String.raw`
+CREATE TABLE IF NOT EXISTS rhinoq_task.checkpoints (
+  id text PRIMARY KEY CHECK (btrim(id) <> ''),
+  task_id text NOT NULL REFERENCES rhinoq_task.tasks(id) ON DELETE CASCADE,
+  execution_id text NOT NULL REFERENCES rhinoq_task.executions(id) ON DELETE CASCADE,
+  checkpoint_key text NOT NULL CHECK (btrim(checkpoint_key) <> '' AND length(checkpoint_key) <= 256),
+  handler_version integer NOT NULL CHECK (handler_version > 0),
+  input_checksum text NOT NULL CHECK (input_checksum ~ '^[0-9a-f]{64}$'),
+  state jsonb NOT NULL CHECK (octet_length(state::text) <= 65536),
+  completed boolean NOT NULL DEFAULT false,
+  version bigint NOT NULL DEFAULT 1 CHECK (version > 0),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (execution_id, checkpoint_key)
+);
+CREATE INDEX IF NOT EXISTS checkpoints_task_execution_idx
+  ON rhinoq_task.checkpoints(task_id, execution_id, checkpoint_key);
+
+CREATE OR REPLACE FUNCTION rhinoq_task.upsert_checkpoint(
+  p_id text,
+  p_task_id text,
+  p_execution_id text,
+  p_key text,
+  p_handler_version integer,
+  p_input_checksum text,
+  p_state jsonb,
+  p_completed boolean,
+  p_expected_version bigint DEFAULT NULL
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_current rhinoq_task.checkpoints%ROWTYPE;
+  v_version bigint;
+BEGIN
+  IF btrim(COALESCE(p_id, '')) = '' OR btrim(COALESCE(p_task_id, '')) = ''
+     OR btrim(COALESCE(p_execution_id, '')) = '' OR btrim(COALESCE(p_key, '')) = ''
+     OR p_handler_version <= 0 OR p_input_checksum !~ '^[0-9a-f]{64}$'
+     OR p_state IS NULL OR octet_length(p_state::text) > 65536 THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_CHECKPOINT');
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM rhinoq_task.executions
+    WHERE id = p_execution_id AND task_id = p_task_id
+  ) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_CHECKPOINT_EXECUTION_MISMATCH');
+  END IF;
+
+  SELECT * INTO v_current
+  FROM rhinoq_task.checkpoints
+  WHERE execution_id = p_execution_id AND checkpoint_key = p_key
+  FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_current.id <> p_id OR v_current.task_id <> p_task_id
+       OR v_current.handler_version <> p_handler_version
+       OR v_current.input_checksum <> p_input_checksum THEN
+      PERFORM rhinoq_task.fail('RHINOQ_CHECKPOINT_INCOMPATIBLE');
+    END IF;
+    -- A lost response can safely replay the exact committed checkpoint without
+    -- consuming another version. A changed cursor always needs a fence.
+    IF v_current.state = p_state AND v_current.completed = COALESCE(p_completed, false) THEN
+      RETURN v_current.version;
+    END IF;
+    IF p_expected_version IS NULL OR v_current.version <> p_expected_version THEN
+      PERFORM rhinoq_task.fail('RHINOQ_CHECKPOINT_VERSION_CONFLICT');
+    END IF;
+    UPDATE rhinoq_task.checkpoints
+    SET state = p_state,
+        completed = COALESCE(p_completed, false),
+        version = version + 1,
+        updated_at = clock_timestamp()
+    WHERE id = v_current.id
+    RETURNING version INTO v_version;
+    RETURN v_version;
+  END IF;
+
+  IF p_expected_version IS NOT NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_CHECKPOINT_VERSION_CONFLICT');
+  END IF;
+  INSERT INTO rhinoq_task.checkpoints(
+    id, task_id, execution_id, checkpoint_key, handler_version,
+    input_checksum, state, completed
+  ) VALUES (
+    p_id, p_task_id, p_execution_id, btrim(p_key), p_handler_version,
+    p_input_checksum, p_state, COALESCE(p_completed, false)
+  )
+  RETURNING version INTO v_version;
+  RETURN v_version;
+EXCEPTION
+  WHEN unique_violation THEN
+    PERFORM rhinoq_task.fail('RHINOQ_CHECKPOINT_ALREADY_EXISTS', p_execution_id || ':' || p_key);
+    RETURN 0;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.delete_execution_checkpoints(p_execution_id text)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  IF btrim(COALESCE(p_execution_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_CHECKPOINT');
+  END IF;
+  DELETE FROM rhinoq_task.checkpoints WHERE execution_id = p_execution_id;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
@@ -1779,7 +1894,8 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 8, name: '008_durable_waitpoints', sql: TASK_SCHEMA_V8_SQL },
   { version: 9, name: TASK_SCHEMA_V9_NAME, sql: TASK_SCHEMA_V9_SQL },
   { version: 10, name: TASK_SCHEMA_V10_NAME, sql: TASK_SCHEMA_V10_SQL },
-  { version: 11, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V11_SQL },
+  { version: 11, name: TASK_SCHEMA_V11_NAME, sql: TASK_SCHEMA_V11_SQL },
+  { version: 12, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V12_SQL },
 ] as const;
 
 export interface SqlConnection extends SqlExecutor {

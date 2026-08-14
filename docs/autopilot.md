@@ -22,5 +22,23 @@ operator gate.
 The SDK also exposes `simulateRhinoQAutopilot()` and
 `planRhinoQAutopilotCanary()`. They emit bounded what-if and approval artifacts
 with `wouldMutate: false`, `approvalRequired: true` and `autoApply: false`; they
-do not execute a runtime change. Bounded-auto remains intentionally absent until
-adopter evidence, rollback tests and explicit operational authority exist.
+do not execute a runtime change. `executeRhinoQAutopilotCanary()` can run an
+explicitly approved application-owned canary, bounds the task count and window,
+requires rollback tokens and rolls back in reverse order when the health gate
+fails. It never mutates Task state or retries an uncertain effect.
+
+For application-owned settings, `createRhinoQAtomicOperationalConfigStore()`
+provides a small stage/commit/rollback primitive with approval and revision
+fencing:
+
+```ts
+const settings = createRhinoQAtomicOperationalConfigStore({ concurrency: 2 });
+const change = settings.stage({ concurrency: 3 });
+settings.commit(change, approval);
+// If the canary is unhealthy:
+settings.rollback(change, rollbackApproval);
+```
+
+This is an in-process transaction helper, not distributed persistence or a
+Control Plane. Connect it to an application-owned durable settings store when
+the deployment crosses a process boundary.

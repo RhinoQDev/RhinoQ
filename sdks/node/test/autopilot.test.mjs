@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { planRhinoQAutopilotCanary, recommendRhinoQAutopilot, simulateRhinoQAutopilot } from '../dist/index.js';
+import { executeRhinoQAutopilotCanary, planRhinoQAutopilotCanary, recommendRhinoQAutopilot, simulateRhinoQAutopilot } from '../dist/index.js';
 
 test('Autopilot creates deterministic review recommendations with guardrails', () => {
   const report = recommendRhinoQAutopilot({
@@ -45,4 +45,65 @@ test('Autopilot simulation and canary phases emit approval artifacts without mut
   assert.deepEqual(canary.recommendationIds, [report.recommendations[0].id]);
   assert.equal(canary.approvalRequired, true);
   assert.equal(canary.autoApply, false);
+});
+
+test('Autopilot canary requires explicit approval and rolls back an unhealthy bounded change', async () => {
+  const report = recommendRhinoQAutopilot({
+    schemaVersion: 1, observedAt: '2026-08-14T00:00:00.000Z', source: 'test-observer',
+    metrics: { cpuPercent: 95 }, envelope: { maxCpuPercent: 80 },
+  });
+  const plan = planRhinoQAutopilotCanary({ report, maxTasks: 3, windowMs: 60_000 });
+  const calls = [];
+  const result = await executeRhinoQAutopilotCanary({
+    plan,
+    approve: () => ({ approvalId: 'approval-1', approvedBy: 'operator', approvedAt: '2026-08-14T00:00:00.000Z' }),
+    apply: (recommendationId, context) => { calls.push(['apply', recommendationId, context.maxTasks]); return { recommendationId, rollbackToken: 'rollback-1' }; },
+    observe: (context) => { calls.push(['observe', context.windowMs]); return { healthy: false, reason: 'error rate increased' }; },
+    rollback: (change) => { calls.push(['rollback', change.rollbackToken]); },
+  });
+  assert.equal(result.phase, 'rolled_back');
+  assert.equal(result.rolledBack, true);
+  assert.deepEqual(calls, [
+    ['apply', report.recommendations[0].id, 3],
+    ['observe', 60_000],
+    ['rollback', 'rollback-1'],
+  ]);
+});
+
+test('Autopilot canary never applies when approval is rejected', async () => {
+  const report = recommendRhinoQAutopilot({
+    schemaVersion: 1, observedAt: '2026-08-14T00:00:00.000Z', source: 'test-observer',
+    metrics: { cpuPercent: 95 }, envelope: { maxCpuPercent: 80 },
+  });
+  const plan = planRhinoQAutopilotCanary({ report });
+  let applied = false;
+  const result = await executeRhinoQAutopilotCanary({
+    plan,
+    approve: () => { throw new Error('operator declined'); },
+    apply: () => { applied = true; return { recommendationId: plan.recommendationIds[0], rollbackToken: 'never' }; },
+    observe: () => ({ healthy: true }),
+    rollback: () => {},
+  });
+  assert.equal(result.phase, 'rejected');
+  assert.equal(applied, false);
+  assert.match(result.error, /operator declined/);
+});
+
+test('Autopilot canary bounds an unresponsive observation window', async () => {
+  const report = recommendRhinoQAutopilot({
+    schemaVersion: 1, observedAt: '2026-08-14T00:00:00.000Z', source: 'test-observer',
+    metrics: { cpuPercent: 95 }, envelope: { maxCpuPercent: 80 },
+  });
+  const plan = planRhinoQAutopilotCanary({ report, windowMs: 1_000, maxTasks: 1 });
+  let rolledBack = false;
+  const result = await executeRhinoQAutopilotCanary({
+    plan,
+    approve: () => ({ approvalId: 'approval-1', approvedBy: 'operator', approvedAt: '2026-08-14T00:00:00.000Z' }),
+    apply: (recommendationId) => ({ recommendationId, rollbackToken: 'rollback-1' }),
+    observe: () => new Promise(() => {}),
+    rollback: () => { rolledBack = true; },
+  });
+  assert.equal(result.phase, 'rolled_back');
+  assert.equal(rolledBack, true);
+  assert.match(result.error, /window expired/);
 });

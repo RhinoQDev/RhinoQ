@@ -3,6 +3,7 @@ import type {
   ProviderOperationOptions,
   ProviderOperationRecord,
 } from '../gateway/types.js';
+import type { RhinoQLifecycleModule } from '../runtime/modules.js';
 
 export interface ProvisioningResult {
   id: string;
@@ -11,6 +12,7 @@ export interface ProvisioningResult {
 }
 
 export interface ProvisioningReferenceAdapter<T extends ProvisioningResult> {
+  module?: RhinoQLifecycleModule;
   provision(idempotencyKey: string): Promise<T>;
   inspect(operation: ProviderOperationRecord): Promise<T | undefined>;
   readyStates?: readonly string[];
@@ -20,11 +22,12 @@ export interface ProvisioningReferenceAdapter<T extends ProvisioningResult> {
 /** Reference adapter for storage buckets, accounts and other provisioning APIs. */
 export function provisioningProviderAdapter<T extends ProvisioningResult>(
   adapter: ProvisioningReferenceAdapter<T>,
-): Pick<ProviderOperationOptions<T>, 'execute' | 'confirm' | 'providerId' | 'evidence'> {
+): Pick<ProviderOperationOptions<T>, 'execute' | 'confirm' | 'providerId' | 'evidence' | 'module'> {
   const ready = new Set(adapter.readyStates ?? ['ready', 'active', 'available']);
   const failed = new Set(adapter.failedStates ?? ['failed', 'error', 'deleted']);
   const describe = (result: T) => `${result.id}:${result.state}${result.version === undefined ? '' : `@${result.version}`}`;
   return {
+    ...(adapter.module ? { module: adapter.module } : {}),
     execute: (key) => adapter.provision(key),
     providerId: (result) => result.id,
     evidence: describe,

@@ -4,6 +4,7 @@ import {
   createManualRuntimeAdapter,
   defineRhinoQApplication,
   defineRhinoQExecutionProfile,
+  compileRhinoQPlan,
 } from '../dist/index.js';
 
 test('application compiler applies one profile and emits a stable Task manifest', () => {
@@ -32,6 +33,33 @@ test('application compiler applies one profile and emits a stable Task manifest'
   });
   assert.ok(Object.isFrozen(application.definitions));
   assert.ok(Object.isFrozen(application.manifest().tasks));
+});
+
+test('application compiler exposes one deterministic canonical plan without changing the manifest contract', () => {
+  const adapter = createManualRuntimeAdapter('manual', 'reports');
+  const create = () => defineRhinoQApplication({
+    profile: { name: 'reports', adapters: [adapter] },
+    tasks: (rhinoq) => ({
+      exportReport: rhinoq.task('report.export', async (input) => input, {
+        dataPath: { payloadBytes: 1024 },
+      }),
+      resizeImages: rhinoq.task('image.resize', async (input) => input, {
+        resources: { workspaceBytes: 1024, codec: 'png' },
+        dataPath: { payloadBytes: 1024, diskFreeBytes: 2048, provider: { codecs: ['png'] } },
+      }),
+    }),
+  });
+  const first = create().plan();
+  const second = create().plan();
+  assert.equal(first.kind, 'rhinoq-plan');
+  assert.equal(first.status, 'ready');
+  assert.equal(first.fingerprint, second.fingerprint);
+  assert.deepEqual(first.capabilities, ['task']);
+  assert.deepEqual(first.requirements, ['adapter:manual', 'codec:png', 'output:checksum', 'runtime:manual', 'scope:reports', 'workspace:1024']);
+  assert.match(first.fingerprint, /^fnv1a32:[0-9a-f]{8}$/);
+  assert.equal(compileRhinoQPlan(JSON.parse(JSON.stringify(first))).fingerprint, first.fingerprint);
+  assert.ok(Object.isFrozen(first));
+  assert.ok(Object.isFrozen(first.tasks));
 });
 
 test('application compiler rejects duplicate names, unknown adapters and unsafe effects', () => {

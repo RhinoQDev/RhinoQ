@@ -3,12 +3,15 @@ import test from 'node:test';
 
 import {
   HttpProviderError,
+  createRhinoQModule,
   httpProviderAdapter,
 } from '../dist/index.js';
 
 test('HTTP provider adapter injects the ledger key and preserves provider callbacks', async () => {
   let received;
+  const module = createRhinoQModule({ descriptor: { id: 'provider/http', namespace: 'provider', version: 1, contractVersion: 1 } });
   const adapter = httpProviderAdapter({
+    module,
     request: (key) => ({
       input: 'https://provider.test/refunds',
       init: { method: 'POST', headers: { Authorization: 'Bearer test' }, body: JSON.stringify({ key }) },
@@ -31,6 +34,7 @@ test('HTTP provider adapter injects the ledger key and preserves provider callba
   assert.deepEqual(await adapter.confirm({}), { decision: 'confirmed', evidence: 'refund_1:succeeded' });
   assert.equal(adapter.providerId(result), 'refund_1');
   assert.equal(adapter.evidence(result), 'refund_1:accepted');
+  assert.equal(adapter.module, module);
 });
 
 test('HTTP provider adapter refuses a caller-supplied key that disagrees with the ledger key', async () => {

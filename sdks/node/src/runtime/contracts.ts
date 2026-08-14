@@ -1,4 +1,5 @@
 import type { TaskProgress } from '../gateway/types.js';
+import type { RhinoQLifecycleModule } from './modules.js';
 
 /** Durable identity of work in an application-owned runtime. */
 export interface RuntimeRef {
@@ -125,6 +126,8 @@ export interface RuntimeAdapter {
   readonly name: string;
   readonly scope: string;
   readonly capabilities: RuntimeCapabilities;
+  /** Optional lifecycle for provider/runtime resources; correctness stays here in Go/Application. */
+  readonly module?: RhinoQLifecycleModule;
   subscribe?(sink: RuntimeEventSink): Promise<Disposable>;
   dispatch?(command: DispatchCommand): Promise<DispatchReceipt>;
   inspect?(ref: RuntimeRef): Promise<RuntimeObservation>;
@@ -144,6 +147,9 @@ export interface RuntimeAdapterReport {
 export function validateRuntimeAdapter(adapter: RuntimeAdapter): RuntimeAdapter {
   requireText(adapter.name, 'adapter.name');
   requireText(adapter.scope, 'adapter.scope');
+  if (adapter.module && adapter.module.descriptor.namespace !== 'runtime') {
+    throw new TypeError('adapter.module must use the runtime namespace');
+  }
   const capabilities = adapter.capabilities;
   if (!capabilities || !['push', 'poll', 'none'].includes(capabilities.events)) {
     throw new TypeError('adapter.capabilities.events must be push, poll or none');

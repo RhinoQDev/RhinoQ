@@ -31,6 +31,23 @@ npx rhinoq adopt --scan --json
 It reports bounded source evidence and never writes or deletes files. See the
 [Integration Eraser guide](./integration-eraser.md).
 
+The Node CLI also exposes the read-only Caddy-inspired composition surfaces:
+
+```bash
+npx rhinoq plan --from manifest.json --output .rhinoq/plan.json
+npx rhinoq plan validate --from .rhinoq/plan.json
+npx rhinoq plan diff --from .rhinoq/plan.json --against .rhinoq/plan.previous.json
+npx rhinoq capabilities --json
+npx rhinoq modules doctor --json
+npx rhinoq build-profile --with processor/ffmpeg@1.0.0 --json
+npx rhinoq explain task report.export --from .rhinoq/plan.json
+```
+
+These commands consume explicit JSON or the bounded built-in catalog. They do
+not import arbitrary project source, install dependencies, mutate Task state or
+start a Control Plane. A build profile is a composition proposal until exact
+checksums, provenance and target-image smoke are attached.
+
 ## Run the preview CLI
 
 Install the CLI into Go's binary directory:

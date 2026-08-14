@@ -24,6 +24,10 @@ import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
 import { recoverFailureLab, runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
 import { adoptionChecklist } from '../runtime/adoption.js';
 import { scanRhinoQIntegrationEraser, type RhinoQIntegrationEraserReport } from '../adopt/eraser.js';
+import { compileRhinoQPlan, inspectRhinoQPlan, type RhinoQPlan, type RhinoQPlanManifest } from '../tasks/plan-inspector.js';
+import { compileRhinoQBuildProfile, type RhinoQBuildProfile } from '../runtime/build-profile.js';
+import { listRhinoQProcessorPackCatalog } from '../tasks/processor-pack.js';
+import { listRhinoQCapabilities } from '../capabilities/registry.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -34,6 +38,11 @@ async function main(): Promise<void> {
     case 'adopt': await adopt(args); break;
     case 'verify': await verify(args); break;
     case 'doctor': await doctor(args); break;
+    case 'plan': await plan(args); break;
+    case 'capabilities': await capabilities(args); break;
+    case 'modules': await modules(args); break;
+    case 'build-profile': await buildProfile(args); break;
+    case 'explain': await explain(args); break;
     case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
     case 'eval': await evaluateProduct(args); break;
@@ -44,6 +53,10 @@ async function main(): Promise<void> {
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
       console.log('Integration Eraser preview: npx rhinoq adopt --scan [--json]');
+      console.log('Plan workflow: npx rhinoq plan --from manifest.json --output .rhinoq/plan.json | npx rhinoq plan validate --from .rhinoq/plan.json | npx rhinoq plan diff --from .rhinoq/plan.json --against .rhinoq/plan.previous.json');
+      console.log('Capability ledger: npx rhinoq capabilities [--json]');
+      console.log('Module/build profile preview: npx rhinoq modules list | npx rhinoq modules doctor | npx rhinoq build-profile --with processor/ffmpeg@1.0.0');
+      console.log('Explain a bounded artifact: npx rhinoq explain plan --from .rhinoq/plan.json | npx rhinoq explain task report.export --from .rhinoq/plan.json | npx rhinoq explain module processor/ffmpeg');
       console.log('Start from your goal:\n  npx rhinoq setup                        # preview the complete golden path\n  npx rhinoq setup --apply                # configure without overwriting\n  npx rhinoq init                         # install the Task profile only\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq measure --before old --after new # measure consumer-owned source\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use defineRhinoQApplication() for a typed registry, shared execution profile and one HTTP mount.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
@@ -86,6 +99,237 @@ async function measure(args: string[]): Promise<void> {
     console.log(`PASS wrote ${path}`);
   }
   console.log(serialized.trimEnd());
+}
+
+type PlanCommand = 'show' | 'validate' | 'diff';
+
+/**
+ * Read-only plan workflow. It accepts an explicit JSON artifact and never
+ * imports arbitrary application source, starts a worker, or changes config.
+ */
+async function plan(args: string[]): Promise<void> {
+  let action: PlanCommand = 'show';
+  let from = '.rhinoq/plan.json';
+  let against: string | undefined;
+  let output: string | undefined;
+  let json = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (index === 0 && !raw.startsWith('--')) {
+      if (raw !== 'show' && raw !== 'validate' && raw !== 'diff') fail(`unknown plan action ${JSON.stringify(raw)}`, 'Run: npx rhinoq plan [show|validate|diff] --from <path>');
+      action = raw;
+      continue;
+    }
+    const [key, inline] = raw.split('=', 2);
+    if (key === '--json') { json = true; continue; }
+    const value = inline ?? args[++index];
+    if (key === '--from') from = requiredOption(key, value);
+    else if (key === '--against') against = requiredOption(key, value);
+    else if (key === '--output') output = requiredOption(key, value);
+    else fail(`unknown plan option ${JSON.stringify(key)}`, 'Run: npx rhinoq plan validate --from .rhinoq/plan.json');
+  }
+  const current = await readCanonicalPlan(resolve(from));
+  if (action === 'show') {
+    if (output) {
+      const outputPath = resolve(output);
+      await mkdir(dirname(outputPath), { recursive: true });
+      await writeNew(outputPath, `${JSON.stringify(current, null, 2)}\n`);
+    }
+    printPlan(current, json);
+    return;
+  }
+  if (action === 'validate') {
+    const inspection = inspectRhinoQPlan(current);
+    if (inspection.status !== 'ready') {
+      if (json) console.log(JSON.stringify({ plan: current, inspection }, null, 2));
+      fail(`plan requires decisions: ${inspection.needsDecision.join('; ')}`, 'Resolve the listed Task data-path decisions and regenerate the plan');
+    }
+    if (json) console.log(JSON.stringify({ plan: current, inspection }, null, 2));
+    else console.log(`PASS plan ${current.fingerprint} is ready (${current.tasks.length} Task(s), profile ${current.profile}).`);
+    return;
+  }
+  if (!against) fail('plan diff requires --against <path>', 'Run: npx rhinoq plan diff --from .rhinoq/plan.json --against .rhinoq/plan.previous.json');
+  const previous = await readCanonicalPlan(resolve(against));
+  const diff = diffPlans(previous, current);
+  if (json) console.log(JSON.stringify(diff, null, 2));
+  else {
+    console.log(`Plan diff ${previous.fingerprint} -> ${current.fingerprint}`);
+    console.log(`  added   ${diff.added.length}`);
+    console.log(`  removed ${diff.removed.length}`);
+    console.log(`  changed ${diff.changed.length}`);
+    for (const name of diff.added) console.log(`  + ${name}`);
+    for (const name of diff.removed) console.log(`  - ${name}`);
+    for (const name of diff.changed) console.log(`  ~ ${name}`);
+  }
+}
+
+async function readCanonicalPlan(path: string): Promise<RhinoQPlan> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(path, 'utf8'));
+  } catch (error) {
+    fail(`cannot read plan ${path}: ${safe(error)}`, `Write a compiled plan artifact first, for example compiler.plan() -> ${path}`);
+  }
+  try {
+    const compiled = compileRhinoQPlan(raw as RhinoQPlanManifest);
+    if (raw && typeof raw === 'object' && (raw as { kind?: unknown }).kind === 'rhinoq-plan'
+      && (raw as { fingerprint?: unknown }).fingerprint !== compiled.fingerprint) {
+      throw new TypeError(`fingerprint mismatch: artifact ${(raw as { fingerprint?: unknown }).fingerprint ?? '(missing)'}, computed ${compiled.fingerprint}`);
+    }
+    return compiled;
+  } catch (error) {
+    fail(`invalid plan ${path}: ${safe(error)}`, 'Export the plan from the typed application compiler and keep schemaVersion 1');
+  }
+}
+
+function printPlan(planValue: RhinoQPlan, json: boolean): void {
+  if (json) {
+    console.log(JSON.stringify(planValue, null, 2));
+    return;
+  }
+  console.log(`RhinoQ plan ${planValue.fingerprint}`);
+  console.log(`  profile       ${planValue.profile}`);
+  console.log(`  status        ${planValue.status}`);
+  console.log(`  Tasks         ${planValue.tasks.length}`);
+  console.log(`  capabilities  ${planValue.capabilities.join(', ') || '(none)'}`);
+  console.log(`  requirements  ${planValue.requirements.join(', ') || '(none)'}`);
+  if (planValue.needsDecision.length) console.log(`  needsDecision ${planValue.needsDecision.join('; ')}`);
+  if (planValue.limitations.length) console.log(`  limitations   ${planValue.limitations.join('; ')}`);
+}
+
+function diffPlans(previous: RhinoQPlan, current: RhinoQPlan): {
+  schemaVersion: 1;
+  previous: string;
+  current: string;
+  added: string[];
+  removed: string[];
+  changed: string[];
+} {
+  const before = new Map(previous.tasks.map((task) => [task.name, JSON.stringify(task)]));
+  const after = new Map(current.tasks.map((task) => [task.name, JSON.stringify(task)]));
+  const added = [...after.keys()].filter((name) => !before.has(name)).sort();
+  const removed = [...before.keys()].filter((name) => !after.has(name)).sort();
+  const changed = [...after.keys()].filter((name) => before.has(name) && before.get(name) !== after.get(name)).sort();
+  return { schemaVersion: 1, previous: previous.fingerprint, current: current.fingerprint, added, removed, changed };
+}
+
+async function capabilities(args: string[]): Promise<void> {
+  const unknown = args.filter((arg) => arg !== '--json');
+  if (unknown.length) fail(`unknown capabilities option ${JSON.stringify(unknown[0])}`, 'Run: npx rhinoq capabilities [--json]');
+  const registry = listRhinoQCapabilities();
+  if (args.includes('--json')) {
+    console.log(JSON.stringify({ schemaVersion: 1, capabilities: registry }, null, 2));
+    return;
+  }
+  console.log('RhinoQ capability ledger (implementation and evidence are separate)');
+  for (const entry of registry) console.log(`${entry.status.padEnd(17)} ${entry.id.padEnd(24)} evidence=${entry.evidence} owner=${entry.owner}`);
+  console.log('NEXT use --json in CI/release review and compare claims with raw evidence.');
+}
+
+async function modules(args: string[]): Promise<void> {
+  const action = args[0] && !args[0].startsWith('--') ? args[0] : 'list';
+  const rest = action === 'list' || action === 'doctor' ? args.slice(args[0] === action ? 1 : 0) : args;
+  if (action !== 'list' && action !== 'doctor') fail(`unknown module action ${JSON.stringify(action)}`, 'Run: npx rhinoq modules [list|doctor] [--json]');
+  const unknown = rest.filter((arg) => arg !== '--json');
+  if (unknown.length) fail(`unknown modules option ${JSON.stringify(unknown[0])}`, 'Run: npx rhinoq modules doctor --json');
+  const catalog = listRhinoQProcessorPackCatalog().map((entry) => ({
+    id: `processor/${entry.name}`,
+    namespace: 'processor',
+    status: entry.status,
+    evidence: entry.evidence,
+    ...(action === 'doctor' ? { readiness: 'not-probed', note: 'instantiate the application-owned pack and call module.provision(), module.validate() and pack.inspect() in the target worker' } : {}),
+  }));
+  if (rest.includes('--json')) console.log(JSON.stringify({ schemaVersion: 1, action, modules: catalog }, null, 2));
+  else {
+    console.log(`RhinoQ modules ${action} (catalog is not a provider health probe)`);
+    for (const entry of catalog) console.log(`${entry.status.padEnd(24)} ${entry.id} ${'readiness' in entry ? entry.readiness : ''}`);
+  }
+}
+
+async function explain(args: string[]): Promise<void> {
+  const target = args[0];
+  if (target === 'plan') {
+    await plan(args.slice(1));
+    return;
+  }
+  if (target === 'module') {
+    const id = args[1];
+    const entry = listRhinoQProcessorPackCatalog().find((item) => `processor/${item.name}` === id);
+    if (!entry) fail(`module ${JSON.stringify(id)} is not in the bounded catalog`, 'Run: npx rhinoq modules list');
+    const json = args.includes('--json');
+    const explained = { schemaVersion: 1, id, namespace: 'processor', status: entry.status, evidence: entry.evidence, lifecycle: ['loaded', 'provisioned', 'validated', 'used', 'cleaned'], note: 'catalog explanation only; target-worker readiness must be probed by the application-owned module' };
+    if (json) console.log(JSON.stringify(explained, null, 2));
+    else console.log(`${id}: ${entry.status}\n  evidence  ${entry.evidence}\n  lifecycle loaded -> provisioned -> validated -> used -> cleaned\n  note      ${explained.note}`);
+    return;
+  }
+  if (target === 'task') {
+    const name = args[1];
+    let from = '.rhinoq/plan.json';
+    let json = false;
+    for (let index = 2; index < args.length; index += 1) {
+      const raw = args[index]!;
+      if (raw === '--json') { json = true; continue; }
+      const [key, inline] = raw.split('=', 2);
+      const value = inline ?? args[++index];
+      if (key === '--from') from = requiredOption(key, value);
+      else fail(`unknown explain task option ${JSON.stringify(key)}`, 'Run: npx rhinoq explain task report.export --from .rhinoq/plan.json');
+    }
+    if (!name?.trim()) fail('explain task requires a Task name', 'Run: npx rhinoq explain task report.export --from .rhinoq/plan.json');
+    const explained = (await readCanonicalPlan(resolve(from))).tasks.find((task) => task.name === name);
+    if (!explained) fail(`Task ${JSON.stringify(name)} is not in plan ${resolve(from)}`, 'Use a Task name from npx rhinoq plan --from <path> --json');
+    if (json) console.log(JSON.stringify({ schemaVersion: 1, task: explained }, null, 2));
+    else console.log(`${explained.name}: ${explained.capability ?? 'task'}\n  runtime   ${explained.runtime}/${explained.scope}\n  adapter   ${explained.adapter}\n  retry     ${explained.retry.mode}\n  effect    ${explained.externalEffect ? 'external; confirmation required' : 'none'}\n  decisions ${(explained.dataPath?.needsDecision ?? []).join('; ') || 'none'}`);
+    return;
+  }
+  fail(`unknown explain target ${JSON.stringify(target)}`, 'Run: npx rhinoq explain [task|plan|module] ...');
+}
+
+async function buildProfile(args: string[]): Promise<void> {
+  let name = 'rhinoq-profile';
+  let lockPath: string | undefined;
+  const selected: { id: string; namespace: 'runtime' | 'processor' | 'provider' | 'storage' | 'surface'; version: string }[] = [];
+  let json = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === '--json') { json = true; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--name') name = requiredOption(key, value);
+    else if (key === '--with') selected.push(parseBuildModule(requiredOption(key, value)));
+    else if (key === '--lock') lockPath = requiredOption(key, value);
+    else fail(`unknown build-profile option ${JSON.stringify(key)}`, 'Run: npx rhinoq build-profile --name media-worker --with processor/ffmpeg@1.0.0');
+  }
+  if (lockPath && selected.length) fail('build-profile cannot combine --lock and --with', 'Use either a lock artifact or explicit --with module selections');
+  let profile: RhinoQBuildProfile;
+  if (lockPath) {
+    try {
+      const raw = JSON.parse(await readFile(resolve(lockPath), 'utf8')) as RhinoQBuildProfile;
+      profile = compileRhinoQBuildProfile(raw);
+    } catch (error) {
+      fail(`invalid build profile lock ${resolve(lockPath)}: ${safe(error)}`, 'Use a schemaVersion 1 profile with namespaced modules and exact versions');
+    }
+  } else {
+    profile = compileRhinoQBuildProfile({ name, modules: selected });
+  }
+  if (json) console.log(JSON.stringify(profile, null, 2));
+  else {
+    console.log(`RhinoQ build profile ${profile.fingerprint}`);
+    console.log(`  name          ${profile.name}`);
+    console.log(`  selected only ${profile.selectedOnly}`);
+    for (const module of profile.modules) console.log(`  with          ${module.id}@${module.version}${module.checksum ? ` ${module.checksum}` : ''}`);
+    for (const limitation of profile.limitations) console.log(`  limitation    ${limitation}`);
+  }
+}
+
+function parseBuildModule(spec: string): { id: string; namespace: 'runtime' | 'processor' | 'provider' | 'storage' | 'surface'; version: string } {
+  const at = spec.lastIndexOf('@');
+  const id = (at > 0 ? spec.slice(0, at) : '').trim();
+  const version = (at > 0 ? spec.slice(at + 1) : '').trim();
+  const namespace = id.split('/', 1)[0] ?? '';
+  if (!id || !version || !['runtime', 'processor', 'provider', 'storage', 'surface'].includes(namespace)) {
+    fail(`invalid module selection ${JSON.stringify(spec)}`, 'Use --with namespace/name@exact-version, for example processor/ffmpeg@1.0.0');
+  }
+  return { id, namespace: namespace as 'runtime' | 'processor' | 'provider' | 'storage' | 'surface', version };
 }
 
 async function countConsumerSource(directory: string): Promise<SourceCount> {

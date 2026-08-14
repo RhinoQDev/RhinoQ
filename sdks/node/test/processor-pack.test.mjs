@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   RhinoQProcessorPackError,
   createRhinoQProcessorPack,
+  createRhinoQSharpProcessorPack,
   listRhinoQProcessorPackCatalog,
 } from '../dist/index.js';
 
@@ -29,6 +30,8 @@ test('processor pack checks readiness, workspace and emits bounded metrics', asy
   const result = await pack.run(2, context({ workspace: {}, metric(name, by) { metrics.push([name, by]); } }));
   assert.equal(result, 4);
   assert.equal(processed, 1);
+  assert.equal(pack.module.descriptor.namespace, 'processor');
+  assert.equal(pack.module.state(), 'validated');
   assert.deepEqual(metrics, [['rhinoq_processor_pack_started_total', undefined], ['custom_total', 2], ['rhinoq_processor_pack_completed_total', undefined]]);
 });
 
@@ -52,4 +55,31 @@ test('processor pack cancellation is fail-closed', async () => {
   controller.abort(new Error('stop'));
   const pack = createRhinoQProcessorPack({ name: 'cancelled', inspect: () => ({ ...ready, name: 'cancelled' }), process: () => 'never' });
   await assert.rejects(() => pack.run({}, { signal: controller.signal }), (error) => error instanceof RhinoQProcessorPackError && error.errorClass === 'cancelled');
+});
+
+test('Sharp processor pack uses an injected provider runtime and bounded Task output', async () => {
+  const calls = [];
+  const pack = createRhinoQSharpProcessorPack({
+    version: '0.33.0',
+    available: () => true,
+    metadata: (inputPath) => ({ inputPath, width: 320, height: 180 }),
+    resize: (inputPath, outputPath, options) => { calls.push([inputPath, outputPath, options]); },
+  });
+  const readiness = await pack.inspect();
+  assert.equal(readiness.ready, true);
+  const metadata = await pack.run({ operation: 'metadata', inputPath: '/tmp/input.jpg' }, context({ workspace: {} }));
+  assert.equal(metadata.width, 320);
+  const output = await pack.run({ operation: 'resize', inputPath: '/tmp/input.jpg', outputPath: '/tmp/output.webp', resize: { width: 640, format: 'webp' } }, context({
+    workspace: {},
+    output: { file: async (path, options) => ({ id: 'artifact-1', taskId: 'task-1', executionId: 'execution-1', name: path.split('/').pop(), contentType: options.contentType }) },
+  }));
+  assert.equal(output.contentType, 'image/webp');
+  assert.deepEqual(calls, [['/tmp/input.jpg', '/tmp/output.webp', { width: 640, format: 'webp' }]]);
+});
+
+test('Sharp processor pack stays provider-gated when runtime is unavailable', async () => {
+  const pack = createRhinoQSharpProcessorPack({ available: () => false, metadata: () => ({}), resize: () => {} });
+  const readiness = await pack.inspect();
+  assert.equal(readiness.ready, false);
+  await assert.rejects(() => pack.run({ operation: 'metadata', inputPath: '/tmp/input.jpg' }, context({ workspace: {} })), (error) => error instanceof RhinoQProcessorPackError && error.errorClass === 'dependency');
 });

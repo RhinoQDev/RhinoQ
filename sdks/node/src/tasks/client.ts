@@ -15,6 +15,8 @@ import type {
 	TaskWaitpoint,
 	TaskWaitpointCreateRequest,
 	TaskWaitpointResolveRequest,
+  TaskCheckpoint,
+  TaskCheckpointSaveRequest,
 } from '../gateway/types.js';
 
 /**
@@ -135,4 +137,11 @@ export interface TaskClient {
 	createTaskWaitpoint?(taskId: string, request: TaskWaitpointCreateRequest): Promise<TaskWaitpoint>;
 	getTaskWaitpoint?(id: string, ownerId: string): Promise<TaskWaitpoint>;
 	resolveTaskWaitpoint?(id: string, ownerId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint>;
+	/**
+	 * Bounded resumable execution state. The embedded PostgreSQL profile owns
+	 * versioning and compatibility checks; adapters only carry the intent.
+	 */
+	saveTaskCheckpoint?(executionId: string, key: string, request: TaskCheckpointSaveRequest): Promise<TaskCheckpoint>;
+	getTaskCheckpoint?(executionId: string, key: string): Promise<TaskCheckpoint | undefined>;
+	deleteTaskCheckpoints?(executionId: string): Promise<number>;
 }

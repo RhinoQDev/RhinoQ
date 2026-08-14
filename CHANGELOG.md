@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- Added a canonical deterministic `RhinoQPlan` projection with compiler and
+  started-application access, read-only CLI `plan`, `validate` and `diff`
+  commands, and an evidence-aware capability ledger exposed by
+  `npx rhinoq capabilities --json`. Added bounded `explain` views for plans,
+  Tasks and processor modules.
+
+- Added an explicit load/provision/validate/cleanup module lifecycle for
+  replaceable runtime and processor boundaries. Processor packs expose their
+  lifecycle without moving lease, retry, effect or Task-state correctness out
+  of the authoritative Go/Application layers.
+
+- Provider adapter contracts can now carry the same optional lifecycle module
+  descriptor across HTTP, Stripe, provisioning and object-transfer boundaries;
+  provider readiness remains an explicit target-worker probe.
+
+- Added a bounded application-owned operational settings transaction with
+  stage, approval, revision-fenced commit and reverse rollback. It is an
+  in-process primitive for canary controllers, not distributed persistence or
+  an automatically started Control Plane.
+
+- Added opt-in selective execution checkpoints for deterministic large-work
+  units. The PostgreSQL-backed contract bounds state, fences handler version
+  and input checksum, supports lost-response-safe replay and keeps checkpoint
+  state separate from Task/business outcome state.
+
+- Added an approval-bound, bounded Autopilot canary executor with an
+  application-owned observation gate and reverse rollback. It does not mutate
+  Task state, retry uncertain effects or start a Control Plane. Added the first
+  provider-injected Sharp-compatible processor boundary without bundling a
+  native image dependency.
+
 - Completed the next low-code async tranche: `schedule` and resource metadata
   now compile into the read-only execution capsule; setup records detected
   capabilities; in-process Task mutation hooks can automatically invalidate

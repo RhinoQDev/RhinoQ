@@ -98,6 +98,7 @@ export class RhinoQPortableApp {
   task<Input, Output>(options: RhinoQTaskOptions<Input, Output>): RhinoQDeclaredTask<Input, Output> {
     return defineRhinoQTask(this.runtime, options, {
       waitpoints: this.tasks,
+      checkpoints: this.tasks,
       ...(this.trace ? { trace: this.trace } : {}),
       ...(this.realtime ? { onMutation: (mutation: { taskId: string; ownerId: string; tenantId?: string; entityVersion: number }) => this.realtime!.invalidate(mutation.taskId, { ownerId: mutation.ownerId, ...(mutation.tenantId ? { tenantId: mutation.tenantId } : {}) }, mutation.entityVersion) } : {}),
       ...((this.artifactProvider?.storage ?? this.artifactStorage) ? { artifacts: { storage: (this.artifactProvider?.storage ?? this.artifactStorage)!, register: (taskId, request) => this.tasks.registerTaskArtifact(taskId, request) } } : {}),

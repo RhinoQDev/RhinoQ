@@ -171,6 +171,36 @@ export interface TaskExecution {
   version: number;
 }
 
+/**
+ * A bounded, resumable unit of one Execution. Checkpoints are deliberately
+ * separate from Task status: they help a handler resume deterministic work,
+ * but they never prove an external effect or business outcome.
+ */
+export interface TaskCheckpoint {
+  schemaVersion: 1;
+  id: string;
+  taskId: string;
+  executionId: string;
+  key: string;
+  handlerVersion: number;
+  inputChecksum: string;
+  state: unknown;
+  completed: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskCheckpointSaveRequest {
+  taskId: string;
+  handlerVersion: number;
+  inputChecksum: string;
+  state: unknown;
+  completed?: boolean;
+  /** Required when changing an existing checkpoint; identical replay is safe. */
+  expectedVersion?: number;
+}
+
 export interface TaskSnapshot {
   schemaVersion: 1;
   /** Monotonic for one Task; ignore responses older than the latest seen value. */
@@ -416,6 +446,8 @@ export interface ProviderOperationAttentionQuery {
 export interface ProviderOperationOptions<T> extends Omit<ProviderOperationRequest, 'provider' | 'operation'> {
   /** `stripe.refund`, `storage.provision`, or another stable provider.operation name. */
   name: `${string}.${string}`;
+  /** Optional provider lifecycle metadata; Go still owns operation correctness. */
+  module?: import('../runtime/modules.js').RhinoQLifecycleModule;
   execute: (idempotencyKey: string) => Promise<T>;
   confirm?: (operation: ProviderOperationRecord) => Promise<ProviderConfirmation>;
   providerId?: (result: T) => string;

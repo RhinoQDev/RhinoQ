@@ -2,7 +2,7 @@ import type { TaskSnapshot } from '../gateway/types.js';
 import type { RhinoQDeclaredTask, RhinoQTaskDispatch, RhinoQTaskOptions, RhinoQTaskRetryPolicy, RhinoQTaskResourcePolicy, RhinoQTaskSchedulePolicy } from '../tasks/declaration.js';
 import type { RuntimeAdapter } from './contracts.js';
 import { compileRhinoQDataPathPlan, type RhinoQDataPathOverrides, type RhinoQDataPathPlan } from '../tasks/data-path.js';
-import { inspectRhinoQPlan } from '../tasks/plan-inspector.js';
+import { compileRhinoQPlan, inspectRhinoQPlan, type RhinoQPlan } from '../tasks/plan-inspector.js';
 import {
   createRhinoQApp,
   type CreateRhinoQAppOptions,
@@ -113,6 +113,8 @@ export interface RhinoQStartedApplication<Definitions extends BlueprintRecord> {
   readonly app: RhinoQPortableApp;
   readonly tasks: RhinoQApplicationTasks<Definitions>;
   readonly manifest: RhinoQApplicationManifest;
+  /** Deterministic, read-only projection of the compiled application. */
+  readonly plan: RhinoQPlan;
   /** The complete owner API, Task Center and Workbench middleware. */
   readonly http?: RhinoQAppHTTPMiddleware;
   /** Handler map for runtimes that register one processor per Task name. */
@@ -147,6 +149,7 @@ export type RhinoQApplicationWorkerHandler = (job: RhinoQApplicationWorkerJob) =
 export interface RhinoQApplicationCompiler<Definitions extends BlueprintRecord> {
   readonly definitions: Definitions;
   manifest(): RhinoQApplicationManifest;
+  plan(): RhinoQPlan;
   start(options: StartRhinoQApplicationOptions): Promise<RhinoQStartedApplication<Definitions>>;
 }
 
@@ -167,10 +170,12 @@ export function defineRhinoQApplication<Definitions extends BlueprintRecord>(
     profile: profile.name,
     tasks: Object.freeze(entries.map(({ options: _options, ...entry }) => Object.freeze(entry))),
   });
+  const plan = compileRhinoQPlan(manifest);
 
   return Object.freeze({
     definitions,
     manifest: () => manifest,
+    plan: () => plan,
     async start(startOptions: StartRhinoQApplicationOptions) {
       const { http: httpOptions, ...appOptions } = startOptions;
       const app = await createRhinoQApp({ ...appOptions, adapters: profile.adapters });
@@ -196,6 +201,7 @@ export function defineRhinoQApplication<Definitions extends BlueprintRecord>(
           app,
           tasks,
           manifest,
+          plan,
           ...(httpOptions ? { http: app.http({ ...httpOptions, applicationPlan: inspectRhinoQPlan(manifest) }) } : {}),
           workerHandlers: () => handlers,
           workerHandler: () => routeWorker,
