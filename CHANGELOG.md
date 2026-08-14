@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.17
+
+- Restored the `createRhinoQApp` golden-path marker in developer CLI help and
+  added a regression assertion matching the clean registry smoke contract.
+  `0.1.0-beta.16` published both npm packages with provenance, but its registry
+  smoke stopped before GitHub binaries, container and release assets; beta.17
+  supersedes that incomplete candidate.
+
 ## 0.1.0-beta.16
 
 - Added a canonical deterministic `RhinoQPlan` projection with compiler and

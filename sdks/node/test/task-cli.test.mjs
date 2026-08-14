@@ -45,6 +45,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   const help = spawnSync(process.execPath, [developerCLI, 'help'], { encoding: 'utf8', env: {} });
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /npx rhinoq init/);
+  assert.match(help.stdout, /createRhinoQApp/);
   assert.match(help.stdout, /npx rhinoq adopt --mode single/);
   assert.match(help.stdout, /lab run completed-but-missing-output --recover --confirm-disposable/);
   const version = spawnSync(process.execPath, [developerCLI, '--version'], { encoding: 'utf8', env: {} });
