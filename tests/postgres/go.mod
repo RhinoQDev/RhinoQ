@@ -6,7 +6,7 @@ module github.com/madebyduy/RhinoQ/tests/postgres
 
 go 1.25.0
 
-toolchain go1.26.5
+toolchain go1.26.6
 
 replace github.com/madebyduy/RhinoQ => ../..
 

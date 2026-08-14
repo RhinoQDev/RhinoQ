@@ -106,10 +106,16 @@ func (s *TaskScheduleStore) UpdateTaskSchedule(ctx context.Context, tenantID, id
 }
 
 func (s *TaskScheduleStore) UpdateTaskScheduleCalendar(ctx context.Context, tenantID, id string, version int64, expression, timezone string, next time.Time) (taskschedule.Record, error) {
-	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(id) == "" || version < 1 || next.IsZero() { return taskschedule.Record{}, taskschedule.ErrInvalid }
-	if _, err := taskschedule.ParseCron(expression, timezone); err != nil { return taskschedule.Record{}, err }
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(id) == "" || version < 1 || next.IsZero() {
+		return taskschedule.Record{}, taskschedule.ErrInvalid
+	}
+	if _, err := taskschedule.ParseCron(expression, timezone); err != nil {
+		return taskschedule.Record{}, err
+	}
 	r, err := scanTaskSchedule(s.db.QueryRowContext(ctx, `UPDATE rhinoq_task_schedules SET every_ms=NULL,cron_expression=$4,timezone=$5,next_run_at=$6,version=version+1,updated_at=clock_timestamp(),lease_owner=NULL,lease_expires_at=NULL,last_error='' WHERE tenant_id=$1 AND id=$2 AND version=$3 RETURNING `+taskScheduleColumns, tenantID, id, version, strings.Join(strings.Fields(expression), " "), strings.TrimSpace(timezone), next.UTC()))
-	if errors.Is(err, sql.ErrNoRows) { return taskschedule.Record{}, ports.ErrVersionConflict }
+	if errors.Is(err, sql.ErrNoRows) {
+		return taskschedule.Record{}, ports.ErrVersionConflict
+	}
 	return r, err
 }
 

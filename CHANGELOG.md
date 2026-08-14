@@ -1487,7 +1487,7 @@ an npm package.
   be mistaken for implemented behavior.
 
 - Hardened the security baseline after a repository audit. Go now requires
-  1.25 and prefers patched toolchain 1.26.5; pgx is upgraded to 5.9.2 and
+  1.25 and prefers patched toolchain 1.26.6; pgx is upgraded to 5.9.2 and
   x/text to 0.39.0. `govulncheck` now reports no reachable vulnerabilities in
   either Go module, `npm audit` reports none in the Node SDK, and Gitleaks found
   no secrets in history or the working tree. CI now repeats those checks.

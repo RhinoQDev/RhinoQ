@@ -43,7 +43,7 @@ exactly-once behavior at an external provider.
 
 ## Minimal Go application
 
-Prerequisites: Go 1.26.5, PostgreSQL 16 and an empty Go project.
+Prerequisites: Go 1.26.6, PostgreSQL 16 and an empty Go project.
 
 ```bash
 go mod init example.com/rhinoq-worker
