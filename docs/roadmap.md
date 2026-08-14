@@ -60,9 +60,30 @@ priority over a DAG engine, another runtime adapter or generic streaming.
 - [x] atomic retry command and at-least-once dispatch intent publication
 - [x] bounded waitpoint expiry scheduler with application-owned escalation hook
 
-SSE, React live hooks and streams now exist as delivery layers over authoritative
-snapshots. WebSocket and Redis fan-out remain deferred until measured demand
-justifies their additional operational state.
+SSE, React live hooks and streams remain the zero-configuration delivery path.
+An optional dependency-free WebSocket hub now multiplexes many Tasks, coalesces
+owner-scoped reads and bounds slow consumers without adding correctness state.
+Redis/NATS invalidation and multi-region fan-out remain adapter choices until
+measured adopter demand justifies their operational cost.
+
+- [x] bounded worker progress coalescer with terminal flush and fault-visible writes
+- [x] read-only TaskEvidencePassport projection with separate technical, external and business statuses
+- [x] short `task`/`batch`/`media`/`effect`/`schedule` factories with compiled execution/resource/data-path metadata
+- [x] read-only `npx rhinoq adopt --scan` Integration Eraser preview with confidence, file/line evidence, diff and reverse-patch artifacts
+- [x] read-only Plan Inspector projection from compiled Task manifest to Workbench, including schedule/resource capsule
+- [x] `defineRhinoQProject()` project profile binding pool, identity and operator mount
+- [x] generic processor-pack lifecycle contract with bounded FFmpeg adapter
+- [x] deterministic Autopilot observe/recommend report and operator-only Workbench panel
+- [x] read-only Autopilot simulate/canary approval artifacts with `autoApply: false`
+
+The project profile, processor-pack and Autopilot slices are implemented as
+bounded composition contracts. Sharp/LibreOffice/malware/AI packs, automatic
+patch application and Autopilot auto-apply remain intentionally unimplemented
+until their provider and adopter evidence exists. In-process realtime
+invalidation is automatic when the application supplies the optional invalidator;
+cross-process invalidation remains an adapter/pilot concern.
+See the dated [low-code upgrade status evidence](./evidence/low-code-upgrade-status-2026-08-14.md)
+for the implementation/evidence split.
 
 ## Foundation — COMMIT and RUN
 
@@ -153,6 +174,8 @@ requiring the application's current queue to be replaced.
 - [x] reproducible PostgreSQL concurrency and Task fan-out snapshot benchmarks
 - [ ] runtime fault-campaign and end-to-end benchmarks
 - [ ] public release and license decision
+- [ ] multi-process/multi-cluster Control Plane design-partner pilot; this is
+  deliberately not part of the data path and must not proxy large payload bytes
 
 Do not start a second external-runtime adapter, DAG engine, automatic repair or
 Outcome Level 2 before the Task slice and one BullMQ integration are validated

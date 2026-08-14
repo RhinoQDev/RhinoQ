@@ -155,9 +155,13 @@ func (c *Client) UpdateRecurringTask(ctx context.Context, tenantID, id string, v
 	return publicRecurring(r), err
 }
 func (c *Client) UpdateRecurringTaskCalendar(ctx context.Context, tenantID, id string, version int64, expression, timezone string, after time.Time) (RecurringTaskSchedule, error) {
-	if c == nil || c.taskSchedules == nil { return RecurringTaskSchedule{}, errors.New("recurring Task schedule store is not configured") }
+	if c == nil || c.taskSchedules == nil {
+		return RecurringTaskSchedule{}, errors.New("recurring Task schedule store is not configured")
+	}
 	next, err := (taskschedule.Spec{Cron: expression, Timezone: timezone}).NextAfter(after)
-	if err != nil { return RecurringTaskSchedule{}, err }
+	if err != nil {
+		return RecurringTaskSchedule{}, err
+	}
 	r, err := c.taskSchedules.UpdateTaskScheduleCalendar(ctx, tenantID, id, version, expression, timezone, next)
 	return publicRecurring(r), err
 }

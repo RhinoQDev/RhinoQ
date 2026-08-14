@@ -101,6 +101,9 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.match(html, /Async Flight Recorder/);
   assert.match(html, /Incident Explainer/);
   assert.match(html, /Runtime health/);
+  assert.match(html, /Plan Inspector/);
+  assert.match(html, /Autopilot/);
+  assert.match(html, /Evidence Passport/);
   assert.match(html, /Operator workspace/);
   assert.match(html, /Async work, explained/);
   assert.match(html, /workspace-intro/);
@@ -119,6 +122,30 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.match(html, /href="\/task-center"/);
   assert.match(html, /history\.pushState/);
   assert.match(html, /addEventListener\('popstate'/);
+});
+
+test('Autopilot is operator-only and exposes review evidence without mutation controls', async () => {
+  const handler = createWorkbenchHandler({
+    tasks: source(), requireOperator: () => true,
+    autopilot: () => ({
+      schemaVersion: 1,
+      phase: 'recommend',
+      observedAt: '2026-08-14T00:00:00.000Z',
+      source: 'test-observer',
+      recommendations: [{
+        id: 'review-concurrency', metric: 'cpuPercent', value: 90, threshold: 80, unit: 'percent',
+        evidence: 'CPU is high.', expectedEffect: 'Review concurrency.', guardrail: 'No Task mutation.', rollback: 'Restore previous setting.', action: 'review', autoApply: false,
+      }],
+      missingMetrics: [],
+      note: 'deterministic observations only; no Task state or business outcome mutation',
+    }),
+  });
+  const body = await (await get(handler, '/rhinoq/api/autopilot')).json();
+  assert.equal(body.phase, 'recommend');
+  assert.equal(body.recommendations[0].autoApply, false);
+
+  const denied = await get(createWorkbenchHandler({ tasks: source(), requireOperator: () => false, autopilot: () => body }), '/rhinoq/api/autopilot');
+  assert.equal(denied.status, 403);
 });
 
 test('runtime health is operator-only, bounded and strips unsafe dashboard URLs', async () => {
@@ -162,6 +189,19 @@ test('the detail view joins runtime job identity from the server-side read', asy
   assert.equal(body.incidentExplanation.schemaVersion, 1);
   assert.equal(body.incidentExplanation.taskId, 'task-1');
   assert.ok(body.incidentExplanation.evidence.length > 0);
+  assert.equal(body.evidencePassport.schemaVersion, 1);
+  assert.equal(body.evidencePassport.taskId, 'task-1');
+  assert.equal(body.evidencePassport.technicalExecution.taskState, 'running');
+});
+
+test('Evidence Passport has a focused authorized endpoint', async () => {
+  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true });
+  const response = await get(handler, '/rhinoq/api/tasks/task-1/evidence-passport');
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.schemaVersion, 1);
+  assert.equal(body.taskId, 'task-1');
+  assert.equal(body.externalEffect.status, 'not_applicable');
 });
 
 test('Incident Explainer has a focused authorized endpoint', async () => {
@@ -173,6 +213,35 @@ test('Incident Explainer has a focused authorized endpoint', async () => {
   assert.equal(body.taskId, 'task-1');
   assert.equal(body.businessOutcome, 'unknown');
   assert.ok(Array.isArray(body.recommendedActions));
+});
+
+test('Plan Inspector is operator-only and exposes compiled readiness without mutation controls', async () => {
+  const handler = createWorkbenchHandler({
+    tasks: source(), requireOperator: () => true,
+    applicationPlan: {
+      schemaVersion: 1,
+      status: 'needs-decision',
+      profile: 'reports',
+      tasks: [{
+        key: 'exportReport', name: 'report.export', factory: 'media', version: 1,
+        readiness: 'needs-decision', needsDecision: ['provider decision'],
+        compiledCapsule: {
+          adapter: 'bullmq', runtime: 'bullmq', scope: 'reports',
+          retry: { mode: 'never' }, externalEffect: false,
+          dataPath: { workload: 'media', inputTransport: 'private-reference', outputTransport: 'stream-to-storage', checksumRequired: true },
+        },
+      }],
+      needsDecision: ['report.export: provider decision'],
+      note: 'read-only compiled manifest; no configuration was generated or changed',
+    },
+  });
+  const body = await (await get(handler, '/rhinoq/api/plan')).json();
+  assert.equal(body.status, 'needs-decision');
+  assert.equal(body.tasks[0].compiledCapsule.dataPath.outputTransport, 'stream-to-storage');
+  assert.deepEqual(body.needsDecision, ['report.export: provider decision']);
+
+  const denied = await get(createWorkbenchHandler({ tasks: source(), requireOperator: () => false }), '/rhinoq/api/plan');
+  assert.equal(denied.status, 403);
 });
 
 test('Workbench refuses cancellation when runtime capability says unsupported', async () => {

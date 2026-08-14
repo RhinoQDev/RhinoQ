@@ -29,6 +29,13 @@ result metadata. The selected RhinoQ adapter and authoritative runtime still
 own reservation, lifecycle events, retry execution, lease fencing,
 reconciliation and durable state.
 
+Worker progress is coalesced at the runtime boundary. Rapid calls keep only the
+newest in-memory update, time/delta thresholds trigger a write, and the final
+pending value is flushed before the handler returns. The buffer is not a
+correctness store: a process crash can lose progress between flushes, while
+Task/Execution state remains owned by the application and Go engine. A failed
+progress write is returned to the worker rather than hidden.
+
 ## Safety defaults
 
 - Automatic retry defaults to `{ mode: 'never' }`.

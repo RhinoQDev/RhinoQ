@@ -3,6 +3,7 @@ export * from './nest.js';
 export * from './tasks/adapters.js';
 export * from './tasks/http.js';
 export * from './tasks/sse.js';
+export * from './tasks/websocket.js';
 export * from './tasks/result.js';
 export * from './tasks/task-center.js';
 export * from './providers/reconciler.js';

@@ -98,6 +98,7 @@ test('setup previews one complete plan and generates a native PostgreSQL worker 
     const preview = spawnSync(process.execPath, [developerCLI, 'setup'], { cwd, encoding: 'utf8', env: {} });
     assert.equal(preview.status, 0, preview.stderr);
     assert.match(preview.stdout, /execution runtime\s+postgres \(auto-selected\)/);
+    assert.match(preview.stdout, /capability detect/);
     assert.match(preview.stdout, /preview only; no schema or file was changed/);
     assert.equal(readFileSync(join(cwd, 'go.mod'), 'utf8'), 'module example.com/app\n\ngo 1.25.0\n');
 
@@ -108,6 +109,8 @@ test('setup previews one complete plan and generates a native PostgreSQL worker 
     assert.match(apply.stdout, /doctor\/eval deferred/);
     const setup = JSON.parse(readFileSync(join(cwd, '.rhinoq', 'setup.json'), 'utf8'));
     assert.equal(setup.runtime, 'postgres');
+    assert.equal(setup.schemaVersion, 2);
+    assert.ok(setup.capabilities.includes('database:postgres-required'));
     assert.match(readFileSync(join(cwd, '.env.rhinoq.example'), 'utf8'), /RHINOQ_OPERATOR_TOKEN=/);
     assert.match(readFileSync(join(cwd, '.env.rhinoq.example'), 'utf8'), /RHINOQ_ARTIFACT_BUCKET=/);
 
@@ -116,6 +119,18 @@ test('setup previews one complete plan and generates a native PostgreSQL worker 
     assert.equal(repeat.status, 0, repeat.stderr);
     assert.equal(readFileSync(worker, 'utf8'), 'package rhinoqworker\n// user-owned\n');
     assert.match(repeat.stdout, /KEEP/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('setup manual generates the project-profile mount instead of a low-level start shell', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-setup-manual-'));
+  try {
+    const apply = spawnSync(process.execPath, [developerCLI, 'setup', '--runtime', 'manual', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(apply.status, 0, apply.stderr);
+    const app = readFileSync(join(cwd, 'rhinoq.app.mjs'), 'utf8');
+    assert.match(app, /defineRhinoQProject/);
+    assert.doesNotMatch(app, /defineRhinoQApplication/);
+    assert.equal(JSON.parse(readFileSync(join(cwd, '.rhinoq', 'setup.json'), 'utf8')).projectProfile, true);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 

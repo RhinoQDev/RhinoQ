@@ -17,6 +17,9 @@ import { safeOperatorURL, type RuntimeHealthReader, type RuntimeJobLink } from '
 import { workbenchPage } from './page.js';
 import { explainTaskIncident, type IncidentExplanation } from '../tasks/incident-explanation.js';
 import type { RuntimeAdapterReport } from '../runtime/contracts.js';
+import type { RhinoQPlanInspection } from '../tasks/plan-inspector.js';
+import type { RhinoQAutopilotReport } from '../observe/autopilot.js';
+import { taskEvidencePassport, type TaskEvidencePassport } from '../tasks/evidence-passport.js';
 
 /** The reads the Workbench performs. `PostgresTaskClient` satisfies it. */
 export interface WorkbenchTaskSource {
@@ -71,6 +74,10 @@ export interface WorkbenchHandlerOptions {
   runtimeJobLink?: RuntimeJobLink;
   /** Portable capability/health reports used to gate runtime actions. */
   runtimeReports?(): Promise<RuntimeAdapterReport[]>;
+  /** Optional read-only compiler output for Plan Inspector. */
+  applicationPlan?: RhinoQPlanInspection;
+  /** Optional deterministic observe/recommend report; never mutates Tasks. */
+  autopilot?(): Promise<RhinoQAutopilotReport> | RhinoQAutopilotReport;
 }
 
 const DEFAULT_STATES: TaskState[] = [
@@ -212,6 +219,28 @@ export function createWorkbenchHandler(
         return json({ schemaVersion: 1, scopes: await inspectRuntimeHealth(options.runtimeHealth) });
       }
 
+      if (request.method === 'GET' && relative.length === 2 && relative[0] === 'api' && relative[1] === 'autopilot') {
+        return json(options.autopilot ? await options.autopilot() : {
+          schemaVersion: 1,
+          phase: 'observe',
+          observedAt: new Date().toISOString(),
+          source: 'not-configured',
+          recommendations: [],
+          missingMetrics: [],
+          note: 'deterministic observations only; no Task state or business outcome mutation',
+        });
+      }
+
+      if (request.method === 'GET' && relative.length === 2 && relative[0] === 'api' && relative[1] === 'plan') {
+        return json(options.applicationPlan ?? {
+          schemaVersion: 1,
+          status: 'not-configured',
+          tasks: [],
+          needsDecision: ['start the typed application compiler to expose a plan'],
+          note: 'read-only compiled manifest; no configuration was generated or changed',
+        });
+      }
+
       if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'tasks' && relative.length === 2) {
         const requested = url.searchParams.get('state') ?? states[0];
         if (requested === ATTENTION_BUCKET) {
@@ -235,6 +264,10 @@ export function createWorkbenchHandler(
           return json({ schemaVersion: 1, ...(await taskDetail(options.tasks, taskId, options.providerOperationsByTask, options.runtimeJobLink, options.runtimeReports)) });
         }
 
+        if (request.method === 'GET' && relative.length === 4 && relative[3] === 'evidence-passport') {
+          const detail = await taskDetail(options.tasks, taskId, options.providerOperationsByTask, undefined, options.runtimeReports);
+          return json(detail.evidencePassport);
+        }
         if (request.method === 'GET' && relative.length === 4 && relative[3] === 'incident-explanation') {
           const detail = await taskDetail(options.tasks, taskId, options.providerOperationsByTask, undefined, options.runtimeReports);
           return json(detail.incidentExplanation);
@@ -541,7 +574,7 @@ async function taskDetail(
   providerOperationsByTask?: (taskId: string) => Promise<ProviderOperationRecord[]>,
   runtimeJobLink?: RuntimeJobLink,
   runtimeReports?: () => Promise<RuntimeAdapterReport[]>,
-): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder; incidentExplanation: IncidentExplanation }> {
+): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder; incidentExplanation: IncidentExplanation; evidencePassport: TaskEvidencePassport }> {
   const task = await tasks.getTask(taskId);
   const [refs, results, waitpoints, verifications, artifacts, providerOperations, reports] = await Promise.all([
     tasks.listTaskExecutionRuntimeRefs?.(taskId).catch(() => undefined),
@@ -589,6 +622,14 @@ async function taskDetail(
   });
 
   const resolvedWaitpoints = waitpoints ?? [];
+  const evidencePassport = taskEvidencePassport({
+    task,
+    executionResults: results?.executions,
+    waitpoints: resolvedWaitpoints,
+    verifications: verifications ?? [],
+    artifacts: artifacts ?? [],
+    providerOperations: providerOperations ?? [],
+  });
   return {
     task,
     ui: taskUIModel(task),
@@ -608,6 +649,7 @@ async function taskDetail(
       providerOperations: providerOperations ?? [],
       runtimeReports: reports,
     }),
+    evidencePassport,
   };
 }
 

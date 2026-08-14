@@ -26,7 +26,9 @@ func (s *store) SetTaskScheduleEnabled(_ context.Context, _ string, _ string, _ 
 func (s *store) UpdateTaskSchedule(_ context.Context, _ string, _ string, _ int64, _ time.Duration, _ time.Time) (taskschedule.Record, error) {
 	return taskschedule.Record{}, nil
 }
-func (s *store) UpdateTaskScheduleCalendar(_ context.Context, _, _ string, _ int64, _, _ string, _ time.Time) (taskschedule.Record, error) { return taskschedule.Record{}, nil }
+func (s *store) UpdateTaskScheduleCalendar(_ context.Context, _, _ string, _ int64, _, _ string, _ time.Time) (taskschedule.Record, error) {
+	return taskschedule.Record{}, nil
+}
 func (s *store) DeleteTaskSchedule(context.Context, string, string, int64) error { return nil }
 func (s *store) TaskScheduleStats(context.Context) (taskschedule.Stats, error) {
 	return taskschedule.Stats{}, nil

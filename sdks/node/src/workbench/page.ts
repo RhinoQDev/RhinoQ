@@ -180,6 +180,16 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
     <div class="head"><strong>Runtime health</strong><span class="muted">read-only evidence from the connected job runtime</span></div>
     <div class="runtime-grid" id="runtimeHealth"></div>
   </section>
+  <section class="panel" id="planPanel" hidden>
+    <div class="head"><strong>Plan Inspector</strong><span class="muted" id="planSummary"></span></div>
+    <div class="guidance"><strong id="planStatus"></strong><p id="planDecisions"></p></div>
+    <div class="scroll"><table id="planTable"><tbody></tbody></table></div>
+  </section>
+  <section class="panel" id="autopilotPanel" hidden>
+    <div class="head"><strong>Autopilot</strong><span class="muted">observe and recommend only</span></div>
+    <div class="guidance"><strong id="autopilotStatus"></strong><p id="autopilotNote"></p></div>
+    <div class="scroll"><table id="autopilotTable"><tbody></tbody></table></div>
+  </section>
   <div class="buckets" id="buckets"></div>
   <div class="panel">
     <div class="head"><strong id="listTitle">Tasks</strong><span class="muted" id="listNote"></span></div>
@@ -214,6 +224,10 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
       <p class="next" id="incidentActions"></p>
     </div>
   </div>
+  <div class="panel" id="proofPanel" hidden>
+    <div class="head"><strong>Evidence Passport</strong><span class="muted">causal proof view derived from the joined Task records</span></div>
+    <div class="guidance"><strong id="proofTechnical"></strong><p id="proofExternal"></p><p id="proofBusiness"></p><p class="muted" id="proofRecovery"></p></div>
+  </div>
 </main>
 <script>
 const base = location.pathname.replace(/\/+$/, '');
@@ -237,6 +251,32 @@ function live(state, text) {
 function fail(error) {
   $('err').hidden = false;
   $('err').textContent = error.message;
+}
+
+function renderPlan(plan) {
+  const panel = $('planPanel');
+  if (!plan || plan.status === 'not-configured') { panel.hidden = true; return; }
+  panel.hidden = false;
+  $('planSummary').textContent = (plan.profile || 'application') + ' â€¢ ' + plan.tasks.length + ' Task(s)';
+  $('planStatus').textContent = plan.status === 'ready' ? 'Ready from compiled manifest' : 'Needs decision before this plan is complete';
+  $('planDecisions').textContent = plan.needsDecision.length ? plan.needsDecision.join(' â€¢ ') : (plan.note || 'Read-only plan evidence.');
+  $('planTable').innerHTML = '<thead><tr><th>Task</th><th>Factory</th><th>Capsule</th><th>Data path</th><th>Readiness</th></tr></thead><tbody>' +
+    plan.tasks.map((task) => '<tr><td><strong>' + esc(task.name) + '</strong><br><span class="muted">' + esc(task.key) + ' v' + esc(task.version) + '</span></td><td>' +
+      esc(task.factory) + '</td><td><code>' + esc(task.compiledCapsule.adapter) + '</code><br><span class="muted">' + esc(task.compiledCapsule.runtime) + ' / ' + esc(task.compiledCapsule.scope) + '</span></td><td>' +
+      esc(task.compiledCapsule.dataPath ? task.compiledCapsule.dataPath.inputTransport + ' â†’ ' + task.compiledCapsule.dataPath.outputTransport : 'not declared') + '</td><td>' +
+      esc(task.readiness) + '</td></tr>').join('') + '</tbody>';
+}
+
+function renderAutopilot(report) {
+  const panel = $('autopilotPanel');
+  if (!report) { panel.hidden = true; return; }
+  panel.hidden = false;
+  $('autopilotStatus').textContent = report.phase === 'recommend' ? report.recommendations.length + ' recommendation(s) need review' : 'Observing project evidence';
+  $('autopilotNote').textContent = report.note + (report.missingMetrics?.length ? ' Missing: ' + report.missingMetrics.join(', ') + '.' : '');
+  $('autopilotTable').innerHTML = report.recommendations?.length
+    ? '<thead><tr><th>Signal</th><th>Evidence</th><th>Expected effect</th><th>Guardrail / rollback</th></tr></thead><tbody>' + report.recommendations.map((item) =>
+      '<tr><td><strong>' + esc(item.id) + '</strong><br><span class="muted">' + esc(item.metric) + ' ' + esc(item.value) + ' / ' + esc(item.threshold) + ' ' + esc(item.unit) + '</span></td><td>' + esc(item.evidence) + '</td><td>' + esc(item.expectedEffect) + '</td><td>' + esc(item.guardrail) + '<br><span class="muted">' + esc(item.rollback) + '</span></td></tr>').join('') + '</tbody>'
+    : '<tbody><tr><td class="empty">No bounded recommendation is active.</td></tr></tbody>';
 }
 
 function ago(iso) {
@@ -348,6 +388,16 @@ function renderDetail() {
   previousItems = next;
   renderIncident(detail.incidentExplanation);
   renderFlightRecorder(detail.flightRecorder);
+  renderProof(detail.evidencePassport);
+}
+
+function renderProof(passport) {
+  if (!passport) { $('proofPanel').hidden = true; return; }
+  $('proofPanel').hidden = false;
+  $('proofTechnical').textContent = 'Technical execution: ' + passport.technicalExecution.status + ' (' + passport.technicalExecution.taskState + ')';
+  $('proofExternal').textContent = 'External effect: ' + passport.externalEffect.status + ' · ' + passport.externalEffect.operationIds.length + ' operation(s)';
+  $('proofBusiness').textContent = 'Business outcome: ' + passport.businessOutcome.status + (passport.businessOutcome.summary ? ' · ' + passport.businessOutcome.summary : '');
+  $('proofRecovery').textContent = passport.recovery.required ? 'Recovery required: ' + passport.recovery.reasons.join(' · ') : 'Recovery: no unresolved recovery reason was derived.';
 }
 
 function renderIncident(incident) {
@@ -405,6 +455,7 @@ function select(taskId) {
   $('detailPanel').hidden = false;
   $('flightPanel').hidden = true;
   $('incidentPanel').hidden = true;
+  $('proofPanel').hidden = true;
   $('timeline').replaceChildren();
   $('detail').querySelector('tbody').innerHTML =
     '<tr><td><span class="skel w-lg"></span></td><td><span class="skel"></span></td><td><span class="skel"></span></td></tr>';
@@ -489,6 +540,22 @@ function startPolling() {
   pollTimer = setInterval(tick, 3000);
 }
 
+async function loadPlan() {
+  try {
+    const response = await fetch(base + '/api/plan', { headers: { accept: 'application/json' } });
+    const plan = await response.json();
+    if (response.ok) renderPlan(plan);
+  } catch { /* Task stream remains useful when a host does not expose a plan. */ }
+}
+
+async function loadAutopilot() {
+  try {
+    const response = await fetch(base + '/api/autopilot', { headers: { accept: 'application/json' } });
+    const report = await response.json();
+    if (response.ok) renderAutopilot(report);
+  } catch { /* The Workbench remains useful when no observation source is configured. */ }
+}
+
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
@@ -519,6 +586,8 @@ $('cancelBtn').onclick = async () => {
 setInterval(() => { if (snap) renderList(); }, 10000);
 skeleton();
 connect();
+void loadPlan();
+void loadAutopilot();
 </script>
 </body>
 </html>`;

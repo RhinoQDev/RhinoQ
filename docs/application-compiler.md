@@ -93,6 +93,11 @@ TypeScript infers every input and output from the registry. `manifest()` is a
 stable, serializable description suitable for tests, diagnostics and build
 metadata. It contains no handler source or payload data.
 
+When `start({ http })` is used, the same bounded manifest is available to the
+operator Workbench's read-only [Plan Inspector](./plan-inspector.md) at
+`/admin/api/plan`. It shows the factory marker, compiled runtime capsule and
+data-path readiness; provider gaps remain explicit `needs-decision` values.
+
 The same registry removes the worker switch statement. Use
 `application.workerHandlers()` when a runtime registers one processor per name,
 or `application.workerHandler()` when one worker receives several Task names.
@@ -102,6 +107,35 @@ checks its versioned envelope before running business code.
 ```ts
 const worker = new Worker('reports', application.workerHandler(), connection);
 ```
+
+For the golden path, the compiler also accepts short capability factories:
+
+```ts
+tasks: (rhinoq) => ({
+  exportReport: rhinoq.task('report.export', async ({ reportId }) => generate(reportId)),
+  resizeImages: rhinoq.batch('image.resize', async (image, context) => resize(image, context.signal)),
+  webVideo: rhinoq.media('video.web', async (video, context) => context.media.transcode(video, 'web')),
+  capturePayment: rhinoq.effect('payment.capture', capture, {
+    effect: { idempotency: 'provider', confirmation: 'readback' },
+  }),
+  nightly: rhinoq.schedule('report.nightly', runNightly, {
+    schedule: { expression: '0 2 * * *', timezone: 'Asia/Ho_Chi_Minh' },
+    resources: { timeoutMs: 30_000, workspaceBytes: 128 * 1024 * 1024, minDiskFreeBytes: 512 * 1024 * 1024, region: 'ap-southeast-1', codec: 'pdf' },
+  }),
+});
+```
+
+The aliases are metadata-bearing composition helpers, not a workflow DSL. They
+compile a capability marker and a bounded execution/data-path plan into the manifest;
+they do not guess retry, provider idempotency or business correctness. The
+callable object form remains available for migration and advanced overrides.
+
+`resources` and `schedule` are metadata, not a second scheduler or worker
+policy engine. Plan Inspector shows timeout/concurrency/workspace/disk/GPU/
+region/codec requirements and schedule expression. The Data Path Planner marks
+missing disk or codec evidence as `needs-decision`; runtime admission must fail
+closed when it cannot prove capacity. Scheduled occurrence creation remains the
+Go/runtime scheduler's responsibility.
 
 ## What the profile removes
 

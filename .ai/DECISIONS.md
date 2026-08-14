@@ -499,6 +499,72 @@
   stored Task data unchanged.
 - **Owner:** Node SDK + product
 
+## ADR-0037 — Low-code composition remains bounded and evidence-gated
+
+- **Status:** accepted
+- **Context:** the low-code upgrade plan asks RhinoQ to remove repeated setup,
+  realtime, processor and operator glue, but automatic mutation or a hosted
+  control plane would add authority before multi-cluster evidence exists.
+- **Decision:** `defineRhinoQProject()` binds pool, identity, execution profile
+  and operator mount; processor packs own readiness/workspace/cleanup glue;
+  Autopilot observations, what-if simulation and canary approval artifacts are
+  deterministic with `autoApply: false`; Plan
+  Inspector and Integration Eraser are read-only. No slice may mutate adopter
+  files, Task state, business outcomes, leases, retries or uncertain effects.
+  A multi-cluster Control Plane is deferred until a design-partner pilot and
+  must not proxy large data-path bytes.
+- **Consequences:** the shortest path is available for evaluation without
+  creating a second correctness engine. Sharp/LibreOffice/malware/AI packs,
+  Autopilot canary execution/automatic phases, patch application and Control
+  Plane production claims remain evidence gates.
+- **Rollback:** remove the additive project/profile, pack, Autopilot and
+  operator projections; existing compiler, runtime and Task contracts remain
+  unchanged.
+- **Owner:** Node SDK + product + architecture
+
+## ADR-0038 — Mutation invalidation and execution capsules stay non-authoritative
+
+- **Status:** accepted
+- **Context:** low-code setup needs one place to describe schedule/resource/data
+  intent and realtime UI should update after writes without making socket health
+  part of Task correctness.
+- **Decision:** compile schedule/resource/data-path fields into a bounded,
+  read-only execution capsule; expose an optional best-effort mutation hook for
+  producer dispatch and runtime projection writes; and derive Evidence Passport
+  from authoritative Task/effect/verification/artifact reads. The hook may
+  invalidate an application-owned realtime hub, but it cannot fail, retry or
+  change the durable write. Runtime admission and occurrence creation remain
+  engine/application-owned.
+- **Consequences:** in-process consumers get automatic invalidation when they
+  compose the hook; external replicas still need an explicit signal adapter or
+  pilot. Capsule metadata improves inspection without moving lease, retry,
+  effect or state-machine correctness into Node.
+- **Rollback:** omit the optional realtime hook and ignore the additive capsule
+  fields; the existing SSE/polling safety net and runtime contracts remain valid.
+- **Owner:** Node SDK + runtime architecture
+
+## ADR-0036 — WebSocket is a multiplexed delivery adapter, not Task state
+
+- **Status:** accepted
+- **Context:** SSE is sufficient for ordinary progress, but an application may
+  already operate WebSocket infrastructure or need many Task subscriptions on
+  one connection. Per-socket polling and full-state broker messages duplicate
+  reads, serialization and correctness state.
+- **Decision:** provide a dependency-free, stack-neutral WebSocket hub in the
+  Node server surface. Group reads by tenant/owner/Task, fan out only newer
+  authoritative snapshots, bound connections/subscriptions/backpressure and
+  version the wire messages. Indexed invalidation is the normal low-latency
+  path; bounded reconciliation polling repairs missed signals. Authentication and upgrade/origin policy remain
+  application-owned. Redis/NATS may carry invalidation identity/version at
+  larger scale but never become the canonical Task store.
+- **Consequences:** adopters reuse an existing socket server with a small
+  adapter and no mandatory broker. The Go engine continues to own leases,
+  retries, cancellation, effects and state transitions. SSE/polling remains the
+  default and recovery path.
+- **Rollback:** stop accepting WebSocket peers and retain the unchanged owner
+  SSE and polling API.
+- **Owner:** Node SDK + product
+
 ## ADR-0034A — Task application compilation is explicit composition
 
 - **Status:** accepted

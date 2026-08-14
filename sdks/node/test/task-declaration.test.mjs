@@ -7,6 +7,7 @@ import { defineRhinoQTask } from '../dist/index.js';
 
 test('one Task declaration drives stable dispatch identity and the worker handler', async () => {
   const calls = [];
+  const mutations = [];
   const integration = {
     async dispatch(adapter, command) {
       calls.push({ adapter, command });
@@ -20,11 +21,13 @@ test('one Task declaration drives stable dispatch identity and the worker handle
     retry: { mode: 'runtime', maxAttempts: 3, backoff: { type: 'exponential', delayMs: 1000 } },
     run: async ({ reportId }) => ({ ref: `${reportId}.pdf` }),
     result: (output) => ({ ref: output.ref, mediaType: 'application/pdf' }),
-  });
+  }, { onMutation(mutation) { mutations.push(mutation); } });
   const snapshot = await task.dispatch({ id: 'report-42', ownerId: 'owner-a', payload: { reportId: '42' } });
   assert.equal(snapshot.state, 'queued');
   assert.equal(calls[0].adapter, 'bullmq');
   assert.equal(calls[0].command.idempotencyKey, 'report-42');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(mutations, [{ taskId: 'report-42', ownerId: 'owner-a', entityVersion: 2 }]);
   assert.equal(calls[0].command.executionId, 'report-42:attempt:1');
   assert.deepEqual(calls[0].command.retry, { maxAttempts: 3, backoff: { type: 'exponential', delayMs: 1000 } });
   assert.deepEqual(calls[0].command.payload, {
@@ -51,6 +54,16 @@ test('Task declaration defaults to no retry and refuses undeclared external effe
     name: 'payment.refund', adapter: 'manual', runtime: 'manual', scope: 'payments',
     externalEffect: true, run: async () => undefined,
   }), /explicit idempotency and confirmation policy/);
+});
+
+test('realtime mutation notification is best-effort and cannot fail dispatch', async () => {
+  const task = defineRhinoQTask({
+    async dispatch(_adapter, command) {
+      return { id: command.task.id, type: command.task.type, ownerId: command.task.ownerId, state: 'queued', entityVersion: 1, schemaVersion: 1, progress: { completed: 0 }, hasResult: false, executions: [], createdAt: '2026-08-14T00:00:00Z', updatedAt: '2026-08-14T00:00:00Z' };
+    },
+  }, { name: 'best.effort', adapter: 'manual', runtime: 'manual', scope: 'test', run: async () => undefined }, { onMutation() { throw new Error('socket hub unavailable'); } });
+  const snapshot = await task.dispatch({ id: 'task-best-effort', ownerId: 'owner-a', payload: {} });
+  assert.equal(snapshot.state, 'queued');
 });
 
 test('worker artifact helper uploads, hashes and registers one owner-safe artifact', async () => {
@@ -92,6 +105,26 @@ test('worker artifact helper streams without buffering and reports byte progress
   assert.equal(registered[0].checksumSha256, '9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a');
   assert.deepEqual(progress.map((value) => value.completed), [2, 4]);
   assert.equal(output.reference, 's3://bucket/video');
+});
+
+test('worker progress coalesces rapid updates and flushes the newest value before return', async () => {
+  const progress = [];
+  const task = defineRhinoQTask({ dispatch() {}, close() {} }, {
+    name: 'progress.coalesced', adapter: 'manual', runtime: 'manual', scope: 'progress',
+    run: async (_input, context) => {
+      await context.progress(0, 10, 'start');
+      await context.progress(0.1, 10, 'middle-1');
+      await context.progress(0.2, 10, 'middle-2');
+    },
+  });
+  await task.workerHandler()({
+    data: { taskName: 'progress.coalesced', definitionVersion: 1, taskId: 't1', executionId: 'e1', payload: {} },
+    updateProgress(value) { progress.push(value); },
+  });
+  assert.deepEqual(progress, [
+    { completed: 0, total: 10, message: 'start' },
+    { completed: 0.2, total: 10, message: 'middle-2' },
+  ]);
 });
 
 test('output helpers infer file names and MIME types while bounding multiple files', async () => {

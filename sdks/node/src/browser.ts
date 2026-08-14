@@ -7,5 +7,6 @@ export * from './tasks/ui.js';
 export * from './tasks/watch.js';
 export * from './tasks/http.js';
 export * from './tasks/sse.js';
+export type { TaskWebSocketClientMessage, TaskWebSocketServerMessage } from './tasks/websocket.js';
 export * from './tasks/direct-upload-client.js';
 export * from './tasks/browser-sha256.js';

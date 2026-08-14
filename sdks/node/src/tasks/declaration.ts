@@ -7,8 +7,10 @@ import { PassThrough } from 'node:stream';
 import { createRhinoQMediaContext, type RhinoQMediaContext } from './media.js';
 import { createRhinoQTaskIO, type RhinoQTaskIO } from './task-io.js';
 import { createTaskWorkspace, type RhinoQTaskWorkspace } from './workspace.js';
+import { createRhinoQProgressCoalescer } from './progress.js';
 import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions, type WaitpointLifecycleClient, type WaitpointOutcome } from './waitpoint.js';
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
+import type { RhinoQDataPathOverrides } from './data-path.js';
 
 export interface RhinoQTaskRunContext {
   taskId: string;
@@ -73,6 +75,15 @@ export interface RhinoQTaskServices {
   };
   waitpoints?: WaitpointLifecycleClient;
   trace?: RhinoQTraceHooks;
+  /** Read-only notification hook; realtime delivery must never change Task correctness. */
+  onMutation?(mutation: RhinoQTaskMutation): Promise<void> | void;
+}
+
+export interface RhinoQTaskMutation {
+  taskId: string;
+  ownerId: string;
+  tenantId?: string;
+  entityVersion: number;
 }
 
 export interface RhinoQTraceHooks {
@@ -89,12 +100,39 @@ export interface RhinoQTaskEffectPolicy {
   confirmation: 'readback' | 'webhook' | 'predicate';
 }
 
+export type RhinoQTaskCapability = 'task' | 'batch' | 'media' | 'effect' | 'schedule';
+
+export interface RhinoQTaskResourcePolicy {
+  timeoutMs?: number;
+  concurrency?: number;
+  maxRssBytes?: number;
+  workspaceBytes?: number;
+  minDiskFreeBytes?: number;
+  gpu?: string;
+  region?: string;
+  codec?: string;
+}
+
+export interface RhinoQTaskSchedulePolicy {
+  expression: string;
+  timezone?: string;
+  enabled?: boolean;
+}
+
 export interface RhinoQTaskOptions<Input, Output> {
   name: string;
   version?: number;
   adapter: string;
   runtime: string;
   scope: string;
+  /** Metadata marker used by the application compiler; it is not a workflow DSL. */
+  capability?: RhinoQTaskCapability;
+  /** Optional expert metadata override; the compiler supplies safe defaults. */
+  dataPath?: RhinoQDataPathOverrides;
+  /** Bounded execution/resource metadata for the compiled capsule. Enforcement stays runtime-owned. */
+  resources?: RhinoQTaskResourcePolicy;
+  /** Schedule declaration metadata; occurrence creation remains runtime/application-owned. */
+  schedule?: RhinoQTaskSchedulePolicy;
   /** Safe default is no automatic retry. Runtime retry requires an explicit bound. */
   retry?: RhinoQTaskRetryPolicy;
   /** Required when the handler mutates an external system. */
@@ -216,7 +254,20 @@ export function defineRhinoQTask<Input, Output>(
           ...(trace ? { trace } : {}),
         },
       });
-      return services.trace ? services.trace.run('rhinoq.task.dispatch', { 'rhinoq.task.name': name, 'rhinoq.task.id': id }, trace, operation) : operation();
+      const dispatched = services.trace
+        ? services.trace.run('rhinoq.task.dispatch', { 'rhinoq.task.name': name, 'rhinoq.task.id': id }, trace, operation)
+        : operation();
+      return dispatched.then((snapshot) => {
+        // Realtime is an acceleration path. A broken socket hub must not make
+        // a durable dispatch fail or cause the producer to retry it.
+        void Promise.resolve().then(() => services.onMutation?.({
+          taskId: id,
+          ownerId,
+          ...(request.tenantId?.trim() ? { tenantId: request.tenantId.trim() } : {}),
+          entityVersion: snapshot.entityVersion,
+        })).catch(() => undefined);
+        return snapshot;
+      });
     },
     dispatchAfter(request, delayMs) {
       validateExecution({ delayMs });
@@ -255,28 +306,39 @@ export function defineRhinoQTask<Input, Output>(
       return async (job) => {
         const envelope = taskEnvelope<Input>(job?.data, name, version);
         const waitpoints = waitpointHelper(services, envelope.taskId);
-        const operation = async () => { const workspace=options.workspace?await createTaskWorkspace({parent:options.workspace.parent,minimumFreeBytes:options.workspace.minimumFreeBytes,prefix:`rhinoq-${safeWorkspaceSegment(envelope.taskId)}-`}):undefined;try{return await Promise.resolve(options.run(envelope.payload, {
-          taskId: envelope.taskId,
-          executionId: envelope.executionId,
-          signal: job.signal,
-          progress: async (completed, total, message) => {
-            if (!Number.isFinite(completed) || completed < 0) throw new RangeError('Task progress completed must be non-negative');
-            if (total !== undefined && (!Number.isFinite(total) || total < completed)) throw new RangeError('Task progress total must be at least completed');
-            await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
-          },
-          artifact: artifactHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
-            await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
-          }),
-          output: outputHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
-            await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
-          }),
-          media: createRhinoQMediaContext(outputHelper(services, envelope.taskId, envelope.executionId, job.signal, async (completed, total, message) => {
-            await job.updateProgress?.({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
-          }), job.signal),
-          io: createRhinoQTaskIO(job.signal),
-          ...(workspace?{workspace}:{}),
-          ...waitpoints,
-        }));}finally{await workspace?.cleanup();}};
+        const operation = async () => {
+          const progress = createRhinoQProgressCoalescer(async (update) => job.updateProgress?.(update));
+          let workspace: RhinoQTaskWorkspace | undefined;
+          let failed = false;
+          try {
+            workspace = options.workspace ? await createTaskWorkspace({ parent: options.workspace.parent, minimumFreeBytes: options.workspace.minimumFreeBytes, prefix: `rhinoq-${safeWorkspaceSegment(envelope.taskId)}-` }) : undefined;
+            const reportProgress: RhinoQTaskRunContext['progress'] = async (completed, total, message) => {
+              await progress.report({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
+            };
+            return await Promise.resolve(options.run(envelope.payload, {
+              taskId: envelope.taskId,
+              executionId: envelope.executionId,
+              signal: job.signal,
+              progress: reportProgress,
+              artifact: artifactHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress),
+              output: outputHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress),
+              media: createRhinoQMediaContext(outputHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress), job.signal),
+              io: createRhinoQTaskIO(job.signal),
+              ...(workspace ? { workspace } : {}),
+              ...waitpoints,
+            }));
+          } catch (error) {
+            failed = true;
+            throw error;
+          } finally {
+            try {
+              await progress.close();
+            } catch (error) {
+              if (!failed) throw error;
+            }
+            await workspace?.cleanup();
+          }
+        };
         return services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation();
       };
     },
@@ -303,6 +365,7 @@ function artifactHelper(
   executionId: string,
   signal?: AbortSignal,
   progress?: RhinoQTaskRunContext['progress'],
+  registrationQueue?: { enqueue<T>(operation: () => Promise<T>): Promise<T> },
 ): RhinoQTaskRunContext['artifact'] {
   const identity = (options: RhinoQArtifactFileOptions) => {
     const name = required(options?.name, 'artifact name');
@@ -313,12 +376,14 @@ function artifactHelper(
   const register = async (options: RhinoQArtifactFileOptions, value: { id: string; name: string; contentType: string; sizeBytes: number; checksumSha256: string; reference: string; expiresAt?: string }) => {
     const expiresAt = value.expiresAt ?? new Date(Date.now() + (options.expiresInMs ?? 3_600_000)).toISOString();
     if (!Number.isFinite(Date.parse(expiresAt))) throw new TypeError('artifact storage expiresAt must be an ISO timestamp');
-    return services.artifacts!.register(taskId, {
+    const request = {
       id: value.id, executionId, name: value.name, contentType: value.contentType,
       sizeBytes: value.sizeBytes, checksumSha256: value.checksumSha256,
       reference: required(value.reference, 'artifact storage reference'), expiresAt,
       ...(options.lineage ? { lineage: options.lineage } : {}),
-    });
+    };
+    const registerArtifact = () => services.artifacts!.register(taskId, request);
+    return registrationQueue ? registrationQueue.enqueue(registerArtifact) : registerArtifact();
   };
   return Object.freeze({
     async file(data, options) {
@@ -366,7 +431,17 @@ function outputHelper(services: RhinoQTaskServices, taskId: string, executionId:
   type FileOptions = { name?: string; contentType?: string; lineage?: string[] };
   type ZipOptions = { name?: string; maxItems?: number; lineage?: string[] };
   const artifact = artifactHelper(services, taskId, executionId, signal, progress);
+  const registrationQueue = {
+    tail: Promise.resolve(),
+    enqueue<T>(operation: () => Promise<T>): Promise<T> {
+      const result = this.tail.then(operation, operation);
+      this.tail = result.then(() => undefined, () => undefined);
+      return result;
+    },
+  };
+  const orderedArtifact = artifactHelper(services, taskId, executionId, signal, progress, registrationQueue);
   const file = (path: string, options: FileOptions = {}) => artifact.filePath(path, { ...options, reportProgress: true });
+  const orderedFile = (path: string, options: FileOptions = {}) => orderedArtifact.filePath(path, { ...options, reportProgress: true });
   const paths = (values: string[], maximum = 100, hardMaximum = 1_000) => {
     if (!Array.isArray(values) || values.length === 0) throw new RangeError('output files requires at least one path');
     if (!Number.isInteger(maximum) || maximum < 1 || maximum > hardMaximum) throw new RangeError(`output maxItems must be 1..${hardMaximum}`);
@@ -387,7 +462,7 @@ function outputHelper(services: RhinoQTaskServices, taskId: string, executionId:
       const results = new Array<import('../gateway/types.js').TaskArtifact>(selected.length);
       let next = 0;
       await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, async () => {
-        while (next < selected.length) { const index = next++; results[index] = await file(selected[index]!); }
+        while (next < selected.length) { const index = next++; results[index] = await orderedFile(selected[index]!); }
       }));
       return results;
     },

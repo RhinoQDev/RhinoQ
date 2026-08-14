@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+- Completed the next low-code async tranche: `schedule` and resource metadata
+  now compile into the read-only execution capsule; setup records detected
+  capabilities; in-process Task mutation hooks can automatically invalidate
+  owner-scoped realtime subscriptions; Data Path Planner admission now carries
+  disk/GPU/region/codec decisions; and the Integration Eraser emits manual-review
+  diff plus reverse-patch artifacts without an apply path.
+
+- Joined Evidence Passport into Workbench Task detail and
+  `/admin/api/tasks/:id/evidence-passport`; added explicit processor catalog
+  statuses and read-only Autopilot simulate/canary approval artifacts. No
+  bounded-auto mutation, provider pack implementation or Control Plane claim was
+  added without external evidence.
+
+- Added `defineRhinoQProject()` for one project-level pool, identity, execution
+  profile and operator mount; added generic processor-pack lifecycle plus the
+  bounded FFmpeg adapter; and added deterministic Autopilot observe/recommend
+  evidence at Workbench `/admin/api/autopilot`. These surfaces are read-only or
+  composition-only and do not move lease, retry, effect or Task-state authority
+  out of the Go/runtime boundary.
+
+- Added one canonical Vietnamese low-code upgrade plan with a negative
+  complexity budget, short metadata-bearing Task factories, automatic
+  realtime/progress paths, Integration Eraser, evidence passports, data-path
+  planning and a developer-oriented Console. README states implemented product
+  strengths separately from roadmap proposals.
+
+- Added the read-only `npx rhinoq adopt --scan [--json]` Integration Eraser
+  preview. It reports bounded file/line evidence for common status, polling,
+  BullMQ, upload-proxy and retry-timer glue, separates review findings from
+  high-confidence estimates, and never writes or deletes adopter files.
+
+- Added a read-only Plan Inspector projection from the typed application
+  manifest into the embedded Workbench at `/admin/api/plan`. It shows factory,
+  compiled runtime capsule, data path and `needs-decision` readiness without
+  exposing payloads or changing runtime authority.
+
+- Added an optional dependency-free WebSocket hub for one-connection/many-Task
+  subscriptions. It coalesces owner/tenant-scoped snapshot reads, serializes
+  each new version once, provides indexed event-driven invalidation, bounds
+  subscriptions/backpressure and keeps SSE with polling fallback as the
+  zero-configuration default.
+
+- Added a bounded worker progress coalescer. Rapid handler, artifact and media
+  progress calls keep the newest update, flush on time/delta thresholds and
+  always flush before the handler returns; write failures remain visible.
+
+- Added `taskEvidencePassport()` as a bounded, read-only projection of Task
+  execution, provider confirmation, business verification, artifacts and
+  recovery references. It keeps technical success, external confirmation and
+  business outcome as separate statuses.
+
+- Added short application compiler factories for `task`, `batch`, `media` and
+  explicit-safety `effect`, plus a bounded compiled data-path plan. The legacy
+  callable/object declaration form remains compatible.
+
 - Added `context.io.download()` for HTTPS-host-allowlisted, bounded, timed,
   checksummed streaming downloads; opt-in per-execution workspaces with capacity
   checks and guaranteed cleanup; and `context.media.probe()` via bounded

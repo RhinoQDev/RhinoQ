@@ -21,6 +21,16 @@ The CLI is not a generic job producer and it is not a standalone Go worker:
 - Workbench is read-only by default. `--actions` enables only recheck and
   registered safe-repair application use cases.
 
+For an existing Node repository, the read-only Integration Eraser preview is:
+
+```bash
+npx rhinoq adopt --scan
+npx rhinoq adopt --scan --json
+```
+
+It reports bounded source evidence and never writes or deletes files. See the
+[Integration Eraser guide](./integration-eraser.md).
+
 ## Run the preview CLI
 
 Install the CLI into Go's binary directory:

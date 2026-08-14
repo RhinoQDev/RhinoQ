@@ -1,6 +1,8 @@
 import type { TaskSnapshot } from '../gateway/types.js';
-import type { RhinoQDeclaredTask, RhinoQTaskDispatch, RhinoQTaskOptions, RhinoQTaskRetryPolicy } from '../tasks/declaration.js';
+import type { RhinoQDeclaredTask, RhinoQTaskDispatch, RhinoQTaskOptions, RhinoQTaskRetryPolicy, RhinoQTaskResourcePolicy, RhinoQTaskSchedulePolicy } from '../tasks/declaration.js';
 import type { RuntimeAdapter } from './contracts.js';
+import { compileRhinoQDataPathPlan, type RhinoQDataPathOverrides, type RhinoQDataPathPlan } from '../tasks/data-path.js';
+import { inspectRhinoQPlan } from '../tasks/plan-inspector.js';
 import {
   createRhinoQApp,
   type CreateRhinoQAppOptions,
@@ -31,8 +33,13 @@ export interface RhinoQTaskBlueprint<Input, Output> {
 
 export interface RhinoQApplicationTaskFactory {
   <Input, Output>(options: RhinoQApplicationTaskOptions<Input, Output>): RhinoQTaskBlueprint<Input, Output>;
+  task<Input, Output>(name: string, run: RhinoQApplicationTaskOptions<Input, Output>['run'], options?: Omit<RhinoQApplicationTaskOptions<Input, Output>, 'name' | 'run' | 'capability'>): RhinoQTaskBlueprint<Input, Output>;
   batch<Input, Output>(options: Omit<RhinoQApplicationTaskOptions<Input, Output>, 'batch'> & { maxItems?: number }): RhinoQTaskBlueprint<Input, Output>;
+  batch<Input, Output>(name: string, run: RhinoQApplicationTaskOptions<Input, Output>['run'], options?: Omit<RhinoQApplicationTaskOptions<Input, Output>, 'name' | 'run' | 'batch' | 'capability'> & { maxItems?: number }): RhinoQTaskBlueprint<Input, Output>;
+  media<Input, Output>(name: string, run: RhinoQApplicationTaskOptions<Input, Output>['run'], options?: Omit<RhinoQApplicationTaskOptions<Input, Output>, 'name' | 'run' | 'capability'> & { dataPath?: RhinoQDataPathOverrides }): RhinoQTaskBlueprint<Input, Output>;
+  schedule<Input, Output>(name: string, run: RhinoQApplicationTaskOptions<Input, Output>['run'], options: Omit<RhinoQApplicationTaskOptions<Input, Output>, 'name' | 'run' | 'capability' | 'schedule'> & { schedule: RhinoQTaskSchedulePolicy }): RhinoQTaskBlueprint<Input, Output>;
   external<Input, Output>(options: Omit<RhinoQApplicationTaskOptions<Input, Output>, 'externalEffect'> & { effect: NonNullable<RhinoQTaskOptions<Input, Output>['effect']> }): RhinoQTaskBlueprint<Input, Output>;
+  effect<Input, Output>(name: string, run: RhinoQApplicationTaskOptions<Input, Output>['run'], options: Omit<RhinoQApplicationTaskOptions<Input, Output>, 'name' | 'run' | 'externalEffect' | 'effect' | 'capability'> & { effect: NonNullable<RhinoQTaskOptions<Input, Output>['effect']> }): RhinoQTaskBlueprint<Input, Output>;
 }
 
 // `any` is intentional at the heterogeneous registry boundary; the mapped
@@ -56,8 +63,12 @@ export interface RhinoQTaskManifestEntry {
   scope: string;
   retry: RhinoQTaskRetryPolicy;
   externalEffect: boolean;
+  capability?: NonNullable<RhinoQTaskOptions<unknown, unknown>['capability']>;
+  dataPath?: RhinoQDataPathPlan;
   batch?: { maxItems: number };
   execution?: { delayMs?: number; priority?: number };
+  resources?: RhinoQTaskResourcePolicy;
+  schedule?: RhinoQTaskSchedulePolicy;
 }
 
 export interface RhinoQApplicationManifest {
@@ -73,6 +84,29 @@ export interface DefineRhinoQApplicationOptions<Definitions extends BlueprintRec
 
 export interface StartRhinoQApplicationOptions extends Omit<CreateRhinoQAppOptions, 'adapters'> {
   http?: RhinoQAppHTTPOptions;
+}
+
+export type RhinoQProjectIdentity = Pick<CreateRhinoQAppOptions,
+  'ownerFromRequest' | 'ownerFromNodeRequest' | 'tenantFromRequest' | 'tenantFromNodeRequest'>;
+
+export interface DefineRhinoQProjectOptions<Definitions extends BlueprintRecord> {
+  /** The pool and identity hooks are project-owned; Tasks only consume them. */
+  pool: CreateRhinoQAppOptions['pool'];
+  profile: RhinoQExecutionProfile;
+  identity: RhinoQProjectIdentity;
+  tasks(task: RhinoQApplicationTaskFactory): Definitions;
+  /** Optional application-owned provider/trace/metrics composition. */
+  application?: Omit<CreateRhinoQAppOptions, 'pool' | 'adapters' | keyof RhinoQProjectIdentity>;
+  /** One operator token is enough for the mounted owner API, Task Center and Workbench. */
+  http: RhinoQAppHTTPOptions;
+}
+
+export type RhinoQProjectStartOptions = Partial<Omit<StartRhinoQApplicationOptions, 'http'>> & {
+  http?: Partial<RhinoQAppHTTPOptions>;
+};
+
+export interface RhinoQProject<Definitions extends BlueprintRecord> extends RhinoQApplicationCompiler<Definitions> {
+  start(options?: RhinoQProjectStartOptions): Promise<RhinoQStartedApplication<Definitions>>;
 }
 
 export interface RhinoQStartedApplication<Definitions extends BlueprintRecord> {
@@ -162,7 +196,7 @@ export function defineRhinoQApplication<Definitions extends BlueprintRecord>(
           app,
           tasks,
           manifest,
-          ...(httpOptions ? { http: app.http(httpOptions) } : {}),
+          ...(httpOptions ? { http: app.http({ ...httpOptions, applicationPlan: inspectRhinoQPlan(manifest) }) } : {}),
           workerHandlers: () => handlers,
           workerHandler: () => routeWorker,
           runWorker: (options) => runApplicationWorker(routeWorker, options),
@@ -174,6 +208,46 @@ export function defineRhinoQApplication<Definitions extends BlueprintRecord>(
         await app.close();
         throw error;
       }
+    },
+  });
+}
+
+/**
+ * Project-level composition for the low-code path. It binds one pool, one
+ * identity source and one operator surface around the existing typed compiler;
+ * it does not create a new runtime or move correctness authority into Node.
+ */
+export function defineRhinoQProject<Definitions extends BlueprintRecord>(
+  options: DefineRhinoQProjectOptions<Definitions>,
+): RhinoQProject<Definitions> {
+  if (!options?.pool) throw new TypeError('project pool is required');
+  if (!options?.identity || (!options.identity.ownerFromRequest && !options.identity.ownerFromNodeRequest)) {
+    throw new TypeError('project identity requires ownerFromRequest or ownerFromNodeRequest');
+  }
+  if (!options.http?.operatorToken?.trim()) throw new TypeError('project http.operatorToken is required');
+  const compiler = defineRhinoQApplication({ profile: options.profile, tasks: options.tasks });
+  return Object.freeze({
+    ...compiler,
+    async start(startOptions: RhinoQProjectStartOptions = {}) {
+      const { http: httpOverrides, ...rest } = startOptions;
+      const runtimeOverrides = { ...rest } as Partial<StartRhinoQApplicationOptions>;
+      delete runtimeOverrides.pool;
+      delete runtimeOverrides.ownerFromRequest;
+      delete runtimeOverrides.ownerFromNodeRequest;
+      delete runtimeOverrides.tenantFromRequest;
+      delete runtimeOverrides.tenantFromNodeRequest;
+      const http = {
+        ...options.http,
+        ...(httpOverrides ?? {}),
+        operatorToken: httpOverrides?.operatorToken ?? options.http.operatorToken,
+      };
+      return compiler.start({
+        ...options.application,
+        ...runtimeOverrides,
+        pool: options.pool,
+        ...options.identity,
+        http,
+      });
     },
   });
 }
@@ -239,10 +313,19 @@ function taskBlueprint<Input, Output>(
 
 function createTaskFactory(): RhinoQApplicationTaskFactory {
   const factory = ((options: RhinoQApplicationTaskOptions<unknown, unknown>) => taskBlueprint(options)) as RhinoQApplicationTaskFactory;
-  factory.batch = (options) => {
-    const { maxItems, ...taskOptions } = options;
+  factory.task = (name, run, options = {}) => taskBlueprint({ ...options, name, run, capability: 'task' });
+  factory.batch = ((first: string | RhinoQApplicationTaskOptions<unknown, unknown>, second?: RhinoQApplicationTaskOptions<unknown, unknown>['run'], third?: Record<string, unknown>) => {
+    if (typeof first === 'string') {
+      if (typeof second !== 'function') throw new TypeError('batch factory handler is required');
+      const { maxItems, ...taskOptions } = (third ?? {}) as RhinoQApplicationTaskOptions<unknown, unknown> & { maxItems?: number };
+      return taskBlueprint({ ...taskOptions, name: first, run: second, capability: 'batch', batch: { ...(maxItems === undefined ? {} : { maxItems }) } });
+    }
+    const { maxItems, ...taskOptions } = first as RhinoQApplicationTaskOptions<unknown, unknown> & { maxItems?: number };
     return taskBlueprint({ ...taskOptions, batch: { ...(maxItems === undefined ? {} : { maxItems }) } });
-  };
+  }) as RhinoQApplicationTaskFactory['batch'];
+  factory.media = (name, run, options = {}) => taskBlueprint({ ...options, name, run, capability: 'media' });
+  factory.schedule = (name, run, options) => taskBlueprint({ ...options, name, run, capability: 'schedule' });
+  factory.effect = (name, run, options) => taskBlueprint({ ...options, name, run, capability: 'effect', externalEffect: true });
   factory.external = (options) => taskBlueprint({ ...options, externalEffect: true });
   return Object.freeze(factory);
 }
@@ -304,21 +387,59 @@ function compileEntries<Definitions extends BlueprintRecord>(definitions: Defini
     if (execution?.priority !== undefined && !Number.isInteger(execution.priority)) {
       throw new RangeError(`Task ${JSON.stringify(key)} execution priority must be an integer`);
     }
+    const resources = taskOptions.resources ? Object.freeze({ ...taskOptions.resources }) : undefined;
+    validateResources(key, resources);
+    const schedule = taskOptions.schedule ? Object.freeze({ ...taskOptions.schedule }) : undefined;
+    validateSchedule(key, schedule);
     const options = Object.freeze({
       ...taskOptions, name, adapter, runtime, scope, retry,
       ...(effect ? { effect } : {}),
       ...(batch ? { batch } : {}),
       ...(execution ? { execution } : {}),
+      ...(resources ? { resources } : {}),
+      ...(schedule ? { schedule } : {}),
     }) as RhinoQTaskOptions<unknown, unknown>;
+    const capability = taskOptions.capability;
+    const dataPath = capability ? compileRhinoQDataPathPlan({
+      workload: capability === 'media' ? 'media' : capability === 'batch' ? 'batch' : capability === 'effect' ? 'effect' : 'task',
+      ...(taskOptions.dataPath ?? {}),
+      ...(resources?.workspaceBytes === undefined ? {} : { workspaceBytes: resources.workspaceBytes }),
+      ...(resources?.minDiskFreeBytes === undefined ? {} : { minDiskFreeBytes: resources.minDiskFreeBytes }),
+      ...(resources?.gpu === undefined ? {} : { gpu: resources.gpu }),
+      ...(resources?.region === undefined ? {} : { region: resources.region }),
+      ...(resources?.codec === undefined ? {} : { codec: resources.codec }),
+    }) : undefined;
     return {
       key, name, version, adapter, runtime, scope,
       retry,
       externalEffect: taskOptions.externalEffect ?? false,
+      ...(capability ? { capability } : {}),
+      ...(dataPath ? { dataPath } : {}),
       ...(batch ? { batch } : {}),
       ...(execution ? { execution } : {}),
+      ...(resources ? { resources } : {}),
+      ...(schedule ? { schedule } : {}),
       options,
     };
   });
+}
+
+function validateResources(key: string, resources: RhinoQTaskResourcePolicy | undefined): void {
+  if (!resources) return;
+  for (const [name, value] of Object.entries(resources)) {
+    if (name === 'gpu' || name === 'region' || name === 'codec') {
+      if (value !== undefined && (typeof value !== 'string' || !value.trim())) throw new TypeError(`Task ${JSON.stringify(key)} resource ${name} must be a non-empty string`);
+      continue;
+    }
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new RangeError(`Task ${JSON.stringify(key)} resource ${name} must be a positive safe integer`);
+  }
+}
+
+function validateSchedule(key: string, schedule: RhinoQTaskSchedulePolicy | undefined): void {
+  if (!schedule) return;
+  if (!schedule.expression?.trim()) throw new TypeError(`Task ${JSON.stringify(key)} schedule expression is required`);
+  if (schedule.timezone !== undefined && !schedule.timezone.trim()) throw new TypeError(`Task ${JSON.stringify(key)} schedule timezone must be non-empty`);
+  if (schedule.enabled !== undefined && typeof schedule.enabled !== 'boolean') throw new TypeError(`Task ${JSON.stringify(key)} schedule enabled must be boolean`);
 }
 
 function freezeRetry(retry: RhinoQTaskRetryPolicy | undefined): RhinoQTaskRetryPolicy {

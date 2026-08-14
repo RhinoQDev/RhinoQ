@@ -10,3 +10,8 @@ Task states in each screen. A succeeded execution without independent output
 evidence must not be displayed as business verified. When a result is recorded
 but no resolver is configured, display `Not configured` rather than hiding the
 distinction.
+
+SSE is the default UI path. A dependency-free, application-mounted multiplexed
+WebSocket hub is available for high fan-out or many Task subscriptions per
+connection; it shares the same versioned snapshots and owner boundary. See
+[realtime transports](./realtime.md).

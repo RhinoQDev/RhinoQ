@@ -23,6 +23,7 @@ import { createNodeTaskCenterMiddleware, createNodeTaskMiddleware } from '../tas
 import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
 import { recoverFailureLab, runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
 import { adoptionChecklist } from '../runtime/adoption.js';
+import { scanRhinoQIntegrationEraser, type RhinoQIntegrationEraserReport } from '../adopt/eraser.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
@@ -42,6 +43,7 @@ async function main(): Promise<void> {
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
+      console.log('Integration Eraser preview: npx rhinoq adopt --scan [--json]');
       console.log('Start from your goal:\n  npx rhinoq setup                        # preview the complete golden path\n  npx rhinoq setup --apply                # configure without overwriting\n  npx rhinoq init                         # install the Task profile only\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq measure --before old --after new # measure consumer-owned source\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nObserve an existing runtime:\n  Use defineRhinoQApplication() for a typed registry, shared execution profile and one HTTP mount.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
@@ -147,12 +149,14 @@ async function setup(args: string[]): Promise<void> {
 
   console.log('RhinoQ complete setup plan');
   console.log(`  project             ${detected.nest ? 'NestJS' : go ? 'Go' : 'Node/framework-neutral'}`);
+  console.log(`  capability detect   ${setupCapabilitySummary(detected, resolved)}`);
   console.log(`  execution runtime   ${selected}${runtime === 'auto' ? ' (auto-selected)' : ''}`);
   console.log(`  PostgreSQL          ${resolved ? `reuse ${resolved.source}` : localPostgres ? 'generate disposable local service' : 'configuration required'}`);
   console.log(`  Task semantics      ${mode}`);
   console.log(`  integration         ${generated}`);
-  console.log('  product surface     owner API + Task Center + Workbench + operator login');
+  console.log('  product surface     owner API + Task Center + Workbench + operator login (project profile mount)');
   console.log('  operations          health + readiness + metrics + reconciliation');
+  console.log('  realtime            SSE fallback + optional app-owned WebSocket invalidation hook');
   console.log('  validation          doctor + bounded eval fixture when PostgreSQL is configured');
   if (selected === 'bullmq' && !detected.bullmq) console.log('  prerequisite        MISSING bullmq package');
   if (selected === 'postgres' && !go) console.log('  prerequisite        MISSING go.mod for native Go worker');
@@ -166,7 +170,7 @@ async function setup(args: string[]): Promise<void> {
 
   await init([]);
   await mkdir(resolve('.rhinoq'), { recursive: true });
-  await writeNew(resolve('.rhinoq', 'setup.json'), `${JSON.stringify({ schemaVersion: 1, runtime: selected, mode, generated }, null, 2)}\n`);
+  await writeNew(resolve('.rhinoq', 'setup.json'), `${JSON.stringify({ schemaVersion: 2, runtime: selected, mode, generated, projectProfile: selected === 'manual', capabilities: setupCapabilities(detected, resolved) }, null, 2)}\n`);
   await writeNew(resolve('.env.rhinoq.example'), setupEnvironmentTemplate(selected));
 
   if (selected === 'bullmq') {
@@ -220,22 +224,21 @@ func Register(queue *rhinoq.Client, runReport func(context.Context, rhinoq.Job) 
 }
 
 function manualAppTemplate(): string {
-  return `import { createManualRuntimeAdapter, defineRhinoQApplication } from '@rhinoq/node';
+  return `import { createManualRuntimeAdapter, defineRhinoQProject } from '@rhinoq/node';
 
 const runtime = createManualRuntimeAdapter('manual', 'application');
-export const rhinoq = defineRhinoQApplication({
-  profile: { name: 'application', adapters: [runtime] },
-  tasks: (task) => ({
-    // Add business Tasks here. The profile supplies adapter/runtime/scope.
-    example: task({ name: 'example.run', run: async (input) => input }),
-  }),
-});
-
 export async function startRhinoQ({ pool, ownerFromNodeRequest, tenantFromNodeRequest }) {
-  return rhinoq.start({
-    pool, ownerFromNodeRequest, tenantFromNodeRequest,
+  const project = defineRhinoQProject({
+    pool,
+    profile: { name: 'application', adapters: [runtime] },
+    identity: { ownerFromNodeRequest, tenantFromNodeRequest },
     http: { operatorToken: process.env.RHINOQ_OPERATOR_TOKEN },
+    tasks: (task) => ({
+      // Add business Tasks here. The profile supplies adapter/runtime/scope.
+      example: task({ name: 'example.run', run: async (input) => input }),
+    }),
   });
+  return project.start();
 }
 `;
 }
@@ -387,6 +390,8 @@ async function demo(args: string[]): Promise<void> {
 
 async function adopt(args: string[]): Promise<void> {
   let apply = false;
+  let scan = false;
+  let json = false;
   let observe = false;
   let adapter: 'manual' | 'sqs' | 'bullmq' | 'custom' | undefined;
   let localPostgres = false;
@@ -401,6 +406,8 @@ async function adopt(args: string[]): Promise<void> {
   for (let index = 0; index < args.length; index += 1) {
     const raw = args[index]!;
     if (raw === '--apply') { apply = true; continue; }
+    if (raw === '--scan') { scan = true; continue; }
+    if (raw === '--json') { json = true; continue; }
     if (raw === '--observe') { observe = true; continue; }
     if (raw === '--local-postgres') { localPostgres = true; continue; }
     const [key, inline] = raw.split('=', 2);
@@ -426,6 +433,19 @@ async function adopt(args: string[]): Promise<void> {
     else if (key === '--task-center-path') taskCenterPath = routePath(requiredOption(key, value));
     else fail(`unknown adopt option ${JSON.stringify(key)}`, 'Run: npx rhinoq adopt --mode single [--apply]');
   }
+  if (scan) {
+    const hasGenerationOption = observe || Boolean(adapter) || localPostgres || Boolean(mode) || Boolean(output) ||
+      selectedQueues.length > 0 || declaredTasks.size > 0 || Boolean(ownerProperty) ||
+      routesPath !== '/tasks' || taskCenterPath !== '/task-center' || Boolean(verifyURL);
+    if (apply || hasGenerationOption) {
+      fail('--scan is preview-only and cannot be combined with adoption generation options', 'Run: npx rhinoq adopt --scan [--json]');
+    }
+    const report = await scanRhinoQIntegrationEraser(resolve('.'));
+    if (json) console.log(JSON.stringify(report, null, 2));
+    else printIntegrationEraserReport(report);
+    return;
+  }
+  if (json) fail('--json is only available with --scan', 'Run: npx rhinoq adopt --scan --json');
   if (observe) {
     await adoptObserve({ apply, adapter, output });
     return;
@@ -495,6 +515,28 @@ async function adopt(args: string[]): Promise<void> {
     console.log(`PASS generated ${output}`);
     console.log('NEXT call startRhinoQ({ pool, queue, queueEvents }) during startup, then run: npx rhinoq doctor');
   }
+}
+
+function printIntegrationEraserReport(report: RhinoQIntegrationEraserReport): void {
+  console.log('RhinoQ Integration Eraser scan');
+  console.log('  mode                 preview-only; repository was not modified');
+  console.log(`  source files         ${report.filesScanned} scanned (${report.linesScanned} lines)`);
+  console.log(`  detected             ${report.detected.length ? report.detected.join(', ') : 'none'}`);
+  console.log(`  replaceable estimate ${report.replaceableEstimate.files} files / ${report.replaceableEstimate.matchingLines} high-confidence matching lines`);
+  console.log('  estimate note        static evidence only; not a deletion, savings or reliability claim');
+  console.log('  still application    auth, handler, business verification');
+  if (report.findings.length) {
+    console.log('  findings');
+    for (const finding of report.findings) {
+      console.log(`    ${finding.confidence.toUpperCase()} ${finding.category} ${finding.file}:${finding.line}`);
+      console.log(`      evidence: ${finding.evidence || '<blank line>'}`);
+      console.log(`      candidate: ${finding.replacement}`);
+      if (finding.reviewReason) console.log(`      review: ${finding.reviewReason}`);
+    }
+  }
+  for (const warning of report.warnings) console.log(`  WARN ${warning}`);
+  console.log(`  preview changes      ${report.preview.changes.length} manual-review patch proposal(s)`);
+  console.log(`  rollback             ${report.preview.rollback.kind === 'patch-preview' ? 'reverse patch preview available' : 'none required'}; no files were written, patched or deleted`);
 }
 
 async function adoptObserve(options: {
@@ -1825,9 +1867,25 @@ async function dev(args: string[]): Promise<void> {
   process.once('SIGINT', close); process.once('SIGTERM', close);
 }
 
-async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean; nest: boolean }> {
-  try { const pkg = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { dependencies?: Record<string,string>; devDependencies?: Record<string,string> }; const all={...pkg.dependencies,...pkg.devDependencies}; return {pg:Boolean(all.pg),bullmq:Boolean(all.bullmq),nest:Boolean(all['@nestjs/common'])}; }
-  catch { return {pg:false,bullmq:false,nest:false}; }
+async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean; nest: boolean; sharp: boolean; s3: boolean; cloudinary: boolean }> {
+  try {
+    const pkg = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { dependencies?: Record<string,string>; devDependencies?: Record<string,string> };
+    const all={...pkg.dependencies,...pkg.devDependencies};
+    return { pg:Boolean(all.pg), bullmq:Boolean(all.bullmq), nest:Boolean(all['@nestjs/common']), sharp:Boolean(all.sharp), s3:Boolean(all['@aws-sdk/client-s3']), cloudinary:Boolean(all.cloudinary) };
+  } catch { return {pg:false,bullmq:false,nest:false,sharp:false,s3:false,cloudinary:false}; }
+}
+function setupCapabilities(detected: Awaited<ReturnType<typeof detectPackages>>, resolved?: ResolvedDatabaseConfig): string[] {
+  return [
+    detected.nest ? 'framework:nestjs' : 'framework:neutral',
+    detected.bullmq ? 'runtime:bullmq' : 'runtime:manual-or-go',
+    resolved ? 'database:postgres-configured' : 'database:postgres-required',
+    detected.s3 ? 'storage:s3-sdk' : 'storage:provider-required',
+    detected.sharp ? 'processor:sharp-package' : 'processor:sharp-package-missing',
+    detected.cloudinary ? 'provider:cloudinary-package' : 'provider:cloudinary-package-missing',
+  ];
+}
+function setupCapabilitySummary(detected: Awaited<ReturnType<typeof detectPackages>>, resolved?: ResolvedDatabaseConfig): string {
+  return setupCapabilities(detected, resolved).join(', ');
 }
 async function pathExists(path: string): Promise<boolean> { try { await access(path); return true; } catch { return false; } }
 async function writeNew(path: string, content: string): Promise<boolean> { try { await access(path); console.log(`KEEP ${path} already exists.`); return false; } catch { await writeFile(path, content, { flag:'wx' }); return true; } }

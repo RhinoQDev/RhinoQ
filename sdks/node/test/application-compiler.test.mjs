@@ -85,3 +85,50 @@ test('application compiler binds every declaration to the started application', 
   assert.equal(closed, 1);
   await started.close();
 });
+
+test('short capability factories compile markers and safe data-path plans', () => {
+  const adapter = createManualRuntimeAdapter('manual', 'reports');
+  const compiler = defineRhinoQApplication({
+    profile: { name: 'reports', adapters: [adapter] },
+    tasks: (rhinoq) => ({
+      exportReport: rhinoq.task('report.export', async (input) => input),
+      resizeImages: rhinoq.batch('image.resize', async (input) => input, { maxItems: 20 }),
+      webVideo: rhinoq.media('video.web', async (input) => input),
+      capturePayment: rhinoq.effect('payment.capture', async (input) => input, {
+        effect: { idempotency: 'provider', confirmation: 'readback' },
+      }),
+    }),
+  });
+
+  const entries = compiler.manifest().tasks;
+  assert.deepEqual(entries.map((entry) => [entry.name, entry.capability]), [
+    ['report.export', 'task'], ['image.resize', 'batch'], ['video.web', 'media'], ['payment.capture', 'effect'],
+  ]);
+  assert.equal(entries[2].dataPath.input.transport, 'private-reference');
+  assert.equal(entries[2].dataPath.output.transport, 'stream-to-storage');
+  assert.equal(entries[3].externalEffect, true);
+});
+
+test('schedule factory compiles resource and occurrence metadata into the capsule', () => {
+  const adapter = createManualRuntimeAdapter('manual', 'reports');
+  const compiler = defineRhinoQApplication({
+    profile: { name: 'reports', adapters: [adapter] },
+    tasks: (rhinoq) => ({
+      nightly: rhinoq.schedule('report.nightly', async () => undefined, {
+        schedule: { expression: '0 2 * * *', timezone: 'Asia/Ho_Chi_Minh' },
+        resources: { timeoutMs: 30_000, workspaceBytes: 1024, minDiskFreeBytes: 2048, gpu: 'none', region: 'ap-southeast-1', codec: 'pdf' },
+      }),
+    }),
+  });
+  const entry = compiler.manifest().tasks[0];
+  assert.equal(entry.capability, 'schedule');
+  assert.deepEqual(entry.schedule, { expression: '0 2 * * *', timezone: 'Asia/Ho_Chi_Minh' });
+  assert.equal(entry.resources.codec, 'pdf');
+  assert.equal(entry.dataPath.admission.workspaceBytes, 1024);
+  assert.equal(entry.dataPath.admission.minDiskFreeBytes, 2048);
+  assert.equal(entry.dataPath.admission.codec, 'pdf');
+  assert.throws(() => defineRhinoQApplication({
+    profile: { name: 'reports', adapters: [adapter] },
+    tasks: (task) => ({ broken: task.schedule('broken', async () => undefined, { schedule: { expression: '' } }) }),
+  }), /schedule expression is required/);
+});

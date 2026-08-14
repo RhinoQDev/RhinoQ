@@ -5,9 +5,10 @@ It composes RhinoQ's existing init, adopt, doctor and eval capabilities; it does
 not create a second runtime.
 
 For framework-neutral/manual execution, the generated integration uses
-`defineRhinoQApplication()`: add Tasks to one typed registry, inherit the
-selected execution profile, and mount the owner API, Task Center and Workbench
-from the returned application. Existing files are still never overwritten.
+`defineRhinoQProject()`: add Tasks to one typed registry, bind the pool and
+authenticated owner identity once, inherit the selected execution profile, and
+mount the owner API, Task Center and Workbench from the returned application.
+Existing files are still never overwritten.
 
 ## Preview, then apply
 
@@ -21,8 +22,8 @@ Preview performs no writes. Apply creates only missing files and refuses to
 overwrite application-owned files. Commit or review the diff before starting
 the application.
 
-Setup detects `package.json`, NestJS, BullMQ, `go.mod` and PostgreSQL
-configuration. Selection is deterministic: detected BullMQ is preferred;
+Setup detects `package.json`, NestJS, BullMQ, optional S3/Cloudinary/Sharp
+packages, `go.mod` and PostgreSQL configuration. Selection is deterministic: detected BullMQ is preferred;
 otherwise a Go application can use the native PostgreSQL queue; otherwise the
 manual adapter is proposed. Override it explicitly when needed:
 
@@ -38,13 +39,17 @@ It is not a production database decision.
 ## What apply produces
 
 - the existing RhinoQ schema/config initialization;
-- `.rhinoq/setup.json` recording the selected path;
+- `.rhinoq/setup.json` recording the selected path and advisory capability
+  markers (schema v2);
 - `.env.rhinoq.example`, without secrets;
 - a BullMQ/Nest integration through the existing adopter, a native Go worker
-  shell for the PostgreSQL queue, or a portable manual application shell;
+  shell for the PostgreSQL queue, or a project-profile manual application
+  shell;
 - doctor/eval results when a database is configured;
 - the Task Center and Workbench paths to open after startup.
 
+Capability detection is advisory: it previews the adapter and hook shell but
+does not install or enable a provider merely because a package is present.
 Setup cannot invent authentication, tenant identity, provider credentials,
 business payloads or safe retry/idempotency policy. Those remain explicit
 application decisions. Rerunning setup is safe: existing files are preserved.

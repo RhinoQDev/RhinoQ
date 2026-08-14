@@ -11,6 +11,8 @@ export interface RuntimeTaskProjectorOptions {
   /** Whether one runtime reference represents the whole Task or one fan-out item. */
   terminalProjection: 'single-execution' | 'execution-only';
   onUnboundEvent?(event: RuntimeEvent): Promise<void> | void;
+  /** Optional event-driven projection hook; failures are isolated from lifecycle convergence. */
+  onTaskMutation?(task: TaskSnapshot): Promise<void> | void;
 }
 
 /**
@@ -21,6 +23,7 @@ export class RuntimeTaskProjector {
   private readonly client: TaskClient;
   private readonly terminalProjection: RuntimeTaskProjectorOptions['terminalProjection'];
   private readonly onUnboundEvent?: RuntimeTaskProjectorOptions['onUnboundEvent'];
+  private readonly onTaskMutation?: RuntimeTaskProjectorOptions['onTaskMutation'];
   private readonly projections = new Map<string, Promise<void>>();
 
   constructor(options: RuntimeTaskProjectorOptions) {
@@ -31,6 +34,7 @@ export class RuntimeTaskProjector {
     this.client = options.client;
     this.terminalProjection = options.terminalProjection;
     this.onUnboundEvent = options.onUnboundEvent;
+    this.onTaskMutation = options.onTaskMutation;
   }
 
   /** Projects events for one runtime identity in arrival order. */
@@ -70,12 +74,13 @@ export class RuntimeTaskProjector {
         const task = await this.activate(execution);
         if (task.state !== 'running' && task.state !== 'cancel_requested') return;
         if (sameProgress(task.progress, event.progress)) return;
-        await this.converge(async () => {
+        const updated = await this.converge(async () => {
           const current = await this.client.getTask(task.id);
           if (current.state !== 'running' && current.state !== 'cancel_requested') return current;
           if (sameProgress(current.progress, event.progress)) return current;
           return this.client.reportTaskProgress(current.id, current.entityVersion, event.progress);
         });
+        this.notifyTaskMutation(updated);
         return;
       }
       case 'attempt_ended':
@@ -179,7 +184,7 @@ export class RuntimeTaskProjector {
   }
 
   private async ensureTask(taskId: string, target: Exclude<TaskState, 'pending' | 'cancel_requested'>): Promise<TaskSnapshot> {
-    return this.converge(async () => {
+    const task = await this.converge(async () => {
       let task = await this.client.getTask(taskId);
       if (task.state === target || task.state === 'succeeded' || task.state === 'failed' || task.state === 'cancelled') return task;
       if (task.state === 'pending') task = await this.client.transitionTask(task.id, task.entityVersion, 'queued');
@@ -192,6 +197,8 @@ export class RuntimeTaskProjector {
       }
       return task;
     });
+    this.notifyTaskMutation(task);
+    return task;
   }
 
   private attachExecutionResult(executionId: string, reference: string): Promise<unknown> {
@@ -205,7 +212,10 @@ export class RuntimeTaskProjector {
     return this.converge(async () => {
       const task = await this.client.getTask(taskId);
       if (task.hasResult) return task;
-      return this.client.attachTaskResult(task.id, task.entityVersion, reference);
+      await this.client.attachTaskResult(task.id, task.entityVersion, reference);
+      const updated = await this.client.getTask(task.id);
+      this.notifyTaskMutation(updated);
+      return updated;
     });
   }
 
@@ -215,12 +225,18 @@ export class RuntimeTaskProjector {
       if (task.state !== 'running' && task.state !== 'cancel_requested') return task;
       const total = task.progress.total ?? Math.max(1, task.progress.completed);
       if (task.progress.completed >= total) return task;
-      return this.client.reportTaskProgress(task.id, task.entityVersion, {
+      const updated = await this.client.reportTaskProgress(task.id, task.entityVersion, {
         ...task.progress,
         completed: total,
         total,
       });
+      this.notifyTaskMutation(updated);
+      return updated;
     });
+  }
+
+  private notifyTaskMutation(task: TaskSnapshot): void {
+    void Promise.resolve().then(() => this.onTaskMutation?.(task)).catch(() => undefined);
   }
 
   private async converge<T>(operation: () => Promise<T>): Promise<T> {

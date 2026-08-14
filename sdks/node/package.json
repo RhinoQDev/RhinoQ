@@ -13,6 +13,7 @@
     "nestjs",
     "job-progress",
     "sse",
+    "websocket",
     "job-dashboard",
     "task-management",
     "reconciliation"

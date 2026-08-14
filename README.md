@@ -71,6 +71,57 @@ HTTP surface. Existing applications can retain their endpoints through the
 lower-level clients, but doing so intentionally keeps more mapping code in the
 application.
 
+### Current product strengths
+
+- **One Task contract across runtimes.** Native PostgreSQL queue, BullMQ and
+  optional adapters converge on the same versioned Task/Execution lifecycle;
+  queue correctness is not reimplemented in application handlers.
+- **Correctness beyond technical completion.** Effect identity, `uncertain`,
+  reconciliation, outcome verification, Findings and provider evidence keep
+  “the worker returned” separate from “the business result is correct”.
+- **Large-data paths avoid application memory.** Direct multipart browser
+  upload, streaming worker IO, bounded workspaces and private artifact
+  references keep multi-GB bytes out of queue payloads and Node buffers.
+- **Realtime without a second source of truth.** SSE with polling fallback is
+  the default; the optional WebSocket Hub multiplexes Tasks, coalesces
+  owner-scoped reads, reuses serialized frames and bounds slow consumers while
+  PostgreSQL remains authoritative.
+- **Progress without handler-side debounce.** Worker progress keeps only a
+  bounded newest update, flushes on time/delta thresholds and always flushes
+  before the handler returns; a failed progress write is surfaced instead of
+  being treated as Task success.
+- **Proof-carrying Task view.** `taskEvidencePassport()` joins technical
+  execution, external-effect confirmation, business verification, artifact
+  checksums and bounded recovery references without exposing provider secrets
+  or storage references.
+- **A mounted product surface, not only a queue API.** Owner API, Task Center,
+  React components, Workbench, health, metrics, incident evidence and guarded
+  repair remove repeated frontend and operator plumbing.
+- **Adopt incrementally.** Explicit composition and optional package subpaths
+  let an application mount only the Task, artifact, media, realtime or existing
+  runtime capabilities it selects; specialist provider dependencies remain
+  optional.
+- **Evidence before claims.** Code-reduction measurement, fault labs and
+  reproducible benchmarks distinguish implemented behavior from production
+  evidence; RhinoQ does not promise an SLA in public beta.
+- **One project profile.** `defineRhinoQProject()` binds the pool, identity,
+  execution profile and operator surface once, while preserving the typed
+  registry and fail-closed worker routing.
+- **Specialist lifecycle without hidden correctness.** Processor packs provide
+  readiness, workspace, cleanup and error classification; Go/runtime adapters
+  still own leases, retries and Task state.
+
+The next product step is not a larger collection of queue adapters. The
+[canonical low-code upgrade plan](./docs/ke-hoach-nang-cap-rhinoq.md) requires a
+positive net reduction in adopter-owned code/config/process. Short capability
+factories, automatic realtime/progress paths, evidence passports, the first
+data-path compiler slice, a read-only Integration Eraser preview and a
+read-only Plan Inspector in Workbench are implemented and tested. Project
+profile auto-mount, bounded Autopilot observe/recommend/simulate/canary contracts
+and processor-pack catalog boundaries now also exist and are tested; Autopilot
+automatic actions, a complete multi-provider pack implementation, auto-patching
+and a multi-cluster Control Plane remain evidence-gated roadmap work.
+
 ## Quick start: one-command setup
 
 `@rhinoq/node` is the canonical package: it contains the Node.js SDK, CLI,
@@ -142,6 +193,24 @@ retain lifecycle authority; retry defaults to `never`, and external effects
 still require explicit idempotency and confirmation policy. The lower-level
 `app.task()` remains supported. See [Task application compiler](./docs/application-compiler.md).
 
+For the shortest project setup, bind the shared composition once:
+
+```ts
+const project = defineRhinoQProject({
+  pool, profile: { name: 'reports', adapters: [bullmqAdapter] },
+  identity: { ownerFromNodeRequest },
+  http: { operatorToken: process.env.RHINOQ_OPERATOR_TOKEN },
+  tasks: (rhinoq) => ({
+    exportReport: rhinoq.task('report.export', async (input) => generateReport(input)),
+  }),
+});
+const application = await project.start();
+```
+
+This mounts the owner API, Task Center and Workbench from one project profile;
+the application still supplies authenticated identity, business handlers and
+provider credentials. See the [project profile guide](./docs/project-profile.md).
+
 For a shared runtime worker, the registry also removes the handwritten routing
 switch while continuing to reject undeclared names and mismatched versions:
 
@@ -192,6 +261,30 @@ These optional React components include loading/error/empty states, accessible
 progress, cancel/retry/result actions, theme tokens and the existing SSE to
 polling fallback. React is dependency-injected, so server-only installs do not
 pull it in. See [embeddable React UI](./docs/react-ui.md).
+
+SSE remains the zero-configuration default. Applications that already operate
+a WebSocket server, or need many simultaneous Task subscriptions on one browser
+connection, can add the dependency-free multiplexing hub:
+
+```ts
+import { createTaskWebSocketHub } from '@rhinoq/node/server';
+
+const realtime = createTaskWebSocketHub(app.tasks);
+const channel = realtime.accept(socket, { ownerId: sessionUser.id, tenantId });
+socket.on('message', (data) => channel.receive(data));
+socket.on('close', () => channel.close());
+```
+
+The application still owns the HTTP upgrade, authentication and origin policy.
+RhinoQ owns the versioned subscribe protocol, one-connection/many-Task
+multiplexing, owner/tenant-scoped reads, coalesced snapshot fan-out, heartbeat,
+limits and slow-consumer protection. No Socket.IO, Redis or second source of
+truth is required. See [realtime transports](./docs/realtime.md).
+Pass `realtime: { invalidate: realtime.invalidate }` to `createRhinoQApp()` and
+in-process producer dispatch/runtime projection writes automatically push through
+the indexed group. The explicit `realtime.invalidate(taskId, identity, version)`
+call remains available for external writes or LISTEN/NOTIFY signals; the interval
+scan is only a missed-signal recovery path.
 
 ## Return files without building an artifact subsystem
 
@@ -783,6 +876,7 @@ already have — no queue replacement, no worker rewrite, no cutover:
 ```bash
 npm install @rhinoq/node@next pg
 npx rhinoq init
+npx rhinoq adopt --scan                 # read-only integration inventory
 npx rhinoq adopt --mode single        # preview
 npx rhinoq adopt --mode single --apply
 npx rhinoq verify add completed-report-has-output
@@ -876,6 +970,20 @@ npx rhinoq adopt --mode single \
   --queue mail-queue --queue notification-queue \
   --owner-property user.id --apply
 ```
+
+Before choosing a migration boundary, run the read-only Integration Eraser
+preview. It reports file/line evidence for status routes, polling, BullMQ
+lifecycle listeners, upload proxies and retry timers. High-confidence matches
+are only a static estimate; uncertain matches require review, and auth,
+handlers and business verification remain application-owned:
+
+```bash
+npx rhinoq adopt --scan
+npx rhinoq adopt --scan --json
+```
+
+It never writes, patches or deletes the scanned repository. See the
+[Integration Eraser guide](./docs/integration-eraser.md).
 
 Queues may declare different contracts instead of sharing one global mode:
 

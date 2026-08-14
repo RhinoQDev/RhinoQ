@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RhinoQ before and after</title>
+<style>
+  *{box-sizing:border-box} body{margin:0;background:#06100d;color:#f4f7f5;font:16px/1.3 Inter,Segoe UI,Arial,sans-serif;overflow:hidden}
+  main{width:1100px;height:720px;padding:26px 38px;background:radial-gradient(circle at 80% 0,#12372d 0,transparent 37%),#07120e}
+  header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}.brand{font-size:40px;font-weight:900;letter-spacing:-2px}.brand b{color:#66e5b7}.tag{font-size:13px;color:#9db1a8;border:1px solid #315246;border-radius:99px;padding:7px 13px;margin-top:5px}
+  h1{font-size:30px;line-height:1.08;letter-spacing:-1px;margin:0 0 18px;max-width:760px}h1 span{color:#72e8bd}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{border:1px solid #29463c;border-radius:18px;padding:17px 20px;background:#0c1914;height:490px}.after{border-color:#51c89e;box-shadow:0 0 0 1px #2d8066 inset}
+  .eyebrow{font-size:12px;letter-spacing:1.5px;font-weight:800;color:#e89292}.after .eyebrow{color:#6ee7b7}h2{font-size:24px;margin:5px 0 10px;letter-spacing:-.5px}
+  pre{white-space:pre-wrap;background:#07100d;border:1px solid #253b33;border-radius:10px;padding:10px 13px;font:12px/1.4 Consolas,monospace;color:#d7e2de;margin:0 0 9px}.minus{color:#f3a0a0}.plus{color:#70e6b8}
+  ul{padding:0;margin:7px 0 0;list-style:none;font-size:13px;color:#c5d2cd}li{margin:5px 0;padding-left:19px;position:relative}li:before{content:'×';position:absolute;left:0;color:#f18d8d;font-weight:800}.after li:before{content:'✓';color:#6ee7b7}
+  .shot{width:100%;height:205px;object-fit:contain;border-radius:10px;border:1px solid #315648;display:block;margin:8px 0}.metric{display:flex;gap:6px;flex-wrap:wrap}.pill{font-size:11px;background:#12261e;border:1px solid #315648;border-radius:99px;padding:5px 8px;color:#cfe0d8}.pill strong{color:#78e8bd}
+  footer{display:flex;justify-content:space-between;align-items:end;margin-top:11px;border-top:1px solid #29463c;padding-top:9px}.url{font-size:18px;font-weight:800}.note{max-width:590px;text-align:right;font-size:10px;color:#8fa69c}
+</style>
+<main>
+  <header><div class="brand">RHINO<b>Q</b></div><div class="tag">Chạy thử thật · không phải mockup</div></header>
+  <h1>Cùng một background task:<br><span>ứng dụng phải tự viết gì?</span></h1>
+  <section class="grid">
+    <article class="panel">
+      <div class="eyebrow">TRƯỚC · KHÔNG RHINOQ</div><h2>Ứng dụng tự sở hữu plumbing</h2>
+      <pre><span class="minus">POST</span> /api/imports
+<span class="minus">GET</span>  /api/imports/:id
+<span class="minus">POST</span> /api/imports/:id/cancel
+<span class="minus">POST</span> /api/imports/:id/result
+
+const imports = new Map()
+updateProgress(...)
+cancelImportTask(...)
+attachImportResult(...)</pre>
+      <ul><li>Tự lưu và chuyển trạng thái Task</li><li>Tự bảo vệ owner cho từng route</li><li>Tự làm status, cancel và result API</li><li>Chưa có realtime UI hay operator console</li></ul>
+      <div class="metric"><span class="pill"><strong>4 route</strong> ứng dụng sở hữu</span><span class="pill">Baseline test: <strong>PASS</strong></span></div>
+    </article>
+    <article class="panel after">
+      <div class="eyebrow">SAU · CÓ RHINOQ</div><h2>Ứng dụng giữ business handler</h2>
+      <img class="shot" src="rhinoq-after-live.png" alt="RhinoQ Workbench chạy thật">
+      <ul><li>Một Task contract và một HTTP mount</li><li>Task API, progress, cancel và result</li><li>SSE tự chuyển sang polling khi cần</li><li>Task Center và operator Workbench</li></ul>
+      <div class="metric"><span class="pill"><strong>50 item</strong> đã chạy</span><span class="pill"><strong>4 lỗi</strong> được đưa vào Attention</span><span class="pill">RhinoQ test: <strong>PASS</strong></span></div>
+    </article>
+  </section>
+  <footer><div class="url">github.com/madebyduy/RhinoQ</div><div class="note">Fixture kiểm soát đo được 4 route → 1 mount và giảm 36 dòng application source. Đây là benchmark trong repository, chưa phải kết quả adopter hoặc cam kết production.</div></footer>
+</main>
+</html>
