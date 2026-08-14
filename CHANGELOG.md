@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.16
 
 - Added a canonical deterministic `RhinoQPlan` projection with compiler and
   started-application access, read-only CLI `plan`, `validate` and `diff`

@@ -567,13 +567,13 @@ example creates and finishes one durable Task without BullMQ:
 
 > [!IMPORTANT]
 > The runtime-neutral APIs below are available in the verified
-> `v0.1.0-beta.15` prerelease. Install the `next` channel or pin that exact
+> `v0.1.0-beta.16` prerelease. Install the `next` channel or pin that exact
 > version; the stable `latest` channel may still point to an older release.
 
 For a reproducible evaluation, pin the verified prerelease explicitly:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.15 pg
+npm install @rhinoq/node@0.1.0-beta.16 pg
 ```
 
 Or generate the fail-closed consumer shell without overwriting existing files:
@@ -640,13 +640,13 @@ That second layer is optional on day one and uses the same operator workflow.
 
 RhinoQ is currently in public beta.
 
-- Latest verified public prerelease: `v0.1.0-beta.15`.
+- Latest verified public prerelease: `v0.1.0-beta.16`.
 
 Use RhinoQ for evaluation and controlled pilots. Production use is not yet
 recommended. The beta.10 release was superseded after its partial npm publish;
 beta.13 published both npm packages but its post-publish smoke used an invalid
 OpenAPI path, so it did not produce GitHub binaries, a container or a complete
-GitHub Release. Beta.15 supersedes it with the corrected end-to-end release
+GitHub Release. Beta.16 supersedes it with the corrected end-to-end release
 gate.
 
 > [!WARNING]
@@ -1605,7 +1605,7 @@ exists but is not the default browser polling shape.
 | Guarded recovery preview/idempotency/post-check | implemented; Go repair service remains mutation authority |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.15 verified public prerelease published |
+| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.16 release candidate; verified only after the tag workflow passes |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 
