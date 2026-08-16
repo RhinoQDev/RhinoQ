@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.20
+
+- Fixed PostgreSQL startup-option merging so tenant binding is preserved when a connection URL already carries options; CLI commands, examples and benchmarks now use tenant-bound pools consistently under forced RLS.
+- Corrected PostgreSQL integration coverage to exercise one tenant per application pool while keeping cross-tenant maintenance checks explicit; the beta20 candidate passed Node22/24, PostgreSQL, fan-out, Go, CodeQL and secret scans.
+
 ## 0.1.0-beta.19
 
 - Fixed CLI Task/evaluation fixture pools to set `rhinoq.tenant_id=default`

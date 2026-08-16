@@ -571,7 +571,7 @@ async function initReportExportExample(): Promise<void> {
   const root = resolve('rhinoq-report-export');
   await mkdir(root, { recursive: true });
   const files: Record<string, string> = {
-    'package.json': `${JSON.stringify({ name: 'rhinoq-report-export', private: true, type: 'module', scripts: { start: 'node app.mjs' }, dependencies: { '@rhinoq/node': '^0.1.0-beta.19', pg: '^8.22.0' } }, null, 2)}\n`,
+    'package.json': `${JSON.stringify({ name: 'rhinoq-report-export', private: true, type: 'module', scripts: { start: 'node app.mjs' }, dependencies: { '@rhinoq/node': '^0.1.0-beta.20', pg: '^8.22.0' } }, null, 2)}\n`,
     '.env.example': 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app\nRHINOQ_OPERATOR_TOKEN=replace-me\n# Optional S3 artifact golden path\nRHINOQ_ARTIFACT_BUCKET=\nRHINOQ_ARTIFACT_REGION=\nRHINOQ_ARTIFACT_MAX_BYTES=10737418240\n',
     '.rhinoq/product-surface.json': `${JSON.stringify({ owner: true, tenant: true, result: false, verifier: false, runtimeIdentity: true, durableStore: false }, null, 2)}\n`,
     'app.mjs': reportExportAppTemplate(),

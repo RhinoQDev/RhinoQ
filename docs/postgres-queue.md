@@ -47,7 +47,7 @@ Prerequisites: Go 1.26.6, PostgreSQL 16 and an empty Go project.
 
 ```bash
 go mod init example.com/rhinoq-worker
-go get github.com/madebyduy/RhinoQ@v0.1.0-beta.19
+go get github.com/madebyduy/RhinoQ@v0.1.0-beta.20
 go get github.com/jackc/pgx/v5@v5.9.2
 ```
 
@@ -55,9 +55,9 @@ Prepare the full RhinoQ schema from a pinned CLI:
 
 ```bash
 export RHINOQ_DATABASE_URL='postgresql://user:password@127.0.0.1:5432/app'
-go run github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.19 migrate plan
-go run github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.19 migrate apply
-go run github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.19 doctor
+go run github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.20 migrate plan
+go run github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.20 migrate apply
+go run github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.20 doctor
 ```
 
 On PowerShell, set the connection with:

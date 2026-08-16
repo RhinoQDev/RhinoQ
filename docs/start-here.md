@@ -225,12 +225,12 @@ source files. Prefer `RHINOQ_DATABASE_URL` when the application already uses
 ### 3. Install the pinned SDK
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.19 pg
+npm install @rhinoq/node@0.1.0-beta.20 pg
 ```
 
 Why: `pg` is a peer dependency and lets RhinoQ reuse the application's pool.
-Pin the exact beta.19 package after the release workflow succeeds; before that,
-install the beta.19 tarball built from this checkout as described in
+Pin the exact beta.20 package after the release workflow succeeds; before that,
+install the beta.20 tarball built from this checkout as described in
 [`docs/nodejs.md`](./nodejs.md). Older prerelease tags do not contain this
 contract.
 
@@ -404,7 +404,7 @@ RhinoQ has two local visual surfaces:
 ### Try Workbench without a database
 
 Download the archive for your OS/CPU from the
-[beta.19 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.19),
+[beta.20 release](https://github.com/madebyduy/RhinoQ/releases/tag/v0.1.0-beta.20),
 extract it, place `rhinoq` (`rhinoq.exe` on Windows) on `PATH`, then run:
 
 ```bash
@@ -753,7 +753,7 @@ Read [Production readiness](./production-readiness.md),
 | provider operation stays `uncertain` | RhinoQ has no proof of the real result | read back by provider ID/key or wait for an authenticated webhook; do not retry blindly |
 | repair is unavailable | Workbench is read-only or handler is not registered | supply the callback allowlist and start with `--actions` |
 | repair becomes `stale` | the business object changed after preview | investigate again and create a new plan; do not bypass the precondition |
-| npm installs an unexpected version | during public beta both `latest` and `next` should resolve to the verified release | pin an exact version, for example `@rhinoq/node@0.1.0-beta.19`, and report the stale tag |
+| npm installs an unexpected version | during public beta both `latest` and `next` should resolve to the verified release | pin an exact version, for example `@rhinoq/node@0.1.0-beta.20`, and report the stale tag |
 
 ## Honest current limits
 
