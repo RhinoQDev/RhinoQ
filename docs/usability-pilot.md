@@ -6,7 +6,7 @@ architecture, commands or expected solution while the timer is running.
 
 ## Participant brief
 
-Use RhinoQ `0.1.0-beta.17` in an existing Node.js application with PostgreSQL
+Use RhinoQ `0.1.0-beta.18` in an existing Node.js application with PostgreSQL
 and BullMQ. Treat it as a public beta for evaluation, not production software.
 
 1. Integrate RhinoQ and make one existing BullMQ job visible in Task Center.

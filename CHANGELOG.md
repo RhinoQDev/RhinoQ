@@ -1226,7 +1226,7 @@ an npm package.
   and the `doctor` timing checks - parts of the product that were already built
   and invisible to anyone who had not run it.
 
-## Unreleased
+## 0.1.0-beta.18
 
 
 - Bundled the AWS S3 SDK as a runtime dependency of `@rhinoq/node`, so `artifacts: 's3'` and `createAwsS3ArtifactProvider()` work after the normal package install. The adapter remains lazy-loaded and the measured workspace cost is about 7.7 MiB.

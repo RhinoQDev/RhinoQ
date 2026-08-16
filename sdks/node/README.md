@@ -38,11 +38,11 @@ the same core without making BullMQ the product boundary.
 For custom runtimes, the development-preview `createRhinoQ()` API exposes
 Observe, Track and capability-gated Control over portable runtime events:
 
-> This portable surface is available in the verified `v0.1.0-beta.17`
+> This portable surface is available in the verified `v0.1.0-beta.18`
 > prerelease. Install the `next` channel or pin that exact version; the stable
 > `latest` channel may still point to an older release.
 
-Latest verified npm prerelease: `v0.1.0-beta.17`.
+Latest verified npm prerelease: `v0.1.0-beta.18`.
 
 ```ts
 const adapter = createManualRuntimeAdapter('manual', 'reports');
@@ -336,7 +336,7 @@ authentication has populated it. It mounts `/tasks`, `/tasks/*` and
 `/task-center`. RhinoQ refuses owner middleware without an explicit resolver;
 it never trusts an owner header by default.
 
-The Node `init` path creates the isolated Task profile. `beta.17` is the current
+The Node `init` path creates the isolated Task profile. `beta.18` is the current
 release that contains the complete Verified Rule loop; an older tarball answers
 `FAIL verify requires 'add <rule-name>'`. For Verified Rules, start the full Go
 Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32 bytes, then run:
@@ -432,7 +432,7 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. The beta.17 release workflow publishes
+This package is a development preview. The beta.18 release workflow publishes
 the prerelease on `next`; `latest` may remain on an older release. Pin an exact
 version after publication if that matters to you. The preview targets Node.js
 22+.
@@ -459,7 +459,7 @@ Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.17.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.18.tgz pg
 ```
 
 #### Confirm what the application actually installed
@@ -482,7 +482,7 @@ For an application evaluation without a source checkout, install from npm and
 pin the exact version rather than a moving tag:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.17 pg
+npm install @rhinoq/node@0.1.0-beta.18 pg
 ```
 
 A published copy carries the same provenance a locally packed one does. It is
