@@ -7,7 +7,13 @@ import {
 } from '@rhinoq/node';
 
 if (!process.env.DATABASE_URL) throw new Error('Set DATABASE_URL to a disposable PostgreSQL database');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+function withTenantSession(connectionString, tenantId = 'default') {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get('options');
+  url.searchParams.set('options', [existing, `-c rhinoq.tenant_id=${tenantId}`].filter(Boolean).join(' '));
+  return url.toString();
+}
+const pool = new Pool({ connectionString: withTenantSession(process.env.DATABASE_URL, 'default') });
 const adapter = createManualRuntimeAdapter('manual', 'reports');
 const rhino = await createRhinoQApp({
   pool, adapters: [adapter], ownerFromNodeRequest: () => 'example',

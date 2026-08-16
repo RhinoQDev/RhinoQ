@@ -16,10 +16,16 @@ if (!container.startsWith('rhinoq-chaos-')) {
   throw new Error('RHINOQ_CHAOS_REDIS_CONTAINER must start with rhinoq-chaos-');
 }
 
+function withTenantSession(connectionString, tenantId = 'default') {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get('options');
+  url.searchParams.set('options', [existing, `-c rhinoq.tenant_id=${tenantId}`].filter(Boolean).join(' '));
+  return url.toString();
+}
 const queueName = `rhinoq-chaos-${process.pid}`;
 const runtimeScope = queueName;
 const taskId = `chaos-${randomUUID()}`;
-const pool = new pg.Pool({ connectionString: databaseUrl, max: 8 });
+const pool = new pg.Pool({ connectionString: withTenantSession(databaseUrl), max: 8 });
 const errors = [];
 const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
 connection.on('error', (error) => errors.push(`redis: ${error.message}`));

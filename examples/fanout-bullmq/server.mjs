@@ -22,6 +22,12 @@ import { createOperatorLoginRouter, operatorAuthorized } from './operator-auth.m
 const DATABASE_URL = process.env.RHINOQ_DATABASE_URL
   ?? 'postgres://postgres:rhinoq@127.0.0.1:55433/fanout';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:56379';
+function withTenantSession(connectionString, tenantId = 'default') {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get('options');
+  url.searchParams.set('options', [existing, `-c rhinoq.tenant_id=${tenantId}`].filter(Boolean).join(' '));
+  return url.toString();
+}
 const QUEUE = 'transcode';
 const SCOPE = 'transcode';
 // The smoke test turns the work down to nothing and the concurrency up. A job
@@ -32,7 +38,7 @@ const WORK_MS = Number(process.env.RHINOQ_EXAMPLE_WORK_MS ?? -1);
 const CONCURRENCY = Number(process.env.RHINOQ_EXAMPLE_CONCURRENCY ?? 4);
 const PORT = Number(process.env.PORT ?? 3000);
 
-const pool = new pg.Pool({ connectionString: DATABASE_URL });
+const pool = new pg.Pool({ connectionString: withTenantSession(DATABASE_URL) });
 const connection = new IORedis(REDIS_URL, { maxRetriesPerRequest: null });
 
 // installPostgresTaskProfile is async. Anything that reads `tasks` must be

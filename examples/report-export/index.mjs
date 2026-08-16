@@ -8,7 +8,13 @@ import { createReportRecovery, reportRecoveryRequest } from './recovery.mjs';
 import { ReportStorage } from './storage.mjs';
 
 if (!process.env.DATABASE_URL) throw new Error('Set DATABASE_URL to a disposable PostgreSQL database');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+function withTenantSession(connectionString, tenantId = 'default') {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get('options');
+  url.searchParams.set('options', [existing, `-c rhinoq.tenant_id=${tenantId}`].filter(Boolean).join(' '));
+  return url.toString();
+}
+const pool = new Pool({ connectionString: withTenantSession(process.env.DATABASE_URL, 'tenant-demo') });
 const storage = new ReportStorage(process.env.REPORT_STORAGE_DIR || resolve('.data'));
 const adapter = createManualRuntimeAdapter('manual', 'report-export');
 const app = await createRhinoQApp({

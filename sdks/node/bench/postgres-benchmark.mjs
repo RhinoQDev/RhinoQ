@@ -5,6 +5,13 @@ import { PostgresTaskClient, migrateTaskSchema } from '../dist/index.js';
 
 const databaseUrl = process.env.RHINOQ_TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error('Set RHINOQ_TEST_DATABASE_URL for the disposable benchmark database');
+const tenantId = process.env.RHINOQ_BENCH_TENANT_ID ?? 'default';
+function withTenantSession(connectionString, tenantId = 'default') {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get('options');
+  url.searchParams.set('options', [existing, `-c rhinoq.tenant_id=${tenantId}`].filter(Boolean).join(' '));
+  return url.toString();
+}
 const iterations = positiveInteger(process.env.RHINOQ_BENCH_ITERATIONS, 1_000);
 const concurrencies = integerList(
   process.env.RHINOQ_BENCH_CONCURRENCIES ?? process.env.RHINOQ_BENCH_CONCURRENCY,
@@ -17,7 +24,7 @@ const fanoutConcurrencies = integerList(
 );
 const fanoutReads = positiveInteger(process.env.RHINOQ_BENCH_FANOUT_READS, 100);
 const pool = new pg.Pool({
-  connectionString: databaseUrl,
+  connectionString: withTenantSession(databaseUrl, tenantId),
   max: Math.max(...concurrencies, ...fanoutConcurrencies),
 });
 const prefix = `bench-${process.pid}-${Date.now()}`;
@@ -33,7 +40,7 @@ try {
     );
 
     const create = await measureConcurrent(ids, concurrency, (id) => client.createTask({
-      id, type: 'benchmark', ownerId: prefix, definitionVersion: 1,
+      id, type: 'benchmark', tenantId, ownerId: prefix, definitionVersion: 1,
     }));
 
     const read = await measureConcurrent(ids, concurrency, (id) => client.getTask(id));
@@ -91,7 +98,7 @@ async function postgresVersion(executor) {
 
 async function measureFanout(client, taskId, size, concurrency) {
   await client.createTask({
-    id: taskId, type: 'benchmark-fanout', ownerId: prefix, definitionVersion: 1,
+    id: taskId, type: 'benchmark-fanout', tenantId, ownerId: prefix, definitionVersion: 1,
   });
   const executionIds = Array.from({ length: size }, (_, index) => index);
   const boundedConcurrency = Math.min(concurrency, size);

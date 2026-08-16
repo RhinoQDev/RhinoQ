@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { installPostgresTaskProfile } from '../postgres/task-client.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
 import { SDK_VERSION } from '../gateway/types.js';
-import { resolveDatabaseConfig, type ResolvedDatabaseConfig } from './database-config.js';
+import { resolveDatabaseConfig, withPostgresOption, type ResolvedDatabaseConfig } from './database-config.js';
 import {
   NOTIFY_REGISTRY_VERSION,
   defaultSecretEnv,
@@ -529,7 +529,7 @@ async function init(args: string[] = []): Promise<void> {
     taskProfileVersion: TASK_SCHEMA_VERSION,
   }, null, 2) + '\n');
   if (resolved) {
-    const pool = new Pool({ ...resolved.pool, options: '-c rhinoq.tenant_id=default', connectionTimeoutMillis: 5_000 });
+    const pool = new Pool({ ...withPostgresOption(resolved.pool, '-c rhinoq.tenant_id=default'), connectionTimeoutMillis: 5_000 });
     try { await installPostgresTaskProfile(pool); }
     finally { await pool.end(); }
     console.log(`PASS PostgreSQL detected at ${resolved.target} via ${resolved.source}; RhinoQ Task schema v${TASK_SCHEMA_VERSION} is current.`);
@@ -601,7 +601,10 @@ function identity(request) {
   if (!session) throw new Error('authenticated demo session required');
   return session;
 }
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, options: '-c rhinoq.tenant_id=tenant-demo' });
+const databaseUrl = new URL(process.env.DATABASE_URL);
+const databaseOptions = [databaseUrl.searchParams.get('options'), '-c rhinoq.tenant_id=tenant-demo'].filter(Boolean).join(' ');
+databaseUrl.searchParams.set('options', databaseOptions);
+const pool = new Pool({ connectionString: databaseUrl.toString() });
 const runtime = createManualRuntimeAdapter('manual', 'report-export');
 const app = await createRhinoQApp({
   pool, adapters: [runtime],
@@ -1487,7 +1490,7 @@ async function doctor(args: string[] = []): Promise<void> {
   console.log('INFO not checked here: worker identity, lease/heartbeat/reaper timing,');
   console.log('     RhinoQ migration state. Those need the Go CLI: rhinoq doctor --ci');
   console.log(`INFO PostgreSQL target ${resolved.target} from ${resolved.source}.`);
-  const pool = new Pool({ ...resolved.pool, options: '-c rhinoq.tenant_id=default', connectionTimeoutMillis: 5_000 });
+  const pool = new Pool({ ...withPostgresOption(resolved.pool, '-c rhinoq.tenant_id=default'), connectionTimeoutMillis: 5_000 });
   let invalidRules = false;
   try {
     await pool.query('SELECT 1');
@@ -1901,7 +1904,7 @@ async function lab(args: string[]): Promise<void> {
       'Re-run against a disposable/evaluation database with --confirm-disposable',
     );
   }
-  const pool = new Pool({ ...requireDatabase(`lab run ${scenario} --confirm-disposable`).pool, options: '-c rhinoq.tenant_id=default' });
+  const pool = new Pool(withPostgresOption(requireDatabase(`lab run ${scenario} --confirm-disposable`).pool, '-c rhinoq.tenant_id=default'));
   try {
     const tasks = await installPostgresTaskProfile(pool);
     const result = await runFailureLab(tasks, scenario);
@@ -1928,7 +1931,7 @@ async function fixture(args: string[]): Promise<void> {
   if (name !== 'failure' && name !== 'async') {
     fail('unknown fixture', 'Run: npx rhinoq fixture async or npx rhinoq fixture failure');
   }
-  const pool = new Pool({ ...requireDatabase(`fixture ${name}`).pool, options: '-c rhinoq.tenant_id=default' });
+  const pool = new Pool(withPostgresOption(requireDatabase(`fixture ${name}`).pool, '-c rhinoq.tenant_id=default'));
   try {
     const tasks = await installPostgresTaskProfile(pool);
     if (name === 'async') {
@@ -1960,7 +1963,7 @@ async function evaluateProduct(args: string[]): Promise<void> {
   if (args.length > 0) fail(`unknown eval option ${JSON.stringify(args[0])}`, 'Run: npx rhinoq eval');
   const resolved = requireDatabase('eval');
   const checks: EvalCheck[] = [];
-  const pool = new Pool({ ...resolved.pool, options: '-c rhinoq.tenant_id=default', connectionTimeoutMillis: 5_000 });
+  const pool = new Pool({ ...withPostgresOption(resolved.pool, '-c rhinoq.tenant_id=default'), connectionTimeoutMillis: 5_000 });
   let server: ReturnType<typeof createServer> | undefined;
   try {
     await pool.query('SELECT 1');
@@ -2082,7 +2085,7 @@ async function createAsyncFixture(tasks: Awaited<ReturnType<typeof installPostgr
 async function dev(args: string[]): Promise<void> {
   const portValue = Number(args.find((item) => item.startsWith('--port='))?.slice(7) ?? 8788);
   if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) fail('port must be 1..65535', 'Example: npx rhinoq dev --port=8788');
-  const pool = new Pool({ ...requireDatabase('dev').pool, options: '-c rhinoq.tenant_id=default' });
+  const pool = new Pool(withPostgresOption(requireDatabase('dev').pool, '-c rhinoq.tenant_id=default'));
   const tasks = await installPostgresTaskProfile(pool);
   const expiry = new WaitpointExpiryScheduler({
     tasks,

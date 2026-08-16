@@ -105,6 +105,34 @@ function resolveDiscrete(env: Environment): ResolvedDatabaseConfig | undefined {
   };
 }
 
+/**
+ * Adds a PostgreSQL startup option without losing options already embedded in a
+ * connection URL. node-postgres ignores the separate `options` field when the
+ * URL already carries its own startup options, so merge into the URL itself.
+ */
+export function withPostgresOption(pool: PoolConfig, option: string): PoolConfig {
+  const normalized = option.trim();
+  if (!normalized) return pool;
+  const poolOptions = pool.options?.trim();
+  if (typeof pool.connectionString !== 'string' || !pool.connectionString.trim()) {
+    return {
+      ...pool,
+      ...(poolOptions ? { options: `${poolOptions} ${normalized}` } : { options: normalized }),
+    };
+  }
+  try {
+    const url = new URL(pool.connectionString);
+    const urlOptions = url.searchParams.get('options')?.trim();
+    url.searchParams.set('options', [urlOptions, poolOptions, normalized].filter(Boolean).join(' '));
+    const { options: _ignored, ...rest } = pool;
+    return { ...rest, connectionString: url.toString() };
+  } catch {
+    return {
+      ...pool,
+      options: [poolOptions, normalized].filter(Boolean).join(' '),
+    };
+  }
+}
 // pg takes a boolean or a TLS options object rather than libpq's sslmode
 // string, so an unmapped value would silently mean "no TLS". Refuse instead:
 // a downgraded connection to a managed database is not something to guess at.

@@ -32,6 +32,12 @@ import pg from 'pg';
 const DATABASE_URL = process.env.RHINOQ_DATABASE_URL
   ?? 'postgres://postgres:rhinoq@127.0.0.1:55433/fanout';
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:56379';
+function withTenantSession(connectionString, tenantId = 'default') {
+  const url = new URL(connectionString);
+  const existing = url.searchParams.get('options');
+  url.searchParams.set('options', [existing, `-c rhinoq.tenant_id=${tenantId}`].filter(Boolean).join(' '));
+  return url.toString();
+}
 const sizes = (name, fallback) => (process.env[name] ?? fallback)
   .split(',').map((value) => Number(value.trim())).filter((value) => value > 0);
 const PHASES = [
@@ -55,7 +61,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 
 let settledLines = [];
 const failures = [];
-const pool = new pg.Pool({ connectionString: DATABASE_URL });
+const pool = new pg.Pool({ connectionString: withTenantSession(DATABASE_URL) });
 let batches = 0;
 let items = 0;
 

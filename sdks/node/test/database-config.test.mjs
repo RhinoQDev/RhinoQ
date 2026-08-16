@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-import { resolveDatabaseConfig } from '../dist/cli/database-config.js';
+import { resolveDatabaseConfig, withPostgresOption } from '../dist/cli/database-config.js';
 
 const developerCLI = fileURLToPath(new URL('../dist/cli/rhinoq.js', import.meta.url));
 
@@ -20,6 +20,21 @@ test('a connection URL still wins, and is never echoed with its password', () =>
   assert.doesNotMatch(resolved.target, /s3cret/);
 });
 
+
+test('withPostgresOption merges into a URL that already has startup options', () => {
+  const resolved = withPostgresOption(
+    { connectionString: 'postgres://app:secret@db.internal:5432/reports?options=-c%20rhinoq.tenant_id%3Dtnt_system' },
+    '-c rhinoq.maintenance=on',
+  );
+  const url = new URL(resolved.connectionString);
+  assert.equal(url.searchParams.get('options'), '-c rhinoq.tenant_id=tnt_system -c rhinoq.maintenance=on');
+  assert.equal(resolved.options, undefined);
+});
+
+test('withPostgresOption adds startup options to discrete pool configuration', () => {
+  const resolved = withPostgresOption({ host: 'db.internal', database: 'reports', options: '-c statement_timeout=5000' }, '-c rhinoq.tenant_id=tnt_acme');
+  assert.equal(resolved.options, '-c statement_timeout=5000 -c rhinoq.tenant_id=tnt_acme');
+});
 test('RHINOQ_DATABASE_URL takes precedence over DATABASE_URL', () => {
   const resolved = resolveDatabaseConfig({
     RHINOQ_DATABASE_URL: 'postgres://rhinoq@127.0.0.1:5432/rhinoq',

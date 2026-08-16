@@ -11,7 +11,9 @@ import { installPostgresTaskProfile, migrateTaskSchema } from '../dist/index.js'
 const databaseUrl = process.env.RHINOQ_TEST_DATABASE_URL;
 
 async function freshProfile() {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const url = new URL(databaseUrl);
+  url.searchParams.set('options', '-c rhinoq.tenant_id=default');
+  const pool = new pg.Pool({ connectionString: url.toString() });
   await pool.query('DROP SCHEMA IF EXISTS rhinoq_task CASCADE');
   await migrateTaskSchema(pool);
   return { pool, tasks: await installPostgresTaskProfile(pool) };
