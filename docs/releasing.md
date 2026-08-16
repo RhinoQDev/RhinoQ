@@ -6,7 +6,7 @@ tag/release:
 - `@rhinoq/node` — authoritative Node SDK and CLIs;
 - `rhinoq` — unscoped compatibility alias.
 
-`0.1.0-beta.18` is the latest verified public prerelease. `0.1.0-beta.10` was
+`0.1.0-beta.19` is the latest verified public prerelease. `0.1.0-beta.10` was
 partially published before a fan-out progress race was fixed. `0.1.0-beta.16`
 published both npm packages but failed the clean CLI registry smoke before the
 GitHub assets were built. Both are superseded and are not verified public
@@ -49,11 +49,11 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    npm test
    npm run pack:check
    cd ../..
-   node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.18
+   node .github/scripts/verify-release-matrix.mjs v0.1.0-beta.19
    ```
 
 3. Commit the candidate, then create and push the matching annotated tag:
-   `v0.1.0-beta.18`.
+   `v0.1.0-beta.19`.
 4. The Release workflow fails closed in this order:
 
    ```text
@@ -67,11 +67,11 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
 5. Verify the resulting state independently:
 
    ```bash
-   npm view @rhinoq/node@0.1.0-beta.18 version dist.integrity dist.attestations
-   npm view rhinoq@0.1.0-beta.18 version dist.integrity dist.attestations
+   npm view @rhinoq/node@0.1.0-beta.19 version dist.integrity dist.attestations
+   npm view rhinoq@0.1.0-beta.19 version dist.integrity dist.attestations
    npm dist-tag ls @rhinoq/node
    npm dist-tag ls rhinoq
-   gh release view v0.1.0-beta.18
+   gh release view v0.1.0-beta.19
    ```
 
    For a public beta, each package must map `next` to the exact candidate. Only
@@ -79,8 +79,8 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    interactive maintainer session:
 
    ```bash
-   npm dist-tag add @rhinoq/node@0.1.0-beta.18 latest
-   npm dist-tag add rhinoq@0.1.0-beta.18 latest
+   npm dist-tag add @rhinoq/node@0.1.0-beta.19 latest
+   npm dist-tag add rhinoq@0.1.0-beta.19 latest
    ```
 
 6. Verify the keyless checksum bundle:
@@ -88,7 +88,7 @@ Protect the `v*` tag rule so a reviewed maintainer creates release tags.
    ```bash
    cosign verify-blob checksums.txt \
      --bundle checksums.txt.sigstore.json \
-     --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.18" \
+     --certificate-identity "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/v0.1.0-beta.19" \
      --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
    ```
 

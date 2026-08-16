@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.19
+
+- Fixed CLI Task/evaluation fixture pools to set `rhinoq.tenant_id=default`
+  under forced RLS; the generated report-export demo now binds its tenant
+  session explicitly.
+
 ## 0.1.0-beta.17
 
 - Restored the `createRhinoQApp` golden-path marker in developer CLI help and

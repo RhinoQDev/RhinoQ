@@ -137,7 +137,7 @@ quyền enqueue mọi job name.
 ## Khởi động Gateway
 
 Binary chính thức đã đăng ký sẵn driver `pgx`. Archive tagged được phát hành
-gồm cả `rhinoq` và `rhinoq-agent`; beta.18 là bản tagged đã được xác minh gần
+gồm cả `rhinoq` và `rhinoq-agent`; beta.19 là bản tagged đã được xác minh gần
 nhất, đã publish npm package, GitHub Release, binary và container. Chuẩn
 bị schema bằng CLI trước, rồi đặt token:
 
@@ -302,7 +302,7 @@ restart loop.
   [security audit](./security-audit-2026-07-29.md).
 - Chưa có gRPC/Unix socket, streaming claim hoặc compression.
 - Node.js là SDK preview duy nhất; chưa cam kết SDK Python/Java/.NET.
-- `beta.18` là public prerelease đã được xác minh gần nhất trên npm và GitHub
+- `beta.19` là public prerelease đã được xác minh gần nhất trên npm và GitHub
   Release; vẫn chỉ dùng cho evaluation và controlled pilots.
 - HTTP Gateway không phải control plane và không thay thế database backup,
   restricted roles hay network policy.

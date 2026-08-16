@@ -1,6 +1,6 @@
 {
   "name": "rhinoq",
-  "version": "0.1.0-beta.18",
+  "version": "0.1.0-beta.19",
   "description": "Open-source async Task platform for PostgreSQL queues and BullMQ with a Task API, realtime UI and safe recovery",
   "keywords": [
     "background-jobs",
@@ -51,7 +51,7 @@
     "README.md"
   ],
   "dependencies": {
-    "@rhinoq/node": "0.1.0-beta.18"
+    "@rhinoq/node": "0.1.0-beta.19"
   },
   "engines": {
     "node": ">=22"
