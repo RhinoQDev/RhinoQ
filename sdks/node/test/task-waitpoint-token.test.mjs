@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { randomBytes } from 'node:crypto';
 import { createWaitpointTokenSigner } from '../dist/index.js';
 
 test('waitpoint tokens bind action, identity and expiry', async () => {
-  const secret = '0123456789abcdef0123456789abcdef';
+  const secret = randomBytes(32).toString('hex');
   const signer = createWaitpointTokenSigner(secret);
   const token = await signer.sign({ waitpointId: 'wp-1', taskId: 'task-1', tenantId: 'tenant-a', ownerId: 'owner-1', action: 'resolve', expiresAt: 2_000, nonce: 'nonce-1' });
   const claims = await signer.verify(token, 'resolve', 1_000);

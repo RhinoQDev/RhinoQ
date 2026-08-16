@@ -2,3 +2,5 @@
 # secret at runtime. Keep this exact fingerprint ignored without weakening
 # detection for the file, rule, or future commits.
 bb2a02e7b81dbdb9aab5cd9199801c2b3125c4c6:cmd/rhinoq/notify_test.go:generic-api-key:34
+# Historical deterministic waitpoint fixture; replaced by a runtime-generated secret.
+50a52030ea4382e2c910b483f29a3d083b53647b:sdks/node/test/task-waitpoint-token.test.mjs:generic-api-key:6

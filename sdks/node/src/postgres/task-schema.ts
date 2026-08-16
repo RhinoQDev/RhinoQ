@@ -2215,7 +2215,7 @@ ALTER TABLE rhinoq_task.artifact_upload_sessions ADD CONSTRAINT artifact_upload_
 DO $$
 DECLARE target text;
 BEGIN
-  FOREACH target IN ARRAY[
+  FOREACH target IN ARRAY ARRAY[
     'tasks', 'executions', 'waitpoints', 'checkpoints', 'verifications',
     'artifacts', 'notification_outbox', 'artifact_upload_sessions'
   ] LOOP
