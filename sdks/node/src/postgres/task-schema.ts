@@ -1,10 +1,11 @@
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 12;
-export const TASK_SCHEMA_NAME = '012_selective_execution_checkpoints';
+export const TASK_SCHEMA_VERSION = 14;
+export const TASK_SCHEMA_NAME = '013_tenant_fenced_access';
 const TASK_SCHEMA_V10_NAME = '010_durable_task_notifications';
 const TASK_SCHEMA_V9_NAME = '009_tenant_verification_artifacts';
 const TASK_SCHEMA_V11_NAME = '011_durable_artifact_upload_sessions';
+const TASK_SCHEMA_V14_NAME = '014_task_row_level_security';
 
 /**
  * Task-only PostgreSQL profile.
@@ -1883,6 +1884,354 @@ END;
 $$;
 `;
 
+const TASK_SCHEMA_V13_SQL = String.raw`
+-- Tenant is part of the authorization boundary for every owner settlement.
+-- Keep the old arity as a fail-closed compatibility trap so an old caller
+-- cannot accidentally resolve a waitpoint without tenant context.
+CREATE OR REPLACE FUNCTION rhinoq_task.resolve_waitpoint(
+  p_id text,
+  p_owner_id text,
+  p_expected_version bigint,
+  p_resolution_id text,
+  p_actor text,
+  p_resolution jsonb,
+  p_resolution_hash text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $fn$
+BEGIN
+  PERFORM rhinoq_task.fail('RHINOQ_TENANT_REQUIRED', COALESCE(p_id, ''));
+END;
+$fn$;
+
+
+CREATE OR REPLACE FUNCTION rhinoq_task.resolve_waitpoint(
+  p_id text,
+  p_tenant_id text,
+  p_owner_id text,
+  p_expected_version bigint,
+  p_resolution_id text,
+  p_actor text,
+  p_resolution jsonb,
+  p_resolution_hash text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v rhinoq_task.waitpoints%ROWTYPE;
+BEGIN
+  IF btrim(COALESCE(p_tenant_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_TENANT', COALESCE(p_id, ''));
+  END IF;
+  SELECT w.* INTO v
+  FROM rhinoq_task.waitpoints w
+  JOIN rhinoq_task.tasks t ON t.id = w.task_id
+  WHERE w.id = p_id AND t.tenant_id = p_tenant_id AND t.owner_id = p_owner_id
+  FOR UPDATE OF w;
+  IF v.id IS NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_WAITPOINT_NOT_FOUND', p_id);
+  END IF;
+  IF v.state = 'resolved' THEN
+    IF v.resolution_id = p_resolution_id AND v.resolution_hash = p_resolution_hash AND v.resolution = p_resolution THEN RETURN; END IF;
+    PERFORM rhinoq_task.fail('RHINOQ_WAITPOINT_CONFLICT', p_id);
+  END IF;
+  IF v.version <> p_expected_version THEN PERFORM rhinoq_task.fail('RHINOQ_VERSION_CONFLICT', p_id); END IF;
+  IF v.state <> 'waiting' OR (v.deadline IS NOT NULL AND clock_timestamp() >= v.deadline) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_WAITPOINT_SETTLED', p_id);
+  END IF;
+  UPDATE rhinoq_task.waitpoints
+  SET state='resolved', resolution=p_resolution, resolution_hash=p_resolution_hash, resolution_id=p_resolution_id,
+      resolved_by=p_actor, resolved_at=clock_timestamp(), version=version+1, updated_at=clock_timestamp()
+  WHERE id=p_id;
+  UPDATE rhinoq_task.tasks SET version=version+1, updated_at=clock_timestamp() WHERE id=v.task_id;
+END;
+$fn$;
+
+
+-- Owner-facing execution transitions must carry both identity axes. The
+-- runtime-only transition command remains separate and is not an owner API.
+CREATE OR REPLACE FUNCTION rhinoq_task.transition_execution_for_owner(
+  p_id text,
+  p_tenant_id text,
+  p_owner_id text,
+  p_expected_version bigint,
+  p_target text,
+  p_reason text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_version bigint;
+BEGIN
+  IF btrim(COALESCE(p_tenant_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_TENANT', COALESCE(p_id, ''));
+  END IF;
+  SELECT e.* INTO v_execution
+  FROM rhinoq_task.executions e
+  JOIN rhinoq_task.tasks t ON t.id=e.task_id
+  WHERE e.id=p_id AND t.tenant_id=p_tenant_id AND t.owner_id=p_owner_id
+  FOR UPDATE OF e;
+  IF NOT FOUND THEN PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id); END IF;
+  IF v_execution.state=p_target THEN RETURN v_execution.version; END IF;
+  IF v_execution.version<>p_expected_version THEN
+    SELECT t.version INTO v_task_version FROM rhinoq_task.tasks t
+    WHERE t.id=v_execution.task_id AND t.tenant_id=p_tenant_id AND t.owner_id=p_owner_id;
+    PERFORM rhinoq_task.fail_version('transitionTaskExecutionForOwner',p_id,p_expected_version,v_execution.version,'Execution',
+      CASE WHEN v_task_version=p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF NOT (
+    (v_execution.state='pending_dispatch' AND p_target='cancelled') OR
+    (v_execution.state='pending_dispatch' AND v_execution.external_id IS NOT NULL AND p_target IN ('running','succeeded','failed','stalled')) OR
+    (v_execution.state='dispatched' AND p_target IN ('running','succeeded','failed','stalled','cancelled')) OR
+    (v_execution.state='running' AND p_target IN ('succeeded','failed','stalled','cancelled')) OR
+    (v_execution.state='stalled' AND p_target IN ('dispatched','failed','cancelled'))
+  ) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_TRANSITION',v_execution.state || ' -> ' || COALESCE(p_target,''));
+  END IF;
+  UPDATE rhinoq_task.executions
+  SET state=p_target,
+      failure_reason=CASE WHEN p_target='failed' THEN left(NULLIF(btrim(COALESCE(p_reason,'')),''),512) ELSE failure_reason END,
+      version=version+1, updated_at=clock_timestamp()
+  WHERE id=p_id
+  RETURNING version INTO v_execution.version;
+  UPDATE rhinoq_task.tasks SET version=version+1, updated_at=clock_timestamp() WHERE id=v_execution.task_id;
+  RETURN v_execution.version;
+END;
+$fn$;
+`;
+
+const TASK_SCHEMA_V14_SQL = String.raw`
+-- PostgreSQL is now the final tenant boundary for the embedded Task profile.
+-- The application still carries tenant_id for domain/API validation, but a
+-- forgotten predicate must not be able to read or write another tenant.
+CREATE OR REPLACE FUNCTION rhinoq_task.current_tenant()
+RETURNS text LANGUAGE sql STABLE PARALLEL SAFE AS $$
+  SELECT NULLIF(btrim(current_setting('rhinoq.tenant_id', true)), '')
+$$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.maintenance_session()
+RETURNS boolean LANGUAGE sql STABLE PARALLEL SAFE AS $$
+  SELECT COALESCE(current_setting('rhinoq.maintenance', true), '') = 'on'
+$$;
+
+COMMENT ON FUNCTION rhinoq_task.current_tenant() IS
+  'Returns the tenant bound to the current PostgreSQL session. NULL denies normal RLS access.';
+COMMENT ON FUNCTION rhinoq_task.maintenance_session() IS
+  'Explicit cross-tenant maintenance context. This is operational context, not a hostile-process security boundary.';
+
+ALTER TABLE rhinoq_task.tasks
+  ALTER COLUMN tenant_id DROP DEFAULT,
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant();
+
+ALTER TABLE rhinoq_task.executions ADD COLUMN IF NOT EXISTS tenant_id text;
+UPDATE rhinoq_task.executions e SET tenant_id = t.tenant_id
+FROM rhinoq_task.tasks t WHERE t.id = e.task_id AND e.tenant_id IS NULL;
+ALTER TABLE rhinoq_task.executions
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant(),
+  ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE rhinoq_task.executions DROP CONSTRAINT IF EXISTS executions_tenant_id_check;
+ALTER TABLE rhinoq_task.executions ADD CONSTRAINT executions_tenant_id_check CHECK (btrim(tenant_id) <> '');
+
+ALTER TABLE rhinoq_task.waitpoints ADD COLUMN IF NOT EXISTS tenant_id text;
+UPDATE rhinoq_task.waitpoints w SET tenant_id = t.tenant_id
+FROM rhinoq_task.tasks t WHERE t.id = w.task_id AND w.tenant_id IS NULL;
+ALTER TABLE rhinoq_task.waitpoints
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant(),
+  ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE rhinoq_task.waitpoints DROP CONSTRAINT IF EXISTS waitpoints_tenant_id_check;
+ALTER TABLE rhinoq_task.waitpoints ADD CONSTRAINT waitpoints_tenant_id_check CHECK (btrim(tenant_id) <> '');
+
+ALTER TABLE rhinoq_task.verifications ADD COLUMN IF NOT EXISTS tenant_id text;
+UPDATE rhinoq_task.verifications v SET tenant_id = t.tenant_id
+FROM rhinoq_task.tasks t WHERE t.id = v.task_id AND v.tenant_id IS NULL;
+ALTER TABLE rhinoq_task.verifications
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant(),
+  ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE rhinoq_task.verifications DROP CONSTRAINT IF EXISTS verifications_tenant_id_check;
+ALTER TABLE rhinoq_task.verifications ADD CONSTRAINT verifications_tenant_id_check CHECK (btrim(tenant_id) <> '');
+
+ALTER TABLE rhinoq_task.artifacts ADD COLUMN IF NOT EXISTS tenant_id text;
+UPDATE rhinoq_task.artifacts a SET tenant_id = t.tenant_id
+FROM rhinoq_task.tasks t WHERE t.id = a.task_id AND a.tenant_id IS NULL;
+ALTER TABLE rhinoq_task.artifacts
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant(),
+  ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE rhinoq_task.artifacts DROP CONSTRAINT IF EXISTS artifacts_tenant_id_check;
+ALTER TABLE rhinoq_task.artifacts ADD CONSTRAINT artifacts_tenant_id_check CHECK (btrim(tenant_id) <> '');
+
+ALTER TABLE rhinoq_task.notification_outbox ADD COLUMN IF NOT EXISTS tenant_id text;
+UPDATE rhinoq_task.notification_outbox n SET tenant_id = t.tenant_id
+FROM rhinoq_task.tasks t WHERE t.id = n.task_id AND n.tenant_id IS NULL;
+ALTER TABLE rhinoq_task.notification_outbox
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant(),
+  ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE rhinoq_task.notification_outbox DROP CONSTRAINT IF EXISTS notification_outbox_tenant_id_check;
+ALTER TABLE rhinoq_task.notification_outbox ADD CONSTRAINT notification_outbox_tenant_id_check CHECK (btrim(tenant_id) <> '');
+
+ALTER TABLE rhinoq_task.checkpoints ADD COLUMN IF NOT EXISTS tenant_id text;
+UPDATE rhinoq_task.checkpoints c SET tenant_id = t.tenant_id
+FROM rhinoq_task.tasks t WHERE t.id = c.task_id AND c.tenant_id IS NULL;
+ALTER TABLE rhinoq_task.checkpoints
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant(),
+  ALTER COLUMN tenant_id SET NOT NULL;
+ALTER TABLE rhinoq_task.checkpoints DROP CONSTRAINT IF EXISTS checkpoints_tenant_id_check;
+ALTER TABLE rhinoq_task.checkpoints ADD CONSTRAINT checkpoints_tenant_id_check CHECK (btrim(tenant_id) <> '');
+
+ALTER TABLE rhinoq_task.artifact_upload_sessions
+  ALTER COLUMN tenant_id SET DEFAULT rhinoq_task.current_tenant();
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM rhinoq_task.executions e JOIN rhinoq_task.tasks t ON t.id=e.task_id
+    WHERE e.tenant_id <> t.tenant_id
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.waitpoints w JOIN rhinoq_task.tasks t ON t.id=w.task_id
+    WHERE w.tenant_id <> t.tenant_id
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.verifications v JOIN rhinoq_task.tasks t ON t.id=v.task_id
+    WHERE v.tenant_id <> t.tenant_id
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.artifacts a JOIN rhinoq_task.tasks t ON t.id=a.task_id
+    WHERE a.tenant_id <> t.tenant_id
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.notification_outbox n JOIN rhinoq_task.tasks t ON t.id=n.task_id
+    WHERE n.tenant_id <> t.tenant_id
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.checkpoints c JOIN rhinoq_task.tasks t ON t.id=c.task_id
+    WHERE c.tenant_id <> t.tenant_id
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.artifact_upload_sessions u JOIN rhinoq_task.tasks t ON t.id=u.task_id
+    WHERE u.tenant_id <> t.tenant_id
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.artifacts a JOIN rhinoq_task.executions e ON e.id=a.execution_id
+    WHERE a.execution_id IS NOT NULL
+      AND (a.tenant_id <> e.tenant_id OR a.task_id <> e.task_id)
+  ) OR EXISTS (
+    SELECT 1 FROM rhinoq_task.artifact_upload_sessions u JOIN rhinoq_task.executions e ON e.id=u.execution_id
+    WHERE u.execution_id IS NOT NULL
+      AND (u.tenant_id <> e.tenant_id OR (u.task_id IS NOT NULL AND u.task_id <> e.task_id))
+  ) THEN
+    RAISE EXCEPTION USING ERRCODE='23514',
+      MESSAGE='RHINOQ_TASK_TENANT_DATA_CONFLICT',
+      DETAIL='A child row has a tenant_id different from its Task parent.';
+  END IF;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.ensure_artifact_execution_tenant()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $guard$
+BEGIN
+  IF NEW.execution_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+    FROM rhinoq_task.executions e
+    WHERE e.id = NEW.execution_id
+      AND e.task_id = NEW.task_id
+      AND e.tenant_id = NEW.tenant_id
+  ) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '23514',
+      MESSAGE = 'RHINOQ_ARTIFACT_EXECUTION_TENANT_CONFLICT';
+  END IF;
+  RETURN NEW;
+END
+$guard$;
+
+DROP TRIGGER IF EXISTS artifacts_execution_tenant_guard ON rhinoq_task.artifacts;
+CREATE TRIGGER artifacts_execution_tenant_guard
+BEFORE INSERT OR UPDATE OF task_id, execution_id, tenant_id
+ON rhinoq_task.artifacts
+FOR EACH ROW EXECUTE FUNCTION rhinoq_task.ensure_artifact_execution_tenant();
+
+CREATE OR REPLACE FUNCTION rhinoq_task.ensure_upload_execution_tenant()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $guard$
+BEGIN
+  IF NEW.execution_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+    FROM rhinoq_task.executions e
+    WHERE e.id = NEW.execution_id
+      AND e.tenant_id = NEW.tenant_id
+      AND (NEW.task_id IS NULL OR e.task_id = NEW.task_id)
+  ) THEN
+    RAISE EXCEPTION USING
+      ERRCODE = '23514',
+      MESSAGE = 'RHINOQ_UPLOAD_EXECUTION_TENANT_CONFLICT';
+  END IF;
+  RETURN NEW;
+END
+$guard$;
+
+DROP TRIGGER IF EXISTS artifact_upload_execution_tenant_guard ON rhinoq_task.artifact_upload_sessions;
+CREATE TRIGGER artifact_upload_execution_tenant_guard
+BEFORE INSERT OR UPDATE OF task_id, execution_id, tenant_id
+ON rhinoq_task.artifact_upload_sessions
+FOR EACH ROW EXECUTE FUNCTION rhinoq_task.ensure_upload_execution_tenant();
+ALTER TABLE rhinoq_task.tasks DROP CONSTRAINT IF EXISTS tasks_id_tenant_key;
+ALTER TABLE rhinoq_task.tasks ADD CONSTRAINT tasks_id_tenant_key UNIQUE (id, tenant_id);
+ALTER TABLE rhinoq_task.executions DROP CONSTRAINT IF EXISTS executions_id_tenant_key;
+ALTER TABLE rhinoq_task.executions ADD CONSTRAINT executions_id_tenant_key UNIQUE (id, tenant_id);
+ALTER TABLE rhinoq_task.verifications DROP CONSTRAINT IF EXISTS verifications_id_tenant_key;
+ALTER TABLE rhinoq_task.verifications ADD CONSTRAINT verifications_id_tenant_key UNIQUE (id, tenant_id);
+
+ALTER TABLE rhinoq_task.executions DROP CONSTRAINT IF EXISTS executions_task_id_fkey;
+ALTER TABLE rhinoq_task.executions ADD CONSTRAINT executions_task_tenant_fkey
+  FOREIGN KEY (task_id, tenant_id) REFERENCES rhinoq_task.tasks(id, tenant_id) ON DELETE CASCADE;
+ALTER TABLE rhinoq_task.waitpoints DROP CONSTRAINT IF EXISTS waitpoints_task_id_fkey;
+ALTER TABLE rhinoq_task.waitpoints ADD CONSTRAINT waitpoints_task_tenant_fkey
+  FOREIGN KEY (task_id, tenant_id) REFERENCES rhinoq_task.tasks(id, tenant_id) ON DELETE CASCADE;
+ALTER TABLE rhinoq_task.verifications DROP CONSTRAINT IF EXISTS verifications_task_id_fkey;
+ALTER TABLE rhinoq_task.verifications ADD CONSTRAINT verifications_task_tenant_fkey
+  FOREIGN KEY (task_id, tenant_id) REFERENCES rhinoq_task.tasks(id, tenant_id) ON DELETE CASCADE;
+ALTER TABLE rhinoq_task.artifacts DROP CONSTRAINT IF EXISTS artifacts_task_id_fkey;
+ALTER TABLE rhinoq_task.artifacts ADD CONSTRAINT artifacts_task_tenant_fkey
+  FOREIGN KEY (task_id, tenant_id) REFERENCES rhinoq_task.tasks(id, tenant_id) ON DELETE CASCADE;
+ALTER TABLE rhinoq_task.notification_outbox DROP CONSTRAINT IF EXISTS notification_outbox_task_id_fkey;
+ALTER TABLE rhinoq_task.notification_outbox ADD CONSTRAINT notification_outbox_task_tenant_fkey
+  FOREIGN KEY (task_id, tenant_id) REFERENCES rhinoq_task.tasks(id, tenant_id) ON DELETE CASCADE;
+ALTER TABLE rhinoq_task.notification_outbox DROP CONSTRAINT IF EXISTS notification_outbox_verification_id_fkey;
+ALTER TABLE rhinoq_task.notification_outbox ADD CONSTRAINT notification_outbox_verification_tenant_fkey
+  FOREIGN KEY (verification_id, tenant_id) REFERENCES rhinoq_task.verifications(id, tenant_id) ON DELETE CASCADE;
+
+ALTER TABLE rhinoq_task.checkpoints
+  DROP CONSTRAINT IF EXISTS checkpoints_task_id_fkey,
+  DROP CONSTRAINT IF EXISTS checkpoints_execution_id_fkey;
+ALTER TABLE rhinoq_task.checkpoints ADD CONSTRAINT checkpoints_task_tenant_fkey
+  FOREIGN KEY (task_id, tenant_id) REFERENCES rhinoq_task.tasks(id, tenant_id) ON DELETE CASCADE;
+ALTER TABLE rhinoq_task.checkpoints ADD CONSTRAINT checkpoints_execution_tenant_fkey
+  FOREIGN KEY (execution_id, tenant_id) REFERENCES rhinoq_task.executions(id, tenant_id) ON DELETE CASCADE;
+
+ALTER TABLE rhinoq_task.artifact_upload_sessions DROP CONSTRAINT IF EXISTS artifact_upload_sessions_task_id_fkey;
+ALTER TABLE rhinoq_task.artifact_upload_sessions ADD CONSTRAINT artifact_upload_sessions_task_tenant_fkey
+  FOREIGN KEY (task_id, tenant_id) REFERENCES rhinoq_task.tasks(id, tenant_id) ON DELETE CASCADE;
+
+DO $$
+DECLARE target text;
+BEGIN
+  FOREACH target IN ARRAY[
+    'tasks', 'executions', 'waitpoints', 'checkpoints', 'verifications',
+    'artifacts', 'notification_outbox', 'artifact_upload_sessions'
+  ] LOOP
+    EXECUTE format('ALTER TABLE rhinoq_task.%I ENABLE ROW LEVEL SECURITY', target);
+    EXECUTE format('ALTER TABLE rhinoq_task.%I FORCE ROW LEVEL SECURITY', target);
+    EXECUTE format('DROP POLICY IF EXISTS rhinoq_task_tenant_isolation ON rhinoq_task.%I', target);
+    EXECUTE format($policy$
+      CREATE POLICY rhinoq_task_tenant_isolation ON rhinoq_task.%I
+      USING (tenant_id = rhinoq_task.current_tenant() OR rhinoq_task.maintenance_session())
+      WITH CHECK (tenant_id = rhinoq_task.current_tenant() OR rhinoq_task.maintenance_session())
+    $policy$, target);
+  END LOOP;
+END
+$$;
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
@@ -1895,9 +2244,85 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 9, name: TASK_SCHEMA_V9_NAME, sql: TASK_SCHEMA_V9_SQL },
   { version: 10, name: TASK_SCHEMA_V10_NAME, sql: TASK_SCHEMA_V10_SQL },
   { version: 11, name: TASK_SCHEMA_V11_NAME, sql: TASK_SCHEMA_V11_SQL },
-  { version: 12, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V12_SQL },
+  { version: 12, name: '012_selective_execution_checkpoints', sql: TASK_SCHEMA_V12_SQL },
+  { version: 13, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V13_SQL },
+  { version: 14, name: TASK_SCHEMA_V14_NAME, sql: TASK_SCHEMA_V14_SQL },
 ] as const;
 
+export const TASK_RLS_TABLES = [
+  'tasks',
+  'executions',
+  'waitpoints',
+  'checkpoints',
+  'verifications',
+  'artifacts',
+  'notification_outbox',
+  'artifact_upload_sessions',
+] as const;
+
+export interface TaskRlsReport {
+  role: string;
+  superuser: boolean;
+  bypassRls: boolean;
+  exempt: boolean;
+  tenantSession: string;
+  unprotected: string[];
+  holds: boolean;
+  detail: string;
+}
+
+/** Inspects the live PostgreSQL role and forced policies, not just migration files. */
+export async function inspectTaskRls(executor: SqlExecutor): Promise<TaskRlsReport> {
+  if (!executor || typeof executor.query !== 'function') {
+    throw new TypeError('a SQL executor is required');
+  }
+  const role = await executor.query<{
+    role: string;
+    superuser: boolean;
+    bypass_rls: boolean;
+    tenant_session: string | null;
+  }>(
+    "SELECT current_user AS role, rolsuper AS superuser, rolbypassrls AS bypass_rls, current_setting('rhinoq.tenant_id', true) AS tenant_session FROM pg_roles WHERE rolname = current_user",
+    [],
+  );
+  const row = role.rows[0];
+  if (!row) throw new Error('RHINOQ_TASK_RLS_ROLE_UNREADABLE');
+  const policies = await executor.query<{ relname: string; forced: boolean }>(
+    "SELECT c.relname, c.relforcerowsecurity AS forced FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'rhinoq_task' AND c.relkind = 'r' AND c.relname = ANY($1::text[]) ORDER BY c.relname",
+    [TASK_RLS_TABLES],
+  );
+  const forcedByName = new Map(policies.rows.map((value) => [value.relname, Boolean(value.forced)]));
+  const unprotected = TASK_RLS_TABLES.filter((name) => forcedByName.get(name) !== true);
+  const superuser = Boolean(row.superuser);
+  const bypassRls = Boolean(row.bypass_rls);
+  const exempt = superuser || bypassRls;
+  const holds = !exempt && unprotected.length === 0;
+  const detail = holds
+    ? (row.tenant_session?.trim()
+      ? `row-level security is in force for "${row.role}" in tenant ${row.tenant_session}`
+      : `row-level security is in force for "${row.role}", but this session announced no tenant and reads nothing`)
+    : [
+      ...(exempt ? [`role "${row.role}" has ${superuser ? 'SUPERUSER' : 'BYPASSRLS'} and PostgreSQL ignores tenant policies`] : []),
+      ...(unprotected.length ? [`tables without forced row-level security: ${unprotected.join(', ')}`] : []),
+    ].join('; ');
+  return {
+    role: row.role,
+    superuser,
+    bypassRls,
+    exempt,
+    tenantSession: row.tenant_session ?? '',
+    unprotected,
+    holds,
+    detail,
+  };
+}
+
+/** Fails startup/deploy checks closed when the live connection bypasses Task RLS. */
+export async function requireTaskRls(executor: SqlExecutor): Promise<TaskRlsReport> {
+  const report = await inspectTaskRls(executor);
+  if (!report.holds) throw new Error(`RHINOQ_TASK_RLS_NOT_IN_FORCE: ${report.detail}`);
+  return report;
+}
 export interface SqlConnection extends SqlExecutor {
   release(): void;
 }
@@ -1914,6 +2339,9 @@ export async function migrateTaskSchema(pool: SqlPool): Promise<void> {
   const connection = await pool.connect();
   try {
     await connection.query('BEGIN', []);
+    // Migration DDL/backfills are deliberately cross-tenant. The setting is
+    // LOCAL to this transaction and is never inherited by application work.
+    await connection.query("SELECT set_config('rhinoq.maintenance', 'on', true)", []);
     await connection.query(
       `SELECT pg_advisory_xact_lock($1::bigint)`,
       [7_246_466_201],

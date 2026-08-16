@@ -61,6 +61,10 @@ export interface TaskClient {
     externalId: string,
     runtimeScope?: string,
   ): Promise<TaskExecution>;
+  /**
+   * Runtime/adapter read only. Do not expose this unscoped method to tenant
+   * callers; owner-facing code must use the owner-scoped Postgres surface.
+   */
   getTaskExecution(executionId: string): Promise<TaskExecution>;
   /**
    * Returns server-side runtime identities for reconciliation. Optional so the
@@ -68,14 +72,21 @@ export interface TaskClient {
    * profile implements it in one bounded query.
    */
   listTaskExecutionRuntimeRefs?(taskId: string): Promise<TaskExecutionRuntimeRefs>;
-  /** Fenced on `TaskExecution.version`, never on `TaskSnapshot.entityVersion`. */
+  /**
+   * Runtime/adapter transition only. Do not expose this unscoped method to
+   * tenant callers; owner-facing code must use the owner-scoped Postgres
+   * surface, which requires tenant and owner identity.
+   */
   transitionTaskExecution(
     executionId: string,
     expectedExecutionVersion: number,
     state: string,
     reason?: string,
   ): Promise<TaskSnapshot>;
-  /** Fenced on `TaskExecution.version`, never on `TaskSnapshot.entityVersion`. */
+  /**
+   * Runtime/adapter result mutation only. Do not expose this unscoped method
+   * to tenant callers; owner-facing APIs must enforce owner and tenant first.
+   */
   attachTaskExecutionResult(
     executionId: string,
     expectedExecutionVersion: number,
@@ -88,7 +99,8 @@ export interface TaskClient {
    * Optional: the Gateway client does not implement it, because the Go engine
    * owns attempt identity for the runtimes it runs itself. It exists for
    * external runtimes that reuse one job identity across retries, where
-   * otherwise the second run leaves no record at all.
+   * otherwise the second run leaves no record at all. This is a runtime/adapter
+   * primitive and has no owner/tenant fence.
    */
   retryTaskExecution?(
     executionId: string,

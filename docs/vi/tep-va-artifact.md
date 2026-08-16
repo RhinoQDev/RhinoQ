@@ -27,11 +27,7 @@ RHINOQ_ARTIFACT_MAX_BYTES=10737418240
 RHINOQ_ARTIFACT_CONTENT_TYPES=video/mp4,application/pdf,application/zip
 ```
 
-Cài thêm các package tùy chọn:
-
-```bash
-npm install @aws-sdk/client-s3 @aws-sdk/lib-storage @aws-sdk/s3-request-presigner
-```
+AWS S3 SDK đã được cài sẵn cùng `@rhinoq/node`; không cần cài thêm package riêng.
 
 R2, MinIO và Spaces dùng cùng factory; thêm endpoint/credential theo chuẩn AWS
 SDK. Secret chỉ tồn tại ở server.

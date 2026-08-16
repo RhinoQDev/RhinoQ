@@ -881,3 +881,42 @@
 - **Rollback:** stop mounting upload routes and cleanup scheduling. Abort stored
   incomplete provider sessions before dropping the additive table/columns.
 - **Owner:** Node SDK + product
+
+## ADR-0039 — Tenant-fenced owner access for waitpoints and Executions
+
+- **Status:** accepted
+- **Context:** The embedded Task profile already carries `tenant_id` on Tasks,
+  but the waitpoint settlement function and the low-level Execution read/
+  transition methods could be called without tenant context. That is safe only
+  for trusted runtime adapters; if mounted as an owner API, an attacker who
+  knows an opaque waitpoint or Execution ID could cross an owner or tenant
+  boundary. Waitpoint capability claims also did not carry the tenant needed by
+  the SQL predicate.
+- **Decision:** Migration 13 adds an eight-argument waitpoint resolver whose
+  predicate includes both `tenant_id` and `owner_id`. The previous seven-
+  argument resolver remains only as a fail-closed compatibility trap returning
+  `RHINOQ_TENANT_REQUIRED`. Waitpoint capability tokens are schema version 2
+  and must include tenant identity. `PostgresTaskClient` exposes explicit
+  owner-scoped Execution read and transition methods; their SQL joins through
+  the owning Task and returns not-found for a mismatched scope. The existing
+  unscoped Execution methods remain runtime/adapter primitives and are not
+  tenant-facing APIs.
+- **Consequences:** Existing version 1 waitpoint tokens are rejected and any
+  direct caller of the old resolver arity must be updated with tenant context.
+  The owner boundary is enforced in both Node pre-checks and the SQL commands;
+  At the time of this decision the embedded profile still assumed a trusted
+  database role; ADR-0040 later adds forced RLS for its tenant-owned tables.
+- **Rollback:** Stop mounting the owner-scoped methods and capability route,
+  then perform a controlled schema rollback only with an explicit review of
+  issued tokens and callers; do not restore acceptance of unscoped tenant
+  settlement by accident.
+- **Owner:** Node SDK + architecture
+
+## ADR-0041 — AWS S3 adapter ships its runtime SDK
+
+- **Status:** accepted
+- **Context:** The built-in S3 artifact adapter lazily imports the three official AWS SDK packages. Keeping them only as optional peers meant a normal `@rhinoq/node` installation could expose `artifacts: 's3'` while failing at runtime until the consumer installed an undocumented extra.
+- **Decision:** Make `@aws-sdk/client-s3`, `@aws-sdk/lib-storage` and `@aws-sdk/s3-request-presigner` runtime dependencies of `@rhinoq/node`. Keep the adapter lazy-loaded so non-S3 paths do not initialize AWS code, and keep `archiver`, Cloudinary/custom providers and the lower-level provider injection path optional.
+- **Consequences:** A default install gains about 7.7 MiB and 38 transitive packages in the current workspace, but S3 works out of the box and the source/bundle does not duplicate the SDK. Consumers that never use artifacts still pay the install footprint, which is the deliberate trade-off for the documented batteries-included S3 path.
+- **Rollback:** Move the three packages back to optional peer dependencies only if install footprint becomes a release blocker; then restore explicit S3 installation instructions and add a separate provider package or install profile before removing the runtime path.
+- **Owner:** Node SDK + architecture

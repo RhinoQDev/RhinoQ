@@ -3,8 +3,8 @@ import type { TaskWaitpoint, TaskWaitpointResolveRequest } from '../gateway/type
 import type { WaitpointTokenClaims } from './waitpoint-token.js';
 
 export interface WaitpointCapabilityClient {
-  getTaskWaitpoint(id: string, ownerId: string): Promise<TaskWaitpoint>;
-  resolveTaskWaitpoint(id: string, ownerId: string, request: TaskWaitpointResolveRequest): Promise<TaskWaitpoint>;
+  getTaskWaitpoint(id: string, ownerId: string, tenantId: string): Promise<TaskWaitpoint>;
+  resolveTaskWaitpoint(id: string, ownerId: string, request: TaskWaitpointResolveRequest, tenantId: string): Promise<TaskWaitpoint>;
 }
 
 /** Single-purpose endpoint for email approval links and provider webhooks. */
@@ -19,7 +19,12 @@ export function createWaitpointCapabilityHandler(options: {
       const authorization = request.headers.get('authorization') ?? '';
       if (!authorization.startsWith('Bearer ')) return Response.json({ code: 'RHINOQ_UNAUTHORIZED' }, { status: 401 });
       const claims = await options.verify(authorization.slice(7).trim(), 'resolve');
-      const current = await options.tasks.getTaskWaitpoint(claims.waitpointId, claims.ownerId);
+      if (claims.schemaVersion !== 2 || claims.action !== 'resolve' ||
+          !claims.waitpointId?.trim() || !claims.taskId?.trim() ||
+          !claims.tenantId?.trim() || !claims.ownerId?.trim() || !claims.nonce?.trim()) {
+        return Response.json({ code: 'RHINOQ_INVALID_CAPABILITY' }, { status: 401 });
+      }
+      const current = await options.tasks.getTaskWaitpoint(claims.waitpointId, claims.ownerId, claims.tenantId);
       if (current.taskId !== claims.taskId) return Response.json({ code: 'RHINOQ_WAITPOINT_NOT_FOUND' }, { status: 404 });
       const body = await request.json() as { expectedVersion?: unknown; resolution?: unknown; actor?: unknown };
       if (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0 || body.resolution === undefined) {
@@ -29,7 +34,7 @@ export function createWaitpointCapabilityHandler(options: {
         expectedVersion: Number(body.expectedVersion), resolutionId: claims.nonce,
         actor: typeof body.actor === 'string' && body.actor.trim() ? body.actor.trim() : `capability:${claims.nonce}`,
         resolution: body.resolution,
-      }));
+      }, claims.tenantId));
     } catch (error) {
       if (error instanceof RhinoQError) return Response.json({ code: error.code, message: error.message }, { status: error.status ?? 500 });
       return Response.json({ code: 'RHINOQ_INVALID_CAPABILITY', message: error instanceof Error ? error.message : 'Invalid waitpoint capability' }, { status: 401 });

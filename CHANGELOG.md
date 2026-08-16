@@ -1228,6 +1228,15 @@ an npm package.
 
 ## Unreleased
 
+
+- Bundled the AWS S3 SDK as a runtime dependency of `@rhinoq/node`, so `artifacts: 's3'` and `createAwsS3ArtifactProvider()` work after the normal package install. The adapter remains lazy-loaded and the measured workspace cost is about 7.7 MiB.
+- Added Task schema migration 014 with forced PostgreSQL RLS across every tenant-owned Node Task table, tenant-bearing child rows, composite parent references, artifact/execution tenant guards, live RLS inspection helpers, and direct SQL cross-tenant integration coverage. Node RLS deployments bind one tenant to each pool and use a NOSUPERUSER NOBYPASSRLS role.
+
+- Security: tenant-fenced waitpoint settlement now requires tenant context;
+  legacy unscoped resolution calls fail closed, waitpoint capabilities are
+  schema version 2, and owner-scoped Execution reads/transitions reject
+  cross-tenant access. Runtime-only unscoped Execution primitives are now
+  documented as non-tenant APIs.
 - Made the security workflow detect whether GitHub Dependency graph is enabled
   before invoking Dependency Review, so unsupported repository configuration is
   reported as an actionable warning instead of failing the whole security run.

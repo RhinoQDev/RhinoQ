@@ -28,6 +28,20 @@ to refuse construction unless the hook is present. Ownership and tenant SQL
 predicates remain mandatory even when the hook allows a request; the hook never
 replaces row-level isolation.
 
+Waitpoint capability tokens are schema version 2 and bind waitpoint, Task,
+tenant, owner, action, expiry and nonce. The resolver passes the signed tenant
+claim into the owner-fenced SQL command; the legacy resolver arity fails closed
+with `RHINOQ_TENANT_REQUIRED`. Existing version 1 tokens are therefore not
+accepted after the migration.
+
+`PostgresTaskClient.getTaskExecution()` and
+`transitionTaskExecution()` remain runtime/adapter primitives and are not
+owner APIs. Owner-facing code must use `getTaskExecutionForOwner()` and
+`transitionTaskExecutionForOwner()`, which require both tenant and owner and
+return not-found for a mismatched scope. Task schema migration 014 now applies
+forced PostgreSQL RLS to the embedded profile. Bind rhinoq.tenant_id in the
+PostgreSQL pool connection options, use one tenant per pool, and verify with
+inspectTaskRls() or requireTaskRls().
 ## Queue protection
 
 The Go worker enables the read-only queue watchdog every 30 seconds by default.

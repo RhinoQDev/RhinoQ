@@ -99,8 +99,7 @@ application.
   repair remove repeated frontend and operator plumbing.
 - **Adopt incrementally.** Explicit composition and optional package subpaths
   let an application mount only the Task, artifact, media, realtime or existing
-  runtime capabilities it selects; specialist provider dependencies remain
-  optional.
+  runtime capabilities it selects. The built-in AWS S3 artifact adapter ships its SDK dependencies; other specialist provider dependencies remain optional.
 - **Evidence before claims.** Code-reduction measurement, fault labs and
   reproducible benchmarks distinguish implemented behavior from production
   evidence; RhinoQ does not promise an SLA in public beta.
@@ -650,10 +649,10 @@ GitHub Release. Beta.17 supersedes it with the corrected end-to-end release
 gate.
 
 > [!WARNING]
-> RhinoQ is a prerelease for evaluation and controlled pilots. The full Go
-> profile enforces tenant isolation in PostgreSQL, while the embedded Node Task
-> profile now requires tenant context at its HTTP boundary and includes it in
-> every owner-scoped SQL predicate. The code-reduction numbers are a
+> RhinoQ is a prerelease for evaluation and controlled pilots. The full Go and embedded Node Task
+> profiles enforce tenant isolation in PostgreSQL. The embedded Node Task
+> profile additionally requires tenant context at its HTTP boundary and binds it to a tenant-scoped PostgreSQL pool;
+> owner-scoped SQL predicates remain a second application check. The code-reduction numbers are a
 > reproducible local benchmark rather than a design-partner count; and chaos
 > evidence is local drills rather than a deployment-shaped campaign. Those still
 > block a production-ready claim.
@@ -1160,10 +1159,11 @@ resolver exists; RhinoQ never falls back to returning a durable storage
 reference directly to the browser.
 
 Applications may supply `tenantFromRequest` beside `ownerFromRequest`. The
-tenant is then carried through list/detail/history/waitpoint/result/SSE reads;
-missing tenant context is refused. Single-tenant applications use the explicit
-`default` tenant. Operator Workbench reads remain deliberately cross-tenant and
-must stay behind `requireOperator`.
+tenant is then carried through list/detail/history/waitpoint/result/SSE reads
+and owner-scoped Execution-by-ID reads/transitions; missing tenant context is
+refused. Single-tenant applications use the explicit `default` tenant. Operator
+Workbench reads remain deliberately cross-tenant and must stay behind
+`requireOperator`. The Node Task profile also requires `rhinoq.tenant_id` in the PostgreSQL pool connection options and one tenant per pool; use `inspectTaskRls()` or `requireTaskRls()` in deployment checks.
 
 An explicit `riskPolicy: { atRiskAfterMs, stuckAfterMs }` enables the bounded
 `GET /tasks/_risk` view. Risk means no Task update crossed a declared threshold;
@@ -1226,8 +1226,9 @@ The application routes expose create/read/resolve under
 `/tasks/{taskId}/waitpoints`, and `ApplicationTaskClient` plus
 `createUseRhinoTaskInput()` remove the corresponding frontend request and UI
 state boilerplate. `createWaitpointTokenSigner()` creates short-lived,
-application-owned HMAC capabilities scoped to one waitpoint, task, owner and
-action. RhinoQ never stores the signing secret. Resolution bodies are bounded
+application-owned HMAC capabilities scoped to one waitpoint, task, tenant, owner
+and action. The token schema is version 2; tokens without tenant scope are
+rejected. RhinoQ never stores the signing secret. Resolution bodies are bounded
 to 64 KiB; large files belong in result/artifact storage.
 
 `waitForInput()`, `waitForApproval()` and `waitForWebhook()` are durable
@@ -1591,7 +1592,7 @@ exists but is not the default browser polling shape.
 | Task verification records and Recently verified | implemented in Node Task profile |
 | Artifact v1 metadata/checksum/expiry/refresh/lineage | implemented in Node Task profile |
 | Task-to-provider Flight Recorder correlation | implemented; compare-attempt diffs, supplied waterfall spans and bounded diagnostic export are available |
-| Node Task tenant HTTP/SQL boundary | implemented with owner/tenant scope plus optional deny-by-default authorization hook; full-profile Gateway RBAC remains separate |
+| Node Task tenant HTTP/SQL boundary | implemented with owner/tenant scope, tenant-fenced waitpoint settlement and owner-scoped Execution guards, plus optional deny-by-default authorization hook; full-profile Gateway RBAC remains separate |
 | Durable Task verification notification handoff | implemented in Task schema v10 with claim/complete/fail leases; recipient/transport stays application-owned |
 | Queue admission and watchdog | admission race fenced; at-risk/stuck/backlog/no-worker/reaper signals are available through WorkerConfig |
 | Signed webhook and Slack notifications with durable dedup | implemented |

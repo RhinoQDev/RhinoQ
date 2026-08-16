@@ -93,6 +93,17 @@ comparison is `NULL`, and the `tenant_id` default resolves to `NULL` against a
 Background work that is legitimately cross-tenant — retention, the notification
 scheduler, recovery sweeps — sets `rhinoq.maintenance=on` instead.
 
+## Embedded Node Task profile
+
+Task schema migration 014 applies the same PostgreSQL RLS boundary to the isolated
+rhinoq_task profile. Every Task-owned table has forced RLS, child rows carry
+tenant_id, and parent references use the tenant key or a tenant-checking trigger.
+Configure the Node pool with rhinoq.tenant_id in its connection options and use
+one tenant per pool. A shared pool serving many tenants needs a transaction-scoped
+connection design; tenantFromRequest and SQL predicates alone are not a substitute
+for the database context. The exported inspectTaskRls() and requireTaskRls()
+helpers inspect the live role and forced policies.
+
 ## What the boundary does and does not defend against
 
 **Does** defend against application bugs: a missing `WHERE tenant_id`, a copied
@@ -139,5 +150,5 @@ forgets `tenant_id` then fails rather than silently writing into `tnt_system`.
   tenant and owner boundaries and requires 404 without metadata. The full Go
   PostgreSQL harness separately runs storage enforcement through a
   `NOSUPERUSER NOBYPASSRLS` application role. These are complementary checks;
-  the embedded Node Task profile enforces tenant predicates rather than the
-  full profile's RLS policies.
+  the embedded Node Task profile now enforces forced RLS in migration 014; its
+  one-tenant-per-pool deployment model is documented above.

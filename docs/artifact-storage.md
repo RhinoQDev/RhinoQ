@@ -114,8 +114,7 @@ RhinoQ API is intentionally unsupported.
 
 ## S3 and S3-compatible storage
 
-Install the optional AWS packages, then provide only the bucket and client
-configuration. RhinoQ owns PutObject, multipart upload, abort cleanup, response
+The AWS S3 packages ship with `@rhinoq/node`; provide only the bucket and client configuration. RhinoQ owns PutObject, multipart upload, abort cleanup, response
 headers and signed downloads:
 
 ```ts
@@ -133,9 +132,7 @@ const app = await createRhinoQApp({
 });
 ```
 
-The factory lazily loads `@aws-sdk/client-s3`, `@aws-sdk/lib-storage` and
-`@aws-sdk/s3-request-presigner`; applications not using AWS do not install
-them. For R2, MinIO or another S3-compatible service, set `endpoint`,
+The factory lazily loads `@aws-sdk/client-s3`, `@aws-sdk/lib-storage` and `@aws-sdk/s3-request-presigner`, so non-S3 paths do not initialize AWS code at startup. These packages are included as runtime dependencies of `@rhinoq/node`. For R2, MinIO or another S3-compatible service, set `endpoint`,
 `credentials`, `region` and `forcePathStyle` in `clientConfig`. The lower-level
 `createS3CompatibleArtifactProvider()` remains available for another SDK.
 

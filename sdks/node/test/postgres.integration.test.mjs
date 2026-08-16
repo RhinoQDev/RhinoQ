@@ -13,6 +13,7 @@ import {
   PostgresProducer,
   installPostgresTaskProfile,
   migrateTaskSchema,
+  inspectTaskRls,
 } from '../dist/index.js';
 
 const databaseUrl = process.env.RHINOQ_TEST_DATABASE_URL;
@@ -20,7 +21,7 @@ const databaseUrl = process.env.RHINOQ_TEST_DATABASE_URL;
 test('runtime-neutral app composition projects a real PostgreSQL Task to terminal progress', {
   skip: !databaseUrl,
 }, async () => {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = new pg.Pool({ connectionString: databaseUrl, options: '-c rhinoq.maintenance=on' });
   const adapter = createManualRuntimeAdapter('manual', 'postgres-e2e');
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const taskId = `portable-app-${suffix}`;
@@ -46,7 +47,7 @@ test('runtime-neutral app composition projects a real PostgreSQL Task to termina
 test('HTTP owner surfaces hide a real PostgreSQL Task across tenant and owner boundaries', {
   skip: !databaseUrl,
 }, async () => {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = new pg.Pool({ connectionString: databaseUrl, options: '-c rhinoq.maintenance=on' });
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const taskId = `http-tenant-${suffix}`;
   const app = await createRhinoQApp({
@@ -80,10 +81,91 @@ test('HTTP owner surfaces hide a real PostgreSQL Task across tenant and owner bo
   }
 });
 
-test('PostgresProducer works with pg and joins the caller transaction', {
+
+
+test('Task profile enforces PostgreSQL RLS for direct SQL cross-tenant access', {
+  skip: !databaseUrl,
+}, async (t) => {
+  const suffix = String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+  const admin = new pg.Pool({ connectionString: databaseUrl, options: '-c rhinoq.maintenance=on' });
+  const tenantA = new pg.Pool({ connectionString: databaseUrl, options: '-c rhinoq.tenant_id=tenant-a' });
+  const tenantB = new pg.Pool({ connectionString: databaseUrl, options: '-c rhinoq.tenant_id=tenant-b' });
+  try {
+    await migrateTaskSchema(admin);
+    const role = await tenantA.query(
+      'SELECT rolsuper AS superuser, rolbypassrls AS bypass_rls FROM pg_roles WHERE rolname=current_user',
+    );
+    if (role.rows[0]?.superuser || role.rows[0]?.bypass_rls) {
+      t.skip('RLS proof requires a NOSUPERUSER NOBYPASSRLS database role');
+      return;
+    }
+
+    const report = await inspectTaskRls(tenantA);
+    assert.equal(report.holds, true);
+    assert.deepEqual(report.unprotected, []);
+
+    const policyState = await tenantA.query(
+      "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='rhinoq_task' AND c.relname = ANY($1::text[]) ORDER BY c.relname",
+      [['tasks', 'executions', 'waitpoints', 'checkpoints', 'verifications', 'artifacts', 'notification_outbox', 'artifact_upload_sessions']],
+    );
+    assert.equal(policyState.rows.length, 8);
+    for (const row of policyState.rows) {
+      assert.equal(row.relrowsecurity, true, row.relname);
+      assert.equal(row.relforcerowsecurity, true, row.relname);
+    }
+
+    const taskA = 'rls-a-' + suffix;
+    const taskB = 'rls-b-' + suffix;
+    await tenantA.query(
+      'SELECT rhinoq_task.create_task($1,$2,$3,$4,$5)',
+      [taskA, 'rls.probe', 'tenant-a', 'owner-a', 1],
+    );
+    await tenantB.query(
+      'SELECT rhinoq_task.create_task($1,$2,$3,$4,$5)',
+      [taskB, 'rls.probe', 'tenant-b', 'owner-b', 1],
+    );
+
+    assert.equal(
+      (await tenantA.query('SELECT count(*)::int AS count FROM rhinoq_task.tasks WHERE id=$1', [taskA])).rows[0].count,
+      1,
+    );
+    assert.equal(
+      (await tenantB.query('SELECT count(*)::int AS count FROM rhinoq_task.tasks WHERE id=$1', [taskB])).rows[0].count,
+      1,
+    );
+    assert.equal(
+      (await tenantA.query('SELECT id FROM rhinoq_task.tasks WHERE id=$1', [taskB])).rows.length,
+      0,
+    );
+
+    await tenantA.query(
+      "INSERT INTO rhinoq_task.executions (id,task_id,tenant_id,item_key,attempt,runtime,state) VALUES($1,$2,$3,'default',1,'manual','pending_dispatch')",
+      ['exec-a-' + suffix, taskA, 'tenant-a'],
+    );
+    assert.equal(
+      (await tenantB.query('SELECT count(*)::int AS count FROM rhinoq_task.executions WHERE id=$1', ['exec-a-' + suffix])).rows[0].count,
+      0,
+    );
+    await assert.rejects(
+      tenantA.query(
+        "INSERT INTO rhinoq_task.tasks (id,type,tenant_id,owner_id,definition_version,state) VALUES($1,'rls.probe','tenant-b','owner-b',1,'pending')",
+        ['forbidden-' + suffix],
+      ),
+      (error) => error.code === '42501',
+    );
+    assert.equal(
+      (await tenantA.query('UPDATE rhinoq_task.tasks SET type=$1 WHERE id=$2 RETURNING id', ['leak', taskB])).rows.length,
+      0,
+    );
+  } finally {
+    await tenantA.end();
+    await tenantB.end();
+    await admin.end();
+  }
+});test('PostgresProducer works with pg and joins the caller transaction', {
   skip: !databaseUrl,
 }, async () => {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = new pg.Pool({ connectionString: databaseUrl, options: '-c rhinoq.maintenance=on' });
   const queue = 'node-integration';
   try {
     await pool.query('DELETE FROM public.rhinoq_jobs WHERE job_name = $1', [queue]);
@@ -147,7 +229,7 @@ test('PostgresProducer works with pg and joins the caller transaction', {
 test('Task-only profile enforces tenant reads and stores verification and artifact records', {
   skip: !databaseUrl,
 }, async () => {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const pool = new pg.Pool({ connectionString: databaseUrl, options: '-c rhinoq.maintenance=on' });
   const taskId = 'node-task-profile';
   try {
     await pool.query('DROP SCHEMA IF EXISTS rhinoq_task CASCADE');
@@ -188,10 +270,59 @@ test('Task-only profile enforces tenant reads and stores verification and artifa
     assert.deepEqual(await tasks.listTaskWaitpointsForOwner(task.id, 'owner-b'), []);
     assert.equal((await tasks.listWaitingTaskWaitpointsForOwner('owner-a'))[0].id, waiting.id);
     assert.deepEqual(await tasks.listWaitingTaskWaitpointsForOwner('owner-b'), []);
-    const resolved = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } });
+    const resolved = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } }, 'default');
     assert.equal(resolved.state, 'resolved');
-    const replayedResolution = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } });
+    const replayedResolution = await tasks.resolveTaskWaitpoint(waiting.id, 'owner-a', { expectedVersion: waiting.entityVersion, resolutionId: 'submit-review-1', resolution: { approved: true } }, 'default');
     assert.equal(replayedResolution.entityVersion, resolved.entityVersion);
+
+    await tasks.createTask({ id: 'tenant-b-waitpoint-task', type: 'bulk-download', tenantId: 'tenant-b', ownerId: 'owner-a', definitionVersion: 1 });
+    const tenantBWaitpoint = await tasks.createTaskWaitpoint('tenant-b-waitpoint-task', { id: 'tenant-b-waitpoint', key: 'review', kind: 'approval', payloadVersion: 1 });
+    await assert.rejects(
+      tasks.resolveTaskWaitpoint(tenantBWaitpoint.id, 'owner-a', { expectedVersion: tenantBWaitpoint.entityVersion, resolutionId: 'cross-tenant-resolution', resolution: { approved: true } }, 'tenant-a'),
+      (error) => error.code === 'RHINOQ_WAITPOINT_NOT_FOUND',
+    );
+    await assert.rejects(
+      pool.query('SELECT rhinoq_task.resolve_waitpoint($1,$2,$3,$4,$5,$6::jsonb,$7)', ['tenant-b-waitpoint', 'owner-a', 1, 'old-arity', 'owner-a', JSON.stringify({ approved: true }), 'hash']),
+      (error) => error.message === 'RHINOQ_TENANT_REQUIRED',
+    );
+    await assert.rejects(
+      pool.query('SELECT rhinoq_task.resolve_waitpoint($1,$2,$3,$4,$5,$6::jsonb,$7,$8)', ['tenant-b-waitpoint', 'tenant-a', 'owner-a', tenantBWaitpoint.entityVersion, 'wrong-tenant', 'owner-a', JSON.stringify({ approved: true }), 'hash']),
+      (error) => error.message === 'RHINOQ_WAITPOINT_NOT_FOUND',
+    );
+
+    await tasks.createTaskExecution('tenant-b-waitpoint-task', { id: 'tenant-b-execution', runtime: 'manual' });
+    await assert.rejects(
+      tasks.getTaskExecutionForOwner('tenant-b-execution', 'owner-a', 'tenant-a'),
+      (error) => error.code === 'RHINOQ_EXECUTION_NOT_FOUND',
+    );
+    await assert.rejects(
+      tasks.transitionTaskExecutionForOwner('tenant-b-execution', 'owner-a', 'tenant-a', 1, 'cancelled'),
+      (error) => error.code === 'RHINOQ_EXECUTION_NOT_FOUND',
+    );
+    await assert.rejects(
+      pool.query(
+        'SELECT rhinoq_task.transition_execution_for_owner($1,$2,$3,$4,$5,$6)',
+        ['tenant-b-execution', 'tenant-a', 'owner-a', 1, 'cancelled', null],
+      ),
+      (error) => error.message === 'RHINOQ_EXECUTION_NOT_FOUND',
+    );
+    await assert.rejects(
+      tasks.getTaskExecutionForOwner('tenant-b-execution', 'owner-b', 'tenant-b'),
+      (error) => error.code === 'RHINOQ_EXECUTION_NOT_FOUND',
+    );
+    await assert.rejects(
+      tasks.transitionTaskExecutionForOwner('tenant-b-execution', 'owner-b', 'tenant-b', 1, 'cancelled'),
+      (error) => error.code === 'RHINOQ_EXECUTION_NOT_FOUND',
+    );
+    await assert.rejects(
+      pool.query(
+        'SELECT rhinoq_task.transition_execution_for_owner($1,$2,$3,$4,$5,$6)',
+        ['tenant-b-execution', 'tenant-b', 'owner-b', 1, 'cancelled', null],
+      ),
+      (error) => error.message === 'RHINOQ_EXECUTION_NOT_FOUND',
+    );
+    const tenantBExecution = await tasks.getTaskExecutionForOwner('tenant-b-execution', 'owner-a', 'tenant-b');
+    await tasks.transitionTaskExecutionForOwner('tenant-b-execution', 'owner-a', 'tenant-b', tenantBExecution.version, 'cancelled');
     task = await tasks.getTask(task.id);
     task = await tasks.transitionTask(task.id, task.entityVersion, 'queued');
     task = await tasks.transitionTask(task.id, task.entityVersion, 'running');

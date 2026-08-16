@@ -131,6 +131,42 @@ test('application Task handler reuses host auth without a RhinoQ token', async (
   assert.throws(() => client.retryTask('task-1', 4, ''), /commandId/i);
 });
 
+test('owner waitpoint routes forward tenant identity to every store call', async () => {
+  const seen = [];
+  const waitpoint = {
+    schemaVersion: 1, entityVersion: 1, id: 'wp-tenant', taskId: 'task-tenant',
+    key: 'approve', kind: 'approval', state: 'waiting', payloadVersion: 1,
+    createdAt: '2026-08-10T00:00:00.000Z', updatedAt: '2026-08-10T00:00:00.000Z',
+  };
+  const handler = createTaskRequestHandler({
+    tasks: {
+      async getTaskWaitpoint(id, ownerId, tenantId) {
+        seen.push(['read', id, ownerId, tenantId]);
+        return waitpoint;
+      },
+      async resolveTaskWaitpoint(id, ownerId, request, tenantId) {
+        seen.push(['resolve', id, ownerId, tenantId, request.resolutionId]);
+        return { ...waitpoint, entityVersion: 2, state: 'resolved', resolution: request.resolution };
+      },
+    },
+    ownerFromRequest: (request) => request.headers.get('x-owner') ?? undefined,
+    tenantFromRequest: (request) => request.headers.get('x-tenant') ?? undefined,
+  });
+  const headers = { 'x-owner': 'owner-a', 'x-tenant': 'tenant-a' };
+  const read = await handler(new Request('http://app.test/tasks/task-tenant/waitpoints/wp-tenant', { headers }));
+  assert.equal(read.status, 200);
+  const resolve = await handler(new Request('http://app.test/tasks/task-tenant/waitpoints/wp-tenant', {
+    method: 'POST', headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedVersion: 1, resolutionId: 'resolve-tenant', resolution: { approved: true } }),
+  }));
+  assert.equal(resolve.status, 200);
+  assert.deepEqual(seen, [
+    ['read', 'wp-tenant', 'owner-a', 'tenant-a'],
+    ['read', 'wp-tenant', 'owner-a', 'tenant-a'],
+    ['resolve', 'wp-tenant', 'owner-a', 'tenant-a', 'resolve-tenant'],
+  ]);
+});
+
 test('risk policy exposes owner-scoped at-risk and stuck tasks with explicit thresholds', async () => {
   const updatedAt = new Date(Date.now() - 120_000).toISOString();
   const handler = createTaskRequestHandler({

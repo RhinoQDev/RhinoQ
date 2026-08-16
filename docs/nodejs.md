@@ -40,10 +40,10 @@ still application-owned.
 The embedded profile also supports a real tenant boundary: put `tenantId` on
 dispatch/create and provide `tenantFromRequest` beside `ownerFromRequest`.
 Owner reads, SSE, waitpoints, verification and artifacts include both tenant
-and owner in their SQL predicates. Omit tenant wiring only in a genuinely
-single-tenant application, where the profile uses `default` explicitly.
-
-Task schema v9 adds append-only business verification records and Artifact v1.
+and owner in their SQL predicates. Migration 014 also applies forced PostgreSQL
+RLS to every tenant-owned Task table. Configure rhinoq.tenant_id in the pool
+connection options and use one tenant per pool; tenantFromRequest remains an
+application authorization check.
 Artifacts keep checksum, expiry, refresh version and lineage while withholding
 the private storage reference from browsers. Configure `resolveArtifact` to
 issue a short-lived authorized URL. Configure `riskPolicy` to expose At risk
@@ -892,10 +892,10 @@ reproducible.
 - `TaskReconciler` is a timer in one process, not a distributed scheduler. The
   standard preset gives it a PostgreSQL advisory lease; custom construction
   must supply equivalent ownership when several replicas share a scope.
-- The full Go profile has PostgreSQL RLS and authorization. The embedded Node
-  Task profile now isolates owner reads by tenant and owner, but intentionally
-  does not duplicate the Go operator-role model.
-- Async effect confirmation has no built-in webhook authentication or
+- The full Go profile and embedded Node Task profile both enforce PostgreSQL RLS
+  and authorization boundaries. Node binds one tenant to each PostgreSQL pool;
+  owner/tenant predicates remain defense in depth and it does not duplicate the
+  Go operator-role model.
   confirmation-deadline scheduler yet; the application authenticates evidence
   and calls `confirmEffect`.
 - Python, Java and .NET SDKs are not implemented.

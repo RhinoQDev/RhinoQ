@@ -218,7 +218,9 @@ ORDER BY selected.updated_at DESC, t.id`;
  *
  * Correctness lives in versioned `rhinoq_task.*` database commands. This
  * class validates call shape, maps rows to the public contract and reuses the
- * application's pool; it does not reimplement Task state machines.
+ * application's pool; it does not reimplement Task state machines. Methods
+ * that operate on unscoped Task/Execution identities are server-side
+ * primitives; the explicit `ForOwner` variants are the tenant-facing boundary.
  */
 export class PostgresTaskClient implements TaskClient {
   private readonly executor: SqlExecutor;
@@ -304,8 +306,8 @@ export class PostgresTaskClient implements TaskClient {
     const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(encoded));
     const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,'0')).join('');
     await this.getTaskWaitpoint(id, ownerId, tenantId);
-    await this.execute(`SELECT rhinoq_task.resolve_waitpoint($1,$2,$3,$4,$5,$6::jsonb,$7)`,
-      [id, ownerId, request.expectedVersion, request.resolutionId, request.actor?.trim() || ownerId, encoded, hash]);
+    await this.execute(`SELECT rhinoq_task.resolve_waitpoint($1,$2,$3,$4,$5,$6,$7::jsonb,$8)`,
+      [id, tenantId, ownerId, request.expectedVersion, request.resolutionId, request.actor?.trim() || ownerId, encoded, hash]);
     return this.readWaitpoint(id, ownerId, tenantId);
   }
 
@@ -549,6 +551,7 @@ export class PostgresTaskClient implements TaskClient {
     return this.getTask(execution.taskId);
   }
 
+  /** Runtime/adapter lookup by external runtime identity; never a tenant API. */
   async lookupTaskExecution(
     runtime: string,
     externalId: string,
@@ -665,7 +668,8 @@ export class PostgresTaskClient implements TaskClient {
    *
    * The superseded row keeps its outcome and its reason. That is the point —
    * "attempt 1 failed with a 502, attempt 2 succeeded" is the answer to the
-   * only question anyone asks about a retried job.
+   * only question anyone asks about a retried job. This is a runtime/adapter
+   * primitive and has no owner/tenant fence.
    */
   async retryTaskExecution(
     executionId: string,
@@ -680,6 +684,30 @@ export class PostgresTaskClient implements TaskClient {
     return this.getTask(execution.taskId);
   }
 
+  /** Owner/tenant-fenced execution read for application-facing code. */
+  async getTaskExecutionForOwner(
+    executionId: string,
+    ownerId: string,
+    tenantId = 'default',
+  ): Promise<TaskExecution> {
+    if (!executionId?.trim() || !ownerId?.trim() || !tenantId?.trim()) {
+      throw new TypeError('execution, owner and tenant identity are required');
+    }
+    const result = await this.execute<ExecutionRow>(
+      `SELECT e.*
+       FROM rhinoq_task.executions e
+       JOIN rhinoq_task.tasks t ON t.id=e.task_id
+       WHERE e.id=$1 AND t.owner_id=$2 AND t.tenant_id=$3`,
+      [executionId, ownerId, tenantId],
+    );
+    const row = result.rows[0];
+    if (!row) throw taskError('RHINOQ_EXECUTION_NOT_FOUND', executionId);
+    return mapExecution(row);
+  }
+  /**
+   * Runtime/adapter lookup. This intentionally has no tenant predicate and
+   * must not be mounted as an owner-facing endpoint.
+   */
   async getTaskExecution(executionId: string): Promise<TaskExecution> {
     const result = await this.execute<ExecutionRow>(
       `SELECT * FROM rhinoq_task.executions WHERE id = $1`,
@@ -693,6 +721,9 @@ export class PostgresTaskClient implements TaskClient {
   }
 
   /**
+   * Runtime/adapter transition. This intentionally has no tenant predicate
+   * and must not be mounted as an owner-facing endpoint.
+   *
    * `expectedExecutionVersion` is `TaskExecution.version`. Passing
    * `TaskSnapshot.entityVersion` here is the single most common integration
    * mistake, and the server answers it with `RHINOQ_WRONG_VERSION_SCOPE` rather
@@ -713,7 +744,27 @@ export class PostgresTaskClient implements TaskClient {
     return this.getTask(execution.taskId);
   }
 
-  /** `expectedExecutionVersion` is `TaskExecution.version`. */
+  /** Owner/tenant-fenced execution transition for application-facing code. */
+  async transitionTaskExecutionForOwner(
+    executionId: string,
+    ownerId: string,
+    tenantId: string,
+    expectedExecutionVersion: number,
+    state: string,
+    reason?: string,
+  ): Promise<TaskSnapshot> {
+    validateVersion(expectedExecutionVersion, 'expectedExecutionVersion');
+    if (!executionId?.trim() || !ownerId?.trim() || !tenantId?.trim()) {
+      throw new TypeError('execution, owner and tenant identity are required');
+    }
+    if (!state?.trim()) throw new TypeError('execution state is required');
+    const execution = await this.getTaskExecutionForOwner(executionId, ownerId, tenantId);
+    await this.execute(
+      `SELECT rhinoq_task.transition_execution_for_owner($1,$2,$3,$4,$5,$6)`,
+      [executionId, tenantId, ownerId, expectedExecutionVersion, state, reason ?? null],
+    );
+    return this.getTaskForOwner(execution.taskId, ownerId, tenantId);
+  }
   async attachTaskExecutionResult(
     executionId: string,
     expectedExecutionVersion: number,

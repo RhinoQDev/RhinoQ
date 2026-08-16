@@ -21,6 +21,10 @@ npx rhinoq setup
 npx rhinoq setup --apply
 ```
 
+`@rhinoq/node` includes the AWS S3 SDK used by `artifacts: 's3'` and
+`createAwsS3ArtifactProvider()`, so no separate AWS SDK install is needed.
+Optional providers such as `archiver` remain host-installed.
+
 `setup` previews before writing, detects Node.js/NestJS/Go, PostgreSQL and
 BullMQ, recommends a runtime path, generates non-overwriting integration files,
 checks the schema and prints the Task Center and Workbench URLs. Start with the
@@ -491,7 +495,7 @@ node -p "require('./node_modules/@rhinoq/node/dist/build-info.json')"
 ## Fastest Task-only setup
 
 ```bash
-RHINOQ_DATABASE_URL='postgres://...' npx rhinoq-task
+RHINOQ_DATABASE_URL='postgres://rhinoq_app:...@host:5432/rhinoq?options=-c%20rhinoq.tenant_id%3Dtnt_acme' npx rhinoq-task
 ```
 
 This creates the isolated Task tables in `rhinoq_task`, including durable
@@ -1413,6 +1417,23 @@ const { executions } = await client.getTaskExecutionResults(taskId);
 `TaskSnapshot` exposes `hasResult` and `failureReason` per execution so the
 list can render without a second call; only the references themselves require
 `getTaskExecutionResults`, which is owner-scoped like the Task result.
+
+The low-level PostgreSQL `getTaskExecution()` and
+`transitionTaskExecution()` methods are runtime/adapter primitives. They query
+by Execution ID for runtime reconciliation and intentionally do not carry
+owner or tenant identity; do not expose them as tenant endpoints. Application
+code that needs by-ID owner access must use the fenced methods instead:
+
+```ts
+const execution = await tasks.getTaskExecutionForOwner(executionId, ownerId, tenantId);
+await tasks.transitionTaskExecutionForOwner(
+  execution.id, ownerId, tenantId, execution.version, 'cancelled',
+);
+```
+
+Those methods join through the owning Task and invoke the tenant-fenced SQL
+command. The embedded Task profile is protected by PostgreSQL RLS in migration 014; owner/tenant predicates remain defense in depth. It does not replace
+full-profile PostgreSQL RLS for callers that have arbitrary database access.
 
 ## Operator Workbench
 

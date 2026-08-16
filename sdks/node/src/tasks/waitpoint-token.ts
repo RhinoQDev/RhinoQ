@@ -1,5 +1,5 @@
 export interface WaitpointTokenClaims {
-  schemaVersion: 1; waitpointId: string; taskId: string; ownerId: string;
+  schemaVersion: 2; waitpointId: string; taskId: string; tenantId: string; ownerId: string;
   action: 'read' | 'resolve'; expiresAt: number; nonce: string;
 }
 
@@ -11,8 +11,8 @@ export function createWaitpointTokenSigner(secret: string | Uint8Array) {
   const cryptoKey = () => key ??= globalThis.crypto.subtle.importKey('raw', keyBytes.slice().buffer as ArrayBuffer, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign','verify']);
   return {
     async sign(input: Omit<WaitpointTokenClaims, 'schemaVersion'>): Promise<string> {
-      validateClaims({ ...input, schemaVersion: 1 });
-      const payload = base64url(new TextEncoder().encode(JSON.stringify({ ...input, schemaVersion: 1 })));
+      validateClaims({ ...input, schemaVersion: 2 });
+      const payload = base64url(new TextEncoder().encode(JSON.stringify({ ...input, schemaVersion: 2 })));
       const signature = await globalThis.crypto.subtle.sign('HMAC', await cryptoKey(), new TextEncoder().encode(payload));
       return `${payload}.${base64url(new Uint8Array(signature))}`;
     },
@@ -31,7 +31,7 @@ export function createWaitpointTokenSigner(secret: string | Uint8Array) {
 }
 
 function validateClaims(value: WaitpointTokenClaims): void {
-  if (value.schemaVersion !== 1 || !value.waitpointId?.trim() || !value.taskId?.trim() || !value.ownerId?.trim() ||
+  if (value.schemaVersion !== 2 || !value.waitpointId?.trim() || !value.taskId?.trim() || !value.tenantId?.trim() || !value.ownerId?.trim() ||
       !value.nonce?.trim() || !['read','resolve'].includes(value.action) || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= 0) {
     throw new TypeError('valid waitpoint token claims are required');
   }

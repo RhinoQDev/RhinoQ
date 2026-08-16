@@ -9,6 +9,13 @@ Read `GET /tasks/_capabilities` before rendering actions. A false capability
 means the corresponding request is intentionally unavailable in this mount;
 clients must not infer support from the Task state alone.
 
+Security boundary: `PostgresTaskClient.getTaskExecution()` and
+`transitionTaskExecution()` are runtime/adapter-only primitives and must not be
+mounted as tenant routes. Owner-facing by-ID access uses
+`getTaskExecutionForOwner(executionId, ownerId, tenantId)` and
+`transitionTaskExecutionForOwner(...)`; both enforce the owner and tenant
+predicate in the SQL command.
+
 ## Cancel a Task
 
 ```http
