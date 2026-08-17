@@ -130,6 +130,7 @@ test('dispatchMany bounds fan-out pressure and never reserves an item twice', as
   let addCalls = 0;
   const client = {
     async getTask() { return task; },
+    async getTaskSummary() { return task; },
     async lookupTaskExecution(_runtime, externalId) {
       lookupCalls++;
       const found = [...executions.values()].find((value) => value.externalId === externalId);
@@ -333,6 +334,7 @@ test('concurrent deterministic dispatch converges when another caller wins the b
   let bindCalls = 0;
   const client = {
     async getTask() { return task; },
+    async getTaskSummary() { return task; },
     async lookupTaskExecution() { return { ...execution }; },
     async getTaskExecution() { return { ...execution }; },
     async bindTaskExecution() {
@@ -476,6 +478,10 @@ function newHarness({
       calls.push('getTask');
       return task;
     },
+    async getTaskSummary() {
+      calls.push('getTaskSummary');
+      return task;
+    },
     async reportTaskProgress(id, expectedVersion, next) {
       calls.push('reportTaskProgress');
       assert.equal(id, 'task-1');
@@ -590,7 +596,12 @@ function delay(milliseconds) {
 test('a job ID BullMQ would reject is refused before anything is reserved', async () => {
   const reads = [];
   const bridge = new BullMQTaskBridge({
-    client: { async getTask(id) { reads.push(id); throw new Error('should not be reached'); } },
+    client: {
+      // Both reads are guarded: reserve() probes the summary, and any fallback
+      // to the full Snapshot must be caught by the same assertion.
+      async getTask(id) { reads.push(id); throw new Error('should not be reached'); },
+      async getTaskSummary(id) { reads.push(id); throw new Error('should not be reached'); },
+    },
     events: { on() {}, off() {} },
     queue: { async add() { throw new Error('should not be reached'); } },
     runtimeScope: 'reports',

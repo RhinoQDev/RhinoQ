@@ -17,8 +17,52 @@ import type { ArtifactUploadService, CreateArtifactUploadRequest } from './artif
 import type { ArtifactUploadPart, ArtifactUploadSession } from './artifact-upload.js';
 
 
+/**
+ * The only Task methods the owner-facing HTTP surface may reach.
+ *
+ * `PostgresTaskClient` carries both boundaries at once. Most of it is
+ * owner-scoped, but a handful of methods are runtime/adapter primitives with no
+ * tenant predicate at all — `getTaskExecution`, `transitionTaskExecution` and
+ * `lookupTaskExecution` read or write by bare identity. Each is marked
+ * "must not be mounted as an owner-facing endpoint" in a comment, and a comment
+ * is not a boundary: nothing stopped a future handler from calling one, and the
+ * result would be an IDOR reachable with any authenticated owner token.
+ *
+ * Naming the permitted surface makes the compiler enforce it. `Pick` keeps the
+ * signatures tied to the client, so this list cannot drift out of date; adding
+ * a route that needs an unlisted method now fails the build, which is the point
+ * at which someone should be asking whether it is owner-safe.
+ *
+ * Three entries take no owner argument — `createTaskWaitpoint`,
+ * `getTaskWaitpoint` and `refreshTaskArtifact`. Their handlers establish
+ * ownership first with a `*ForOwner` read and pass the identity through, so the
+ * fence is in the route rather than the signature.
+ */
+export type OwnerFacingTaskStore = Pick<
+  PostgresTaskClient,
+  | 'createTaskWaitpoint'
+  | 'getTaskArtifactForOwner'
+  | 'getTaskExecutionResultsForOwner'
+  | 'getTaskForOwner'
+  | 'getTaskResultForOwner'
+  | 'getTaskSummaryForOwner'
+  | 'getTaskWaitpoint'
+  | 'listRecentlyVerifiedForOwner'
+  | 'listTaskArtifactsForOwner'
+  | 'listTaskExecutionsForOwner'
+  | 'listTaskVerificationsForOwner'
+  | 'listTaskWaitpointsForOwner'
+  | 'listTasks'
+  | 'listTasksPage'
+  | 'listTasksByState'
+  | 'listWaitingTaskWaitpointsForOwner'
+  | 'refreshTaskArtifact'
+  | 'requestTaskCancellationForOwner'
+  | 'resolveTaskWaitpoint'
+>;
+
 export interface TaskRequestHandlerOptions {
-  tasks: PostgresTaskClient;
+  tasks: OwnerFacingTaskStore;
   /** Return the authenticated application owner ID; never a RhinoQ token. */
   ownerFromRequest(request: Request): Promise<string | undefined> | string | undefined;
   /** Resolve a stable tenant from the host session. Omit for a single `default` tenant. */
@@ -662,7 +706,7 @@ function taskHTTPError(payload: Record<string, unknown>, response: Response): Rh
  * Callers who do want the fence keep it by sending `expectedVersion`.
  */
 async function cancelWithoutFence(
-  tasks: PostgresTaskClient,
+  tasks: OwnerFacingTaskStore,
   taskId: string,
   ownerId: string,
   tenantId: string,

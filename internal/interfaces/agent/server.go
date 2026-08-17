@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,7 +51,14 @@ type Config struct {
 	// multiple replicas still need an edge/distributed limiter.
 	RequestsPerSecond float64
 	RequestBurst      int
-	RepairRegistry    *rhinoq.RepairRegistry
+	// PerCallerRequestsPerSecond and PerCallerRequestBurst bound one
+	// authenticated credential, so a single noisy adopter cannot spend the
+	// process budget and return 429 to everyone else. Left at zero they are
+	// derived: one credential keeps the full Gateway budget — the previous
+	// behaviour exactly — and several credentials split it.
+	PerCallerRequestsPerSecond float64
+	PerCallerRequestBurst      int
+	RepairRegistry             *rhinoq.RepairRegistry
 }
 
 type TaskCredential struct {
@@ -167,13 +173,27 @@ func New(config Config) (*Server, error) {
 	if config.RequestBurst <= 0 {
 		config.RequestBurst = 400
 	}
+	// The operator token is a caller too, so the split counts it alongside the
+	// Task credentials. The floor keeps a share usable: a budget so small that
+	// one page of the console exceeds it would be a worse failure than the
+	// unfairness this prevents.
+	callers := len(credentials) + 1
+	if config.PerCallerRequestsPerSecond <= 0 {
+		config.PerCallerRequestsPerSecond = fairCallerShare(config.RequestsPerSecond, callers, 10)
+	}
+	if config.PerCallerRequestBurst <= 0 {
+		config.PerCallerRequestBurst = int(fairCallerShare(float64(config.RequestBurst), callers, 20))
+	}
 	server := &Server{
 		client: config.Client, tokenHash: operatorHash,
 		taskCredentials:   credentials,
 		open:              config.AllowUnauthenticated,
 		heartbeatInterval: config.HeartbeatInterval, maxPayloadBytes: config.MaxPayloadBytes,
 		maxRequestBytes: config.MaxRequestBytes, version: config.Version,
-		limiter:  newRequestLimiter(config.RequestsPerSecond, config.RequestBurst),
+		limiter: newRequestLimiter(
+			config.RequestsPerSecond, config.RequestBurst,
+			config.PerCallerRequestsPerSecond, config.PerCallerRequestBurst,
+		),
 		repairs:  config.RepairRegistry,
 		tenantID: tenantID,
 		role:     role,
@@ -390,7 +410,10 @@ func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, status, errorResponse{Error: body})
 			return
 		}
-		if !s.allow(w) {
+		// Operator routes all share one budget: the operator token is a single
+		// credential, and splitting it by route would only hide which route is
+		// hot.
+		if !s.allow(w, "operator") {
 			return
 		}
 		permission, ok := agentPermission(r)
@@ -479,7 +502,7 @@ func (s *Server) taskGuard(next http.HandlerFunc) http.HandlerFunc {
 			writeJSON(w, status, errorResponse{Error: body})
 			return
 		}
-		if !s.allow(w) {
+		if !s.allow(w, principal.limiterKey()) {
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
@@ -488,8 +511,12 @@ func (s *Server) taskGuard(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) allow(w http.ResponseWriter) bool {
-	ok, retry := s.limiter.Allow(time.Now())
+// allow charges the caller's own budget before the Gateway ceiling, so a noisy
+// credential cannot rate-limit the others. The two cases carry different
+// messages because they need different responses: the caller can slow its own
+// polling down, but only an operator can raise the Gateway ceiling.
+func (s *Server) allow(w http.ResponseWriter, callerKey string) bool {
+	ok, retry, scope := s.limiter.Allow(callerKey, time.Now())
 	if ok {
 		return true
 	}
@@ -497,43 +524,33 @@ func (s *Server) allow(w http.ResponseWriter) bool {
 	if seconds < 1 {
 		seconds = 1
 	}
+	message := "This credential's request budget on the RhinoQ Gateway is exhausted. " +
+		"Retry after the advertised delay and lower this client's polling or worker pressure; " +
+		"other credentials on this Gateway are unaffected."
+	if scope == scopeGateway {
+		message = "The RhinoQ Gateway process-wide request budget is exhausted, not this " +
+			"credential's. Retry after the advertised delay; an operator must raise " +
+			"RHINOQ_AGENT_REQUESTS_PER_SECOND or add a replica behind a distributed limiter."
+	}
 	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: ErrorBody{
 		Code: "RHINOQ_RATE_LIMITED", Retryable: true, RetryAfterMs: retry.Milliseconds(),
-		Message: "The RhinoQ Gateway request budget is exhausted. Retry after the advertised delay; lower polling/worker pressure or raise RHINOQ_AGENT_REQUESTS_PER_SECOND deliberately.",
+		Message: message,
 	}})
 	return false
 }
 
-type requestLimiter struct {
-	mu                  sync.Mutex
-	rate, tokens, burst float64
-	last                time.Time
-}
-
-func newRequestLimiter(rate float64, burst int) *requestLimiter {
-	return &requestLimiter{rate: rate, tokens: float64(burst), burst: float64(burst), last: time.Now()}
-}
-func (l *requestLimiter) Allow(now time.Time) (bool, time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	elapsed := now.Sub(l.last).Seconds()
-	if elapsed > 0 {
-		l.tokens += elapsed * l.rate
-		if l.tokens > l.burst {
-			l.tokens = l.burst
-		}
-		l.last = now
+// limiterKey names the budget a request draws from. It is derived from the
+// authenticated principal, never from a header, so a caller cannot move itself
+// to a fresh bucket by changing its request.
+func (p taskPrincipal) limiterKey() string {
+	if p.operator {
+		return "operator"
 	}
-	if l.tokens >= 1 {
-		l.tokens--
-		return true, 0
+	if p.ownerID == "" {
+		return "anonymous"
 	}
-	retry := time.Duration((1 - l.tokens) / l.rate * float64(time.Second))
-	if retry < time.Millisecond {
-		retry = time.Millisecond
-	}
-	return false, retry
+	return "owner:" + p.ownerID
 }
 
 func (s *Server) authorized(r *http.Request) bool {

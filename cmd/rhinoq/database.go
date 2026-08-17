@@ -8,6 +8,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/database"
 )
 
 func openDatabase(
@@ -27,6 +28,13 @@ func openDatabase(
 	db, err := sql.Open(driver, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open PostgreSQL driver %q: %w", driver, err)
+	}
+	// The CLI is short-lived and single-purpose, so it reserves nothing. What it
+	// must not do is inherit the database/sql defaults: unlimited connections
+	// and two idle ones.
+	if _, err := database.Tune(db, getenv, 0); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

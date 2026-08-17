@@ -57,7 +57,21 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: sdks/node/package-lock.json
-      - run: npm audit
+      # Two audits, because the two dependency sets have different blast radii
+      # and deserve different thresholds.
+      #
+      # What ships is @aws-sdk/* plus the pg and archiver peers: an advisory
+      # there reaches every adopter, so any severity fails.
+      - name: Audit shipped dependencies (any severity)
+        run: npm audit --omit=dev
+        working-directory: sdks/node
+      # The dev toolchain runs on CI and on maintainer machines and is never
+      # published. A single low-severity advisory in a transitive build
+      # dependency used to fail this job, and a check that blocks every merge
+      # for something nobody can act on is a check that gets bypassed. High and
+      # above still fails.
+      - name: Audit build toolchain (high and above)
+        run: npm audit --audit-level=high
         working-directory: sdks/node
 
   dependency-review:

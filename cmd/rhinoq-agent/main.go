@@ -20,6 +20,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	outboxadapter "github.com/madebyduy/RhinoQ/internal/adapters/outbox"
 	postgresadapter "github.com/madebyduy/RhinoQ/internal/adapters/postgres"
+	// Aliased: run() already has a local named `database` for the *sql.DB.
+	dbpool "github.com/madebyduy/RhinoQ/internal/infrastructure/database"
 	"github.com/madebyduy/RhinoQ/internal/interfaces/agent"
 	"github.com/madebyduy/RhinoQ/internal/runtime/scheduler"
 	"github.com/madebyduy/RhinoQ/internal/runtime/shutdown"
@@ -91,7 +93,13 @@ Verify
 		MaxPayloadBytes:   intOr("RHINOQ_MAX_PAYLOAD_BYTES", 1<<20),
 		RequestsPerSecond: floatOr("RHINOQ_AGENT_REQUESTS_PER_SECOND", 200),
 		RequestBurst:      intOr("RHINOQ_AGENT_REQUEST_BURST", 400),
-		RepairRegistry:    repairRegistry,
+		// Zero means "derive it": one credential keeps the whole Gateway
+		// budget, several split it. Set these when the split should not be
+		// even — a Gateway whose console traffic is negligible next to its
+		// worker traffic, for instance.
+		PerCallerRequestsPerSecond: floatOr("RHINOQ_AGENT_REQUESTS_PER_SECOND_PER_CALLER", 0),
+		PerCallerRequestBurst:      intOr("RHINOQ_AGENT_REQUEST_BURST_PER_CALLER", 0),
+		RepairRegistry:             repairRegistry,
 	})
 	if err != nil {
 		return err
@@ -254,6 +262,16 @@ How to fix
 Verify
   rhinoq doctor`, driver, err)
 	}
+	// The Gateway serves concurrent HTTP requests, so its reserve is the request
+	// budget it is already rate-limited to rather than a worker concurrency.
+	// Leaving the pool unbounded is how one traffic spike turns into
+	// "too many clients already" for every process sharing this database.
+	settings, err := dbpool.Tune(db, os.Getenv, 0)
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, nil, err
+	}
+	log.Printf("rhinoq-agent: postgres pool %s", settings.Describe())
 	client, err := rhinoq.NewPostgres(db)
 	if err != nil {
 		_ = db.Close()

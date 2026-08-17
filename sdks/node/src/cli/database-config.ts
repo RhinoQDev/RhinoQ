@@ -1,5 +1,9 @@
 import type { PoolConfig } from 'pg';
 
+import { assertTenantId } from '../postgres/tenant.js';
+
+export { assertTenantId, isValidTenantId } from '../postgres/tenant.js';
+
 /**
  * Where the CLI found its PostgreSQL connection, and how to describe it in
  * output without printing the password.
@@ -113,6 +117,14 @@ function resolveDiscrete(env: Environment): ResolvedDatabaseConfig | undefined {
 export function withPostgresOption(pool: PoolConfig, option: string): PoolConfig {
   const normalized = option.trim();
   if (!normalized) return pool;
+  // The startup option list is space separated, so a tenant carrying whitespace
+  // does not fail here — it appends a second option to the connection. The URL
+  // branch below percent-encodes and would survive it; the branch above does
+  // not, and neither branch should depend on which one a caller happens to hit.
+  const tenant = /^-c\s*rhinoq\.tenant_id=(.*)$/s.exec(normalized);
+  if (tenant) {
+    assertTenantId(tenant[1]);
+  }
   const poolOptions = pool.options?.trim();
   if (typeof pool.connectionString !== 'string' || !pool.connectionString.trim()) {
     return {

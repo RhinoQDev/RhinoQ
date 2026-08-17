@@ -700,12 +700,19 @@ export class BullMQTaskBridge {
     }
 
     try {
-      snapshot = await this.client.createTaskExecution(snapshot.id, {
+      // The Snapshot this used to return was overwritten by the bind on the
+      // next line before anything read it.
+      const create = {
         id: binding.executionId,
         runtime: 'bullmq',
         ...(binding.itemKey ? { itemKey: binding.itemKey } : {}),
         ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {}),
-      });
+      };
+      if (this.client.createTaskExecutionAck) {
+        await this.client.createTaskExecutionAck(snapshot.id, create);
+      } else {
+        await this.client.createTaskExecution(snapshot.id, create);
+      }
       snapshot = await this.client.bindTaskExecution(binding.executionId, {
         runtime: 'bullmq',
         ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {}),
@@ -730,9 +737,9 @@ export class BullMQTaskBridge {
   async dispatch(input: BullMQTaskDispatch): Promise<TaskSnapshot> {
     this.assertDispatchReady();
     this.assertDispatchableJobIds([input]);
-    const snapshot = await this.reserve(input);
+    const taskId = await this.reserve(input);
     await this.dispatchReserved(input);
-    return this.ensureTask(snapshot.id, 'queued');
+    return this.ensureTask(taskId, 'queued');
   }
 
   private async dispatchReserved(input: BullMQTaskDispatch): Promise<void> {
@@ -750,11 +757,16 @@ export class BullMQTaskBridge {
       jobId: input.jobId,
     });
     try {
-      await this.client.bindTaskExecution(input.executionId, {
+      const binding = {
         runtime: 'bullmq',
         runtimeScope: this.runtimeScope,
         externalId: input.jobId,
-      });
+      };
+      if (this.client.bindTaskExecutionAck) {
+        await this.client.bindTaskExecutionAck(input.executionId, binding);
+      } else {
+        await this.client.bindTaskExecution(input.executionId, binding);
+      }
     } catch (error) {
       // Queue.add may have succeeded while a concurrent deterministic retry
       // won the bind. Re-read the durable identity before classifying the
@@ -954,36 +966,55 @@ export class BullMQTaskBridge {
     }
   }
 
-  private async reserve(binding: BullMQTaskBinding): Promise<TaskSnapshot> {
-    let snapshot: TaskSnapshot;
+  /**
+   * Reserves one item and returns the Task id, not the Task.
+   *
+   * This runs once per item of a fan-out and every caller discards everything
+   * but the id, so returning a Snapshot meant each item produced, transferred
+   * and parsed a document containing every item reserved so far — quadratic
+   * work for a string that was already in `binding.task.id`.
+   *
+   * The existence probe reads the summary rather than the Snapshot for the same
+   * reason: it aggregates the item counts server-side instead of shipping the
+   * items. The reservation semantics are unchanged; only the size of the
+   * answer is.
+   */
+  private async reserve(binding: BullMQTaskBinding): Promise<string> {
+    let taskId: string;
     try {
-      snapshot = await this.client.getTask(binding.task.id);
+      taskId = (await this.client.getTaskSummary(binding.task.id)).id;
     } catch (error) {
       if (!isCode(error, 'RHINOQ_TASK_NOT_FOUND')) {
         throw error;
       }
-      snapshot = await this.client.createTask(binding.task);
+      taskId = (await this.client.createTask(binding.task)).id;
     }
     const existing = await this.find(binding.jobId);
     if (existing) {
-      this.assertExistingBinding(existing, binding, snapshot.id);
-      return snapshot;
+      this.assertExistingBinding(existing, binding, taskId);
+      return taskId;
     }
+    const request = {
+      id: binding.executionId,
+      runtime: 'bullmq',
+      ...(binding.itemKey ? { itemKey: binding.itemKey } : {}),
+      ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {}),
+      externalId: binding.jobId,
+    };
     try {
-      return await this.client.createTaskExecution(snapshot.id, {
-        id: binding.executionId,
-        runtime: 'bullmq',
-        ...(binding.itemKey ? { itemKey: binding.itemKey } : {}),
-        ...(this.runtimeScope ? { runtimeScope: this.runtimeScope } : {}),
-        externalId: binding.jobId,
-      });
+      if (this.client.createTaskExecutionAck) {
+        await this.client.createTaskExecutionAck(taskId, request);
+      } else {
+        await this.client.createTaskExecution(taskId, request);
+      }
+      return taskId;
     } catch (error) {
       const raced = await this.find(binding.jobId);
       if (!raced) {
         throw error;
       }
-      this.assertExistingBinding(raced, binding, snapshot.id);
-      return this.client.getTask(snapshot.id);
+      this.assertExistingBinding(raced, binding, taskId);
+      return taskId;
     }
   }
 
@@ -1193,7 +1224,7 @@ export class BullMQTaskBridge {
         if (isTerminalExecution(current.state)) {
           return;
         }
-        await this.client.transitionTaskExecution(current.id, current.version, 'cancelled');
+        await this.transitionExecution(current.id, current.version, 'cancelled');
       });
     }
     return this.converge(async () => {
@@ -1556,7 +1587,11 @@ export class BullMQTaskBridge {
     if (reference) {
       await this.converge(async () => {
         const current = await this.client.getTaskExecution(execution.id);
-        await this.client.attachTaskExecutionResult(current.id, current.version, reference);
+        if (this.client.attachTaskExecutionResultAck) {
+          await this.client.attachTaskExecutionResultAck(current.id, current.version, reference);
+        } else {
+          await this.client.attachTaskExecutionResult(current.id, current.version, reference);
+        }
       });
     }
 
@@ -1755,7 +1790,7 @@ export class BullMQTaskBridge {
         return;
       }
       try {
-        await this.client.transitionTaskExecution(
+        await this.transitionExecution(
           execution.id,
           // TaskExecution.version, not TaskSnapshot.entityVersion. The two are
           // different axes and the store now says so by name.
@@ -1777,6 +1812,35 @@ export class BullMQTaskBridge {
         await this.ensureExecution(executionId, target, reason);
       }
     });
+  }
+
+  /**
+   * Moves one attempt, without asking for the Task back.
+   *
+   * The projector never reads the returned Snapshot here — it re-reads what it
+   * needs on the next pass — but the Snapshot-returning command builds one
+   * anyway, aggregating every Execution of the Task. Across a fan-out that is
+   * O(N²) bytes produced and discarded, and the write itself costs three round
+   * trips instead of one.
+   *
+   * The acknowledged form is optional on the port, so a Gateway-backed client
+   * keeps working on the original path.
+   */
+  private async transitionExecution(
+    executionId: string,
+    expectedExecutionVersion: number,
+    target: string,
+    reason?: string,
+  ): Promise<void> {
+    if (this.client.transitionTaskExecutionAck) {
+      await this.client.transitionTaskExecutionAck(
+        executionId, expectedExecutionVersion, target, reason,
+      );
+      return;
+    }
+    await this.client.transitionTaskExecution(
+      executionId, expectedExecutionVersion, target, reason,
+    );
   }
 
   private async ensureTask(taskId: string, target: Exclude<TaskState, 'pending' | 'cancel_requested' | 'cancelled'>): Promise<TaskSnapshot> {

@@ -75,6 +75,36 @@ Go, Redis and BullMQ versions are listed in the
 Pass condition: `doctor` exits zero and the isolation tests pass with a
 `NOSUPERUSER NOBYPASSRLS` application role. See [tenancy](./tenancy.md).
 
+### 2b. Bound waits and connections at the role, not in the caller
+
+A query with no timeout is not slow, it is indefinite: it holds a pooled
+connection and, if it holds a lock, everything queued behind that lock holds one
+too. That is the mechanism by which one slow statement becomes an outage for
+traffic that has nothing to do with it. Set the bounds on the role so they apply
+to every connection, including ones opened by a script nobody reviewed:
+
+```sql
+ALTER ROLE rhinoq_app SET lock_timeout = '5s';
+ALTER ROLE rhinoq_app SET statement_timeout = '30s';
+ALTER ROLE rhinoq_app SET idle_in_transaction_session_timeout = '60s';
+```
+
+`idle_in_transaction_session_timeout` is the one that matters most. It is the
+only setting that recovers a transaction whose client died while holding a lock;
+without it that lock is held until someone notices and terminates the backend by
+hand.
+
+Size the pool explicitly as well. Every RhinoQ binary applies
+`RHINOQ_DB_MAX_OPEN_CONNS` (default: twice the CPU count, clamped to 32) and
+holds the same number idle, because `database/sql` otherwise defaults to
+unlimited connections and two idle ones — the first exhausts `max_connections`
+for every client on the server, the second reconnects on every burst. Set
+`RHINOQ_DB_EXPECTED_REPLICAS` so `rhinoq doctor` compares the whole deployment's
+demand against the server ceiling rather than one replica's.
+
+Pass condition: `rhinoq doctor` reports PASS for "Connection pool", and the
+three role settings are present in `pg_db_role_setting`.
+
 ### 3. Rehearse migration and restore
 
 - Back up before applying migrations.

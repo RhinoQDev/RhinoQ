@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/postgres"
 	"github.com/madebyduy/RhinoQ/internal/infrastructure/config"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/database"
 	"github.com/madebyduy/RhinoQ/internal/infrastructure/migrations"
 )
 
@@ -293,6 +295,34 @@ func runDoctor(reportOnly bool) int {
 					warnings++
 					fmt.Printf("  WARN oldest recurring schedule is late by %s, beyond one %s worker lease\n", scheduleStats.OldestDueLag, c.LeaseDuration)
 					fmt.Println("       Verify a recurring scheduler replica is running and can dispatch its configured Task names.")
+				}
+			}
+
+			// PostgreSQL does not degrade as it runs out of connections; it
+			// refuses the next one outright, to every client sharing the
+			// server. That is worth a number an operator can read before the
+			// outage rather than during it.
+			fmt.Println("Connection pool")
+			poolSettings, poolErr := database.SettingsFromEnv(os.Getenv, 0)
+			if poolErr != nil {
+				failures++
+				fmt.Printf("  FAIL pool configuration: %v\n", poolErr)
+			} else {
+				replicas, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("RHINOQ_DB_EXPECTED_REPLICAS")))
+				capacity, capacityErr := database.InspectCapacity(dbCtx, db, poolSettings, replicas)
+				switch {
+				case capacityErr != nil:
+					warnings++
+					fmt.Printf("  WARN cannot read server connection limits: %v\n", capacityErr)
+					fmt.Printf("       Local pool: %s\n", poolSettings.Describe())
+				case capacity.Crowded():
+					warnings++
+					fmt.Printf("  WARN %s\n", capacity.Explain())
+					fmt.Printf("       Local pool: %s\n", poolSettings.Describe())
+					fmt.Println("       Set RHINOQ_DB_EXPECTED_REPLICAS so this check counts the whole deployment.")
+				default:
+					fmt.Printf("  PASS %s\n", capacity.Explain())
+					fmt.Printf("       Local pool: %s\n", poolSettings.Describe())
 				}
 			}
 

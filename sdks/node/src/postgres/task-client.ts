@@ -8,7 +8,10 @@ import type {
   TaskExecutionResult,
   TaskExecutionResults,
   TaskExecutionRuntimeRefs,
+	TaskExecutionCreateAck,
 	TaskExecutionPage,
+	TaskExecutionWriteAck,
+	TaskPage,
   TaskExecutionSummary,
   TaskProgress,
   TaskResult,
@@ -32,6 +35,7 @@ import type {
 import type { TaskClient } from '../tasks/client.js';
 import { sha256RhinoQCheckpointInput } from '../tasks/checkpoint.js';
 import type { SqlExecutor } from './producer.js';
+import { assertTenantId } from './tenant.js';
 import { migrateTaskSchema } from './task-schema.js';
 import type { SqlConnection, SqlPool } from './task-schema.js';
 
@@ -214,6 +218,56 @@ GROUP BY t.id, selected.updated_at
 ORDER BY selected.updated_at DESC, t.id`;
 
 /**
+ * The same page, selected by position instead of by counting past it.
+ *
+ * `OFFSET n` makes PostgreSQL produce and discard n rows before returning
+ * anything, so the cost of a page grows with how deep it is: page 200 does two
+ * hundred times the work of page 1 to return the same number of rows. The list
+ * stream re-runs this query on a timer, which turns that into a standing cost
+ * rather than a one-off.
+ *
+ * `(updated_at, id)` is already the sort key and `tasks_owner_updated_idx`
+ * already covers it, so comparing against the last row of the previous page
+ * seeks straight to the right place and every page costs the same.
+ *
+ * A keyset page is also stable under concurrent writes in a way an offset page
+ * is not: a Task updated while the reader is paging shifts every subsequent
+ * offset by one, silently skipping or repeating a row.
+ */
+const LIST_SNAPSHOTS_KEYSET_SQL = `
+WITH selected AS (
+  SELECT id, updated_at
+  FROM rhinoq_task.tasks
+  WHERE owner_id = $1 AND tenant_id = $2
+    AND ($4::timestamptz IS NULL OR (updated_at, id) < ($4::timestamptz, $5::text))
+  ORDER BY updated_at DESC, id DESC
+  LIMIT $3
+)
+SELECT t.*,
+       COALESCE(
+         jsonb_agg(
+           jsonb_build_object(
+             'id', e.id,
+             'itemKey', e.item_key,
+             'attempt', e.attempt,
+             'runtime', e.runtime,
+             'runtimeScope', e.runtime_scope,
+             'state', e.state,
+             'version', e.version,
+             'hasResult', e.result_ref IS NOT NULL,
+             'failureReason', e.failure_reason
+           )
+           ORDER BY e.item_key, e.attempt, e.id
+         ) FILTER (WHERE e.id IS NOT NULL),
+         '[]'::jsonb
+       ) AS executions
+FROM selected
+JOIN rhinoq_task.tasks AS t ON t.id = selected.id
+LEFT JOIN rhinoq_task.executions AS e ON e.task_id = t.id
+GROUP BY t.id, selected.updated_at
+ORDER BY selected.updated_at DESC, t.id DESC`;
+
+/**
  * Embedded Task client for Node applications already using PostgreSQL.
  *
  * Correctness lives in versioned `rhinoq_task.*` database commands. This
@@ -222,14 +276,35 @@ ORDER BY selected.updated_at DESC, t.id`;
  * that operate on unscoped Task/Execution identities are server-side
  * primitives; the explicit `ForOwner` variants are the tenant-facing boundary.
  */
+/** Tuning for the transaction `onceForItem` opens around a business callback. */
+export interface PostgresTaskClientOptions {
+  /**
+   * How long a transaction waits for the per-item lock before giving up.
+   *
+   * The wait happens with a pooled connection checked out, so an unbounded one
+   * lets a single stuck holder drain the application's pool. Five seconds is
+   * long enough to absorb a normal concurrent claim and short enough that a
+   * stuck one is an error on one item rather than an outage.
+   */
+  lockTimeoutMs?: number;
+}
+
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+
 export class PostgresTaskClient implements TaskClient {
   private readonly executor: SqlExecutor;
+  private readonly lockTimeoutMs: number;
 
-  constructor(executor: SqlExecutor) {
+  constructor(executor: SqlExecutor, options: PostgresTaskClientOptions = {}) {
     if (!executor || typeof executor.query !== 'function') {
       throw new TypeError('a PostgreSQL query executor is required');
     }
+    const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
+    if (!Number.isInteger(lockTimeoutMs) || lockTimeoutMs <= 0) {
+      throw new RangeError('lockTimeoutMs must be a positive integer number of milliseconds');
+    }
     this.executor = executor;
+    this.lockTimeoutMs = lockTimeoutMs;
   }
 
   async createTask(request: TaskCreateRequest): Promise<TaskSnapshot> {
@@ -432,6 +507,41 @@ export class PostgresTaskClient implements TaskClient {
     return result.rows.map(mapSnapshot);
   }
 
+  /**
+   * Owner's Tasks, newest first, paged by cursor rather than by offset.
+   *
+   * Prefer this to `listTasks` for anything that pages past the first screen or
+   * re-reads on a timer: every page costs the same here, and a Task updated
+   * mid-walk cannot shift the window underneath the reader. `listTasks` stays
+   * for callers that already speak offsets.
+   */
+  async listTasksPage(
+    ownerId: string,
+    options: { cursor?: string; limit?: number; tenantId?: string } = {},
+  ): Promise<TaskPage> {
+    if (!ownerId?.trim()) {
+      throw new TypeError('owner id is required');
+    }
+    const limit = options.limit ?? 50;
+    if (!Number.isInteger(limit) || limit <= 0 || limit > 200) {
+      throw new RangeError('limit must be 1..200');
+    }
+    const after = decodeTaskCursor(options.cursor ?? '');
+    // limit + 1 answers "is there another page" without a second count query.
+    const result = await this.execute<TaskRow>(
+      LIST_SNAPSHOTS_KEYSET_SQL,
+      [ownerId, options.tenantId ?? 'default', limit + 1, after?.updatedAt ?? null, after?.id ?? ''],
+    );
+    const more = result.rows.length > limit;
+    const rows = more ? result.rows.slice(0, limit) : result.rows;
+    const last = rows[rows.length - 1];
+    return {
+      schemaVersion: 1,
+      tasks: rows.map(mapSnapshot),
+      ...(more && last ? { nextCursor: encodeTaskCursor(last) } : {}),
+    };
+  }
+
   async createTaskExecution(
     taskId: string,
     request: TaskExecutionCreateRequest,
@@ -484,6 +594,22 @@ export class PostgresTaskClient implements TaskClient {
     try {
       await connection.query('BEGIN', []);
       inTransaction = true;
+      // A bounded wait for the item lock, not an unbounded one.
+      //
+      // Migration 015 narrowed the lock to a single item, so contention here
+      // now means a genuine concurrent claim for that same item rather than
+      // an unrelated sibling. Waiting forever for it is still wrong: this
+      // connection is checked out of the application's pool for the whole
+      // wait, so a stuck holder converts one slow item into pool exhaustion
+      // for traffic that has nothing to do with this Task. Failing fast turns
+      // that into one visible error on one item.
+      //
+      // LOCAL, so it expires with the transaction and the connection returns
+      // to the pool exactly as it left.
+      await connection.query(
+        `SELECT set_config('lock_timeout', $1, true)`,
+        [`${this.lockTimeoutMs}ms`],
+      );
       let claimed: boolean;
       try {
         const result = await connection.query<{ claimed: boolean }>(
@@ -549,6 +675,163 @@ export class PostgresTaskClient implements TaskClient {
       ],
     );
     return this.getTask(execution.taskId);
+  }
+
+  /**
+   * Runs `work` with this transaction bound to one tenant.
+   *
+   * Row-level security reads `rhinoq.tenant_id` from the PostgreSQL session,
+   * and the documented way to set it has been `?options=-c rhinoq.tenant_id=x`
+   * on the connection string. That makes the tenant a property of the
+   * connection, so serving N tenants from one process needs N pools. With
+   * PostgreSQL's default `max_connections` of 100, a handful of tenants at a
+   * modest pool size each is already past the ceiling — and the ceiling is
+   * shared with every other client of that server.
+   *
+   * `set_config(..., true)` is `SET LOCAL`: it applies to this transaction and
+   * is discarded at COMMIT or ROLLBACK, so the connection returns to the pool
+   * carrying nothing. One pool then serves every tenant, and the isolation is
+   * still PostgreSQL's rather than the caller's — a forgotten predicate inside
+   * `work` is caught by RLS exactly as before.
+   *
+   * The callback receives a client bound to the checked-out connection. Using
+   * the outer client inside it would run on a different connection, outside
+   * both the transaction and the tenant binding, which is the one mistake worth
+   * naming here.
+   *
+   * The connection-string form still works and is still correct for a
+   * single-tenant deployment. `docs/tenancy.md` shows both side by side and when
+   * to reach for each.
+   */
+  async withTenant<T>(
+    tenantId: string,
+    work: (tasks: PostgresTaskClient, transaction: SqlConnection) => Promise<T>,
+  ): Promise<T> {
+    const tenant = assertTenantId(tenantId);
+    if (typeof work !== 'function') {
+      throw new TypeError('withTenant requires a callback');
+    }
+    const pool = this.executor as Partial<SqlPool>;
+    if (typeof pool.connect !== 'function') {
+      throw new TypeError('withTenant requires a PostgreSQL pool-backed Task client');
+    }
+
+    const connection = await pool.connect();
+    let inTransaction = false;
+    try {
+      await connection.query('BEGIN', []);
+      inTransaction = true;
+      await connection.query(
+        `SELECT set_config('rhinoq.tenant_id', $1, true)`,
+        [tenant],
+      );
+      const scoped = new PostgresTaskClient(connection, { lockTimeoutMs: this.lockTimeoutMs });
+      const value = await work(scoped, connection);
+      await connection.query('COMMIT', []);
+      inTransaction = false;
+      return value;
+    } catch (error) {
+      if (inTransaction) {
+        await connection.query('ROLLBACK', []).catch(() => undefined);
+        inTransaction = false;
+      }
+      throw error;
+    } finally {
+      if (inTransaction) {
+        await connection.query('ROLLBACK', []).catch(() => undefined);
+      }
+      connection.release();
+    }
+  }
+
+  /*
+   * Acknowledged writes: the command's own result, not a fresh Snapshot.
+   *
+   * Every write above ends with `getTask()`, and `getTask()` runs SNAPSHOT_SQL,
+   * which aggregates every Execution of the Task into one jsonb document. On a
+   * fan-out that document grows with the batch, so N writes move O(N²) bytes —
+   * serialised by PostgreSQL, pushed through the socket, and parsed by Node.
+   * The projector then discards almost all of it: what it actually needs is the
+   * new version to fence its next command with.
+   *
+   * These variants return exactly that. `transitionTaskExecutionAck` is one
+   * round trip where the Snapshot-returning form is three: the pre-read exists
+   * only to learn the Task id for the trailing read, and the trailing read is
+   * the part being removed.
+   *
+   * They are additive. The Snapshot-returning methods keep their contract for
+   * callers that want the aggregate, and a `TaskClient` that does not implement
+   * these — the Gateway client — is detected and falls back.
+   */
+
+  /** Creates the next attempt for an item and returns its attempt number. */
+  async createTaskExecutionAck(
+    taskId: string,
+    request: TaskExecutionCreateRequest,
+  ): Promise<TaskExecutionCreateAck> {
+    if (!taskId?.trim() || !request?.id?.trim() || !request.runtime?.trim()) {
+      throw new TypeError('task id, execution id and runtime are required');
+    }
+    const result = await this.execute<{ attempt: number }>(
+      `SELECT rhinoq_task.create_execution($1, $2, $3, $4, $5, $6) AS attempt`,
+      [
+        request.id,
+        taskId,
+        request.itemKey ?? 'default',
+        request.runtime,
+        request.runtimeScope ?? '',
+        request.externalId ?? null,
+      ],
+    );
+    return { attempt: Number(result.rows[0]?.attempt ?? 0) };
+  }
+
+  async bindTaskExecutionAck(
+    executionId: string,
+    binding: TaskExecutionBinding,
+  ): Promise<TaskExecutionWriteAck> {
+    const externalId = binding?.externalId ?? binding?.jobId;
+    if (!binding?.runtime || !externalId) {
+      throw new TypeError('execution runtime and external id are required');
+    }
+    // The pre-read stays here: bind fences on the version it discovers rather
+    // than on one the caller supplied, which is the existing contract.
+    const execution = await this.getTaskExecution(executionId);
+    const result = await this.execute<{ version: string }>(
+      `SELECT rhinoq_task.bind_execution($1, $2, $3, $4, $5) AS version`,
+      [executionId, execution.version, binding.runtime, binding.runtimeScope ?? '', externalId],
+    );
+    return { executionVersion: Number(result.rows[0]?.version ?? 0) };
+  }
+
+  async transitionTaskExecutionAck(
+    executionId: string,
+    expectedExecutionVersion: number,
+    state: string,
+    reason?: string,
+  ): Promise<TaskExecutionWriteAck> {
+    validateVersion(expectedExecutionVersion, 'expectedExecutionVersion');
+    const result = await this.execute<{ version: string }>(
+      `SELECT rhinoq_task.transition_execution($1, $2, $3, $4) AS version`,
+      [executionId, expectedExecutionVersion, state, reason ?? null],
+    );
+    return { executionVersion: Number(result.rows[0]?.version ?? 0) };
+  }
+
+  async attachTaskExecutionResultAck(
+    executionId: string,
+    expectedExecutionVersion: number,
+    reference: string,
+  ): Promise<TaskExecutionWriteAck> {
+    validateVersion(expectedExecutionVersion, 'expectedExecutionVersion');
+    if (!reference?.trim()) {
+      throw new TypeError('execution result reference is required');
+    }
+    const result = await this.execute<{ version: string }>(
+      `SELECT rhinoq_task.attach_execution_result($1, $2, $3) AS version`,
+      [executionId, expectedExecutionVersion, reference],
+    );
+    return { executionVersion: Number(result.rows[0]?.version ?? 0) };
   }
 
   /** Runtime/adapter lookup by external runtime identity; never a tenant API. */
@@ -1363,6 +1646,30 @@ function mapExecutionSummaryRow(row: ExecutionRow): TaskExecutionSummary {
 		state: row.state, version: Number(row.version), hasResult: row.result_ref !== null,
 		...(row.failure_reason ? { failureReason: row.failure_reason } : {}),
 	};
+}
+
+interface TaskCursor { updatedAt: string; id: string }
+
+// The cursor carries both halves of the sort key, because `updated_at` alone is
+// not unique: two Tasks written in the same statement share a timestamp, and a
+// cursor that could not tell them apart would drop one of them from the walk.
+function encodeTaskCursor(row: TaskRow): string {
+	const updatedAt = row.updated_at instanceof Date
+		? row.updated_at.toISOString()
+		: String(row.updated_at);
+	return Buffer.from(JSON.stringify({ updatedAt, id: row.id }), 'utf8').toString('base64url');
+}
+
+function decodeTaskCursor(value: string): TaskCursor | undefined {
+	if (!value) return undefined;
+	try {
+		const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<TaskCursor>;
+		if (!parsed.updatedAt || !parsed.id) throw new Error();
+		if (Number.isNaN(Date.parse(parsed.updatedAt))) throw new Error();
+		return { updatedAt: parsed.updatedAt, id: parsed.id };
+	} catch {
+		throw new TypeError('invalid task cursor');
+	}
 }
 
 function encodeExecutionCursor(row: ExecutionRow): string {
