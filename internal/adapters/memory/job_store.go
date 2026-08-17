@@ -326,6 +326,36 @@ func (s *JobStore) QueueRateLimitTTL(_ context.Context, name string, now time.Ti
 	return ttl, nil
 }
 
+// NextQueueRateLimitTTL takes one read lock for the whole subscription instead
+// of one per lane, which is the in-memory equivalent of the batched query.
+func (s *JobStore) NextQueueRateLimitTTL(
+	_ context.Context,
+	names []string,
+	now time.Time,
+) (time.Duration, error) {
+	if now.IsZero() {
+		return 0, errors.New("current time is required")
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var next time.Duration
+	for _, name := range names {
+		state, ok := s.rateLimits[name]
+		if !ok || state.count < state.limit.Max || state.windowStarted.IsZero() {
+			continue
+		}
+		// An elapsed window is not something to wait for.
+		if ttl := state.windowStarted.Add(state.limit.Window).Sub(now); ttl > 0 &&
+			(next == 0 || ttl < next) {
+			next = ttl
+		}
+	}
+	return next, nil
+}
+
 func (s *JobStore) SetQueueAdmission(_ context.Context, name string, policy admission.Policy) error {
 	if name == "" {
 		return errors.New("queue name is required")

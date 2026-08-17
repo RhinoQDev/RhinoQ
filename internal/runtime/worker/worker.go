@@ -315,20 +315,21 @@ func (w *Worker) claim(ctx context.Context, available int) ([]job.Record, error)
 // idleWait sleeps until the earlier of the backoff and the moment a rate-limited
 // queue opens its next window, so a throttled worker wakes up when there is
 // something to do rather than on a fixed tick.
+// One query for the whole subscription, not one per lane. A worker subscribed
+// to thirty lanes used to issue thirty queries on every idle tick, and an idle
+// worker ticks as often as its poll interval — so a pool of workers with
+// nothing to do generated a steady load on the very database they were idle
+// waiting on. The answer is a single MIN over the lanes.
 func (w *Worker) idleWait(ctx context.Context, backoff time.Duration) time.Duration {
-	wait := backoff
-	now := w.now()
-	for _, name := range w.handlers.QueueNames() {
-		ttl, err := w.store.QueueRateLimitTTL(ctx, name, now)
-		if err != nil {
-			w.report(err)
-			continue
-		}
-		if ttl > 0 && ttl < wait {
-			wait = ttl
-		}
+	ttl, err := w.store.NextQueueRateLimitTTL(ctx, w.handlers.QueueNames(), w.now())
+	if err != nil {
+		w.report(err)
+		return backoff
 	}
-	return wait
+	if ttl > 0 && ttl < backoff {
+		return ttl
+	}
+	return backoff
 }
 
 func (w *Worker) nextBackoff(current time.Duration) time.Duration {

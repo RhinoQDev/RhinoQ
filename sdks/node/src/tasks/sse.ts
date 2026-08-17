@@ -11,20 +11,70 @@ export interface TaskSSESource {
   getTaskSummaryForOwner(taskId: string, ownerId: string, tenantId?: string): Promise<TaskSummary>;
   listTasks(ownerId: string, limit: number, offset: number, tenantId?: string): Promise<TaskSnapshot[]>;
 }
-export interface TaskSSEOptions { pollIntervalMs?: number; heartbeatMs?: number; maxConnections?: number; }
+/**
+ * Announces committed Task changes to this process.
+ *
+ * Supplying one turns each stream from "ask every second" into "wait until told,
+ * with a slow poll as a safety net". The database then pays for changes rather
+ * than for watchers.
+ */
+export interface TaskChangeSource {
+  subscribe(listener: (change: { taskId: string; tenantId: string }) => void): () => void;
+  readonly connected: boolean;
+}
+
+export interface TaskSSEOptions {
+  pollIntervalMs?: number;
+  heartbeatMs?: number;
+  maxConnections?: number;
+  /**
+   * When present and connected, the poll interval falls back to
+   * `idlePollIntervalMs` because it is only covering missed notifications.
+   */
+  changes?: TaskChangeSource;
+  /** Safety-net interval used while notifications are live. Default 30s. */
+  idlePollIntervalMs?: number;
+}
 
 export function taskEventResponse(source: TaskSSESource, request: Request, ownerId: string, taskId: string, options: TaskSSEOptions = {}, onClose?: () => void, tenantId = 'default'): Response {
   const lastVersion = parseLastVersion(request.headers.get('last-event-id'));
   return sseResponse(request, async (send, signal) => {
     let version = lastVersion;
     const pollMs = bounded(options.pollIntervalMs ?? 1_000, 250, 60_000, 'stream poll interval');
+    const idlePollMs = bounded(options.idlePollIntervalMs ?? 30_000, 1_000, 300_000, 'stream idle poll interval');
     const heartbeatMs = bounded(options.heartbeatMs ?? 15_000, 1_000, 120_000, 'stream heartbeat');
     let heartbeatAt = Date.now() + heartbeatMs;
-    while (!signal.aborted) {
-      const task = await source.getTaskSummaryForOwner(taskId, ownerId, tenantId);
-      if (task.entityVersion > version) { version = task.entityVersion; send('task.snapshot', task, String(version)); }
-      if (Date.now() >= heartbeatAt) { send('task.heartbeat', { serverTime: new Date().toISOString() }); heartbeatAt = Date.now() + heartbeatMs; }
-      if (isTerminal(task.state) || !(await wait(pollMs, signal))) return;
+
+    // A change that lands between the read and the wait must not be missed, so
+    // the flag is set by the subscription and consumed by the wait rather than
+    // racing it.
+    let touched = false;
+    let wake: (() => void) | undefined;
+    const unsubscribe = options.changes?.subscribe((change) => {
+      if (change.taskId !== taskId || change.tenantId !== tenantId) return;
+      touched = true;
+      wake?.();
+    });
+
+    try {
+      while (!signal.aborted) {
+        const task = await source.getTaskSummaryForOwner(taskId, ownerId, tenantId);
+        if (task.entityVersion > version) { version = task.entityVersion; send('task.snapshot', task, String(version)); }
+        if (Date.now() >= heartbeatAt) { send('task.heartbeat', { serverTime: new Date().toISOString() }); heartbeatAt = Date.now() + heartbeatMs; }
+        if (isTerminal(task.state)) return;
+
+        // Notifications are best effort across a disconnect, so the poll stays
+        // — just far enough apart that it is a safety net rather than the
+        // mechanism. Without a live hub this is the original interval.
+        const live = options.changes?.connected === true;
+        const untilHeartbeat = Math.max(50, heartbeatAt - Date.now());
+        const budget = live ? Math.min(idlePollMs, untilHeartbeat) : pollMs;
+        if (touched) { touched = false; continue; }
+        if (!(await waitForChange(budget, signal, (resolve) => { wake = resolve; }))) return;
+        wake = undefined;
+      }
+    } finally {
+      unsubscribe?.();
     }
   }, onClose);
 }
@@ -110,4 +160,35 @@ function parseBlock(block: string): TaskStreamEvent | undefined {
 function parseLastVersion(value: string | null): number { if (!value || !/^\d+$/.test(value)) return 0; const parsed = Number(value); return Number.isSafeInteger(parsed) ? parsed : 0; }
 function bounded(value: number, min: number, max: number, name: string): number { if (!Number.isFinite(value) || value < min || value > max) throw new RangeError(`${name} must be ${min}..${max}ms`); return value; }
 function isTerminal(state: string): boolean { return state === 'succeeded' || state === 'failed' || state === 'cancelled'; }
+/**
+ * Sleeps until the budget elapses, the stream aborts, or a change wakes it.
+ *
+ * Returns false only for abort, so a caller cannot tell a notification from a
+ * timeout — and does not need to. Either way the next step is to re-read
+ * through the owner-scoped path, because the notification is a hint and never
+ * the data.
+ */
+function waitForChange(
+  ms: number,
+  signal: AbortSignal,
+  register: (wake: () => void) => void,
+): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => finish(true), ms);
+    const abort = () => finish(false);
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      register(() => {});
+      resolve(value);
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    register(() => finish(true));
+  });
+}
+
 function wait(ms: number, signal: AbortSignal): Promise<boolean> { if (signal.aborted) return Promise.resolve(false); return new Promise((resolve) => { const timer = setTimeout(() => finish(true), ms); const abort = () => finish(false); const finish = (value: boolean) => { clearTimeout(timer); signal.removeEventListener('abort', abort); resolve(value); }; signal.addEventListener('abort', abort, { once: true }); }); }

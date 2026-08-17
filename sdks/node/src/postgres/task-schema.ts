@@ -2232,6 +2232,771 @@ END
 $$;
 `;
 
+/**
+ * Per-item locking, so a fan-out stops serialising on its own parent row.
+ *
+ * `claim_item_effect` took `FOR UPDATE` on the Task and then handed the same
+ * transaction to the caller's business callback. PostgreSQL holds a row lock
+ * until COMMIT, and COMMIT is after the callback, so the parent row of the
+ * whole batch was locked for the duration of whatever the application did —
+ * typically a Stripe or S3 call. Every other item of that Task queued behind
+ * it. A batch of N items took N times the per-item work no matter how much
+ * concurrency was configured, and every waiting item held a pooled connection
+ * while it waited, so a slow provider drained the pool for unrelated traffic.
+ *
+ * The lock was not wrong, only far too wide. What it protects is the scan over
+ * "every attempt of this item": a new attempt must not be inserted in the
+ * middle of it. That is a property of one item, not of the Task, so an
+ * advisory lock keyed on `(task_id, item_key)` protects exactly the same
+ * invariant and lets different items proceed at the same time. Key collisions
+ * between two different items are possible and cost a little serialisation;
+ * they cannot cost correctness.
+ *
+ * Three functions insert or renumber attempts, so all three take the lock, and
+ * all three take it in the same order — advisory key, then the Execution row,
+ * then anything on the Task. Ordering matters more than usual here: taking the
+ * Execution row first in one function and the advisory key first in another is
+ * exactly the cycle that deadlocks. Reading `task_id`/`item_key` unlocked to
+ * derive the key is safe because neither column is ever updated.
+ *
+ * `claim_item_effect` also stops bumping `tasks.version`. `effect_keys` is not
+ * in the Snapshot, so the bump invalidated every holder's optimistic-
+ * concurrency token for a change none of them could observe — the same
+ * argument `settle_items` already makes for itself — and it re-acquired the
+ * parent row lock at the end of the function, which would have kept the
+ * original problem in place.
+ */
+const TASK_SCHEMA_V15_NAME = '015_per_item_effect_lock';
+const TASK_SCHEMA_V15_SQL = String.raw`
+CREATE OR REPLACE FUNCTION rhinoq_task.item_lock_key(p_task_id text, p_item_key text)
+RETURNS bigint LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT hashtextextended(COALESCE(p_task_id, '') || ':' || COALESCE(p_item_key, ''), 0)
+$$;
+
+COMMENT ON FUNCTION rhinoq_task.item_lock_key(text, text) IS
+  'Advisory-lock key for one item of one Task. Serialises attempt creation and effect claims for that item only.';
+
+CREATE OR REPLACE FUNCTION rhinoq_task.create_execution(
+  p_id text,
+  p_task_id text,
+  p_item_key text,
+  p_runtime text,
+  p_runtime_scope text,
+  p_external_id text
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_item_key text := btrim(COALESCE(p_item_key, 'default'));
+  v_attempt integer;
+BEGIN
+  IF btrim(COALESCE(p_id, '')) = '' OR btrim(COALESCE(p_runtime, '')) = ''
+     OR v_item_key = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION');
+  END IF;
+
+  -- Serialise attempt numbering for this item, not for the whole Task.
+  PERFORM pg_advisory_xact_lock(rhinoq_task.item_lock_key(p_task_id, v_item_key));
+
+  -- Existence only. Taking FOR UPDATE here would put every item of a fan-out
+  -- back in the queue this migration exists to remove; the foreign key on
+  -- executions.task_id is what actually prevents an orphan.
+  PERFORM 1 FROM rhinoq_task.tasks WHERE id = p_task_id;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_task_id);
+  END IF;
+
+  SELECT COALESCE(MAX(attempt), 0) + 1 INTO v_attempt
+  FROM rhinoq_task.executions
+  WHERE task_id = p_task_id AND item_key = v_item_key;
+
+  INSERT INTO rhinoq_task.executions (
+    id, task_id, item_key, attempt, runtime, runtime_scope,
+    external_id, state
+  ) VALUES (
+    p_id, p_task_id, v_item_key, v_attempt, btrim(p_runtime),
+    btrim(COALESCE(p_runtime_scope, '')),
+    NULLIF(btrim(COALESCE(p_external_id, '')), ''), 'pending_dispatch'
+  );
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = p_task_id;
+  RETURN v_attempt;
+EXCEPTION
+  WHEN unique_violation THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_EXISTS', p_id);
+    RETURN 0;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.claim_item_effect(
+  p_execution_id text,
+  p_effect_key text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_task_id text;
+  v_item_key text;
+  v_current_id text;
+  v_effect_key text := btrim(COALESCE(p_effect_key, ''));
+BEGIN
+  IF btrim(COALESCE(p_execution_id, '')) = ''
+     OR v_effect_key = '' OR length(v_effect_key) > 256 THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_ITEM_EFFECT');
+  END IF;
+
+  -- Unlocked read purely to derive the lock key. task_id and item_key are set
+  -- at insert and never updated, so there is nothing to race against.
+  SELECT task_id, item_key INTO v_task_id, v_item_key
+  FROM rhinoq_task.executions WHERE id = p_execution_id;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_execution_id);
+  END IF;
+
+  -- Same order as create_execution and retry_execution: key, then row.
+  PERFORM pg_advisory_xact_lock(rhinoq_task.item_lock_key(v_task_id, v_item_key));
+
+  PERFORM 1 FROM rhinoq_task.executions WHERE id = p_execution_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_execution_id);
+  END IF;
+
+  PERFORM 1 FROM rhinoq_task.tasks WHERE id = v_task_id;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', v_task_id);
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM rhinoq_task.executions
+    WHERE task_id = v_task_id
+      AND item_key = v_item_key
+      AND v_effect_key = ANY(effect_keys)
+  ) THEN
+    RETURN false;
+  END IF;
+
+  SELECT id INTO v_current_id
+  FROM rhinoq_task.executions
+  WHERE task_id = v_task_id
+    AND item_key = v_item_key
+    AND superseded_at IS NULL
+  ORDER BY attempt DESC, id DESC
+  LIMIT 1
+  FOR UPDATE;
+  IF v_current_id IS NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_execution_id);
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET effect_keys = array_append(effect_keys, v_effect_key),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = v_current_id;
+  -- Deliberately no UPDATE on rhinoq_task.tasks. See the migration comment.
+  RETURN true;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.retry_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_new_id text
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_id text;
+  v_item_key text;
+  v_task_version bigint;
+  v_attempt integer;
+BEGIN
+  IF btrim(COALESCE(p_new_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION');
+  END IF;
+
+  SELECT task_id, item_key INTO v_task_id, v_item_key
+  FROM rhinoq_task.executions WHERE id = p_id;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+
+  -- Before the row lock, so this never holds a row another holder of the key
+  -- is waiting for.
+  PERFORM pg_advisory_xact_lock(rhinoq_task.item_lock_key(v_task_id, v_item_key));
+
+  SELECT * INTO v_execution FROM rhinoq_task.executions
+  WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.superseded_at IS NOT NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_SUPERSEDED', p_id);
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'retryTaskExecution', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF v_execution.state NOT IN ('succeeded', 'failed', 'stalled', 'cancelled') THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_TRANSITION',
+      v_execution.state || ' -> superseded');
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET superseded_at = clock_timestamp(),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id;
+
+  SELECT COALESCE(MAX(attempt), 0) + 1 INTO v_attempt
+  FROM rhinoq_task.executions
+  WHERE task_id = v_execution.task_id AND item_key = v_execution.item_key;
+
+  INSERT INTO rhinoq_task.executions (
+    id, task_id, item_key, attempt, runtime, runtime_scope, external_id, state
+  ) VALUES (
+    p_new_id, v_execution.task_id, v_execution.item_key, v_attempt,
+    v_execution.runtime, v_execution.runtime_scope, v_execution.external_id,
+    'dispatched'
+  );
+
+  UPDATE rhinoq_task.tasks
+  SET version = version + 1, updated_at = clock_timestamp()
+  WHERE id = v_execution.task_id;
+  RETURN v_attempt;
+EXCEPTION
+  WHEN unique_violation THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_EXISTS', p_new_id);
+    RETURN 0;
+END;
+$fn$;
+`;
+
+/**
+ * One write to the parent row per statement, instead of two per row.
+ *
+ * Every Execution state change used to touch `rhinoq_task.tasks` twice: once
+ * from `update_execution_counts`, declared `FOR EACH ROW`, and once from the
+ * calling function's own `UPDATE ... SET version = version + 1`. A fan-out of N
+ * items moving through four states therefore wrote to a single row about 8N
+ * times. Those writes are all on the same page, they all produce a dead tuple,
+ * and autovacuum does not keep up with a row that hot while the batch that is
+ * making it hot is still running — so reads of that row get slower over the
+ * life of the batch, which is exactly when the Task is being watched.
+ *
+ * Two changes, neither of which alters what anything observes:
+ *
+ * 1. The trigger becomes `FOR EACH STATEMENT` over transition tables. Today
+ *    each transition arrives as its own single-row statement so the immediate
+ *    saving is zero, but the shape stops being the reason a batched write is
+ *    impossible: one statement updating 500 items now costs one parent write
+ *    rather than 500.
+ *
+ * 2. The version bump moves into the trigger. `entityVersion` must still
+ *    advance on Execution create and state change — ARCHITECTURE.md is explicit
+ *    that stale-response rejection in the frontend depends on it, so this is
+ *    not an opportunity to stop bumping it — but it does not need a second
+ *    statement to do it. Folding it into the same `UPDATE` halves the writes to
+ *    the hot row and keeps the counters and the version in one atomic step,
+ *    which they always should have been.
+ *
+ * Functions that change Execution state stop bumping the version themselves;
+ * `attach_execution_result` still does, because it writes no state column and
+ * so fires no trigger. `claim_item_effect` deliberately still does not — see
+ * migration 015.
+ */
+const TASK_SCHEMA_V16_NAME = '016_statement_level_execution_counts';
+const TASK_SCHEMA_V16_SQL = String.raw`
+DROP TRIGGER IF EXISTS executions_update_counts ON rhinoq_task.executions;
+
+-- INSERT: every new attempt adds to the total and to its own state bucket.
+CREATE OR REPLACE FUNCTION rhinoq_task.execution_counts_inserted()
+RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  UPDATE rhinoq_task.tasks AS task SET
+    execution_total = task.execution_total + delta.total,
+    execution_pending_dispatch = task.execution_pending_dispatch + delta.pending_dispatch,
+    execution_dispatched = task.execution_dispatched + delta.dispatched,
+    execution_running = task.execution_running + delta.running,
+    execution_succeeded = task.execution_succeeded + delta.succeeded,
+    execution_failed = task.execution_failed + delta.failed,
+    execution_stalled = task.execution_stalled + delta.stalled,
+    execution_cancelled = task.execution_cancelled + delta.cancelled,
+    version = task.version + 1,
+    updated_at = clock_timestamp()
+  FROM (
+    SELECT task_id,
+      count(*) AS total,
+      count(*) FILTER (WHERE state='pending_dispatch') AS pending_dispatch,
+      count(*) FILTER (WHERE state='dispatched') AS dispatched,
+      count(*) FILTER (WHERE state='running') AS running,
+      count(*) FILTER (WHERE state='succeeded') AS succeeded,
+      count(*) FILTER (WHERE state='failed') AS failed,
+      count(*) FILTER (WHERE state='stalled') AS stalled,
+      count(*) FILTER (WHERE state='cancelled') AS cancelled
+    FROM inserted GROUP BY task_id
+  ) AS delta
+  WHERE task.id = delta.task_id;
+  RETURN NULL;
+END;
+$fn$;
+
+-- UPDATE: paired by primary key, because a delta needs both sides of the move.
+-- Rows whose state did not change contribute nothing, which is what the old
+-- FOR EACH ROW trigger achieved with its early RETURN.
+CREATE OR REPLACE FUNCTION rhinoq_task.execution_counts_updated()
+RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  UPDATE rhinoq_task.tasks AS task SET
+    execution_pending_dispatch = task.execution_pending_dispatch + delta.pending_dispatch,
+    execution_dispatched = task.execution_dispatched + delta.dispatched,
+    execution_running = task.execution_running + delta.running,
+    execution_succeeded = task.execution_succeeded + delta.succeeded,
+    execution_failed = task.execution_failed + delta.failed,
+    execution_stalled = task.execution_stalled + delta.stalled,
+    execution_cancelled = task.execution_cancelled + delta.cancelled,
+    version = task.version + 1,
+    updated_at = clock_timestamp()
+  FROM (
+    SELECT after.task_id,
+      count(*) FILTER (WHERE after.state='pending_dispatch')
+        - count(*) FILTER (WHERE before.state='pending_dispatch') AS pending_dispatch,
+      count(*) FILTER (WHERE after.state='dispatched')
+        - count(*) FILTER (WHERE before.state='dispatched') AS dispatched,
+      count(*) FILTER (WHERE after.state='running')
+        - count(*) FILTER (WHERE before.state='running') AS running,
+      count(*) FILTER (WHERE after.state='succeeded')
+        - count(*) FILTER (WHERE before.state='succeeded') AS succeeded,
+      count(*) FILTER (WHERE after.state='failed')
+        - count(*) FILTER (WHERE before.state='failed') AS failed,
+      count(*) FILTER (WHERE after.state='stalled')
+        - count(*) FILTER (WHERE before.state='stalled') AS stalled,
+      count(*) FILTER (WHERE after.state='cancelled')
+        - count(*) FILTER (WHERE before.state='cancelled') AS cancelled
+    FROM updated AS after
+    JOIN superseded AS before ON before.id = after.id
+    WHERE before.state IS DISTINCT FROM after.state
+    GROUP BY after.task_id
+  ) AS delta
+  WHERE task.id = delta.task_id;
+  RETURN NULL;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.execution_counts_deleted()
+RETURNS trigger LANGUAGE plpgsql AS $fn$
+BEGIN
+  UPDATE rhinoq_task.tasks AS task SET
+    execution_total = task.execution_total - delta.total,
+    execution_pending_dispatch = task.execution_pending_dispatch - delta.pending_dispatch,
+    execution_dispatched = task.execution_dispatched - delta.dispatched,
+    execution_running = task.execution_running - delta.running,
+    execution_succeeded = task.execution_succeeded - delta.succeeded,
+    execution_failed = task.execution_failed - delta.failed,
+    execution_stalled = task.execution_stalled - delta.stalled,
+    execution_cancelled = task.execution_cancelled - delta.cancelled,
+    version = task.version + 1,
+    updated_at = clock_timestamp()
+  FROM (
+    SELECT task_id,
+      count(*) AS total,
+      count(*) FILTER (WHERE state='pending_dispatch') AS pending_dispatch,
+      count(*) FILTER (WHERE state='dispatched') AS dispatched,
+      count(*) FILTER (WHERE state='running') AS running,
+      count(*) FILTER (WHERE state='succeeded') AS succeeded,
+      count(*) FILTER (WHERE state='failed') AS failed,
+      count(*) FILTER (WHERE state='stalled') AS stalled,
+      count(*) FILTER (WHERE state='cancelled') AS cancelled
+    FROM removed GROUP BY task_id
+  ) AS delta
+  WHERE task.id = delta.task_id;
+  RETURN NULL;
+END;
+$fn$;
+
+-- Three triggers rather than one: a statement trigger may name transition
+-- tables for a single event only.
+DROP TRIGGER IF EXISTS executions_counts_insert ON rhinoq_task.executions;
+CREATE TRIGGER executions_counts_insert
+AFTER INSERT ON rhinoq_task.executions
+REFERENCING NEW TABLE AS inserted
+FOR EACH STATEMENT EXECUTE FUNCTION rhinoq_task.execution_counts_inserted();
+
+-- No column list: PostgreSQL refuses transition tables on a trigger that has
+-- one. Firing on every UPDATE costs nothing, because the delta subquery
+-- discards rows whose state did not move — an update that touches only
+-- effect_keys or superseded_at produces no delta row, so the statement matches
+-- no Task and the hot row is not written at all. That is the same outcome the
+-- old FOR EACH ROW trigger reached with its early RETURN, and it is what keeps
+-- migration 015's decision intact for claim_item_effect.
+DROP TRIGGER IF EXISTS executions_counts_update ON rhinoq_task.executions;
+CREATE TRIGGER executions_counts_update
+AFTER UPDATE ON rhinoq_task.executions
+REFERENCING NEW TABLE AS updated OLD TABLE AS superseded
+FOR EACH STATEMENT EXECUTE FUNCTION rhinoq_task.execution_counts_updated();
+
+DROP TRIGGER IF EXISTS executions_counts_delete ON rhinoq_task.executions;
+CREATE TRIGGER executions_counts_delete
+AFTER DELETE ON rhinoq_task.executions
+REFERENCING OLD TABLE AS removed
+FOR EACH STATEMENT EXECUTE FUNCTION rhinoq_task.execution_counts_deleted();
+
+-- The functions below lose only their own second write to the parent row. The
+-- trigger above now performs that bump in the same statement as the counters.
+
+CREATE OR REPLACE FUNCTION rhinoq_task.create_execution(
+  p_id text,
+  p_task_id text,
+  p_item_key text,
+  p_runtime text,
+  p_runtime_scope text,
+  p_external_id text
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_item_key text := btrim(COALESCE(p_item_key, 'default'));
+  v_attempt integer;
+BEGIN
+  IF btrim(COALESCE(p_id, '')) = '' OR btrim(COALESCE(p_runtime, '')) = ''
+     OR v_item_key = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION');
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(rhinoq_task.item_lock_key(p_task_id, v_item_key));
+
+  PERFORM 1 FROM rhinoq_task.tasks WHERE id = p_task_id;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_task_id);
+  END IF;
+
+  SELECT COALESCE(MAX(attempt), 0) + 1 INTO v_attempt
+  FROM rhinoq_task.executions
+  WHERE task_id = p_task_id AND item_key = v_item_key;
+
+  INSERT INTO rhinoq_task.executions (
+    id, task_id, item_key, attempt, runtime, runtime_scope,
+    external_id, state
+  ) VALUES (
+    p_id, p_task_id, v_item_key, v_attempt, btrim(p_runtime),
+    btrim(COALESCE(p_runtime_scope, '')),
+    NULLIF(btrim(COALESCE(p_external_id, '')), ''), 'pending_dispatch'
+  );
+  RETURN v_attempt;
+EXCEPTION
+  WHEN unique_violation THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_EXISTS', p_id);
+    RETURN 0;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.bind_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_runtime text,
+  p_runtime_scope text,
+  p_external_id text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_version bigint;
+BEGIN
+  SELECT * INTO v_execution
+  FROM rhinoq_task.executions WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'bindTaskExecution', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF v_execution.state <> 'pending_dispatch'
+     OR v_execution.runtime <> btrim(COALESCE(p_runtime, '')) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_BINDING', p_id);
+  END IF;
+  IF v_execution.external_id IS NOT NULL
+     AND (
+       v_execution.external_id <> btrim(COALESCE(p_external_id, '')) OR
+       v_execution.runtime_scope <> btrim(COALESCE(p_runtime_scope, ''))
+     ) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_BOUND', p_id);
+  END IF;
+  IF btrim(COALESCE(p_external_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_BINDING', p_id);
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET runtime_scope = btrim(COALESCE(p_runtime_scope, '')),
+      external_id = btrim(p_external_id),
+      state = 'dispatched',
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_execution.version;
+  RETURN v_execution.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.transition_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_target text,
+  p_reason text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_version bigint;
+BEGIN
+  SELECT * INTO v_execution
+  FROM rhinoq_task.executions WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.state = p_target THEN
+    RETURN v_execution.version;
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'transitionTaskExecution', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF NOT (
+    (v_execution.state = 'pending_dispatch' AND p_target = 'cancelled') OR
+    (v_execution.state = 'pending_dispatch' AND v_execution.external_id IS NOT NULL
+      AND p_target IN ('running', 'succeeded', 'failed', 'stalled')) OR
+    (v_execution.state = 'dispatched' AND p_target IN (
+      'running', 'succeeded', 'failed', 'stalled', 'cancelled'
+    )) OR
+    (v_execution.state = 'running' AND p_target IN (
+      'succeeded', 'failed', 'stalled', 'cancelled'
+    )) OR
+    (v_execution.state = 'stalled' AND p_target IN (
+      'dispatched', 'failed', 'cancelled'
+    ))
+  ) THEN
+    PERFORM rhinoq_task.fail(
+      'RHINOQ_INVALID_EXECUTION_TRANSITION',
+      v_execution.state || ' -> ' || COALESCE(p_target, '')
+    );
+  END IF;
+  UPDATE rhinoq_task.executions
+  SET state = p_target,
+      failure_reason = CASE
+        WHEN p_target = 'failed'
+          THEN left(NULLIF(btrim(COALESCE(p_reason, '')), ''), 512)
+        ELSE failure_reason
+      END,
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_execution.version;
+  RETURN v_execution.version;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.retry_execution(
+  p_id text,
+  p_expected_version bigint,
+  p_new_id text
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_execution rhinoq_task.executions%ROWTYPE;
+  v_task_id text;
+  v_item_key text;
+  v_task_version bigint;
+  v_attempt integer;
+BEGIN
+  IF btrim(COALESCE(p_new_id, '')) = '' THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION');
+  END IF;
+
+  SELECT task_id, item_key INTO v_task_id, v_item_key
+  FROM rhinoq_task.executions WHERE id = p_id;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(rhinoq_task.item_lock_key(v_task_id, v_item_key));
+
+  SELECT * INTO v_execution FROM rhinoq_task.executions
+  WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_NOT_FOUND', p_id);
+  END IF;
+  IF v_execution.superseded_at IS NOT NULL THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_SUPERSEDED', p_id);
+  END IF;
+  IF v_execution.version <> p_expected_version THEN
+    SELECT version INTO v_task_version FROM rhinoq_task.tasks WHERE id = v_execution.task_id;
+    PERFORM rhinoq_task.fail_version(
+      'retryTaskExecution', p_id, p_expected_version, v_execution.version, 'Execution',
+      CASE WHEN v_task_version = p_expected_version THEN 'Task' ELSE NULL END);
+  END IF;
+  IF v_execution.state NOT IN ('succeeded', 'failed', 'stalled', 'cancelled') THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_EXECUTION_TRANSITION',
+      v_execution.state || ' -> superseded');
+  END IF;
+
+  UPDATE rhinoq_task.executions
+  SET superseded_at = clock_timestamp(),
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id;
+
+  SELECT COALESCE(MAX(attempt), 0) + 1 INTO v_attempt
+  FROM rhinoq_task.executions
+  WHERE task_id = v_execution.task_id AND item_key = v_execution.item_key;
+
+  -- The INSERT below fires the statement trigger, which bumps the version. A
+  -- second explicit bump here would write the hot row twice for one retry.
+  INSERT INTO rhinoq_task.executions (
+    id, task_id, item_key, attempt, runtime, runtime_scope, external_id, state
+  ) VALUES (
+    p_new_id, v_execution.task_id, v_execution.item_key, v_attempt,
+    v_execution.runtime, v_execution.runtime_scope, v_execution.external_id,
+    'dispatched'
+  );
+  RETURN v_attempt;
+EXCEPTION
+  WHEN unique_violation THEN
+    PERFORM rhinoq_task.fail('RHINOQ_EXECUTION_ALREADY_EXISTS', p_new_id);
+    RETURN 0;
+END;
+$fn$;
+`;
+
+/**
+ * Tell listeners a Task changed, instead of making them ask.
+ *
+ * `taskEventResponse` opens an SSE stream and then polls `getTaskSummaryForOwner`
+ * once a second, per connection, for the life of the connection. The default
+ * connection cap is 1000, so a fully subscribed Gateway issues a thousand
+ * queries a second — each one a LATERAL aggregate over the Task's Executions —
+ * whether or not anything changed. That is the shape the documentation
+ * described as "only trigger update when there is an actual change in the DB",
+ * and it was never what the code did.
+ *
+ * `pg_notify` moves the trigger to where the change actually happens. One
+ * connection per process holds `LISTEN`, and a change reaches every subscriber
+ * on that process through memory. Database load stops scaling with the number
+ * of people watching.
+ *
+ * The payload carries identity and nothing else — `{taskId, version, tenantId}`.
+ * Two reasons, and the second is the one that matters: `NOTIFY` is delivered
+ * outside row-level security, so anything in the payload is readable by any
+ * session listening on the channel regardless of tenant. A listener learns that
+ * something moved and must still read it back through the owner-scoped,
+ * RLS-enforced path. The `tenantId` is there so a process can discard
+ * notifications for tenants it does not serve before doing that read, not as an
+ * authorisation decision.
+ *
+ * Notifications are queued until COMMIT and dropped on ROLLBACK, so a listener
+ * never sees a change that did not happen. They are also best-effort across a
+ * disconnect: a listener that reconnects has no way to learn what it missed,
+ * which is why the poll is reduced rather than removed. Thirty seconds is a
+ * safety net; it is not the mechanism any more.
+ */
+const TASK_SCHEMA_V17_NAME = '017_task_change_notifications';
+const TASK_SCHEMA_V17_SQL = String.raw`
+CREATE OR REPLACE FUNCTION rhinoq_task.notify_change(
+  p_task_id text,
+  p_version bigint,
+  p_tenant_id text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $fn$
+BEGIN
+  -- Identity only. NOTIFY bypasses row-level security, so a payload carrying
+  -- state or progress would be readable by any session on this channel.
+  PERFORM pg_notify('rhinoq_task_changed', json_build_object(
+    'taskId', p_task_id,
+    'version', p_version,
+    'tenantId', p_tenant_id
+  )::text);
+END;
+$fn$;
+
+COMMENT ON FUNCTION rhinoq_task.notify_change(text, bigint, text) IS
+  'Announces a committed Task change. Payload is identity only: NOTIFY is not subject to RLS.';
+
+-- One trigger, on the tasks table, and nothing on executions.
+--
+-- The obvious wiring — announce from the Execution triggers as well — was tried
+-- and announces twice for every item: an Execution write fires its own trigger,
+-- and then the statement-level counter trigger from migration 016 updates the
+-- Task row, which fires this one. Doubling the notification volume of a fan-out
+-- to say the same thing twice is the opposite of the point.
+--
+-- Watching tasks.version alone is also the more honest rule. Every change a
+-- Snapshot holder can observe bumps that version — that is what makes it the
+-- optimistic-concurrency token — so a version bump is exactly the set of events
+-- worth waking a subscriber for. claim_item_effect deliberately does not bump
+-- it (migration 015), and correspondingly does not announce: nothing a watcher
+-- can see has changed.
+CREATE OR REPLACE FUNCTION rhinoq_task.announce_tasks()
+RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE
+  v_row record;
+BEGIN
+  FOR v_row IN
+    SELECT after.id, after.version, after.tenant_id
+    FROM changed AS after
+    LEFT JOIN previous AS before ON before.id = after.id
+    WHERE before.id IS NULL OR before.version IS DISTINCT FROM after.version
+  LOOP
+    PERFORM rhinoq_task.notify_change(v_row.id, v_row.version, v_row.tenant_id);
+  END LOOP;
+  RETURN NULL;
+END;
+$fn$;
+
+CREATE OR REPLACE FUNCTION rhinoq_task.announce_created_tasks()
+RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE
+  v_row record;
+BEGIN
+  FOR v_row IN SELECT id, version, tenant_id FROM changed
+  LOOP
+    PERFORM rhinoq_task.notify_change(v_row.id, v_row.version, v_row.tenant_id);
+  END LOOP;
+  RETURN NULL;
+END;
+$fn$;
+
+DROP TRIGGER IF EXISTS tasks_announce_insert ON rhinoq_task.tasks;
+CREATE TRIGGER tasks_announce_insert
+AFTER INSERT ON rhinoq_task.tasks
+REFERENCING NEW TABLE AS changed
+FOR EACH STATEMENT EXECUTE FUNCTION rhinoq_task.announce_created_tasks();
+
+DROP TRIGGER IF EXISTS tasks_announce_update ON rhinoq_task.tasks;
+CREATE TRIGGER tasks_announce_update
+AFTER UPDATE ON rhinoq_task.tasks
+REFERENCING NEW TABLE AS changed OLD TABLE AS previous
+FOR EACH STATEMENT EXECUTE FUNCTION rhinoq_task.announce_tasks();
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
@@ -2247,6 +3012,9 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 12, name: '012_selective_execution_checkpoints', sql: TASK_SCHEMA_V12_SQL },
   { version: 13, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V13_SQL },
   { version: 14, name: TASK_SCHEMA_V14_NAME, sql: TASK_SCHEMA_V14_SQL },
+  { version: 15, name: TASK_SCHEMA_V15_NAME, sql: TASK_SCHEMA_V15_SQL },
+  { version: 16, name: TASK_SCHEMA_V16_NAME, sql: TASK_SCHEMA_V16_SQL },
+  { version: 17, name: TASK_SCHEMA_V17_NAME, sql: TASK_SCHEMA_V17_SQL },
 ] as const;
 
 export const TASK_RLS_TABLES = [

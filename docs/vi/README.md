@@ -12,6 +12,13 @@ Nếu mới dùng RhinoQ, hãy đọc theo thứ tự này:
 6. [Ma trận bao phủ hệ sinh thái async (English)](../async-capability-coverage.md)
 7. [Kế hoạch nâng cấp RhinoQ](../ke-hoach-nang-cap-rhinoq.md)
 
+Dành cho người đóng góp và người vận hành:
+
+- [Luồng và quan hệ giữa các tầng xử lý](./luong-va-quan-he-cac-tang.md) — bản đồ
+  kiến trúc đầy đủ hai mặt phẳng, mô hình dữ liệu và bản đồ khoá.
+- [Kế hoạch nâng cấp hiệu năng và bảo mật](./nang-cap-hieu-nang-va-bao-mat.md) —
+  các điểm ngắt mạch đã xác định, cách sửa và bộ đo thay thế.
+
 ## RhinoQ giải quyết việc gì?
 
 Bạn viết hàm nghiệp vụ. RhinoQ cung cấp phần hạ tầng lặp lại xung quanh tác vụ

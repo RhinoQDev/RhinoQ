@@ -46,20 +46,46 @@ test('onceForItem commits the claim with the application write and skips a repea
   assert.deepEqual(first, { executed: true, value: 'ledger-row-1' });
   assert.deepEqual(second, { executed: false });
   assert.equal(runs, 1);
+  // The lock_timeout is LOCAL and comes before the claim, so a transaction
+  // that cannot get the item lock fails fast instead of holding a pooled
+  // connection for as long as the other holder takes.
   assert.deepEqual(
     pool.calls.map((call) => call.text),
     [
       'BEGIN',
+      "SELECT set_config('lock_timeout', $1, true)",
       'SELECT rhinoq_task.claim_item_effect($1, $2) AS claimed',
       'INSERT INTO credit_logs (item_id) VALUES ($1)',
       'COMMIT',
       'RELEASE',
       'BEGIN',
+      "SELECT set_config('lock_timeout', $1, true)",
       'SELECT rhinoq_task.claim_item_effect($1, $2) AS claimed',
       'COMMIT',
       'RELEASE',
     ],
   );
+});
+
+test('onceForItem bounds the wait for the item lock', async () => {
+  const pool = fakePool([true]);
+  const tasks = new PostgresTaskClient(pool, { lockTimeoutMs: 250 });
+
+  await tasks.onceForItem('execution-1', 'deduct-credits', async () => 'done');
+
+  const timeout = pool.calls.find((call) => call.text.includes('lock_timeout'));
+  assert.ok(timeout, 'the transaction must set a lock timeout before claiming');
+  assert.deepEqual(timeout.values, ['250ms']);
+});
+
+test('onceForItem refuses a lock timeout that cannot bound anything', async () => {
+  for (const lockTimeoutMs of [0, -1, 1.5]) {
+    assert.throws(
+      () => new PostgresTaskClient(fakePool([]), { lockTimeoutMs }),
+      RangeError,
+      `lockTimeoutMs ${lockTimeoutMs} must be refused at construction`,
+    );
+  }
 });
 
 test('onceForItem rolls the claim back when the business callback fails', async () => {
@@ -79,10 +105,12 @@ test('onceForItem rolls the claim back when the business callback fails', async 
     pool.calls.map((call) => call.text),
     [
       'BEGIN',
+      "SELECT set_config('lock_timeout', $1, true)",
       'SELECT rhinoq_task.claim_item_effect($1, $2) AS claimed',
       'ROLLBACK',
       'RELEASE',
       'BEGIN',
+      "SELECT set_config('lock_timeout', $1, true)",
       'SELECT rhinoq_task.claim_item_effect($1, $2) AS claimed',
       'COMMIT',
       'RELEASE',

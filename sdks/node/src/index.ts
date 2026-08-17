@@ -2,6 +2,8 @@ export * from './gateway/types.js';
 export * from './gateway/client.js';
 export * from './postgres/producer.js';
 export * from './postgres/task-client.js';
+export * from './postgres/tenant.js';
+export * from './postgres/change-hub.js';
 export * from './postgres/task-schema.js';
 export * from './postgres/projector-lease.js';
 export * from './postgres/projection-failure-sink.js';

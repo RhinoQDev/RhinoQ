@@ -256,6 +256,32 @@ export type TaskSummary = Omit<TaskSnapshot, 'executions'> & {
   itemCounts?: TaskItemCounts;
 };
 
+/**
+ * What an Execution write returns when the caller does not need the aggregate.
+ *
+ * The Snapshot-returning forms re-read the whole Task, including every
+ * Execution, after each write. A projector needs one number out of that: the
+ * version to fence its next command with.
+ */
+export interface TaskExecutionWriteAck {
+	readonly executionVersion: number;
+}
+
+/** Attempt number assigned to a newly created Execution. */
+export interface TaskExecutionCreateAck {
+	readonly attempt: number;
+}
+
+/**
+ * A cursor-paged list of Tasks. `nextCursor` is absent on the last page, which
+ * is how a caller knows to stop without a count query.
+ */
+export interface TaskPage {
+	readonly schemaVersion: 1;
+	readonly tasks: TaskSnapshot[];
+	readonly nextCursor?: string;
+}
+
 export interface TaskExecutionPage {
 	readonly schemaVersion: 1;
 	readonly entityVersion: number;

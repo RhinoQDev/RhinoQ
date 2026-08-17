@@ -98,11 +98,61 @@ scheduler, recovery sweeps — sets `rhinoq.maintenance=on` instead.
 Task schema migration 014 applies the same PostgreSQL RLS boundary to the isolated
 rhinoq_task profile. Every Task-owned table has forced RLS, child rows carry
 tenant_id, and parent references use the tenant key or a tenant-checking trigger.
-Configure the Node pool with rhinoq.tenant_id in its connection options and use
-one tenant per pool. A shared pool serving many tenants needs a transaction-scoped
-connection design; tenantFromRequest and SQL predicates alone are not a substitute
-for the database context. The exported inspectTaskRls() and requireTaskRls()
-helpers inspect the live role and forced policies.
+The exported `inspectTaskRls()` and `requireTaskRls()` helpers inspect the live
+role and forced policies.
+
+There are two ways to announce the tenant, and they are for two different
+deployments. Pick by how many tenants one process serves, not by which looks
+newer.
+
+### One tenant per process — connection string
+
+The simplest correct design when a process serves a single tenant. Bake the
+tenant into the pool's connection options and every query on that pool is
+already scoped:
+
+```js
+const pool = new pg.Pool({
+  connectionString: 'postgres://rhinoq_app:...@host:5432/rhinoq'
+    + '?options=-c%20rhinoq.tenant_id%3Dtnt_acme',
+});
+const tasks = await installPostgresTaskProfile(pool);
+```
+
+This is what every example under `examples/` does. Nothing about it is
+deprecated: for one tenant it is the right amount of machinery.
+
+### Many tenants per process — `withTenant()`
+
+A SaaS backend serving many tenants must not open one pool per tenant. PostgreSQL
+defaults to 100 connections and the ceiling is shared with every other client of
+the server, so a handful of tenants at a modest pool size each already exhausts
+it. Open **one** tenant-less pool and name the tenant per unit of work instead:
+
+```js
+const pool = new pg.Pool({ connectionString: DATABASE_URL });   // no tenant here
+const tasks = new PostgresTaskClient(pool);
+
+// Per request: bind the tenant for the length of one transaction.
+await tasks.withTenant(request.tenantId, async (scoped) => {
+  await scoped.createTask({ id, type, ownerId, definitionVersion: 1 });
+});
+```
+
+`withTenant` sets `rhinoq.tenant_id` with `set_config(..., true)` — `SET LOCAL`,
+so the binding lives for that transaction and is gone when the connection returns
+to the pool. The callback receives a client bound to the checked-out connection;
+using the outer `tasks` inside it would run on a different connection, outside
+both the transaction and the binding. The tenant id is validated against
+`assertTenantId()` first, because a value carrying whitespace could otherwise
+smuggle a second `-c` startup option onto the connection.
+
+Isolation is still PostgreSQL's, not the callback's. A forgotten predicate
+inside `withTenant` returns zero rows exactly as it would with the connection
+string; `tenantFromRequest` and SQL predicates are a convenience on top of the
+database context, never a substitute for it. The runnable proof — two tenants on
+one shared pool, each blind to the other, on a `NOSUPERUSER NOBYPASSRLS` role —
+is `sdks/node/test/tenant-transaction.integration.test.mjs`.
 
 ## What the boundary does and does not defend against
 
@@ -142,13 +192,15 @@ forgets `tenant_id` then fails rather than silently writing into `tnt_system`.
   HTTP surface to resolve a credential into a `Subject` per request — replacing
   the operator-token-plus-owner-list model in
   `internal/interfaces/agent/server.go` — is not done.
-- One process serves one tenant, because the tenant is a property of the
-  connection pool. Serving many tenants from one Agent needs per-request
-  `SET LOCAL` inside a transaction-scoped handle, which the adapters do not
-  currently take.
+- The embedded Node Task profile now serves many tenants from one pool through
+  `PostgresTaskClient.withTenant()` (see above), which takes the per-request
+  `SET LOCAL` inside a transaction-scoped handle. The Go Agent's HTTP surface
+  still binds one tenant per process at the pool; giving it the same
+  per-request handle is not done.
 - The Node PostgreSQL integration harness exercises owner API reads across both
   tenant and owner boundaries and requires 404 without metadata. The full Go
   PostgreSQL harness separately runs storage enforcement through a
   `NOSUPERUSER NOBYPASSRLS` application role. These are complementary checks;
-  the embedded Node Task profile now enforces forced RLS in migration 014; its
-  one-tenant-per-pool deployment model is documented above.
+  the embedded Node Task profile now enforces forced RLS in migration 014; both
+  its one-tenant-per-pool and shared-pool `withTenant()` deployment models are
+  documented above.

@@ -587,6 +587,45 @@ func (s *JobStore) QueueRateLimitTTL(ctx context.Context, name string, now time.
 	return time.Duration(remainingMS.Float64) * time.Millisecond, nil
 }
 
+// NextQueueRateLimitTTL is the batched form of QueueRateLimitTTL.
+//
+// Only lanes that are actually throttled contribute, and only with a remaining
+// window above zero — a lane whose window has already elapsed is not something
+// to wait for, it is something to claim from now. That is the same rule the
+// caller used to apply in Go after issuing one query per lane.
+func (s *JobStore) NextQueueRateLimitTTL(
+	ctx context.Context,
+	names []string,
+	now time.Time,
+) (time.Duration, error) {
+	if now.IsZero() {
+		return 0, errors.New("current time is required")
+	}
+	if len(names) == 0 {
+		return 0, nil
+	}
+	var remainingMS sql.NullFloat64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT MIN(remaining_ms) FROM (
+			SELECT EXTRACT(epoch FROM (
+				rate_window_started_at + (rate_limit_window_ms * interval '1 millisecond') - now()
+			)) * 1000 AS remaining_ms
+			FROM rhinoq_queue_controls
+			WHERE queue_name = ANY($1)
+			  AND rate_limit_max IS NOT NULL
+			  AND rate_window_started_at IS NOT NULL
+			  AND rate_window_count >= rate_limit_max
+		) AS windows
+		WHERE remaining_ms > 0`, names).Scan(&remainingMS)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !remainingMS.Valid) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(remainingMS.Float64) * time.Millisecond, nil
+}
+
 func (s *JobStore) SetQueueAdmission(ctx context.Context, name string, policy admission.Policy) error {
 	if name == "" {
 		return errors.New("queue name is required")

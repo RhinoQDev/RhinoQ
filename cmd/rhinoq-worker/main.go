@@ -12,6 +12,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/database"
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
@@ -31,6 +32,14 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	// This sidecar runs a reaper and a queue watchdog, not a handler pool, so it
+	// reserves nothing. It still must not inherit MaxIdleConns=2: the reaper
+	// ticks forever, and reconnecting on every tick is pure latency.
+	settings, err := database.Tune(db, os.Getenv, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("rhinoq-worker: postgres pool %s", settings.Describe())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := db.PingContext(ctx); err != nil {

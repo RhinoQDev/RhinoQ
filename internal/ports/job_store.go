@@ -234,6 +234,15 @@ type JobStore interface {
 	SetQueueRateLimit(ctx context.Context, name string, limit QueueRateLimit) error
 	RemoveQueueRateLimit(ctx context.Context, name string) error
 	QueueRateLimitTTL(ctx context.Context, name string, now time.Time) (time.Duration, error)
+	// NextQueueRateLimitTTL answers the same question for a whole subscription
+	// in one round trip: how long until the earliest throttled lane among these
+	// opens its next window. Zero means none of them is currently throttled.
+	//
+	// It exists because the idle worker loop asked lane by lane. A worker
+	// subscribed to thirty lanes issued thirty queries every idle tick, and an
+	// idle worker ticks often — so a pool of workers with nothing to do was a
+	// steady, purely self-inflicted load on the database they were waiting on.
+	NextQueueRateLimitTTL(ctx context.Context, names []string, now time.Time) (time.Duration, error)
 	SetQueueAdmission(ctx context.Context, name string, policy admission.Policy) error
 	RemoveQueueAdmission(ctx context.Context, name string) error
 }

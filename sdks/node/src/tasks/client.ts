@@ -3,10 +3,12 @@ import type {
   TaskCreateRequest,
   TaskExecution,
   TaskExecutionBinding,
+  TaskExecutionCreateAck,
   TaskExecutionCreateRequest,
   TaskExecutionResults,
 	TaskExecutionRuntimeRefs,
 	TaskExecutionPage,
+	TaskExecutionWriteAck,
   TaskProgress,
   TaskResult,
   TaskSnapshot,
@@ -72,6 +74,36 @@ export interface TaskClient {
    * profile implements it in one bounded query.
    */
   listTaskExecutionRuntimeRefs?(taskId: string): Promise<TaskExecutionRuntimeRefs>;
+  /*
+   * Acknowledged Execution writes.
+   *
+   * Same commands as the Snapshot-returning methods below, returning the new
+   * Execution version instead of re-reading the whole Task. A fan-out's writes
+   * are the hot path and the projector discards the Snapshot it is handed, so
+   * on a batch of N items the Snapshot form moves O(N²) bytes for a number.
+   *
+   * Optional so the Gateway client keeps its contract; a caller that wants the
+   * cheap path checks for the method and falls back to the Snapshot form.
+   */
+  createTaskExecutionAck?(
+    taskId: string,
+    request: TaskExecutionCreateRequest,
+  ): Promise<TaskExecutionCreateAck>;
+  bindTaskExecutionAck?(
+    executionId: string,
+    binding: TaskExecutionBinding,
+  ): Promise<TaskExecutionWriteAck>;
+  transitionTaskExecutionAck?(
+    executionId: string,
+    expectedExecutionVersion: number,
+    state: string,
+    reason?: string,
+  ): Promise<TaskExecutionWriteAck>;
+  attachTaskExecutionResultAck?(
+    executionId: string,
+    expectedExecutionVersion: number,
+    reference: string,
+  ): Promise<TaskExecutionWriteAck>;
   /**
    * Runtime/adapter transition only. Do not expose this unscoped method to
    * tenant callers; owner-facing code must use the owner-scoped Postgres
