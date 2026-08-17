@@ -1,50 +1,50 @@
-export const PROTOCOL_VERSION = '1.0';
-export const SDK_VERSION = '0.1.0-beta.20';
+export const PROTOCOL_VERSION = "1.0";
+export const SDK_VERSION = '0.1.0-beta.21';
 export const MAX_CLAIM_BATCH = 1000;
 
 export const CLIENT_CAPABILITIES = [
-  'claim',
-  'heartbeat',
-  'fencing',
-  'cancel',
-  'effect',
-  'batch-claim',
-  'queue-filter',
+  "claim",
+  "heartbeat",
+  "fencing",
+  "cancel",
+  "effect",
+  "batch-claim",
+  "queue-filter",
 ] as const;
 
 export type RetryClass =
-  | 'transient'
-  | 'permanent'
-  | 'rate_limited'
-  | 'dependency_down'
-  | 'cancelled'
-  | 'unknown';
+  | "transient"
+  | "permanent"
+  | "rate_limited"
+  | "dependency_down"
+  | "cancelled"
+  | "unknown";
 
 export type JobClass =
-  | 'critical'
-  | 'interactive'
-  | 'standard'
-  | 'batch'
-  | 'maintenance';
+  | "critical"
+  | "interactive"
+  | "standard"
+  | "batch"
+  | "maintenance";
 
 export type JobState =
-  | 'pending'
-  | 'leased'
-  | 'retry_wait'
-  | 'blocked'
-  | 'dead'
-  | 'succeeded'
-  | 'cancelled';
+  | "pending"
+  | "leased"
+  | "retry_wait"
+  | "blocked"
+  | "dead"
+  | "succeeded"
+  | "cancelled";
 
 export type TaskState =
-  | 'pending'
-  | 'queued'
-  | 'running'
-  | 'uncertain'
-  | 'succeeded'
-  | 'failed'
-  | 'cancel_requested'
-  | 'cancelled';
+  | "pending"
+  | "queued"
+  | "running"
+  | "uncertain"
+  | "succeeded"
+  | "failed"
+  | "cancel_requested"
+  | "cancelled";
 
 export interface TaskCreateRequest {
   id: string;
@@ -138,13 +138,13 @@ export interface TaskExecutionCreateRequest {
 }
 
 export type TaskCancellationStatus =
-  | 'none'
-  | 'requested'
-  | 'acknowledged'
-  | 'cancelled'
-  | 'too_late'
-  | 'cannot_cancel_safely'
-  | 'failed';
+  | "none"
+  | "requested"
+  | "acknowledged"
+  | "cancelled"
+  | "too_late"
+  | "cannot_cancel_safely"
+  | "failed";
 
 export interface TaskCancellation {
   status: TaskCancellationStatus;
@@ -246,7 +246,7 @@ export interface TaskItemCounts extends TaskExecutionCounts {
   retries: number;
 }
 
-export type TaskSummary = Omit<TaskSnapshot, 'executions'> & {
+export type TaskSummary = Omit<TaskSnapshot, "executions"> & {
   /** One entry per attempt, retries included. Operator-facing. */
   executionCounts: TaskExecutionCounts;
   /**
@@ -264,12 +264,12 @@ export type TaskSummary = Omit<TaskSnapshot, 'executions'> & {
  * version to fence its next command with.
  */
 export interface TaskExecutionWriteAck {
-	readonly executionVersion: number;
+  readonly executionVersion: number;
 }
 
 /** Attempt number assigned to a newly created Execution. */
 export interface TaskExecutionCreateAck {
-	readonly attempt: number;
+  readonly attempt: number;
 }
 
 /**
@@ -277,17 +277,17 @@ export interface TaskExecutionCreateAck {
  * is how a caller knows to stop without a count query.
  */
 export interface TaskPage {
-	readonly schemaVersion: 1;
-	readonly tasks: TaskSnapshot[];
-	readonly nextCursor?: string;
+  readonly schemaVersion: 1;
+  readonly tasks: TaskSnapshot[];
+  readonly nextCursor?: string;
 }
 
 export interface TaskExecutionPage {
-	readonly schemaVersion: 1;
-	readonly entityVersion: number;
-	readonly taskId: string;
-	readonly executions: TaskExecutionSummary[];
-	readonly nextCursor?: string;
+  readonly schemaVersion: 1;
+  readonly entityVersion: number;
+  readonly taskId: string;
+  readonly executions: TaskExecutionSummary[];
+  readonly nextCursor?: string;
 }
 
 export interface TaskResult {
@@ -298,8 +298,12 @@ export interface TaskResult {
   updatedAt: string;
 }
 
-export type TaskWaitpointKind = 'input' | 'approval' | 'webhook';
-export type TaskWaitpointState = 'waiting' | 'resolved' | 'expired' | 'cancelled';
+export type TaskWaitpointKind = "input" | "approval" | "webhook";
+export type TaskWaitpointState =
+  | "waiting"
+  | "resolved"
+  | "expired"
+  | "cancelled";
 export interface TaskWaitpoint {
   schemaVersion: 1;
   entityVersion: number;
@@ -317,13 +321,20 @@ export interface TaskWaitpoint {
   updatedAt: string;
 }
 export interface TaskWaitpointCreateRequest {
-  id: string; key: string; kind: TaskWaitpointKind; payloadVersion: number; deadline?: string;
+  id: string;
+  key: string;
+  kind: TaskWaitpointKind;
+  payloadVersion: number;
+  deadline?: string;
 }
 export interface TaskWaitpointResolveRequest {
-  expectedVersion: number; resolutionId: string; actor?: string; resolution: unknown;
+  expectedVersion: number;
+  resolutionId: string;
+  actor?: string;
+  resolution: unknown;
 }
 
-export type TaskVerificationStatus = 'verified' | 'mismatch' | 'unverifiable';
+export type TaskVerificationStatus = "verified" | "mismatch" | "unverifiable";
 export interface TaskVerificationFinding {
   ruleId: string;
   subjectType: string;
@@ -354,7 +365,7 @@ export interface TaskVerificationCreateRequest {
   verifiedAt?: string;
 }
 
-export type TaskNotificationState = 'pending' | 'leased' | 'sent' | 'failed';
+export type TaskNotificationState = "pending" | "leased" | "sent" | "failed";
 /** Durable handoff created by the Task profile; delivery transport stays host-owned. */
 export interface TaskNotificationRecord {
   schemaVersion: 1;
@@ -413,13 +424,19 @@ export interface TaskArtifactRefreshRequest {
   reference: string;
   expiresAt: string;
 }
-export interface TaskArtifactRecord extends TaskArtifact { reference: string; }
+export interface TaskArtifactRecord extends TaskArtifact {
+  reference: string;
+}
 
-export type ProviderConfirmationPolicy = 'on-return' | 'readback' | 'webhook';
-export type ProviderRetryPolicy = 'never' | 'when-not-happened';
+export type ProviderConfirmationPolicy = "on-return" | "readback" | "webhook";
+export type ProviderRetryPolicy = "never" | "when-not-happened";
 export type ProviderOperationState =
-  | 'pending' | 'accepted' | 'confirmed' | 'failed'
-  | 'not_happened' | 'uncertain';
+  | "pending"
+  | "accepted"
+  | "confirmed"
+  | "failed"
+  | "not_happened"
+  | "uncertain";
 
 export interface ProviderOperationRequest {
   taskId?: string;
@@ -450,7 +467,7 @@ export interface ProviderOperationRecord {
 }
 
 export interface ProviderConfirmation {
-  decision: 'confirmed' | 'pending' | 'failed' | 'not_happened' | 'unknown';
+  decision: "confirmed" | "pending" | "failed" | "not_happened" | "unknown";
   evidence?: string;
   reason?: string;
 }
@@ -469,13 +486,18 @@ export interface ProviderOperationAttentionQuery {
   limit?: number;
 }
 
-export interface ProviderOperationOptions<T> extends Omit<ProviderOperationRequest, 'provider' | 'operation'> {
+export interface ProviderOperationOptions<T> extends Omit<
+  ProviderOperationRequest,
+  "provider" | "operation"
+> {
   /** `stripe.refund`, `storage.provision`, or another stable provider.operation name. */
   name: `${string}.${string}`;
   /** Optional provider lifecycle metadata; Go still owns operation correctness. */
-  module?: import('../runtime/modules.js').RhinoQLifecycleModule;
+  module?: import("../runtime/modules.js").RhinoQLifecycleModule;
   execute: (idempotencyKey: string) => Promise<T>;
-  confirm?: (operation: ProviderOperationRecord) => Promise<ProviderConfirmation>;
+  confirm?: (
+    operation: ProviderOperationRecord,
+  ) => Promise<ProviderConfirmation>;
   providerId?: (result: T) => string;
   evidence?: (result: T) => string | undefined;
 }
@@ -498,7 +520,9 @@ export interface EffectOptions<T> {
   confirmation?: ProviderConfirmationPolicy;
   retryPolicy?: ProviderRetryPolicy;
   execute: (idempotencyKey: string) => Promise<T>;
-  confirm?: (operation: ProviderOperationRecord) => Promise<ProviderConfirmation>;
+  confirm?: (
+    operation: ProviderOperationRecord,
+  ) => Promise<ProviderConfirmation>;
   providerId?: (result: T) => string;
   evidence?: (result: T) => string | undefined;
 }
@@ -542,14 +566,14 @@ export interface AttemptEvent {
   leaseOwner: string;
   leaseEpoch: number;
   kind:
-    | 'claimed'
-    | 'succeeded'
-    | 'retry_scheduled'
-    | 'dead'
-    | 'blocked'
-    | 'cancelled'
-    | 'released'
-    | 'lease_expired';
+    | "claimed"
+    | "succeeded"
+    | "retry_scheduled"
+    | "dead"
+    | "blocked"
+    | "cancelled"
+    | "released"
+    | "lease_expired";
   resultState?: string;
   failureClass?: RetryClass;
   blockedReason?: string;
@@ -586,11 +610,11 @@ export interface AttentionQuery {
 
 export interface AttentionItem {
   kind:
-    | 'dead_job'
-    | 'execution_blocked'
-    | 'effect_uncertain'
-    | 'outcome_mismatch'
-    | 'integrity_finding';
+    | "dead_job"
+    | "execution_blocked"
+    | "effect_uncertain"
+    | "outcome_mismatch"
+    | "integrity_finding";
   jobId?: string;
   queue?: string;
   jobState?: JobState;
@@ -614,20 +638,20 @@ export interface EffectRequest {
   name: string;
   key: string;
   irreversible?: boolean;
-  confirm?: 'on-return' | 'external-signal' | 'verify' | 'predicate';
+  confirm?: "on-return" | "external-signal" | "verify" | "predicate";
   completedStatus?: string;
 }
 
 export interface EffectResult {
   id: string;
   name: string;
-  state: 'pending' | 'confirmed' | 'uncertain' | 'rejected' | 'not_happened';
+  state: "pending" | "confirmed" | "uncertain" | "rejected" | "not_happened";
   externalRef?: string;
   irreversible: boolean;
 }
 
 export interface HandshakeResult {
-  result: 'compatible' | 'degraded' | 'rejected';
+  result: "compatible" | "degraded" | "rejected";
   protocolVersion: string;
   capabilities: string[];
   missing?: string[];
@@ -638,14 +662,14 @@ export interface HandshakeResult {
 }
 
 export type FindingStatus =
-  | 'open'
-  | 'acknowledged'
-  | 'repair_proposed'
-  | 'repairing'
-  | 'resolved'
-  | 'false_positive'
-  | 'ignored'
-  | 'regressed';
+  | "open"
+  | "acknowledged"
+  | "repair_proposed"
+  | "repairing"
+  | "resolved"
+  | "false_positive"
+  | "ignored"
+  | "regressed";
 
 export interface FindingKey {
   ruleId: string;
@@ -685,7 +709,16 @@ export interface RepairRecord {
   finding: FindingKey;
   handler: string;
   parameters?: unknown;
-  state: 'proposed' | 'previewed' | 'approved' | 'running' | 'succeeded' | 'failed' | 'stale' | 'uncertain' | 'aborted';
+  state:
+    | "proposed"
+    | "previewed"
+    | "approved"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "stale"
+    | "uncertain"
+    | "aborted";
   proposedBy: string;
   approvedBy?: string;
   approvalReason?: string;

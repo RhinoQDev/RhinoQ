@@ -1,72 +1,625 @@
 {
   "openapi": "3.1.0",
-  "info": { "title": "RhinoQ Owner Task API", "version": "0.1.0-beta.20", "description": "Owner- and tenant-scoped Task product surface. Host authentication supplies identity." },
+  "info": {
+    "title": "RhinoQ Owner Task API",
+    "version": "0.1.0-beta.21",
+    "description": "Owner- and tenant-scoped Task product surface. Host authentication supplies identity."
+  },
   "servers": [{ "url": "/tasks" }],
   "paths": {
-    "/": { "get": { "operationId": "listTasks", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Offset" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/_events": { "get": { "operationId": "streamTasks", "parameters": [{ "$ref": "#/components/parameters/Limit" }, { "$ref": "#/components/parameters/Offset" }], "responses": { "200": { "$ref": "#/components/responses/EventStream" }, "404": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } } } },
-    "/_health": { "get": { "operationId": "getTaskHealth", "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/_capabilities": { "get": { "operationId": "getTaskCapabilities", "responses": { "200": { "description": "Configured product capabilities", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskSurfaceCapabilities" } } } } } } },
-    "/_risk": { "get": { "operationId": "listAtRiskTasks", "parameters": [{ "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/JSON" }, "404": { "$ref": "#/components/responses/Error" } } } },
-    "/_verified": { "get": { "operationId": "listRecentlyVerifiedTasks", "parameters": [{ "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/_waitpoints": { "get": { "operationId": "listWaitingTaskWaitpoints", "parameters": [{ "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/_uploads": { "post": { "operationId": "createArtifactUpload", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ArtifactUploadCreateRequest" } } } }, "responses": { "201": { "$ref": "#/components/responses/JSON" }, "501": { "$ref": "#/components/responses/Error" } } } },
-    "/_uploads/{uploadId}": { "get": { "operationId": "resumeArtifactUpload", "parameters": [{ "$ref": "#/components/parameters/UploadId" }], "responses": { "200": { "$ref": "#/components/responses/JSON" }, "404": { "$ref": "#/components/responses/Error" } } } },
-    "/_uploads/{uploadId}/parts/{partNumber}": { "post": { "operationId": "signArtifactUploadPart", "parameters": [{ "$ref": "#/components/parameters/UploadId" }, { "$ref": "#/components/parameters/PartNumber" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/_uploads/{uploadId}/parts": { "post": { "operationId": "recordArtifactUploadPart", "parameters": [{ "$ref": "#/components/parameters/UploadId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ArtifactUploadPartRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/JSON" }, "409": { "$ref": "#/components/responses/Error" } } } },
-    "/_uploads/{uploadId}/complete": { "post": { "operationId": "completeArtifactUpload", "parameters": [{ "$ref": "#/components/parameters/UploadId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ArtifactUploadCompleteRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/JSON" }, "409": { "$ref": "#/components/responses/Error" } } } },
-    "/_uploads/{uploadId}/abort": { "post": { "operationId": "abortArtifactUpload", "parameters": [{ "$ref": "#/components/parameters/UploadId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ExpectedVersionRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/{taskId}": { "get": { "operationId": "getTask", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "responses": { "200": { "$ref": "#/components/responses/JSON" }, "404": { "$ref": "#/components/responses/Error" } } } },
-    "/{taskId}/events": { "get": { "operationId": "streamTask", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "responses": { "200": { "$ref": "#/components/responses/EventStream" }, "404": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } } } },
-    "/{taskId}/summary": { "get": { "operationId": "getTaskSummary", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/{taskId}/executions": { "get": { "operationId": "getTaskExecutionResults", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/{taskId}/executions/page": { "get": { "operationId": "listTaskExecutions", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/{taskId}/failed-items": { "get": { "operationId": "downloadFailedTaskItems", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "name": "format", "in": "query", "schema": { "enum": ["json", "csv"] } }], "responses": { "200": { "description": "Failed item JSON or CSV attachment" } } } },
-    "/{taskId}/manifest": { "get": { "operationId": "getTaskGroupManifest", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/{taskId}/result": { "get": { "operationId": "getTaskResult", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "responses": { "200": { "description": "Application-resolved, browser-safe result" }, "501": { "$ref": "#/components/responses/Error" } } } },
-    "/{taskId}/cancel": { "post": { "operationId": "cancelTask", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "requestBody": { "required": false, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CancelTaskRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/JSON" }, "400": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } } },
-    "/{taskId}/retry": { "post": { "operationId": "retryTask", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RetryTaskRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/JSON" }, "400": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } } } },
+    "/": {
+      "get": {
+        "operationId": "listTasks",
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Offset" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/_events": {
+      "get": {
+        "operationId": "streamTasks",
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "$ref": "#/components/parameters/Offset" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/EventStream" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/_health": {
+      "get": {
+        "operationId": "getTaskHealth",
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/_capabilities": {
+      "get": {
+        "operationId": "getTaskCapabilities",
+        "responses": {
+          "200": {
+            "description": "Configured product capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSurfaceCapabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_risk": {
+      "get": {
+        "operationId": "listAtRiskTasks",
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/_verified": {
+      "get": {
+        "operationId": "listRecentlyVerifiedTasks",
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/_waitpoints": {
+      "get": {
+        "operationId": "listWaitingTaskWaitpoints",
+        "parameters": [{ "$ref": "#/components/parameters/Limit" }],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/_uploads": {
+      "post": {
+        "operationId": "createArtifactUpload",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactUploadCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "$ref": "#/components/responses/JSON" },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/_uploads/{uploadId}": {
+      "get": {
+        "operationId": "resumeArtifactUpload",
+        "parameters": [{ "$ref": "#/components/parameters/UploadId" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/_uploads/{uploadId}/parts/{partNumber}": {
+      "post": {
+        "operationId": "signArtifactUploadPart",
+        "parameters": [
+          { "$ref": "#/components/parameters/UploadId" },
+          { "$ref": "#/components/parameters/PartNumber" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/_uploads/{uploadId}/parts": {
+      "post": {
+        "operationId": "recordArtifactUploadPart",
+        "parameters": [{ "$ref": "#/components/parameters/UploadId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactUploadPartRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/_uploads/{uploadId}/complete": {
+      "post": {
+        "operationId": "completeArtifactUpload",
+        "parameters": [{ "$ref": "#/components/parameters/UploadId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactUploadCompleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/_uploads/{uploadId}/abort": {
+      "post": {
+        "operationId": "abortArtifactUpload",
+        "parameters": [{ "$ref": "#/components/parameters/UploadId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedVersionRequest"
+              }
+            }
+          }
+        },
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/{taskId}": {
+      "get": {
+        "operationId": "getTask",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/{taskId}/events": {
+      "get": {
+        "operationId": "streamTask",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/EventStream" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "503": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/{taskId}/summary": {
+      "get": {
+        "operationId": "getTaskSummary",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/{taskId}/executions": {
+      "get": {
+        "operationId": "getTaskExecutionResults",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/{taskId}/executions/page": {
+      "get": {
+        "operationId": "listTaskExecutions",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/{taskId}/failed-items": {
+      "get": {
+        "operationId": "downloadFailedTaskItems",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": { "enum": ["json", "csv"] }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Failed item JSON or CSV attachment" }
+        }
+      }
+    },
+    "/{taskId}/manifest": {
+      "get": {
+        "operationId": "getTaskGroupManifest",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/{taskId}/result": {
+      "get": {
+        "operationId": "getTaskResult",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "responses": {
+          "200": { "description": "Application-resolved, browser-safe result" },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/{taskId}/cancel": {
+      "post": {
+        "operationId": "cancelTask",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CancelTaskRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "400": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/{taskId}/retry": {
+      "post": {
+        "operationId": "retryTask",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RetryTaskRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "400": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/{taskId}/waitpoints": {
-      "get": { "operationId": "listTaskWaitpoints", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } },
-      "post": { "operationId": "createTaskWaitpoint", "parameters": [{ "$ref": "#/components/parameters/TaskId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskWaitpointCreateRequest" } } } }, "responses": { "201": { "$ref": "#/components/responses/JSON" } } }
+      "get": {
+        "operationId": "listTaskWaitpoints",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      },
+      "post": {
+        "operationId": "createTaskWaitpoint",
+        "parameters": [{ "$ref": "#/components/parameters/TaskId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskWaitpointCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": { "201": { "$ref": "#/components/responses/JSON" } }
+      }
     },
     "/{taskId}/waitpoints/{waitpointId}": {
-      "get": { "operationId": "getTaskWaitpoint", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/WaitpointId" }], "responses": { "200": { "$ref": "#/components/responses/JSON" }, "404": { "$ref": "#/components/responses/Error" } } },
-      "post": { "operationId": "resolveTaskWaitpoint", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/WaitpointId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskWaitpointResolveRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/JSON" } } }
+      "get": {
+        "operationId": "getTaskWaitpoint",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/WaitpointId" }
+        ],
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      },
+      "post": {
+        "operationId": "resolveTaskWaitpoint",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/WaitpointId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskWaitpointResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
     },
-    "/{taskId}/verifications": { "get": { "operationId": "listTaskVerifications", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/{taskId}/artifacts": { "get": { "operationId": "listTaskArtifacts", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/JSON" } } } },
-    "/{taskId}/artifacts/{artifactId}/download": { "get": { "operationId": "downloadTaskArtifact", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/ArtifactId" }], "responses": { "200": { "description": "Application-resolved artifact" }, "404": { "$ref": "#/components/responses/Error" }, "501": { "$ref": "#/components/responses/Error" } } } },
-    "/{taskId}/artifacts/{artifactId}/refresh": { "post": { "operationId": "refreshTaskArtifact", "parameters": [{ "$ref": "#/components/parameters/TaskId" }, { "$ref": "#/components/parameters/ArtifactId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TaskArtifactRefreshRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/JSON" }, "404": { "$ref": "#/components/responses/Error" } } } }
+    "/{taskId}/verifications": {
+      "get": {
+        "operationId": "listTaskVerifications",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/{taskId}/artifacts": {
+      "get": {
+        "operationId": "listTaskArtifacts",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/Limit" }
+        ],
+        "responses": { "200": { "$ref": "#/components/responses/JSON" } }
+      }
+    },
+    "/{taskId}/artifacts/{artifactId}/download": {
+      "get": {
+        "operationId": "downloadTaskArtifact",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/ArtifactId" }
+        ],
+        "responses": {
+          "200": { "description": "Application-resolved artifact" },
+          "404": { "$ref": "#/components/responses/Error" },
+          "501": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/{taskId}/artifacts/{artifactId}/refresh": {
+      "post": {
+        "operationId": "refreshTaskArtifact",
+        "parameters": [
+          { "$ref": "#/components/parameters/TaskId" },
+          { "$ref": "#/components/parameters/ArtifactId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskArtifactRefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "$ref": "#/components/responses/JSON" },
+          "404": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    }
   },
   "components": {
     "parameters": {
-      "TaskId": { "name": "taskId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1 } },
-      "WaitpointId": { "name": "waitpointId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1 } },
-      "ArtifactId": { "name": "artifactId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1 } },
-      "UploadId": { "name": "uploadId", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1 } },
-      "PartNumber": { "name": "partNumber", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1, "maximum": 10000 } },
-      "Limit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } },
-      "Offset": { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0 } },
-      "Cursor": { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+      "TaskId": {
+        "name": "taskId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      "WaitpointId": {
+        "name": "waitpointId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      "ArtifactId": {
+        "name": "artifactId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      "UploadId": {
+        "name": "uploadId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1 }
+      },
+      "PartNumber": {
+        "name": "partNumber",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 100 }
+      },
+      "Offset": {
+        "name": "offset",
+        "in": "query",
+        "schema": { "type": "integer", "minimum": 0 }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": { "type": "string" }
+      }
     },
     "schemas": {
-      "CancelTaskRequest": { "type": "object", "additionalProperties": false, "properties": { "expectedVersion": { "type": "integer", "minimum": 1 } } },
-      "RetryTaskRequest": { "type": "object", "additionalProperties": false, "required": ["expectedVersion", "commandId"], "properties": { "expectedVersion": { "type": "integer", "minimum": 1 }, "commandId": { "type": "string", "minLength": 1 } } },
-      "TaskWaitpointCreateRequest": { "type": "object", "required": ["id", "key", "kind", "payloadVersion"], "properties": { "id": { "type": "string" }, "key": { "type": "string" }, "kind": { "enum": ["input", "approval", "webhook"] }, "payloadVersion": { "type": "integer", "minimum": 1 }, "deadline": { "type": "string", "format": "date-time" } } },
-      "TaskWaitpointResolveRequest": { "type": "object", "required": ["expectedVersion", "resolutionId", "resolution"], "properties": { "expectedVersion": { "type": "integer", "minimum": 1 }, "resolutionId": { "type": "string", "minLength": 1 }, "actor": { "type": "string" }, "resolution": {} } },
-      "TaskArtifactRefreshRequest": { "type": "object", "required": ["expectedVersion", "reference", "expiresAt"], "properties": { "expectedVersion": { "type": "integer", "minimum": 1 }, "reference": { "type": "string", "minLength": 1 }, "expiresAt": { "type": "string", "format": "date-time" } } },
-      "ExpectedVersionRequest": { "type": "object", "required": ["expectedVersion"], "properties": { "expectedVersion": { "type": "integer", "minimum": 1 } } },
-      "ArtifactUploadCompleteRequest": { "type": "object", "required": ["expectedVersion"], "properties": { "expectedVersion": { "type": "integer", "minimum": 1 }, "checksumSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Required by completion for Task-bound uploads; computed concurrently by the browser helper." } } },
-        "ArtifactUploadCreateRequest": { "type": "object", "required": ["name", "contentType", "sizeBytes"], "properties": { "taskId": { "type": "string", "description": "When set, ownership is verified before provider access and checksumSha256 is required by completion." }, "executionId": { "type": "string" }, "artifactId": { "type": "string" }, "name": { "type": "string", "minLength": 1 }, "contentType": { "type": "string", "minLength": 1 }, "sizeBytes": { "type": "integer", "minimum": 1 }, "checksumSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "expiresInMs": { "type": "integer", "minimum": 1, "description": "Incomplete upload session lifetime." }, "artifactExpiresInMs": { "type": "integer", "minimum": 1, "description": "Completed artifact retention lifetime." }, "memoryBudgetBytes": { "type": "integer", "minimum": 5242880 } } },
-      "ArtifactUploadPartRequest": { "type": "object", "required": ["expectedVersion", "part"], "properties": { "expectedVersion": { "type": "integer", "minimum": 1 }, "part": { "type": "object", "required": ["partNumber", "etag", "sizeBytes"], "properties": { "partNumber": { "type": "integer", "minimum": 1 }, "etag": { "type": "string", "minLength": 1 }, "sizeBytes": { "type": "integer", "minimum": 1 } } } } },
-      "TaskSurfaceCapabilities": { "type": "object", "required": ["schemaVersion", "cancel", "retry", "result", "waitpoints", "stream", "risk", "tenant", "verifications", "artifacts", "authorization"], "properties": { "schemaVersion": { "const": 1 }, "cancel": { "type": "boolean" }, "retry": { "type": "boolean" }, "result": { "type": "boolean" }, "waitpoints": { "type": "boolean" }, "stream": { "type": "boolean" }, "risk": { "oneOf": [{ "const": false }, { "type": "object" }] }, "tenant": { "type": "boolean" }, "verifications": { "type": "boolean" }, "artifacts": { "type": "boolean" }, "artifactUploads": { "type": "boolean" }, "authorization": { "type": "boolean" } } },
-      "RhinoQError": { "type": "object", "required": ["code"], "properties": { "code": { "type": "string", "pattern": "^RHINOQ_" }, "message": { "type": "string" }, "field": { "type": "string" }, "retryable": { "type": "boolean" }, "expectedShape": {}, "nextAction": { "type": "string" }, "docs": { "type": "string", "format": "uri" } } }
+      "CancelTaskRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": { "expectedVersion": { "type": "integer", "minimum": 1 } }
+      },
+      "RetryTaskRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expectedVersion", "commandId"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "commandId": { "type": "string", "minLength": 1 }
+        }
+      },
+      "TaskWaitpointCreateRequest": {
+        "type": "object",
+        "required": ["id", "key", "kind", "payloadVersion"],
+        "properties": {
+          "id": { "type": "string" },
+          "key": { "type": "string" },
+          "kind": { "enum": ["input", "approval", "webhook"] },
+          "payloadVersion": { "type": "integer", "minimum": 1 },
+          "deadline": { "type": "string", "format": "date-time" }
+        }
+      },
+      "TaskWaitpointResolveRequest": {
+        "type": "object",
+        "required": ["expectedVersion", "resolutionId", "resolution"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "resolutionId": { "type": "string", "minLength": 1 },
+          "actor": { "type": "string" },
+          "resolution": {}
+        }
+      },
+      "TaskArtifactRefreshRequest": {
+        "type": "object",
+        "required": ["expectedVersion", "reference", "expiresAt"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "reference": { "type": "string", "minLength": 1 },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ExpectedVersionRequest": {
+        "type": "object",
+        "required": ["expectedVersion"],
+        "properties": { "expectedVersion": { "type": "integer", "minimum": 1 } }
+      },
+      "ArtifactUploadCompleteRequest": {
+        "type": "object",
+        "required": ["expectedVersion"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "checksumSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Required by completion for Task-bound uploads; computed concurrently by the browser helper."
+          }
+        }
+      },
+      "ArtifactUploadCreateRequest": {
+        "type": "object",
+        "required": ["name", "contentType", "sizeBytes"],
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "description": "When set, ownership is verified before provider access and checksumSha256 is required by completion."
+          },
+          "executionId": { "type": "string" },
+          "artifactId": { "type": "string" },
+          "name": { "type": "string", "minLength": 1 },
+          "contentType": { "type": "string", "minLength": 1 },
+          "sizeBytes": { "type": "integer", "minimum": 1 },
+          "checksumSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "expiresInMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Incomplete upload session lifetime."
+          },
+          "artifactExpiresInMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Completed artifact retention lifetime."
+          },
+          "memoryBudgetBytes": { "type": "integer", "minimum": 5242880 }
+        }
+      },
+      "ArtifactUploadPartRequest": {
+        "type": "object",
+        "required": ["expectedVersion", "part"],
+        "properties": {
+          "expectedVersion": { "type": "integer", "minimum": 1 },
+          "part": {
+            "type": "object",
+            "required": ["partNumber", "etag", "sizeBytes"],
+            "properties": {
+              "partNumber": { "type": "integer", "minimum": 1 },
+              "etag": { "type": "string", "minLength": 1 },
+              "sizeBytes": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      },
+      "TaskSurfaceCapabilities": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "cancel",
+          "retry",
+          "result",
+          "waitpoints",
+          "stream",
+          "risk",
+          "tenant",
+          "verifications",
+          "artifacts",
+          "authorization"
+        ],
+        "properties": {
+          "schemaVersion": { "const": 1 },
+          "cancel": { "type": "boolean" },
+          "retry": { "type": "boolean" },
+          "result": { "type": "boolean" },
+          "waitpoints": { "type": "boolean" },
+          "stream": { "type": "boolean" },
+          "risk": { "oneOf": [{ "const": false }, { "type": "object" }] },
+          "tenant": { "type": "boolean" },
+          "verifications": { "type": "boolean" },
+          "artifacts": { "type": "boolean" },
+          "artifactUploads": { "type": "boolean" },
+          "authorization": { "type": "boolean" }
+        }
+      },
+      "RhinoQError": {
+        "type": "object",
+        "required": ["code"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^RHINOQ_" },
+          "message": { "type": "string" },
+          "field": { "type": "string" },
+          "retryable": { "type": "boolean" },
+          "expectedShape": {},
+          "nextAction": { "type": "string" },
+          "docs": { "type": "string", "format": "uri" }
+        }
+      }
     },
     "responses": {
-      "JSON": { "description": "Owner-scoped JSON response", "content": { "application/json": { "schema": {} } } },
-      "EventStream": { "description": "SSE stream with polling fallback available through snapshot routes", "content": { "text/event-stream": { "schema": { "type": "string" } } } },
-      "Error": { "description": "Structured RhinoQ error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RhinoQError" } } } }
+      "JSON": {
+        "description": "Owner-scoped JSON response",
+        "content": { "application/json": { "schema": {} } }
+      },
+      "EventStream": {
+        "description": "SSE stream with polling fallback available through snapshot routes",
+        "content": { "text/event-stream": { "schema": { "type": "string" } } }
+      },
+      "Error": {
+        "description": "Structured RhinoQ error",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/RhinoQError" }
+          }
+        }
+      }
     }
   }
 }
