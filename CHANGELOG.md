@@ -8,6 +8,12 @@
   both transports expose the version-aware `TaskHandle` lifecycle API.
 - PostgreSQL Task clients now turn missing or incomplete Task schemas into an
   actionable `RHINOQ_TASK_SCHEMA_MISSING` error that points to `npx rhinoq-task`.
+- Added `reportTaskProgressAutoVersion()` and `completeTask()` as convenience
+  compositions; they read once and keep optimistic-concurrency conflicts
+  visible instead of retrying them silently.
+- `TaskHandle.complete()` now covers the common start, result attachment and
+  success path. The typed application compiler remains the high-level worker
+  abstraction; lease and retry authority stays with the selected runtime.
 
 ## 0.1.0-beta.21
 

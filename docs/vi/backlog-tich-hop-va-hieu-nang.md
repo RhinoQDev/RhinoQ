@@ -10,6 +10,30 @@ Bản tổng hợp mọi điểm cần sửa, gộp từ ba nguồn và **đã k
 Bắc đẩu định hướng: **giảm sâu nhất chi phí tích hợp, và hiệu năng tốt nhất** — hai
 trục, xếp theo (tác động × bằng chứng × rủi ro thấp).
 
+## Trạng thái report Issue #06
+
+Các finding DX trong report Issue #06 được đối chiếu lại với code beta.21:
+
+- F-01 và F-05 đã sửa: lỗi thiếu schema có `RHINOQ_TASK_SCHEMA_MISSING` và
+  `definitionVersion` mặc định là `1` ở hai Node client.
+- F-02 đã sửa bằng `TaskHandle`, `reportTaskProgressAutoVersion()` và giữ
+  `RHINOQ_VERSION_CONFLICT` khi có race; SDK không tự retry mù.
+- F-04 đã được bao phủ bởi `TaskHandle.start()`, tự đi qua
+  `pending -> queued -> running` đúng state machine.
+- F-03 không tạo thêm một vòng polling/lease riêng. Tương đương an toàn hiện
+  có là `defineRhinoQApplication()` + `workerHandler()`/`runWorker()`; runtime
+  vẫn là nơi sở hữu lease, retry và lifecycle correctness.
+- API matrix `completeTask()` đã có ở Gateway và PostgreSQL client, là helper
+  composition có version fence; không quảng bá nhầm là một transaction atomic.
+
+Các claim benchmark về LOC/thời gian chỉ nên giữ khi log và bảng tổng hợp dùng
+chung một nguồn số liệu; report hiện có chênh lệch giữa hai phần này.
+
+Riêng Case 3.1 trong report ghi “SDK Auto-Retry” là diễn giải quá mức: Node
+client chỉ phân loại lỗi kết nối là retryable, không tự retry lệnh đã có thể
+commit. Đây là chủ ý fail-safe để không nhân đôi side effect khi mất
+acknowledgement; caller phải reconcile hoặc chỉ retry command idempotent.
+
 ---
 
 ## Phần 0 — Đã xong (để khỏi làm lại)

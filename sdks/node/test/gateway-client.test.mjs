@@ -104,6 +104,49 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
   });
 });
 
+test('Gateway high-level progress and completion helpers retain the OCC boundary', async () => {
+  const requests = [];
+  let taskReads = 0;
+  const snapshot = {
+    schemaVersion: 1,
+    entityVersion: 4,
+    id: 'task_helper',
+    type: 'report.export',
+    state: 'running',
+    progress: { completed: 0 },
+    hasResult: false,
+    executions: [],
+    createdAt: '2026-07-29T00:00:00Z',
+    updatedAt: '2026-07-29T00:00:01Z',
+  };
+  const client = new RhinoQClient({
+    url: 'http://gateway.test',
+    fetch: async (url, options) => {
+      requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined });
+      if (url.endsWith('/result')) {
+        return Response.json({ schemaVersion: 1, entityVersion: 5, taskId: 'task_helper', reference: 's3://result', updatedAt: snapshot.updatedAt });
+      }
+      if (url.endsWith('/state')) return Response.json({ ...snapshot, entityVersion: 6, state: 'succeeded', hasResult: true });
+      if (options.method === 'GET') {
+        taskReads += 1;
+        return Response.json({ ...snapshot, entityVersion: taskReads === 3 ? 5 : 4, hasResult: taskReads === 3 });
+      }
+      return Response.json({ ...snapshot, entityVersion: 5, progress: { completed: 1 } });
+    },
+  });
+
+  const progressed = await client.reportTaskProgressAutoVersion('task_helper', { completed: 1 });
+  assert.equal(progressed.entityVersion, 5);
+  const completed = await client.completeTask('task_helper', { resultRef: 's3://result' });
+  assert.equal(completed.state, 'succeeded');
+  assert.deepEqual(requests.slice(0, 2).map(({ method, url }) => [method, url]), [
+    ['GET', 'http://gateway.test/v1/tasks/task_helper'],
+    ['POST', 'http://gateway.test/v1/tasks/task_helper/progress'],
+  ]);
+  assert.deepEqual(requests[1].body, { expectedVersion: 4, progress: { completed: 1 } });
+  assert.ok(requests.some(({ url }) => url.endsWith('/result')));
+});
+
 test('BullMQ Task bridge projects an existing job without owning the queue', async () => {
   const events = new FakeQueueEvents();
   const client = new FakeTaskClient();

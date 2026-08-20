@@ -1,5 +1,6 @@
 import type {
   TaskCancellationStatus,
+  TaskCompletionOptions,
   TaskCreateRequest,
   TaskExecution,
   TaskExecutionBinding,
@@ -48,6 +49,10 @@ import type {
 export interface TaskClient {
   createTask(request: TaskCreateRequest): Promise<TaskSnapshot>;
   getTask(taskId: string): Promise<TaskSnapshot>;
+	/** Reads once, then reports with that snapshot's version; conflicts remain visible. */
+	reportTaskProgressAutoVersion?(taskId: string, progress: TaskProgress): Promise<TaskSnapshot>;
+	/** Composes start, optional result attachment and success without hiding OCC conflicts. */
+	completeTask?(taskId: string, options?: TaskCompletionOptions): Promise<TaskSnapshot>;
 	getTaskSummary(taskId: string): Promise<TaskSummary>;
 	listTaskExecutions(taskId: string, cursor?: string, limit?: number): Promise<TaskExecutionPage>;
   createTaskExecution(

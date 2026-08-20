@@ -23,6 +23,7 @@ import {
   type LeasedJob,
   type TaskCreateRequest,
   type TaskCancellationStatus,
+  type TaskCompletionOptions,
   type TaskExecutionBinding,
   type TaskExecutionCreateRequest,
   type TaskExecution,
@@ -164,6 +165,23 @@ export class RhinoQClient {
   /** Opens a stateful Task handle that carries the latest entity version. */
   async openTask(taskId: string): Promise<TaskHandle> {
     return new TaskHandle(this, await this.getTask(taskId));
+  }
+
+  /** Reads the current Task once, then reports using its version fence. */
+  async reportTaskProgressAutoVersion(taskId: string, progress: TaskProgress): Promise<TaskSnapshot> {
+    const handle = await this.openTask(taskId);
+    await handle.reportProgress(progress);
+    return handle.snapshot;
+  }
+
+  /** High-level lifecycle composition; OCC conflicts are still surfaced. */
+  async completeTask(taskId: string, options: TaskCompletionOptions = {}): Promise<TaskSnapshot> {
+    if (!options || typeof options !== 'object') {
+      throw new TypeError('Task completion options must be an object');
+    }
+    const handle = await this.openTask(taskId);
+    await handle.complete(options.resultRef);
+    return handle.snapshot;
   }
 
 	async getTaskSummary(taskId: string): Promise<TaskSummary> {

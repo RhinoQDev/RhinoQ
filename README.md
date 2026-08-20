@@ -620,6 +620,13 @@ the Gateway and embedded PostgreSQL clients. If the PostgreSQL Task profile has
 not been installed, the client reports `RHINOQ_TASK_SCHEMA_MISSING` and points
 to `npx rhinoq-task`.
 
+For a direct client lifecycle, `openTask()` hides version threading while
+preserving optimistic-concurrency errors. `reportTaskProgressAutoVersion()`
+reads the current version once, and `completeTask(id, { resultRef })` composes
+start, result attachment and success; neither helper silently retries a race.
+For runtime-backed workers, use the typed `defineRhinoQApplication()` path
+below so lease and retry correctness remain with the selected runtime.
+
 That small portable boundary replaces the generic plumbing around your business handler:
 
 | You keep | RhinoQ supplies |

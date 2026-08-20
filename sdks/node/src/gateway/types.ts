@@ -56,6 +56,11 @@ export interface TaskCreateRequest {
   definitionVersion?: number;
 }
 
+/** High-level completion input; the result reference remains optional. */
+export interface TaskCompletionOptions {
+  resultRef?: string;
+}
+
 export interface TaskProgress {
   completed: number;
   total?: number;

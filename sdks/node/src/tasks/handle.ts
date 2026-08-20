@@ -84,6 +84,18 @@ export class TaskHandle {
   async succeed(): Promise<this> { return this.transitionTo('succeeded'); }
   async fail(): Promise<this> { return this.transitionTo('failed'); }
 
+  /**
+   * Completes a Task in the safe order: start if needed, attach the optional
+   * result reference, then transition to succeeded. Each command remains
+   * version-fenced; this is a convenience composition, not an atomic claim.
+   */
+  async complete(resultRef?: string): Promise<this> {
+    await this.start();
+    if (resultRef !== undefined) await this.attachResult(resultRef);
+    if (this.current.state !== 'succeeded') await this.succeed();
+    return this;
+  }
+
   async requestCancel(): Promise<this> {
     this.current = await this.client.requestTaskCancellation(this.id, this.current.entityVersion);
     return this;

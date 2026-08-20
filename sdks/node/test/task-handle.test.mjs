@@ -89,6 +89,17 @@ test('attachResult refreshes so the next write is not stale', async () => {
   assert.equal(handle.version, 5);
 });
 
+test('complete() hides the happy-path lifecycle while preserving version fencing', async () => {
+  const client = fakeClient(snapshot());
+  const handle = new TaskHandle(client, client.snapshot());
+
+  await handle.complete('s3://bucket/result.json');
+
+  assert.deepEqual(client.fencedWith, [1, 2, 3, 4], 'start, attach and succeed must stay fenced');
+  assert.equal(handle.state, 'succeeded');
+  assert.equal(handle.snapshot.hasResult, true);
+});
+
 test('the handle refuses a missing client or snapshot', () => {
   assert.throws(() => new TaskHandle(null, snapshot()), TypeError);
   assert.throws(() => new TaskHandle(fakeClient(snapshot()), {}), TypeError);

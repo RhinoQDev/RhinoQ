@@ -37,6 +37,27 @@ heartbeats and falls back to snapshot polling after disconnect; SSE is a
 delivery optimization, not a second state store. Result-payload proxying is
 still application-owned.
 
+For the direct Task client, `openTask(id)` returns a `TaskHandle` that carries
+the latest version through a linear worker. The two convenience methods below
+cover common friction without hiding conflicts:
+
+```ts
+await client.reportTaskProgressAutoVersion(taskId, { completed: 50, total: 100 });
+await client.completeTask(taskId, { resultRef: 's3://reports/report-42.csv' });
+```
+
+`reportTaskProgressAutoVersion()` reads once before writing, and
+`completeTask()` composes start, optional result attachment and success. They
+are not atomic SQL commands and do not auto-retry `RHINOQ_VERSION_CONFLICT`.
+For runtime-backed workers, prefer `defineRhinoQApplication()` with
+`workerHandler()` or `runWorker()`; that abstraction routes registered Task
+names while the selected runtime retains lease and retry authority.
+
+`RHINOQ_POSTGRES_UNREACHABLE` is a retryable classification, not an automatic
+SDK retry. A lost acknowledgement can mean that a write committed, so the
+application or runtime must retry only an idempotent command or reconcile the
+Task first.
+
 The embedded profile also supports a real tenant boundary: put `tenantId` on
 dispatch/create and provide `tenantFromRequest` beside `ownerFromRequest`.
 Owner reads, SSE, waitpoints, verification and artifacts include both tenant
