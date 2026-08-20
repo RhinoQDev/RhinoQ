@@ -37,7 +37,6 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
     id: 'task_01',
     type: 'report.export',
     ownerId: 'user_01',
-    definitionVersion: 1,
   });
   await client.createTaskExecution('task_01', {
     id: 'exec_01',
@@ -47,7 +46,10 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
     runtime: 'bullmq',
     externalId: 'bull_job_01',
   });
-  const polled = await client.getTask('task_01');
+  const handle = await client.openTask('task_01');
+  assert.equal(handle.id, 'task_01');
+  assert.equal(handle.version, 2);
+  const polled = handle.snapshot;
   await client.transitionTask('task_01', polled.entityVersion, 'running');
   await client.requestTaskCancellation('task_01', polled.entityVersion);
   await client.resolveTaskCancellation(
@@ -79,6 +81,7 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
     ['POST', 'http://gateway.test/v1/tasks/task_01/result'],
     ['GET', 'http://gateway.test/v1/tasks/task_01/result'],
   ]);
+  assert.equal(requests[0].body.definitionVersion, 1);
   assert.deepEqual(requests[4].body, {
     expectedVersion: 2,
     state: 'running',

@@ -312,12 +312,13 @@ export class PostgresTaskClient implements TaskClient {
     if (!request?.id || !request.type) {
       throw new TypeError('task id and type are required');
     }
-    if (!Number.isInteger(request.definitionVersion) || request.definitionVersion <= 0) {
+    const definitionVersion = request.definitionVersion === undefined ? 1 : request.definitionVersion;
+    if (!Number.isInteger(definitionVersion) || definitionVersion <= 0) {
       throw new RangeError('task definitionVersion must be a positive integer');
     }
     await this.execute(
       `SELECT rhinoq_task.create_task($1, $2, $3, $4, $5)`,
-      [request.id, request.type, request.tenantId?.trim() || 'default', request.ownerId ?? null, request.definitionVersion],
+      [request.id, request.type, request.tenantId?.trim() || 'default', request.ownerId ?? null, definitionVersion],
     );
     return this.getTask(request.id);
   }
@@ -1791,6 +1792,14 @@ function mapDatabaseError(error: unknown): RhinoQError {
   }
   const record = isRecord(error) ? error : {};
   const message = typeof record.message === 'string' ? record.message : '';
+  const databaseCode = typeof record.code === 'string' ? record.code : '';
+  if (databaseCode === '42P01' || databaseCode === '3F000') {
+    return taskError(
+      'RHINOQ_TASK_SCHEMA_MISSING',
+      'RhinoQ Task schema is not installed or is incomplete. Run npx rhinoq-task against the same database, then retry.',
+      error,
+    );
+  }
   if (message.startsWith('RHINOQ_')) {
     return taskError(
       message,
@@ -1812,6 +1821,7 @@ function mapDatabaseError(error: unknown): RhinoQError {
 // structured.
 const TASK_ERROR_NEXT_ACTION: Record<string, string> = {
   RHINOQ_PROGRESS_STATE: "Transition the task to 'running' before reporting progress.",
+  RHINOQ_TASK_SCHEMA_MISSING: 'Run npx rhinoq-task against the same database, then retry.',
 };
 
 function taskError(code: string, detail: string, cause?: unknown): RhinoQError {

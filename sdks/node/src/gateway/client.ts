@@ -43,6 +43,7 @@ import {
   type RepairProposalRequest,
   type RepairRecord,
 } from './types.js';
+import { TaskHandle } from '../tasks/handle.js';
 
 export class RhinoQError extends Error {
   readonly code: string;
@@ -146,10 +147,11 @@ export class RhinoQClient {
     if (!request?.id || !request.type) {
       throw new TypeError('task id and type are required');
     }
-    if (!Number.isInteger(request.definitionVersion) || request.definitionVersion <= 0) {
+    const definitionVersion = request.definitionVersion === undefined ? 1 : request.definitionVersion;
+    if (!Number.isInteger(definitionVersion) || definitionVersion <= 0) {
       throw new RangeError('task definitionVersion must be a positive integer');
     }
-    return this.send<TaskSnapshot>('POST', '/v1/tasks', request);
+    return this.send<TaskSnapshot>('POST', '/v1/tasks', { ...request, definitionVersion });
   }
 
   async getTask(taskId: string): Promise<TaskSnapshot> {
@@ -157,6 +159,11 @@ export class RhinoQClient {
       'GET',
       `/v1/tasks/${requiredPath(taskId, 'task id')}`,
     );
+  }
+
+  /** Opens a stateful Task handle that carries the latest entity version. */
+  async openTask(taskId: string): Promise<TaskHandle> {
+    return new TaskHandle(this, await this.getTask(taskId));
   }
 
 	async getTaskSummary(taskId: string): Promise<TaskSummary> {

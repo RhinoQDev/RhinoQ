@@ -52,7 +52,8 @@ export interface TaskCreateRequest {
   /** Stable application tenant boundary. Defaults to `default` for single-tenant apps. */
   tenantId?: string;
   ownerId?: string;
-  definitionVersion: number;
+  /** Application definition version. Defaults to `1` when omitted. */
+  definitionVersion?: number;
 }
 
 export interface TaskProgress {

@@ -615,6 +615,11 @@ createServer((req, res) => http(req, res)).listen(8787, '127.0.0.1');
 console.log('Task Center: http://127.0.0.1:8787/task-center/report-42');
 ```
 
+`definitionVersion` on a Task request is optional and defaults to `1` for both
+the Gateway and embedded PostgreSQL clients. If the PostgreSQL Task profile has
+not been installed, the client reports `RHINOQ_TASK_SCHEMA_MISSING` and points
+to `npx rhinoq-task`.
+
 That small portable boundary replaces the generic plumbing around your business handler:
 
 | You keep | RhinoQ supplies |

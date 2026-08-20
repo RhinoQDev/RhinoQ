@@ -229,7 +229,9 @@ const taskHandler = createTaskRequestHandler({
 `PostgresTaskClient` calls versioned PostgreSQL command functions; it does not
 copy transition or progress correctness into TypeScript. It reuses `appPool`,
 creates no process and requires no RhinoQ token. The application still owns
-its user authentication and result signing.
+its user authentication and result signing. `definitionVersion` is optional on
+Task creation and defaults to `1`; if the Task profile is missing, the client
+returns `RHINOQ_TASK_SCHEMA_MISSING` with the next action `npx rhinoq-task`.
 
 ## Prepare PostgreSQL once
 

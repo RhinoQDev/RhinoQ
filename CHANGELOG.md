@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Made `TaskCreateRequest.definitionVersion` optional, defaulting to `1` in
+  the Gateway and embedded PostgreSQL clients.
+- Added `RhinoQClient.openTask(id)` parity with the PostgreSQL Task client so
+  both transports expose the version-aware `TaskHandle` lifecycle API.
+- PostgreSQL Task clients now turn missing or incomplete Task schemas into an
+  actionable `RHINOQ_TASK_SCHEMA_MISSING` error that points to `npx rhinoq-task`.
+
 ## 0.1.0-beta.21
 
 - Remediated fan-out contention on the PostgreSQL Task path (migrations 015–017, backward-compatible): the per-item effect claim now takes a narrow advisory lock instead of locking the parent Task row across the business callback; execution-count triggers moved to statement level; execution writes return the new version instead of the full snapshot; and committed Task changes announce over `pg_notify` with a per-process `LISTEN` hub so realtime stops polling per connection.
