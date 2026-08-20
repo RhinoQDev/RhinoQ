@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en" data-theme="dark" data-density="compact">
+<html lang="en" data-theme="light" data-density="compact">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light">
   <meta name="description" content="RhinoQ Workbench — a local developer interface for background work and business integrity evidence.">
-  <title>RhinoQ Workbench — Evidence Ledger</title>
+  <title>RhinoQ Workbench — Operations</title>
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
 </head>
@@ -17,7 +17,7 @@
         <span class="brand-mark" aria-hidden="true"><span></span></span>
         <span class="brand-copy">
           <strong>RHINOQ</strong>
-          <span>EVIDENCE LEDGER</span>
+          <span>WORKBENCH</span>
         </span>
       </a>
       <div class="topbar-divider" aria-hidden="true"></div>
@@ -37,11 +37,11 @@
 
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-scroll">
-        <p class="sidebar-label">Evidence map</p>
+        <p class="sidebar-label">Workspace</p>
         <nav class="primary-nav" aria-label="Workbench views">
           <button class="nav-item is-active" type="button" data-view="jobs">
             <span class="nav-symbol nav-symbol-jobs" aria-hidden="true"></span>
-            <span>Execution worktable</span>
+            <span>Tasks</span>
             <span class="nav-count" id="jobs-count">—</span>
           </button>
           <button class="nav-item" type="button" data-view="attention">
@@ -51,7 +51,7 @@
           </button>
           <button class="nav-item" type="button" data-view="findings">
             <span class="nav-symbol nav-symbol-findings" aria-hidden="true"></span>
-            <span>Integrity findings</span>
+            <span>Findings</span>
             <span class="nav-count" id="findings-count">—</span>
           </button>
           <button class="nav-item" type="button" data-view="rules">
@@ -68,8 +68,11 @@
 
         <div class="sidebar-section">
           <div class="sidebar-section-title">
-            <p class="sidebar-label">Queues in view</p>
-            <button class="plain-icon-button" id="clear-queue" type="button" title="Clear queue filter" aria-label="Clear queue filter">×</button>
+            <div>
+              <p class="sidebar-label">Queues</p>
+              <span class="sidebar-helper">Filter the Tasks table</span>
+            </div>
+            <button class="queue-reset" id="clear-queue" type="button" hidden>Reset</button>
           </div>
           <div class="queue-list" id="queue-list">
             <div class="queue-skeleton"></div>
@@ -79,28 +82,14 @@
         </div>
       </div>
 
-      <div class="sidebar-footer">
-        <div class="safety-note">
-          <span class="lock-mark" aria-hidden="true"></span>
-          <div>
-            <strong>Read-only session</strong>
-            <span>No payload export or silent replay</span>
-          </div>
-        </div>
-        <div class="estimate-note">
-          <span>Drain estimate</span>
-          <strong>Unavailable</strong>
-          <small>Mixed durations · no false precision</small>
-        </div>
-      </div>
     </aside>
 
     <main class="main-content">
       <section class="page-heading">
         <div>
-          <p class="eyebrow" id="view-eyebrow">EVIDENCE / EXECUTION</p>
-          <h1 id="view-title">Execution worktable</h1>
-          <p id="view-description">Trace queued work from durable commit to business evidence.</p>
+          <p class="eyebrow" id="view-eyebrow">OPERATIONS / TASKS</p>
+          <h1 id="view-title">Tasks</h1>
+          <p id="view-description">Monitor background work, investigate failures, and verify outcomes.</p>
         </div>
         <div class="heading-actions">
           <span class="connection-state"><span class="connection-dot"></span><span id="connection-label">Local connection</span></span>
@@ -133,7 +122,7 @@
         <button class="flow-step" type="button" data-stage="recover">
           <span class="flow-index">04</span>
           <span class="flow-copy"><strong>RECOVER</strong><small>Human decision</small></span>
-          <span class="flow-value attention-value" id="flow-recover">—</span>
+          <span class="flow-value" id="flow-recover">—</span>
         </button>
       </section>
 
@@ -151,6 +140,17 @@
             <button class="filter-chip" type="button" data-state="attention">Attention</button>
           </div>
           <div class="toolbar-spacer"></div>
+          <div class="toolbar-menu-wrap">
+            <button class="toolbar-button" id="views-button" type="button" aria-expanded="false">
+              Views <span aria-hidden="true">⌄</span>
+            </button>
+            <div class="toolbar-menu views-menu" id="views-menu" hidden>
+              <button type="button" id="save-view-button"><span>Save current view</span><small>Keep this lens for later</small></button>
+              <button type="button" id="copy-view-button"><span>Copy share link</span><small>Share queue, filters and search</small></button>
+              <p class="menu-subheading">Saved views</p>
+              <div id="saved-view-list"><small>No saved views yet</small></div>
+            </div>
+          </div>
           <div class="toolbar-menu-wrap">
             <button class="toolbar-button" id="density-button" type="button" aria-expanded="false">
               Density <span aria-hidden="true">⌄</span>
@@ -172,6 +172,14 @@
               <label><input type="checkbox" data-column-toggle="priority" checked> Priority</label>
               <label><input type="checkbox" data-column-toggle="created" checked> Created</label>
             </div>
+          </div>
+        </div>
+
+        <div class="bulk-toolbar" id="bulk-toolbar" hidden>
+          <div class="bulk-selection"><span class="selection-check" aria-hidden="true">✓</span><strong id="bulk-selection-count">0 selected</strong><span>Safe actions require a preview.</span></div>
+          <div class="bulk-toolbar-actions">
+            <button class="secondary-button" id="clear-selection-button" type="button">Clear</button>
+            <button class="primary-button" id="bulk-preview-button" type="button">Preview recheck</button>
           </div>
         </div>
 
@@ -207,6 +215,9 @@
     </main>
 
     <aside class="evidence-rail" id="evidence-rail" aria-label="Selected job evidence">
+      <div class="rail-resizer" id="rail-resizer" role="separator" tabindex="0"
+        aria-label="Resize detail panel" aria-orientation="vertical"
+        aria-valuemin="360" aria-valuemax="720" aria-valuenow="396"></div>
       <div class="rail-empty" id="rail-empty">
         <span class="rail-horn" aria-hidden="true"></span>
         <p class="eyebrow">EVIDENCE RAIL</p>
@@ -255,12 +266,25 @@
             <dl class="detail-grid" id="job-context"></dl>
           </section>
 
+          <section class="rail-section progress-panel" data-rail-mode="job">
+            <div class="rail-section-heading">
+              <div><h3>Task progress</h3><small class="section-kicker">Worker-reported progress</small></div>
+              <span id="progress-updated">—</span>
+            </div>
+            <div id="progress-content"></div>
+          </section>
+
           <section class="rail-section" data-rail-mode="job">
             <div class="rail-section-heading">
-              <h3>Execution timeline</h3>
-              <span id="attempt-total">0 events</span>
+              <div><h3>Incident Flight Recorder</h3><small class="section-kicker">Technical facts connected to business evidence</small></div>
+              <span id="flight-total">0 events</span>
             </div>
-            <ol class="timeline" id="attempt-timeline"></ol>
+            <ol class="timeline flight-timeline" id="flight-timeline"></ol>
+            <details class="attempt-diff" id="attempt-diff-panel">
+              <summary>Compare attempts</summary>
+              <div class="attempt-diff-controls"><label>From <select id="attempt-from"></select></label><label>To <select id="attempt-to"></select></label></div>
+              <div id="attempt-diff-content" class="diff-grid"></div>
+            </details>
           </section>
 
           <section class="rail-section" data-rail-mode="job">
@@ -314,5 +338,13 @@
   </dialog>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog class="bulk-dialog" id="bulk-dialog">
+    <form method="dialog" class="bulk-dialog-card">
+      <header><div><p class="eyebrow">SAFE BULK ACTION</p><h2>Review recheck scope</h2><p>RhinoQ groups work by evidence before any action is approved.</p></div><button class="icon-button" value="cancel" aria-label="Close bulk preview">×</button></header>
+      <div id="bulk-dialog-content"></div>
+      <footer class="dialog-actions"><button class="secondary-button" value="cancel">Cancel</button><button class="secondary-button" id="bulk-approve-button" type="button" disabled>Request approval</button><button class="primary-button" id="bulk-execute-button" type="button" disabled>Execute + verify</button></footer>
+    </form>
+  </dialog>
 </body>
 </html>

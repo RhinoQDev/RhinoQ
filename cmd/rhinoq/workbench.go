@@ -59,6 +59,9 @@ func runWorkbench(
 	)
 	if *demo {
 		reader = workbench.NewDemoReader()
+		if *actions {
+			operator = workbench.NewDemoOperator()
+		}
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -276,6 +279,26 @@ type liveWorkbenchReader struct {
 	source string
 }
 
+func (r *liveWorkbenchReader) TestRule(ctx context.Context, ruleID, subjectID string) (workbench.RuleTestResult, error) {
+	evaluation, err := r.client.EvaluateRule(ctx, ruleID, subjectID, "")
+	if err != nil {
+		return workbench.RuleTestResult{}, err
+	}
+	result := workbench.RuleTestResult{
+		RuleID: ruleID, SubjectID: subjectID, Status: "pass",
+		Reason: "No bounded observation contradicted this Rule.", EvaluatedAt: time.Now().UTC(),
+	}
+	for _, observation := range evaluation.Observations {
+		if observation.SubjectID == subjectID && observation.Status != "pass" {
+			result.Status = "finding"
+			result.Reason = observation.Reason
+			result.Samples = []string{observation.Reason}
+			break
+		}
+	}
+	return result, nil
+}
+
 func (r *liveWorkbenchReader) ListRecurringSchedules(ctx context.Context, tenantID string, limit int) ([]workbench.RecurringSchedule, error) {
 	records, err := r.client.ListRecurringTasks(ctx, tenantID, limit)
 	if err != nil {
@@ -381,8 +404,21 @@ func (r *liveWorkbenchReader) JobDetail(
 	if err != nil {
 		return workbench.JobDetail{}, err
 	}
+	public := publicJob(job)
+	// Job and Task are separate public records, so progress is joined only by
+	// the exact selected id. A missing Task summary is a legitimate “no data”
+	// result; it is never inferred from queue state or attempt count.
+	if taskSummary, progressErr := r.client.GetTaskSummary(ctx, id); progressErr == nil {
+		public.Progress = workbench.Progress{
+			Completed: taskSummary.Progress.Completed,
+			Total:     taskSummary.Progress.Total,
+			Message:   taskSummary.Progress.Message,
+			UpdatedAt: taskSummary.UpdatedAt,
+			HasData:   taskSummary.Progress.Total != nil || taskSummary.Progress.Completed > 0 || taskSummary.Progress.Message != "",
+		}
+	}
 	return workbench.JobDetail{
-		Job: publicJob(job), Attempts: publicAttempts(attempts),
+		Job: public, Attempts: publicAttempts(attempts),
 		Effects: publicEffects(effects), Outcomes: publicOutcomes(outcomes),
 		Audit: publicAudit(audit),
 		Notices: []string{

@@ -28,6 +28,22 @@ type Reader interface {
 	SubjectDetail(context.Context, SubjectRef) (SubjectDetail, error)
 }
 
+// RuleTester is an optional Application-backed, read-only rule evaluation
+// capability. The Workbench never accepts SQL from the browser; an
+// implementation evaluates a registered Rule through the application facade.
+type RuleTester interface {
+	TestRule(context.Context, string, string) (RuleTestResult, error)
+}
+
+// BulkOperator is optional because a read-only Workbench must still be useful
+// without mutation callbacks. Preview is safe to expose only after the
+// bounded Reader classification; approval/execution remain application-owned.
+type BulkOperator interface {
+	PreviewBulk(context.Context, BulkActionRequest) (BulkPlan, error)
+	ApproveBulk(context.Context, string, string, string) (BulkPlan, error)
+	ExecuteBulk(context.Context, string) (BulkPlan, error)
+}
+
 // RecurringReader is optional so existing read-only Workbench compositions
 // remain compatible while recurring visibility is wired deliberately.
 type RecurringReader interface {
@@ -64,6 +80,42 @@ type RecurringOperator interface {
 type ActionResult struct {
 	Status string `json:"status"`
 	Detail string `json:"detail"`
+}
+
+type BulkActionRequest struct {
+	JobIDs []string `json:"jobIds"`
+	Action string   `json:"action"`
+	Actor  string   `json:"actor,omitempty"`
+}
+
+type BulkClassification struct {
+	JobID  string `json:"jobId"`
+	Reason string `json:"reason"`
+}
+
+type BulkPlan struct {
+	ID         string               `json:"id"`
+	Action     string               `json:"action"`
+	State      string               `json:"state"`
+	Total      int                  `json:"total"`
+	Safe       []BulkClassification `json:"safe"`
+	Uncertain  []BulkClassification `json:"uncertain"`
+	Blocked    []BulkClassification `json:"blocked"`
+	ProposedBy string               `json:"proposedBy,omitempty"`
+	ApprovedBy string               `json:"approvedBy,omitempty"`
+	Reason     string               `json:"reason,omitempty"`
+	Outcome    string               `json:"outcome,omitempty"`
+	Version    int64                `json:"version"`
+}
+
+type RuleTestResult struct {
+	RuleID      string    `json:"ruleId"`
+	SubjectID   string    `json:"subjectId"`
+	RuleVersion int       `json:"ruleVersion"`
+	Status      string    `json:"status"`
+	Reason      string    `json:"reason"`
+	Samples     []string  `json:"samples,omitempty"`
+	EvaluatedAt time.Time `json:"evaluatedAt"`
 }
 
 type RepairProposal struct {
@@ -185,18 +237,27 @@ type Source struct {
 }
 
 type Snapshot struct {
-	Product     string           `json:"product"`
-	Version     string           `json:"version"`
-	GeneratedAt time.Time        `json:"generatedAt"`
-	Source      Source           `json:"source"`
-	Counts      map[string]int64 `json:"counts"`
-	Jobs        []Job            `json:"jobs"`
-	Attention   []AttentionItem  `json:"attention"`
-	Findings    []Finding        `json:"findings"`
-	Rules       []Rule           `json:"rules"`
-	Queues      []string         `json:"queues"`
-	Limits      map[string]int   `json:"limits"`
-	Notices     []string         `json:"notices,omitempty"`
+	Product      string           `json:"product"`
+	Version      string           `json:"version"`
+	GeneratedAt  time.Time        `json:"generatedAt"`
+	Source       Source           `json:"source"`
+	Counts       map[string]int64 `json:"counts"`
+	Jobs         []Job            `json:"jobs"`
+	Attention    []AttentionItem  `json:"attention"`
+	Findings     []Finding        `json:"findings"`
+	Rules        []Rule           `json:"rules"`
+	Queues       []string         `json:"queues"`
+	Limits       map[string]int   `json:"limits"`
+	Notices      []string         `json:"notices,omitempty"`
+	Capabilities Capabilities     `json:"capabilities"`
+}
+
+type Capabilities struct {
+	Realtime     bool `json:"realtime"`
+	BulkPreview  bool `json:"bulkPreview"`
+	BulkActions  bool `json:"bulkActions"`
+	RuleTest     bool `json:"ruleTest"`
+	TaskProgress bool `json:"taskProgress"`
 }
 
 type Job struct {
@@ -215,6 +276,17 @@ type Job struct {
 	CreatedAt       time.Time `json:"createdAt"`
 	NotBefore       time.Time `json:"notBefore"`
 	CancelRequested bool      `json:"cancelRequested"`
+	Progress        Progress  `json:"progress"`
+}
+
+// Progress is deliberately explicit about data availability. A zero-value
+// progress record means “not available”, not 0/0 and never an estimated ETA.
+type Progress struct {
+	Completed int64     `json:"completed"`
+	Total     *int64    `json:"total,omitempty"`
+	Message   string    `json:"message,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+	HasData   bool      `json:"hasData"`
 }
 
 type AttentionItem struct {
@@ -249,15 +321,37 @@ type Rule struct {
 	Status      string        `json:"status"`
 	Every       time.Duration `json:"every"`
 	UpdatedAt   time.Time     `json:"updatedAt"`
+	Versions    []RuleVersion `json:"versions,omitempty"`
+}
+
+type RuleVersion struct {
+	Version   int       `json:"version"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Note      string    `json:"note,omitempty"`
 }
 
 type JobDetail struct {
-	Job      Job       `json:"job"`
-	Attempts []Attempt `json:"attempts"`
-	Effects  []Effect  `json:"effects"`
-	Outcomes []Outcome `json:"outcomes"`
-	Audit    []Audit   `json:"audit"`
-	Notices  []string  `json:"notices,omitempty"`
+	Job      Job           `json:"job"`
+	Attempts []Attempt     `json:"attempts"`
+	Effects  []Effect      `json:"effects"`
+	Outcomes []Outcome     `json:"outcomes"`
+	Audit    []Audit       `json:"audit"`
+	Flight   []FlightEvent `json:"flight,omitempty"`
+	Notices  []string      `json:"notices,omitempty"`
+}
+
+type FlightEvent struct {
+	ID         string    `json:"id"`
+	Kind       string    `json:"kind"`
+	Title      string    `json:"title"`
+	Detail     string    `json:"detail,omitempty"`
+	Status     string    `json:"status,omitempty"`
+	OccurredAt time.Time `json:"occurredAt"`
+	EndedAt    time.Time `json:"endedAt,omitempty"`
+	Attempt    int       `json:"attempt,omitempty"`
+	Actor      string    `json:"actor,omitempty"`
+	Reference  string    `json:"reference,omitempty"`
 }
 
 type Attempt struct {

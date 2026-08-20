@@ -12,9 +12,8 @@ realtime SSE with polling fallback, embeddable React components, a user Task
 Center and an operator Workbench around your business handler.
 
 Task Center and Workbench keep the same lightweight, self-contained product
-surface while using clearly separated panels, high-contrast typography and a
-responsive blue/graphite console theme that follows the operating-system light
-or dark preference.
+surface while using clearly separated panels, restrained semantic color and a
+neutral operator-focused visual hierarchy.
 
 [![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
 [![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
@@ -28,6 +27,20 @@ or dark preference.
 > RhinoQ is a public beta for evaluation and controlled pilots. It does not
 > claim a production SLA. Start with the [production status](./docs/production-readiness.md)
 > before deploying real workloads.
+
+![RhinoQ Workbench showing Tasks, execution stages, and evidence detail](./marketing/rhinoq-workbench-quiet-operations.png)
+
+The operator Workbench keeps Tasks, execution state and business evidence in
+one inspectable view. The end-user Task Center is a separate, lower-density
+surface for progress, results and safe actions.
+
+The Workbench also exposes the operator investigation loop: bounded worker
+progress when the source provides it, an Incident Flight Recorder that joins
+queue/attempt/effect/outcome/decision facts, Rule test previews against one
+subject, and Safe Bulk Actions grouped as Safe / Uncertain / Blocked before a
+separate approval. Queue, stage, state and search lenses can be saved locally
+or shared as a URL; live snapshot updates use SSE with a polling fallback. A
+missing progress record is shown as unavailable, never as a guessed ETA.
 
 The Go Agent remains one-tenant-per-process. Set `RHINOQ_TENANT_ID` and
 `RHINOQ_AGENT_ROLE`; owner Task
@@ -1491,6 +1504,13 @@ unknown callback result becomes `uncertain`.
 
 See [Safe repair](./docs/safe-repair.md) and [Workbench](./docs/workbench.md).
 
+Workbench Safe Bulk Actions follow the same boundary: select a bounded set,
+preview the evidence grouping, approve with a different operator, execute only
+registered safe handlers and post-verify. Unknown or blocked effects remain
+untouched. `rhinoq workbench --demo --actions` provides a disposable in-memory
+walkthrough of this flow; live deployments must supply an Application-owned
+`BulkOperator`.
+
 The Node SDK also exposes `GuardedRecovery` for application/operator clients.
 It derives a deterministic repair identity from an idempotency key, refuses to
 execute without a preview and separate approval, and requires a post-check;
@@ -1619,6 +1639,8 @@ exists but is not the default browser polling shape.
 | `uncertain` Task state linked to provider uncertainty | implemented |
 | HTTP, Stripe and provisioning/storage reference adapters | implemented in Node SDK; HTTP transport and fail-closed tests included |
 | Rules, Findings and Evidence Workbench | implemented |
+| Workbench progress, Flight Recorder, Rule test preview, saved views and SSE fallback | implemented; bounded Reader/Application capabilities |
+| Workbench Safe Bulk Actions | implemented; preview is bounded read, approval/execute require an application BulkOperator |
 | Recheck and guarded repair workflow | implemented; callback registration is application-owned |
 | Summary polling and cursor-paginated Executions | implemented |
 | Explicit At risk/Stuck policy and owner-scoped view | implemented in Node Task profile |

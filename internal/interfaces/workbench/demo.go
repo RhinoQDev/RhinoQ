@@ -3,9 +3,13 @@ package workbench
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+func int64Ptr(value int64) *int64 { return &value }
 
 type demoReader struct {
 	now     func() time.Time
@@ -21,6 +25,91 @@ func NewDemoReader() Reader {
 		jobs:    jobs,
 		details: demoDetails(now, jobs),
 	}
+}
+
+// DemoRuleTester exercises the exact same read-only Rule Console contract as
+// a live Application-backed tester. It is intentionally deterministic and
+// bounded so the demo never evaluates arbitrary SQL or contacts a provider.
+func (d *demoReader) TestRule(_ context.Context, ruleID, subjectID string) (RuleTestResult, error) {
+	now := d.now()
+	for _, rule := range demoRules(now) {
+		if rule.ID != ruleID {
+			continue
+		}
+		result := RuleTestResult{
+			RuleID: rule.ID, SubjectID: subjectID, RuleVersion: rule.Version,
+			Status: "pass", Reason: "No bounded evidence contradicts this Rule for the subject.",
+			EvaluatedAt: now,
+			Samples:     []string{"subject_id=" + subjectID, "rule_version=" + strconv.Itoa(rule.Version)},
+		}
+		for _, finding := range demoFindings(now) {
+			if finding.RuleID == ruleID && finding.SubjectID == subjectID {
+				result.Status = "finding"
+				result.Reason = finding.LatestEvidence
+				result.Samples = []string{finding.LatestEvidence}
+				break
+			}
+		}
+		return result, nil
+	}
+	return RuleTestResult{}, ErrNotFound
+}
+
+// NewDemoOperator exposes a safe, in-memory version of the guarded action
+// contract so the full Workbench workflow can be inspected without a database
+// or external provider. It never mutates demo jobs or calls the network.
+func NewDemoOperator() Operator { return &demoOperator{plans: map[string]BulkPlan{}} }
+
+type demoOperator struct {
+	mu    sync.Mutex
+	plans map[string]BulkPlan
+}
+
+func (o *demoOperator) Recheck(_ context.Context, subject SubjectRef, ruleID string) (ActionResult, error) {
+	return ActionResult{Status: "drift", Detail: "Demo recheck evaluated " + ruleID + " for " + subject.Type + "/" + subject.ID}, nil
+}
+func (o *demoOperator) ProposeRepair(_ context.Context, request RepairProposal) (RepairPlan, error) {
+	return RepairPlan{ID: "repair_demo_01", State: "proposed", Handler: request.Handler, ProposedBy: request.Actor, Version: 1}, nil
+}
+func (o *demoOperator) PreviewRepair(_ context.Context, id string) (RepairPlan, error) {
+	return RepairPlan{ID: id, State: "previewed", Handler: "registered-demo-handler", Preview: "Would reconcile the bounded subject record", Precondition: "provider read-back is confirmed", DryRun: true, Version: 2}, nil
+}
+func (o *demoOperator) ApproveRepair(_ context.Context, id, actor, reason string) (RepairPlan, error) {
+	return RepairPlan{ID: id, State: "approved", ApprovedBy: actor, ApprovalReason: reason, Version: 3}, nil
+}
+func (o *demoOperator) ExecuteRepair(_ context.Context, id string) (RepairPlan, error) {
+	return RepairPlan{ID: id, State: "succeeded", Outcome: "Demo post-check passed; no external provider was called", Version: 4}, nil
+}
+func (o *demoOperator) PreviewBulk(_ context.Context, request BulkActionRequest) (BulkPlan, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	plan := BulkPlan{ID: "bulk_demo_01", Action: request.Action, State: "previewed", ProposedBy: request.Actor, Version: 1}
+	for _, id := range request.JobIDs {
+		plan.Total++
+		if strings.Contains(id, "PROVISION") || strings.Contains(id, "EXPORT") {
+			plan.Uncertain = append(plan.Uncertain, BulkClassification{JobID: id, Reason: "demo effect confirmation is incomplete"})
+		} else {
+			plan.Safe = append(plan.Safe, BulkClassification{JobID: id, Reason: "demo evidence has no unresolved effect"})
+		}
+	}
+	o.plans[plan.ID] = plan
+	return plan, nil
+}
+func (o *demoOperator) ApproveBulk(_ context.Context, id, actor, reason string) (BulkPlan, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	plan := o.plans[id]
+	plan.State, plan.ApprovedBy, plan.Reason, plan.Version = "approved", actor, reason, plan.Version+1
+	o.plans[id] = plan
+	return plan, nil
+}
+func (o *demoOperator) ExecuteBulk(_ context.Context, id string) (BulkPlan, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	plan := o.plans[id]
+	plan.State, plan.Outcome, plan.Version = "verified", "Demo post-check passed for every safe item; uncertain items stayed blocked", plan.Version+1
+	o.plans[id] = plan
+	return plan, nil
 }
 
 func (d *demoReader) Snapshot(_ context.Context, query Query) (Snapshot, error) {
@@ -96,6 +185,7 @@ func demoJobs(now time.Time) []Job {
 			ResourceClass: "standard", Stage: "run", Priority: 8, Attempts: 2,
 			CorrelationID: "asset_41H9", CreatedAt: now.Add(-7 * time.Minute),
 			NotBefore: now.Add(-6 * time.Minute),
+			Progress:  Progress{Completed: 43, Total: int64Ptr(100), Message: "Processing media item 43", UpdatedAt: now.Add(-12 * time.Second), HasData: true},
 		},
 		{
 			ID: "job_01J0SYNC9M4CV", QueueName: "catalog", JobName: "sync-catalog",
@@ -118,6 +208,7 @@ func demoJobs(now time.Time) []Job {
 			ResourceClass: "standard", Stage: "run", Priority: 5,
 			CorrelationID: "asset_8D2A", CreatedAt: now.Add(-74 * time.Second),
 			NotBefore: now.Add(4 * time.Minute),
+			Progress:  Progress{Completed: 18, Total: int64Ptr(60), Message: "Preparing thumbnail batch", UpdatedAt: now.Add(-8 * time.Second), HasData: true},
 		},
 		{
 			ID: "job_01J0EXPORT6AZ", QueueName: "reports", JobName: "export-dataset",
@@ -125,6 +216,7 @@ func demoJobs(now time.Time) []Job {
 			ResourceClass: "batch", Stage: "recover", Priority: -12, Attempts: 4,
 			CorrelationID: "export_K19F", CreatedAt: now.Add(-2 * time.Hour),
 			NotBefore: now.Add(-94 * time.Minute),
+			Progress:  Progress{Completed: 72, Total: int64Ptr(100), Message: "Export stopped after provider confirmation gap", UpdatedAt: now.Add(-89 * time.Minute), HasData: true},
 		},
 		{
 			ID: "job_01J0EMAIL0FJQ", QueueName: "notifications", JobName: "send-notification",
@@ -254,17 +346,20 @@ func demoRules(now time.Time) []Rule {
 			ID: "ready-report-has-output", Name: "Ready reports have an output object",
 			Scope: "table", SubjectType: "report", Version: 2, Status: "enabled",
 			Every: 10 * time.Minute, UpdatedAt: now.Add(-2 * time.Hour),
+			Versions: []RuleVersion{{Version: 1, Status: "retired", UpdatedAt: now.Add(-9 * time.Hour), Note: "Initial contract"}, {Version: 2, Status: "enabled", UpdatedAt: now.Add(-2 * time.Hour), Note: "Requires READY plus output object"}},
 		},
 		{
 			ID: "media-has-all-renditions", Name: "Media has every declared rendition",
 			Scope: "table", SubjectType: "asset", Version: 1, Status: "enabled",
 			Every: 5 * time.Minute, UpdatedAt: now.Add(-5 * time.Hour),
+			Versions: []RuleVersion{{Version: 1, Status: "enabled", UpdatedAt: now.Add(-5 * time.Hour), Note: "All renditions must be present"}},
 		},
 		{
 			ID: "provisioning-reaches-active", Name: "Provisioning reaches active state",
 			Scope: "job", SubjectType: "account", JobName: "provision-account",
 			Version: 3, Status: "draft", Every: 15 * time.Minute,
 			UpdatedAt: now.Add(-38 * time.Minute),
+			Versions:  []RuleVersion{{Version: 1, Status: "draft", UpdatedAt: now.Add(-38 * time.Minute), Note: "Draft for provisioning verification"}, {Version: 2, Status: "draft", UpdatedAt: now.Add(-20 * time.Minute), Note: "Adds ACTIVE transition"}, {Version: 3, Status: "draft", UpdatedAt: now.Add(-8 * time.Minute), Note: "Pending application review"}},
 		},
 	}
 }

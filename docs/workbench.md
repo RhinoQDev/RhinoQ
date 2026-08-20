@@ -60,14 +60,45 @@ controls are deliberately absent.
 - **Flow Lens:** COMMIT, RUN, VERIFY and RECOVER stay visible as separate
   stages instead of collapsing everything into “success” or “failure”.
 - **Evidence Rail:** selecting a job shows append-only attempt events, declared
-  effects, outcome observations and decision audit next to the row.
+  effects, outcome observations and decision audit next to the row. On desktop,
+  its divider can be dragged or adjusted with the arrow keys to fit long
+  identifiers and evidence.
+- **Task progress:** a selected job can show worker-reported `completed/total`
+  progress and the latest message. When the source does not provide a bounded
+  total, the rail says that progress is unavailable; it never fabricates an
+  ETA or turns a missing value into `0/0`.
+- **Incident Flight Recorder:** queue commit, attempt transitions, external
+  effects, outcome verification and operator decisions are rendered as one
+  ordered narrative. When two attempts exist, the rail also exposes a bounded
+  before/after diff.
 - **Needs Attention:** execution failures, uncertain effects, outcome
   mismatches and persistent Findings share one bounded inbox.
 - **Integrity views:** Findings and Rules are available without switching to a
-  different product.
+  different product. Selecting a Rule opens a read-only detail panel with its
+  scope, subject, schedule, version history and related Findings from the
+  bounded snapshot. A registered Application Rule tester can run a bounded
+  subject preview; the browser never submits SQL.
+- **Safe bulk actions:** select a bounded set of Tasks, preview its Safe /
+  Uncertain / Blocked grouping, then request a separate approval and execute
+  only the safe set through an Application-owned BulkOperator. Uncertain and
+  blocked work remains untouched and the post-check result is recorded.
+- **Realtime and saved views:** the Workbench emits bounded SSE snapshots with
+  reconnect/polling fallback. Queue, stage, state and search filters can be
+  saved locally or copied as a shareable URL.
 - **Developer ergonomics:** search, queue/state/stage lenses, configurable
-  columns, compact/comfortable density, light/dark themes, `J`/`K` navigation,
-  `/` search and `Ctrl/Cmd+K` commands.
+  columns, compact/comfortable density, `J`/`K` navigation, `/` search and
+  `Ctrl/Cmd+K` commands.
+- **Focused navigation:** session safety remains visible beside the connection
+  status; the sidebar contains only navigation and queue filters, without
+  unavailable estimates or non-actionable status panels.
+- **Explicit queue scope:** the sidebar exposes an `All queues` choice, visible
+  per-queue counts and a Reset action only while a queue filter is active.
+- **Container-aware layout:** the lifecycle summary reflows from four columns
+  to two columns and then one based on the actual workspace width, including
+  when the evidence rail consumes part of a desktop window.
+- **Legible narrow tables:** when the evidence rail narrows the workspace, the
+  worktable keeps minimum operational column widths and scrolls internally;
+  state and stage badges are never compressed into clipped labels.
 
 The defining visual contract is:
 
@@ -78,28 +109,45 @@ request accepted  ≠  effect confirmed  ≠  outcome achieved
 It is visible in the Evidence Rail because it is also a correctness boundary in
 the engine.
 
-## Visual language: Obsidian Ledger
+The COMMIT, RUN, VERIFY and RECOVER summary is a stage filter over the bounded
+Workbench snapshot, not an individual Task progress bar. It uses one neutral
+interaction color so RECOVER is not mistaken for warning severity. A Workbench
+Reader may additionally supply bounded `completed/total` progress; when it
+does not, the rail explicitly says that progress is unavailable and never
+invents an ETA.
 
-The default dark theme is intentionally not a generic â€œneon queue dashboardâ€.
-It uses a low-glare obsidian surface, warm mineral brass only for the active
-lens and counts, and verdigris only for confirmed evidence. The **Proof Path**
-is a single horizontal line through COMMIT, RUN, VERIFY and RECOVER; it gives
-RhinoQ a recognizable navigation motif without adding a card for every number.
+## Visual language: Quiet Operations
 
-Typography separates reading modes: an editorial serif for the question being
-investigated, a technical mono face for state/IDs, and a restrained UI face for
-controls. The result is dense enough for operators but leaves the hierarchy
-clear at a glance. This is presentation only: theme does not change state,
-permissions or evidence semantics.
+The Workbench uses a neutral daylight surface and one restrained navy
+interaction color. Amber, red and green are reserved for real state, so color
+continues to carry operational meaning instead of decoration. The **Proof
+Path** is a single quiet line through COMMIT, RUN, VERIFY and RECOVER; it keeps
+the lifecycle visible without turning every number into a dashboard card.
+
+Typography uses the Windows-native Segoe UI Variable face for navigation,
+metadata, states and identifiers. Weight, color and tabular numerals provide
+hierarchy without switching ordinary interface copy into a diagnostic-looking
+mono face. The result is dense enough for operators while remaining easy to
+scan. This is presentation only: theme does not change state, permissions or
+evidence semantics.
+
+Detail sections use an 18 px bold heading, 14 px values, 14 px empty-state
+explanations and 12–13 px timeline context at the default browser zoom.
+Evidence is treated as primary reading content rather than compressed
+dashboard decoration.
 
 ## Safety and privacy
 
-Workbench is read-only by default. `--actions` explicitly enables only subject
-recheck and the registered safe-repair workflow:
+Workbench is read-only by default. `--actions` explicitly enables subject
+recheck, the registered safe-repair workflow and (when a `BulkOperator` is
+provided) Safe Bulk Actions:
 
 - it exposes no replay, pause, arbitrary SQL or unregistered mutation;
 - repair requires proposal, dry-run, different approver, reason, fresh
   precondition, application callback and automatic verification;
+- bulk actions require Safe / Uncertain / Blocked preview, a separate approver,
+  registered handlers and a post-check; uncertain or blocked items are never
+  executed;
 - list and evidence reads are bounded;
 - job payloads are not part of the Workbench DTOs;
 - database credentials are never sent to the browser or printed in the source
@@ -186,6 +234,8 @@ Implemented now:
 - keyboard, theme, density and column preferences;
 - security headers and payload-free read models;
 - a business-subject investigation view.
+- bounded SSE updates with polling fallback, saved/shareable views, Incident
+  Flight Recorder spans, Rule test previews and Safe Bulk preview.
 
 ## Subject investigation
 
@@ -200,6 +250,10 @@ into a single time-ordered narrative:
 - observations RhinoQ made and decisions people took, told apart by whether an
   actor is recorded.
 
+The subject history uses a dedicated responsive timeline: event type, event
+copy and timestamp keep explicit columns on a wide rail, while timestamps move
+below the event copy on a narrow rail instead of overlapping it.
+
 `GET /api/v1/subjects/{type}/{id}` serves it. Type and id are separate path
 segments because a subject id may itself contain a slash.
 
@@ -210,11 +264,14 @@ more than RhinoQ knows.
 Not implemented:
 
 - tenant-aware remote hosting or authentication;
-- streaming updates and large-history virtualization;
+- large-history virtualization;
 - arbitrary SQL, unregistered mutations or automatic repair.
 
-Recheck and guarded business repair are implemented only when `--actions` is
-supplied. Repair still runs through an allowlisted application callback with a
-preview, fresh precondition, different approver, reason, idempotency token and
-post-apply verification. Those boundaries are explicit: Workbench makes
-current evidence actionable without pretending to be a hosted control plane.
+Recheck, guarded business repair and Safe Bulk Actions are implemented only
+when `--actions` is supplied and the composition provides the corresponding
+Application callbacks. Repair still runs through an allowlisted application
+callback with a preview, fresh precondition, different approver, reason,
+idempotency token and post-apply verification. Bulk preview remains available
+as a bounded read when mutation callbacks are absent. Those boundaries are
+explicit: Workbench makes current evidence actionable without pretending to be
+a hosted control plane.

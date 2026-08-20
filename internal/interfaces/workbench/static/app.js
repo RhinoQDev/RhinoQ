@@ -10,7 +10,13 @@ const app = {
   selectedJobId: "",
   selectedSubject: null,
   selectedSubjectDetail: null,
+  selectedRuleId: "",
   repairPlan: null,
+  selectedJobs: new Set(),
+  bulkPlan: null,
+  savedViews: [],
+  realtime: null,
+  realtimeFallback: null,
   selectedIndex: -1,
   visibleRows: [],
   columns: {
@@ -29,9 +35,9 @@ const app = {
 
 const viewDefinitions = {
   jobs: {
-    eyebrow: "EXECUTION",
-    title: "Execution worktable",
-    description: "Trace queued work from durable commit to business evidence.",
+    eyebrow: "OPERATIONS / TASKS",
+    title: "Tasks",
+    description: "Monitor background work, investigate failures, and verify outcomes.",
     placeholder: "Search job, queue, correlation…",
   },
   attention: {
@@ -42,7 +48,7 @@ const viewDefinitions = {
   },
   findings: {
     eyebrow: "VERIFY",
-    title: "Integrity findings",
+    title: "Findings",
     description: "Persistent business invariant drift, grouped by subject and Rule version.",
     placeholder: "Search Rule, subject or evidence…",
   },
@@ -69,7 +75,13 @@ document.addEventListener("DOMContentLoaded", () => {
   configurePlatformKeys();
   app.queue = new URLSearchParams(window.location.search).get("queue") || "";
   app.recurringTenant = new URLSearchParams(window.location.search).get("tenant") || "";
+  const initialParams = new URLSearchParams(window.location.search);
+  app.view = viewDefinitions[initialParams.get("view")] ? initialParams.get("view") : "jobs";
+  app.stateFilter = initialParams.get("state") || "";
+  app.stageFilter = initialParams.get("stage") || "";
+  app.search = initialParams.get("q") || "";
   bindEvents();
+  elements["search-input"].value = app.search;
   renderPalette();
   loadSnapshot({ initial: true });
 });
@@ -83,11 +95,15 @@ function cacheElements() {
     "density-menu", "columns-button", "columns-menu", "active-context",
     "active-context-copy", "clear-context", "table-scroll", "data-table", "table-head",
     "table-body", "table-loading", "table-empty", "table-empty-title", "table-empty-copy", "empty-clear", "row-summary",
-    "generated-at", "evidence-rail", "rail-empty", "rail-content", "rail-queue",
+    "generated-at", "evidence-rail", "rail-resizer", "rail-empty", "rail-content", "rail-queue",
     "rail-title", "rail-close", "rail-id", "copy-job-id", "truth-request",
     "truth-request-copy", "truth-effect", "truth-effect-copy", "truth-outcome",
-    "truth-outcome-copy", "rail-state", "job-context", "attempt-total",
-    "attempt-timeline", "effect-total", "effect-list", "outcome-total", "outcome-list",
+    "truth-outcome-copy", "rail-state", "job-context", "flight-total",
+    "flight-timeline", "attempt-diff-panel", "attempt-from", "attempt-to", "attempt-diff-content",
+    "progress-content", "progress-updated", "bulk-toolbar", "bulk-selection-count", "clear-selection-button", "bulk-preview-button",
+    "views-button", "views-menu", "save-view-button", "copy-view-button", "saved-view-list",
+    "bulk-dialog", "bulk-dialog-content", "bulk-approve-button", "bulk-execute-button",
+    "effect-total", "effect-list", "outcome-total", "outcome-list",
     "audit-section", "audit-total", "audit-list", "rail-subject", "rail-notice",
     "command-trigger",
     "command-palette", "palette-input", "palette-results",
@@ -106,11 +122,10 @@ function configurePlatformKeys() {
 }
 
 function restorePreferences() {
-  // The Workbench is dark-only. A stored preference from an older build must
-  // not be able to put the page back into a theme this stylesheet no longer
-  // defines, which would render it as unstyled black text on white.
+  // A stored preference from an older build must not override the current
+  // daylight operator surface.
   localStorage.removeItem("rhinoq.theme");
-  document.documentElement.dataset.theme = "dark";
+  document.documentElement.dataset.theme = "light";
 
   const density = localStorage.getItem("rhinoq.density") || "compact";
   document.documentElement.dataset.density = density;
@@ -121,9 +136,19 @@ function restorePreferences() {
   } catch (_) {
     // Corrupt local preferences should never block the local inspector.
   }
+  try {
+    app.savedViews = JSON.parse(localStorage.getItem("rhinoq.savedViews") || "[]");
+  } catch (_) {
+    app.savedViews = [];
+  }
   document.querySelectorAll("[data-column-toggle]").forEach((input) => {
     input.checked = app.columns[input.dataset.columnToggle] !== false;
   });
+
+  const storedRailWidth = Number(localStorage.getItem("rhinoq.railWidth"));
+  if (Number.isFinite(storedRailWidth) && storedRailWidth >= 360) {
+    setRailWidth(storedRailWidth);
+  }
 }
 
 function bindEvents() {
@@ -134,6 +159,7 @@ function bindEvents() {
     button.addEventListener("click", () => {
       app.stageFilter = app.stageFilter === button.dataset.stage ? "" : button.dataset.stage;
       app.stateFilter = "";
+      syncURLQuery();
       setView("jobs", { preserveFilters: true });
     });
   });
@@ -141,11 +167,13 @@ function bindEvents() {
     button.addEventListener("click", () => {
       app.stateFilter = button.dataset.state;
       app.stageFilter = "";
+      syncURLQuery();
       renderCurrentView();
     });
   });
   elements["search-input"].addEventListener("input", (event) => {
     app.search = event.target.value.trim().toLocaleLowerCase();
+    syncURLQuery();
     renderCurrentView();
   });
   elements["refresh-button"].addEventListener("click", () => loadSnapshot());
@@ -153,12 +181,24 @@ function bindEvents() {
   elements["clear-context"].addEventListener("click", clearFilters);
   elements["empty-clear"].addEventListener("click", clearFilters);
   elements["table-body"].addEventListener("click", onTableClick);
+  elements["table-body"].addEventListener("change", onTableSelectionChange);
+  elements["clear-selection-button"].addEventListener("click", clearSelection);
+  elements["bulk-preview-button"].addEventListener("click", openBulkPreview);
+  elements["bulk-approve-button"].addEventListener("click", approveBulkPlan);
+  elements["bulk-execute-button"].addEventListener("click", executeBulkPlan);
   elements["rail-close"].addEventListener("click", closeRail);
   elements["rail-subject"].addEventListener("click", onSubjectAction);
+  elements["rail-subject"].addEventListener("submit", onRailFormSubmit);
   elements["copy-job-id"].addEventListener("click", copySelectedJobID);
+  elements["attempt-from"].addEventListener("change", renderAttemptDiff);
+  elements["attempt-to"].addEventListener("change", renderAttemptDiff);
 
   bindMenu(elements["density-button"], elements["density-menu"]);
   bindMenu(elements["columns-button"], elements["columns-menu"]);
+  bindMenu(elements["views-button"], elements["views-menu"]);
+  elements["save-view-button"].addEventListener("click", saveCurrentView);
+  elements["copy-view-button"].addEventListener("click", copyCurrentViewLink);
+  elements["saved-view-list"].addEventListener("click", onSavedViewClick);
   document.querySelectorAll("[data-density-value]").forEach((button) => {
     button.addEventListener("click", () => {
       const density = button.dataset.densityValue;
@@ -182,6 +222,8 @@ function bindEvents() {
 
   elements["mobile-nav-button"].addEventListener("click", openMobileNavigation);
   elements["mobile-scrim"].addEventListener("click", closeMobileLayers);
+  elements["rail-resizer"].addEventListener("pointerdown", beginRailResize);
+  elements["rail-resizer"].addEventListener("keydown", resizeRailWithKeyboard);
   window.addEventListener("resize", syncResponsiveRail);
   document.addEventListener("keydown", onGlobalKeydown);
   document.addEventListener("click", (event) => {
@@ -217,6 +259,8 @@ async function loadSnapshot(options = {}) {
     renderSnapshotChrome();
     renderQueueList();
     renderCurrentView();
+    renderSavedViews();
+    if (options.initial) startRealtime();
     if (options.initial && snapshot.jobs.length && window.innerWidth > 1120) {
       await selectJob(snapshot.jobs[0].id, { silentScroll: true });
     }
@@ -227,6 +271,45 @@ async function loadSnapshot(options = {}) {
     glyph.classList.remove("is-spinning");
     elements["table-loading"].hidden = true;
   }
+}
+
+function startRealtime() {
+  if (!window.EventSource || app.realtime) return;
+  const params = new URLSearchParams({ limit: "150" });
+  if (app.queue) params.set("queue", app.queue);
+  app.realtime = new EventSource(`/api/v1/stream?${params}`);
+  app.realtime.addEventListener("snapshot", (event) => {
+    try {
+      app.snapshot = JSON.parse(event.data);
+      renderSnapshotChrome();
+      renderQueueList();
+      renderCurrentView();
+      elements["connection-label"].textContent = "Live updates";
+    } catch (_) {
+      // Keep the last valid snapshot when a frame cannot be decoded.
+    }
+  });
+  app.realtime.onerror = () => {
+    elements["connection-label"].textContent = "Reconnecting…";
+    if (!app.realtimeFallback) {
+      app.realtimeFallback = window.setInterval(() => loadSnapshot(), 12000);
+    }
+  };
+  app.realtime.onopen = () => {
+    elements["connection-label"].textContent = "Live updates";
+    if (app.realtimeFallback) {
+      window.clearInterval(app.realtimeFallback);
+      app.realtimeFallback = null;
+    }
+  };
+}
+
+function restartRealtime() {
+  if (app.realtime) {
+    app.realtime.close();
+    app.realtime = null;
+  }
+  startRealtime();
 }
 
 async function fetchJSON(path, options = {}) {
@@ -271,7 +354,7 @@ function renderSnapshotChrome() {
 
   elements["source-label"].textContent = snapshot.source.label;
   elements["source-mode"].textContent = snapshot.source.mode.toLocaleUpperCase();
-  elements["connection-label"].textContent = snapshot.source.readOnly ? "Local · read-only" : "Local connection";
+  elements["connection-label"].textContent = snapshot.source.readOnly ? "Read-only" : "Connected";
   elements["jobs-count"].textContent = compactNumber(count);
   elements["attention-count"].textContent = compactNumber(attention) + attentionSuffix;
   elements["findings-count"].textContent = compactNumber(snapshot.findings.length);
@@ -290,13 +373,20 @@ function renderQueueList() {
   snapshot.jobs.forEach((job) => {
     visibleCounts[job.queueName] = (visibleCounts[job.queueName] || 0) + 1;
   });
-  elements["queue-list"].innerHTML = snapshot.queues.map((queue) => `
+  const visibleTotal = Object.values(visibleCounts).reduce((sum, value) => sum + value, 0);
+  elements["clear-queue"].hidden = !app.queue;
+  const allQueues = `<button class="queue-item queue-item-all ${app.queue ? "" : "is-active"}" type="button" data-queue="">
+    <span class="queue-all-mark" aria-hidden="true"></span>
+    <span>All queues</span>
+    <span class="queue-visible-count">${visibleTotal}</span>
+  </button>`;
+  elements["queue-list"].innerHTML = allQueues + snapshot.queues.map((queue) => `
     <button class="queue-item ${queue === app.queue ? "is-active" : ""}" type="button" data-queue="${escapeAttribute(queue)}">
       <span class="queue-dot"></span>
       <span title="${escapeAttribute(queue)}">${escapeHTML(queue)}</span>
       <span class="queue-visible-count">${visibleCounts[queue] || ""}</span>
     </button>
-  `).join("") || `<div class="empty-evidence">No queues are visible in this bounded page.</div>`;
+  `).join("");
   elements["queue-list"].querySelectorAll("[data-queue]").forEach((button) => {
     button.addEventListener("click", async () => {
       app.view = "jobs";
@@ -304,6 +394,7 @@ function renderQueueList() {
       syncURLQuery();
       app.stateFilter = "";
       app.stageFilter = "";
+      restartRealtime();
       document.querySelectorAll("[data-view]").forEach((item) => {
         item.classList.toggle("is-active", item.dataset.view === "jobs");
       });
@@ -324,6 +415,7 @@ function setView(view, options = {}) {
     app.stateFilter = "";
     app.stageFilter = "";
   }
+  syncURLQuery();
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === view);
   });
@@ -389,6 +481,9 @@ function renderCurrentView() {
   }
   elements["row-summary"].textContent = `${rows.length} ${rows.length === 1 ? "row" : "rows"} · bounded local read`;
   renderActiveContext();
+  renderBulkToolbar();
+  const selectAll = document.querySelector("#select-all-jobs");
+  if (selectAll && rows.length) selectAll.checked = rows.every((row) => app.selectedJobs.has(row.id));
 }
 
 function sourceRowsForView() {
@@ -472,6 +567,7 @@ function tableHeadForView(view) {
     </tr>`;
   }
   return `<tr>
+    <th class="select-column"><input type="checkbox" id="select-all-jobs" aria-label="Select all visible jobs"></th>
     <th style="width:25%">Job</th>
     <th style="width:12%">State</th>
     <th class="${columnClass("correlation")}" style="width:17%">Correlation</th>
@@ -518,7 +614,7 @@ function tableRowForView(view, row, index) {
     </tr>`;
   }
   if (view === "rules") {
-    return `<tr data-row-index="${index}">
+    return `<tr data-row-index="${index}" data-rule-id="${escapeAttribute(row.id)}" class="${row.id === app.selectedRuleId ? "is-selected" : ""}">
       <td><span class="cell-primary"><span class="state-mark" data-state="${escapeAttribute(row.status)}"></span>${stateBadge(row.status)}</span></td>
       <td><div class="cell-stack"><strong>${escapeHTML(row.name)}</strong><small>${escapeHTML(row.id)}</small></div></td>
       <td><span class="stage-badge">${escapeHTML(row.scope)}</span></td>
@@ -529,6 +625,7 @@ function tableRowForView(view, row, index) {
     </tr>`;
   }
   return `<tr data-row-index="${index}" data-job-id="${escapeAttribute(row.id)}" class="${selected ? "is-selected" : ""}">
+    <td class="select-column"><input class="row-select" type="checkbox" data-job-select="${escapeAttribute(row.id)}" aria-label="Select ${escapeAttribute(row.jobName)}" ${app.selectedJobs.has(row.id) ? "checked" : ""}></td>
     <td>
       <div class="cell-primary">
         <span class="state-mark" data-state="${escapeAttribute(row.state)}"></span>
@@ -571,6 +668,7 @@ function clearFilters() {
   app.stateFilter = "";
   app.stageFilter = "";
   elements["search-input"].value = "";
+  syncURLQuery();
   if (app.queue) {
     clearQueue();
     return;
@@ -595,10 +693,63 @@ function syncURLQuery() {
   } else {
     url.searchParams.delete("queue");
   }
+  if (app.view !== "jobs") url.searchParams.set("view", app.view); else url.searchParams.delete("view");
+  if (app.stateFilter) url.searchParams.set("state", app.stateFilter); else url.searchParams.delete("state");
+  if (app.stageFilter) url.searchParams.set("stage", app.stageFilter); else url.searchParams.delete("stage");
+  if (app.search) url.searchParams.set("q", app.search); else url.searchParams.delete("q");
   window.history.replaceState(null, "", url);
 }
 
+function currentViewState() {
+  return { view: app.view, queue: app.queue, state: app.stateFilter, stage: app.stageFilter, q: app.search };
+}
+
+function saveCurrentView() {
+  const name = window.prompt("Name this saved view", `${viewDefinitions[app.view].title}${app.queue ? ` · ${app.queue}` : ""}`);
+  if (!name?.trim()) return;
+  const view = { id: `view_${Date.now()}`, name: name.trim(), state: currentViewState() };
+  app.savedViews = [view, ...app.savedViews.filter((item) => item.name !== view.name)].slice(0, 12);
+  localStorage.setItem("rhinoq.savedViews", JSON.stringify(app.savedViews));
+  renderSavedViews();
+  closeMenus();
+  showToast("View saved. The link can be shared with the same filters.");
+}
+
+function renderSavedViews() {
+  if (!elements["saved-view-list"]) return;
+  elements["saved-view-list"].innerHTML = app.savedViews.length ? app.savedViews.map((item) => `<button type="button" class="saved-view-item" data-saved-view="${escapeAttribute(item.id)}"><span>${escapeHTML(item.name)}</span><small>${escapeHTML(viewDefinitions[item.state.view]?.title || "Tasks")}</small></button>`).join("") : `<small class="saved-view-empty">No saved views yet</small>`;
+}
+
+function onSavedViewClick(event) {
+  const button = event.target.closest("[data-saved-view]");
+  if (!button) return;
+  const saved = app.savedViews.find((item) => item.id === button.dataset.savedView);
+  if (!saved) return;
+  const state = saved.state;
+  app.view = state.view || "jobs";
+  app.queue = state.queue || "";
+  app.stateFilter = state.state || "";
+  app.stageFilter = state.stage || "";
+  app.search = state.q || "";
+  elements["search-input"].value = app.search;
+  syncURLQuery();
+  closeMenus();
+  if (app.view === "jobs" && app.queue) loadSnapshot(); else renderCurrentView();
+}
+
+async function copyCurrentViewLink() {
+  syncURLQuery();
+  try {
+    await navigator.clipboard.writeText(window.location.href);
+    showToast("Share link copied");
+  } catch (_) {
+    showToast(window.location.href);
+  }
+  closeMenus();
+}
+
 function onTableClick(event) {
+  if (event.target.closest(".row-select, #select-all-jobs")) return;
   const rowElement = event.target.closest("tr[data-row-index]");
   if (!rowElement) return;
   const index = Number(rowElement.dataset.rowIndex);
@@ -614,8 +765,155 @@ function onTableClick(event) {
     selectJob(jobID);
   } else if (app.view === "findings" && row?.subjectType && row?.subjectId) {
     selectSubject({ type: row.subjectType, id: row.subjectId });
-  } else if (app.view === "rules") {
-    showToast("Rule details remain read-only in Workbench v0.");
+  } else if (app.view === "rules" && row) {
+    selectRule(row);
+  }
+}
+
+function onTableSelectionChange(event) {
+  const selectAll = event.target.closest("#select-all-jobs");
+  if (selectAll) {
+    app.visibleRows.forEach((row) => selectAll.checked ? app.selectedJobs.add(row.id) : app.selectedJobs.delete(row.id));
+  }
+  const checkbox = event.target.closest("[data-job-select]");
+  if (checkbox) {
+    if (checkbox.checked) app.selectedJobs.add(checkbox.dataset.jobSelect);
+    else app.selectedJobs.delete(checkbox.dataset.jobSelect);
+  }
+  renderCurrentView();
+}
+
+function clearSelection() {
+  app.selectedJobs.clear();
+  app.bulkPlan = null;
+  renderCurrentView();
+}
+
+function renderBulkToolbar() {
+  const visible = app.view === "jobs" && app.selectedJobs.size > 0;
+  elements["bulk-toolbar"].hidden = !visible;
+  elements["bulk-selection-count"].textContent = `${app.selectedJobs.size} selected`;
+}
+
+async function openBulkPreview() {
+  if (!app.selectedJobs.size) return;
+  elements["bulk-preview-button"].disabled = true;
+  try {
+    const plan = await fetchJSON("/api/v1/bulk/preview", {
+      method: "POST", body: { action: "recheck", jobIds: Array.from(app.selectedJobs) },
+    });
+    app.bulkPlan = plan;
+    renderBulkPlan(plan);
+    elements["bulk-dialog"].showModal();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    elements["bulk-preview-button"].disabled = false;
+  }
+}
+
+function renderBulkPlan(plan) {
+  const group = (label, items, tone) => `<section class="bulk-group" data-tone="${tone}"><div><strong>${label}</strong><span>${items.length}</span></div>${items.length ? `<ul>${items.map((item) => `<li><code>${escapeHTML(shortID(item.jobId))}</code><span>${escapeHTML(item.reason)}</span></li>`).join("")}</ul>` : `<p>None</p>`}</section>`;
+  elements["bulk-dialog-content"].innerHTML = `<div class="bulk-summary"><div><span>Selected</span><strong>${plan.total}</strong></div><div data-tone="safe"><span>Safe</span><strong>${plan.safe.length}</strong></div><div data-tone="uncertain"><span>Uncertain</span><strong>${plan.uncertain.length}</strong></div><div data-tone="blocked"><span>Blocked</span><strong>${plan.blocked.length}</strong></div></div>${group("Safe to recheck", plan.safe, "safe")}${group("Uncertain evidence", plan.uncertain, "uncertain")}${group("Blocked by state", plan.blocked, "blocked")}<p class="bulk-safety-note">Only safe items can be approved. Uncertain and blocked items remain untouched until their evidence is resolved.</p>`;
+  elements["bulk-approve-button"].disabled = !app.snapshot?.capabilities?.bulkActions || !plan.safe.length || plan.state !== "previewed";
+  elements["bulk-execute-button"].disabled = !app.snapshot?.capabilities?.bulkActions || plan.state !== "approved";
+}
+
+async function approveBulkPlan() {
+  if (!app.bulkPlan) return;
+  const actor = window.prompt("Approver identity", "reviewer@example.com");
+  const reason = actor && window.prompt("Approval reason", "Reviewed Safe / Uncertain / Blocked grouping");
+  if (!actor || !reason) return;
+  try {
+    app.bulkPlan = await fetchJSON(`/api/v1/bulk/${encodeURIComponent(app.bulkPlan.id)}/approve`, { method: "POST", body: { actor, reason } });
+    renderBulkPlan(app.bulkPlan);
+    showToast("Bulk plan approved. Safe items are ready for execution.");
+  } catch (error) { showToast(error.message); }
+}
+
+async function executeBulkPlan() {
+  if (!app.bulkPlan) return;
+  try {
+    app.bulkPlan = await fetchJSON(`/api/v1/bulk/${encodeURIComponent(app.bulkPlan.id)}/execute`, { method: "POST", body: {} });
+    renderBulkPlan(app.bulkPlan);
+    showToast("Bulk action completed with post-verification.");
+  } catch (error) { showToast(error.message); }
+}
+
+function selectRule(rule) {
+  app.selectedRuleId = rule.id;
+  app.selectedJobId = "";
+  app.selectedSubject = null;
+  setRailMode("subject");
+  elements["rail-empty"].hidden = true;
+  elements["rail-content"].hidden = false;
+  elements["evidence-rail"].classList.add("is-open");
+  if (window.innerWidth <= 1120) elements["mobile-scrim"].hidden = false;
+  elements["rail-queue"].textContent = "RULE";
+  elements["rail-title"].textContent = rule.name;
+  elements["rail-id"].textContent = rule.id;
+  elements["rail-notice"].textContent = "Rule inspection is read-only. Rule evaluation and mutations stay behind Application commands.";
+  renderRuleDetail(rule);
+  renderCurrentView();
+}
+
+function renderRuleDetail(rule) {
+  const findings = (app.snapshot?.findings || []).filter((item) => item.ruleId === rule.id);
+  const findingCards = findings.map((finding) => `<article class="evidence-card">
+    <div class="evidence-card-head">
+      <strong>${escapeHTML(finding.subjectId)}</strong>
+      ${stateBadge(finding.status)}
+    </div>
+    <dl>
+      <div><dt>Subject</dt><dd>${escapeHTML(finding.subjectType)}</dd></div>
+      <div><dt>Occurrences</dt><dd>${finding.occurrenceCount}</dd></div>
+      <div><dt>Last seen</dt><dd>${escapeHTML(formatDate(finding.lastSeen))}</dd></div>
+    </dl>
+  </article>`).join("");
+  elements["rail-subject"].innerHTML = `
+    <section class="rail-section rule-overview">
+      <div class="rail-section-heading"><h3>Rule overview</h3>${stateBadge(rule.status)}</div>
+      <dl class="detail-grid">
+        <div><dt>Scope</dt><dd>${escapeHTML(humanize(rule.scope))}</dd></div>
+        <div><dt>Subject type</dt><dd>${escapeHTML(rule.subjectType)}</dd></div>
+        <div><dt>Job filter</dt><dd>${escapeHTML(rule.jobName || "All business records")}</dd></div>
+        <div><dt>Schedule</dt><dd>${escapeHTML(formatDuration(rule.every))}</dd></div>
+        <div><dt>Version</dt><dd>v${rule.version}</dd></div>
+        <div><dt>Updated</dt><dd>${escapeHTML(formatDate(rule.updatedAt))}</dd></div>
+      </dl>
+    </section>
+    <section class="rail-section rule-console">
+      <div class="rail-section-heading"><div><h3>Test this Rule</h3><small class="section-kicker">Read-only preview against one subject</small></div><span>${rule.status === "enabled" ? "registered" : "draft"}</span></div>
+      <form class="rule-test-form" data-rule-action="test"><label>Subject id<input name="subjectId" type="text" placeholder="report_3Q1N" required></label><button class="secondary-button" type="submit">Run preview</button></form>
+      <div id="rule-test-result" class="rule-test-result" hidden></div>
+    </section>
+    <section class="rail-section">
+      <div class="rail-section-heading"><h3>Version history</h3><span>${plural((rule.versions || []).length || 1, "version")}</span></div>
+      <div class="version-list">${(rule.versions || [{version: rule.version, status: rule.status, updatedAt: rule.updatedAt}]).map((version) => `<div class="version-row"><span class="version-dot ${version.version === rule.version ? "is-current" : ""}"></span><div><strong>v${version.version}</strong><small>${escapeHTML(humanize(version.status))}${version.note ? ` · ${escapeHTML(version.note)}` : ""}</small></div><time>${escapeHTML(relativeTime(version.updatedAt))}</time></div>`).join("")}</div>
+    </section>
+    <section class="rail-section">
+      <div class="rail-section-heading"><h3>Related findings</h3><span>${plural(findings.length, "finding")}</span></div>
+      <div class="evidence-list">${findingCards || `<div class="empty-evidence">No finding in this bounded snapshot references this Rule.</div>`}</div>
+    </section>`;
+}
+
+async function onRailFormSubmit(event) {
+  const form = event.target.closest("[data-rule-action=\"test\"]");
+  if (!form) return;
+  event.preventDefault();
+  const subjectID = new FormData(form).get("subjectId");
+  const resultElement = form.parentElement.querySelector("#rule-test-result");
+  const button = form.querySelector("button");
+  button.disabled = true;
+  try {
+    const result = await fetchJSON(`/api/v1/rules/${encodeURIComponent(app.selectedRuleId)}/test`, { method: "POST", body: { subjectId: subjectID } });
+    resultElement.hidden = false;
+    resultElement.innerHTML = `<div class="rule-test-head"><strong>${escapeHTML(humanize(result.status))}</strong>${stateBadge(result.status === "pass" ? "succeeded" : "open")}</div><p>${escapeHTML(result.reason)}</p>${(result.samples || []).length ? `<ul>${result.samples.slice(0, 5).map((sample) => `<li><code>${escapeHTML(sample)}</code></li>`).join("")}</ul>` : ""}<small>Evaluated ${escapeHTML(relativeTime(result.evaluatedAt))} · Rule v${result.ruleVersion || "?"}</small>`;
+  } catch (error) {
+    resultElement.hidden = false;
+    resultElement.innerHTML = `<p class="error-copy">${escapeHTML(error.message)}</p>`;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -688,10 +986,14 @@ function renderJobDetail(detail) {
     <div><dt>${escapeHTML(term)}</dt><dd title="${escapeAttribute(value)}">${escapeHTML(value)}</dd></div>
   `).join("");
 
-  elements["attempt-total"].textContent = plural(detail.attempts.length, "event");
-  elements["attempt-timeline"].innerHTML = detail.attempts.length
-    ? detail.attempts.map(renderAttempt).join("")
+  renderProgress(job.progress);
+
+  const flight = detail.flight || [];
+  elements["flight-total"].textContent = plural(flight.length, "event");
+  elements["flight-timeline"].innerHTML = flight.length
+    ? flight.map(renderFlightEvent).join("")
     : `<li class="empty-evidence">No execution event has been recorded yet.</li>`;
+  renderAttemptDiffControls(detail.attempts);
 
   elements["effect-total"].textContent = plural(detail.effects.length, "effect");
   elements["effect-list"].innerHTML = detail.effects.length
@@ -709,6 +1011,50 @@ function renderJobDetail(detail) {
     : `<div class="empty-evidence">No human decision has been written to the replay audit.</div>`;
   elements["rail-notice"].textContent = (detail.notices || []).join(" ");
   elements["rail-notice"].hidden = !(detail.notices || []).length;
+}
+
+function renderProgress(progress) {
+  if (!progress?.hasData) {
+    elements["progress-content"].innerHTML = `<div class="progress-empty"><span class="progress-empty-mark">—</span><div><strong>No progress data available</strong><p>This Task has not reported a bounded completed/total value. RhinoQ will not invent an ETA.</p></div></div>`;
+    elements["progress-updated"].textContent = "No data";
+    return;
+  }
+  const completed = Number(progress.completed || 0);
+  const total = progress.total == null ? null : Number(progress.total);
+  const percent = total && total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : null;
+  elements["progress-updated"].textContent = progress.updatedAt ? `Updated ${relativeTime(progress.updatedAt)}` : "Live value";
+  elements["progress-content"].innerHTML = `<div class="progress-hero"><div class="progress-value"><strong>${total == null ? escapeHTML(String(completed)) : `${escapeHTML(String(completed))} / ${escapeHTML(String(total))}`}</strong>${percent == null ? `<span>completed</span>` : `<span>${percent}%</span>`}</div>${percent == null ? `<div class="progress-track is-indeterminate"><span></span></div>` : `<div class="progress-track"><span style="width:${percent}%"></span></div>`}<p>${escapeHTML(progress.message || "Worker reported progress")}</p></div>`;
+}
+
+function renderFlightEvent(item) {
+  const detail = [item.detail, item.actor ? `by ${item.actor}` : "", item.reference].filter(Boolean).join(" · ");
+  return `<li class="timeline-item flight-event" data-kind="${escapeAttribute(item.kind)}" data-status="${escapeAttribute(item.status || "")}">
+    <span class="timeline-dot"></span><div class="timeline-copy"><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(detail || "Recorded by RhinoQ")}</small></div><time class="timeline-time" title="${escapeAttribute(formatDate(item.occurredAt))}">${relativeTime(item.occurredAt)}</time>
+  </li>`;
+}
+
+function renderAttemptDiffControls(attempts) {
+  const options = attempts.map((item) => `<option value="${item.sequence}">Attempt ${item.attempt} · ${escapeHTML(humanize(item.kind))}</option>`).join("");
+  elements["attempt-from"].innerHTML = options;
+  elements["attempt-to"].innerHTML = options;
+  if (attempts.length > 1) {
+    elements["attempt-from"].value = String(attempts[0].sequence);
+    elements["attempt-to"].value = String(attempts[attempts.length - 1].sequence);
+    elements["attempt-diff-panel"].hidden = false;
+    elements["attempt-diff-panel"].open = false;
+    app.currentAttempts = attempts;
+  } else {
+    elements["attempt-diff-panel"].hidden = true;
+  }
+}
+
+function renderAttemptDiff() {
+  const attempts = app.currentAttempts || [];
+  const from = attempts.find((item) => String(item.sequence) === elements["attempt-from"].value);
+  const to = attempts.find((item) => String(item.sequence) === elements["attempt-to"].value);
+  if (!from || !to) return;
+  const rows = [["State", from.resultState || "—", to.resultState || "—"], ["Failure", from.failureClass || "—", to.failureClass || "—"], ["Lease owner", from.leaseOwner || "—", to.leaseOwner || "—"], ["Blocked reason", from.blockedReason || "—", to.blockedReason || "—"]];
+  elements["attempt-diff-content"].innerHTML = `<div class="diff-header"><span></span><strong>Attempt ${from.attempt}</strong><strong>Attempt ${to.attempt}</strong></div>${rows.map((row) => `<div class="diff-row"><span>${row[0]}</span><span>${escapeHTML(row[1])}</span><span class="${row[1] !== row[2] ? "is-changed" : ""}">${escapeHTML(row[2])}</span></div>`).join("")}`;
 }
 
 function renderTruthSeparation(detail) {
@@ -812,6 +1158,8 @@ function closeRail() {
     elements["rail-content"].hidden = true;
     elements["rail-empty"].hidden = false;
     app.selectedJobId = "";
+    app.selectedRuleId = "";
+    app.selectedSubject = null;
     renderCurrentView();
   }
   elements["mobile-scrim"].hidden = true;
@@ -826,6 +1174,40 @@ function syncResponsiveRail() {
   } else if (!elements["evidence-rail"].classList.contains("is-open")) {
     elements["mobile-scrim"].hidden = true;
   }
+}
+
+function setRailWidth(width) {
+  const maximum = Math.min(720, Math.max(420, window.innerWidth - 720));
+  const next = Math.max(360, Math.min(maximum, Math.round(width)));
+  document.documentElement.style.setProperty("--rail-width", `${next}px`);
+  localStorage.setItem("rhinoq.railWidth", String(next));
+  elements["rail-resizer"].setAttribute("aria-valuenow", String(next));
+}
+
+function beginRailResize(event) {
+  if (window.innerWidth <= 1120) return;
+  event.preventDefault();
+  const startX = event.clientX;
+  const startWidth = elements["evidence-rail"].getBoundingClientRect().width;
+  document.body.classList.add("is-resizing-rail");
+  elements["rail-resizer"].setPointerCapture(event.pointerId);
+  const move = (moveEvent) => setRailWidth(startWidth + startX - moveEvent.clientX);
+  const finish = () => {
+    document.body.classList.remove("is-resizing-rail");
+    elements["rail-resizer"].removeEventListener("pointermove", move);
+    elements["rail-resizer"].removeEventListener("pointerup", finish);
+    elements["rail-resizer"].removeEventListener("pointercancel", finish);
+  };
+  elements["rail-resizer"].addEventListener("pointermove", move);
+  elements["rail-resizer"].addEventListener("pointerup", finish);
+  elements["rail-resizer"].addEventListener("pointercancel", finish);
+}
+
+function resizeRailWithKeyboard(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const current = elements["evidence-rail"].getBoundingClientRect().width;
+  setRailWidth(current + (event.key === "ArrowLeft" ? 32 : -32));
 }
 
 async function copySelectedJobID() {
@@ -862,9 +1244,9 @@ function closeMenus() {
 
 function paletteCommandDefinitions() {
   return [
-    { id: "jobs", group: "Navigate", label: "Execution worktable", detail: "Inspect jobs and execution state", icon: "01", run: () => setView("jobs") },
+    { id: "jobs", group: "Navigate", label: "Tasks", detail: "Inspect background work and execution state", icon: "01", run: () => setView("jobs") },
     { id: "attention", group: "Navigate", label: "Needs attention", detail: "Open the bounded recovery inbox", icon: "04", run: () => setView("attention") },
-    { id: "findings", group: "Navigate", label: "Integrity findings", detail: "Review persistent business drift", icon: "03", run: () => setView("findings") },
+    { id: "findings", group: "Navigate", label: "Findings", detail: "Review persistent business drift", icon: "03", run: () => setView("findings") },
     { id: "rules", group: "Navigate", label: "Rules", detail: "Review deterministic invariant checks", icon: "R", run: () => setView("rules") },
     { id: "recurring", group: "Navigate", label: "Recurring schedules", detail: "Inspect, pause or resume durable schedules", icon: "S", run: () => setView("recurring") },
     { id: "refresh", group: "Actions", label: "Refresh local evidence", detail: "Read the bounded snapshot again", icon: "↻", run: () => loadSnapshot() },
@@ -1199,7 +1581,7 @@ function renderSubjectDetail(detail) {
     </section>
     <section class="rail-section">
       <h3>What happened, in order</h3>
-      ${history ? `<ol class="timeline">${history}</ol>` : `<p class="muted">No observations or decisions recorded.</p>`}
+      ${history ? `<ol class="timeline subject-history">${history}</ol>` : `<p class="muted">No observations or decisions recorded.</p>`}
     </section>`;
 
   elements["rail-notice"].textContent = (detail.notices || []).join(" ");

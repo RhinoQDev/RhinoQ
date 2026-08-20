@@ -352,3 +352,41 @@ func TestUnknownSubjectIsNotFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d", recorder.Code)
 	}
 }
+
+func TestWorkbenchProgressFlightBulkAndRuleConsoleContracts(t *testing.T) {
+	handler, err := NewHandler(NewDemoReader(), Options{Operator: NewDemoOperator()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshotResponse := httptest.NewRecorder()
+	handler.ServeHTTP(snapshotResponse, localRequest(http.MethodGet, "/api/v1/snapshot"))
+	if snapshotResponse.Code != http.StatusOK || !strings.Contains(snapshotResponse.Body.String(), `"taskProgress":true`) {
+		t.Fatalf("snapshot capabilities=%d %s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+
+	bulkRequest := localRequest(http.MethodPost, "/api/v1/bulk/preview")
+	bulkRequest.Header.Set("Content-Type", "application/json")
+	bulkRequest.Body = io.NopCloser(strings.NewReader(`{"action":"recheck","jobIds":["job_01J0MEDIA8QK2","job_01J0PROVISION3P"]}`))
+	bulkResponse := httptest.NewRecorder()
+	handler.ServeHTTP(bulkResponse, bulkRequest)
+	if bulkResponse.Code != http.StatusOK || !strings.Contains(bulkResponse.Body.String(), `"uncertain"`) {
+		t.Fatalf("bulk preview=%d %s", bulkResponse.Code, bulkResponse.Body.String())
+	}
+
+	ruleRequest := localRequest(http.MethodPost, "/api/v1/rules/ready-report-has-output/test")
+	ruleRequest.Header.Set("Content-Type", "application/json")
+	ruleRequest.Body = io.NopCloser(strings.NewReader(`{"subjectId":"report_3Q1N"}`))
+	ruleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(ruleResponse, ruleRequest)
+	if ruleResponse.Code != http.StatusOK || !strings.Contains(ruleResponse.Body.String(), `"ruleId":"ready-report-has-output"`) {
+		t.Fatalf("rule test=%d %s", ruleResponse.Code, ruleResponse.Body.String())
+	}
+
+	detailRequest := localRequest(http.MethodGet, "/api/v1/jobs/job_01J0MEDIA8QK2")
+	detailResponse := httptest.NewRecorder()
+	handler.ServeHTTP(detailResponse, detailRequest)
+	if detailResponse.Code != http.StatusOK || !strings.Contains(detailResponse.Body.String(), `"flight"`) || !strings.Contains(detailResponse.Body.String(), `"progress"`) {
+		t.Fatalf("detail=%d %s", detailResponse.Code, detailResponse.Body.String())
+	}
+}

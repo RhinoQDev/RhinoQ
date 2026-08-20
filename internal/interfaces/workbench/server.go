@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
@@ -66,6 +67,12 @@ func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case r.URL.Path == "/api/v1/snapshot":
 		s.snapshot(w, r)
+	case r.URL.Path == "/api/v1/stream":
+		s.stream(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/v1/rules/") && strings.HasSuffix(r.URL.Path, "/test"):
+		s.ruleTest(w, r)
+	case r.URL.Path == "/api/v1/bulk/preview":
+		s.bulkPreview(w, r)
 	case r.URL.Path == "/api/v1/recurring-schedules":
 		s.recurringSchedules(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/v1/subjects/"):
@@ -101,12 +108,108 @@ func (s *server) snapshot(w http.ResponseWriter, r *http.Request) {
 		snapshot.GeneratedAt = time.Now().UTC()
 	}
 	snapshot.Source.ReadOnly = s.operator == nil
+	snapshot.Capabilities.Realtime = true
+	snapshot.Capabilities.BulkPreview = true
+	_, snapshot.Capabilities.BulkActions = s.operator.(BulkOperator)
+	_, snapshot.Capabilities.RuleTest = s.reader.(RuleTester)
+	snapshot.Capabilities.TaskProgress = hasTaskProgress(snapshot)
 	if snapshot.Limits == nil {
 		snapshot.Limits = map[string]int{"jobs": query.Limit}
 	}
 	normalizeSnapshot(&snapshot)
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func hasTaskProgress(snapshot Snapshot) bool {
+	for _, job := range snapshot.Jobs {
+		if job.Progress.HasData {
+			return true
+		}
+	}
+	return false
+}
+
+// stream provides an SSE delivery path for bounded snapshots. PostgreSQL (or
+// another Reader) remains authoritative; this endpoint only re-reads the same
+// query and emits a frame when its JSON changes. A polling fallback remains
+// correct when the stream is unavailable.
+func (s *server) stream(w http.ResponseWriter, r *http.Request) {
+	query, err := parseQuery(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_query", err.Error())
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "stream_unsupported", "streaming is unavailable for this response writer")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	last := ""
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	write := func() bool {
+		snapshot, readErr := s.reader.Snapshot(r.Context(), query)
+		if readErr != nil {
+			_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", mustJSON(map[string]string{"message": readErr.Error()}))
+			flusher.Flush()
+			return true
+		}
+		if snapshot.Product == "" {
+			snapshot.Product = "RhinoQ Workbench"
+		}
+		if snapshot.Version == "" {
+			snapshot.Version = s.version
+		}
+		if snapshot.GeneratedAt.IsZero() {
+			snapshot.GeneratedAt = time.Now().UTC()
+		}
+		snapshot.Source.ReadOnly = s.operator == nil
+		snapshot.Capabilities.Realtime = true
+		snapshot.Capabilities.BulkPreview = true
+		_, snapshot.Capabilities.BulkActions = s.operator.(BulkOperator)
+		_, snapshot.Capabilities.RuleTest = s.reader.(RuleTester)
+		snapshot.Capabilities.TaskProgress = hasTaskProgress(snapshot)
+		normalizeSnapshot(&snapshot)
+		encoded := mustJSON(snapshot)
+		if encoded == last {
+			return true
+		}
+		last = encoded
+		_, _ = fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", encoded)
+		flusher.Flush()
+		return true
+	}
+	if !write() {
+		return
+	}
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if !write() {
+				return
+			}
+		case <-heartbeat.C:
+			_, _ = fmt.Fprint(w, ": heartbeat\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+func mustJSON(value any) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `{"error":"serialization_failed"}`
+	}
+	return string(encoded)
 }
 
 func (s *server) action(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +223,12 @@ func (s *server) action(w http.ResponseWriter, r *http.Request) {
 		s.recheck(w, r)
 	case path == "api/v1/repairs":
 		s.proposeRepair(w, r)
+	case path == "api/v1/bulk/preview":
+		s.bulkPreview(w, r)
+	case strings.HasPrefix(path, "api/v1/bulk/"):
+		s.bulkAction(w, r)
+	case strings.HasPrefix(path, "api/v1/rules/") && strings.HasSuffix(path, "/test"):
+		s.ruleTest(w, r)
 	case strings.HasPrefix(path, "api/v1/repairs/"):
 		s.repairAction(w, r)
 	case strings.HasPrefix(path, "api/v1/recurring-schedules/"):
@@ -127,6 +236,160 @@ func (s *server) action(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "Workbench action endpoint not found")
 	}
+}
+
+func (s *server) bulkPreview(w http.ResponseWriter, r *http.Request) {
+	var request BulkActionRequest
+	if !decodeAction(w, r, &request) {
+		return
+	}
+	request.Action = strings.TrimSpace(request.Action)
+	if request.Action == "" {
+		request.Action = "recheck"
+	}
+	if request.Action != "recheck" || len(request.JobIDs) == 0 || len(request.JobIDs) > 100 {
+		writeError(w, http.StatusBadRequest, "invalid_bulk_request", "select 1 to 100 jobs and use the recheck action")
+		return
+	}
+	if operator, ok := s.operator.(BulkOperator); ok {
+		plan, err := operator.PreviewBulk(r.Context(), request)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "bulk_preview_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, normalizeBulkPlan(plan, request))
+		return
+	}
+	plan := BulkPlan{ID: fmt.Sprintf("bulk_preview_%d", time.Now().UnixNano()), Action: request.Action, State: "previewed", Version: 1}
+	seen := make(map[string]struct{}, len(request.JobIDs))
+	for _, id := range request.JobIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		plan.Total++
+		detail, err := s.reader.JobDetail(r.Context(), id)
+		if err != nil {
+			plan.Blocked = append(plan.Blocked, BulkClassification{JobID: id, Reason: "job evidence is unavailable"})
+			continue
+		}
+		if detail.Job.State == "blocked" || detail.Job.State == "dead" || detail.Job.State == "cancelled" {
+			plan.Blocked = append(plan.Blocked, BulkClassification{JobID: id, Reason: "terminal state requires an explicit recovery decision"})
+			continue
+		}
+		uncertain := false
+		for _, effect := range detail.Effects {
+			if effect.State == "pending" || effect.State == "uncertain" {
+				uncertain = true
+				break
+			}
+		}
+		if uncertain {
+			plan.Uncertain = append(plan.Uncertain, BulkClassification{JobID: id, Reason: "an external effect is not confirmed"})
+		} else {
+			plan.Safe = append(plan.Safe, BulkClassification{JobID: id, Reason: "no unresolved effect in the bounded evidence"})
+		}
+	}
+	writeJSON(w, http.StatusOK, normalizeBulkPlan(plan, request))
+}
+
+func (s *server) bulkAction(w http.ResponseWriter, r *http.Request) {
+	operator, ok := s.operator.(BulkOperator)
+	if !ok {
+		writeError(w, http.StatusMethodNotAllowed, "bulk_actions_disabled", "bulk actions require an application BulkOperator and --actions")
+		return
+	}
+	rest := strings.TrimPrefix(strings.Trim(r.URL.Path, "/"), "api/v1/bulk/")
+	id, verb, found := strings.Cut(rest, "/")
+	if !found || strings.TrimSpace(id) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_bulk_plan", "bulk plan id and action are required")
+		return
+	}
+	var plan BulkPlan
+	var err error
+	switch verb {
+	case "approve":
+		var request struct {
+			Actor  string `json:"actor"`
+			Reason string `json:"reason"`
+		}
+		if !decodeAction(w, r, &request) {
+			return
+		}
+		plan, err = operator.ApproveBulk(r.Context(), id, request.Actor, request.Reason)
+	case "execute":
+		if !decodeOptionalAction(w, r) {
+			return
+		}
+		plan, err = operator.ExecuteBulk(r.Context(), id)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "bulk action not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "bulk_action_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
+func normalizeBulkPlan(plan BulkPlan, request BulkActionRequest) BulkPlan {
+	if plan.ID == "" {
+		plan.ID = fmt.Sprintf("bulk_%d", time.Now().UnixNano())
+	}
+	if plan.Action == "" {
+		plan.Action = request.Action
+	}
+	if plan.State == "" {
+		plan.State = "previewed"
+	}
+	if plan.Total == 0 {
+		plan.Total = len(plan.Safe) + len(plan.Uncertain) + len(plan.Blocked)
+	}
+	if plan.Safe == nil {
+		plan.Safe = []BulkClassification{}
+	}
+	if plan.Uncertain == nil {
+		plan.Uncertain = []BulkClassification{}
+	}
+	if plan.Blocked == nil {
+		plan.Blocked = []BulkClassification{}
+	}
+	return plan
+}
+
+func (s *server) ruleTest(w http.ResponseWriter, r *http.Request) {
+	tester, ok := s.reader.(RuleTester)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "rule_test_unavailable", "this Workbench source has no registered Rule tester")
+		return
+	}
+	rest := strings.TrimPrefix(r.URL.Path, "/api/v1/rules/")
+	ruleID := strings.TrimSuffix(rest, "/test")
+	ruleID, err := url.PathUnescape(ruleID)
+	if err != nil || strings.TrimSpace(ruleID) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_rule", "rule id is required")
+		return
+	}
+	var request struct {
+		SubjectID string `json:"subjectId"`
+	}
+	if !decodeAction(w, r, &request) || strings.TrimSpace(request.SubjectID) == "" {
+		if strings.TrimSpace(request.SubjectID) == "" {
+			writeError(w, http.StatusBadRequest, "invalid_subject", "subject id is required")
+		}
+		return
+	}
+	result, err := tester.TestRule(r.Context(), ruleID, strings.TrimSpace(request.SubjectID))
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "rule_test_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *server) recurringSchedules(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +698,72 @@ func normalizeDetail(detail *JobDetail) {
 	if detail.Audit == nil {
 		detail.Audit = []Audit{}
 	}
+	if detail.Flight == nil {
+		detail.Flight = buildFlight(detail)
+	}
+}
+
+func buildFlight(detail *JobDetail) []FlightEvent {
+	items := make([]FlightEvent, 0, 1+len(detail.Attempts)+len(detail.Effects)+len(detail.Outcomes)+len(detail.Audit))
+	if !detail.Job.CreatedAt.IsZero() {
+		items = append(items, FlightEvent{
+			ID: "commit", Kind: "commit", Title: "Task committed",
+			Detail: "Durable intent accepted", Status: "confirmed", OccurredAt: detail.Job.CreatedAt,
+		})
+	}
+	for _, attempt := range detail.Attempts {
+		detailText := strings.TrimSpace(strings.Join([]string{
+			attempt.LeaseOwner,
+			func() string {
+				if attempt.FailureClass != "" {
+					return "failure: " + attempt.FailureClass
+				}
+				return ""
+			}(),
+			func() string {
+				if attempt.BlockedReason != "" {
+					return "blocked: " + attempt.BlockedReason
+				}
+				return ""
+			}(),
+		}, " · "))
+		items = append(items, FlightEvent{
+			ID: fmt.Sprintf("attempt-%d", attempt.Sequence), Kind: "attempt",
+			Title:  fmt.Sprintf("Attempt %d · %s", attempt.Attempt, humanFlight(attempt.Kind)),
+			Detail: detailText, Status: attempt.ResultState, OccurredAt: attempt.OccurredAt,
+			Attempt: attempt.Attempt, Reference: attempt.LeaseOwner,
+		})
+	}
+	for _, effect := range detail.Effects {
+		status := effect.State
+		title := "Effect " + humanFlight(status)
+		if status == "confirmed" {
+			title = "Effect confirmed"
+		}
+		items = append(items, FlightEvent{
+			ID: effect.ID, Kind: "effect", Title: title, Detail: effect.Name,
+			Status: status, OccurredAt: effect.CreatedAt, Reference: effect.ExternalRef,
+		})
+	}
+	for _, outcome := range detail.Outcomes {
+		items = append(items, FlightEvent{
+			ID: outcome.ID, Kind: "outcome", Title: "Outcome " + humanFlight(outcome.State),
+			Detail: outcome.Reason, Status: outcome.State, OccurredAt: outcome.UpdatedAt,
+			Reference: fmt.Sprintf("contract v%d", outcome.ContractVersion),
+		})
+	}
+	for _, audit := range detail.Audit {
+		items = append(items, FlightEvent{
+			ID: audit.ID, Kind: "decision", Title: humanFlight(audit.Action), Detail: audit.Reason,
+			Status: "recorded", OccurredAt: audit.OccurredAt, Actor: audit.Actor, Reference: audit.RowHash,
+		})
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].OccurredAt.Before(items[j].OccurredAt) })
+	return items
+}
+
+func humanFlight(value string) string {
+	return strings.Title(strings.ReplaceAll(strings.ReplaceAll(value, "_", " "), "-", " "))
 }
 
 // subjectDetail serves the investigation view for one business subject.
