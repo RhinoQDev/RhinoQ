@@ -1,7 +1,10 @@
 import {
   createRhinoQTaskIntegration,
   createBullMQIntegration,
+  createPostgresTaskIntegration,
   type BullMQIntegrationPresetOptions,
+  type PostgresTaskIntegration,
+  type PostgresTaskIntegrationOptions,
   type RhinoQTaskIntegration,
   type RhinoQTaskIntegrationOptions,
 } from './integration.js';
@@ -34,6 +37,14 @@ export interface RhinoQBullMQModuleFactoryOptions {
   integrationToken?: unknown;
   useFactory: (...dependencies: any[]) =>
     BullMQIntegrationPresetOptions | Promise<BullMQIntegrationPresetOptions>;
+}
+
+export interface RhinoQPostgresModuleFactoryOptions {
+  imports?: readonly unknown[];
+  inject?: readonly unknown[];
+  integrationToken?: unknown;
+  useFactory: (...dependencies: any[]) =>
+    PostgresTaskIntegrationOptions | Promise<PostgresTaskIntegrationOptions>;
 }
 
 export interface RhinoQApplicationModuleFactoryOptions {
@@ -76,6 +87,47 @@ export class RhinoQModule {
 
   static forBullMQAsync(options: RhinoQBullMQModuleFactoryOptions): any {
     return dynamicModule(options, (resolved) => createBullMQIntegration(resolved));
+  }
+
+  /**
+   * PostgreSQL-only Task integration — no BullMQ, no QueueEvents required.
+   *
+   * For an application that produces and reads Tasks on PostgreSQL without
+   * driving work through BullMQ. It exposes RHINOQ_TASKS and RHINOQ_HEALTH but
+   * not RHINOQ_BRIDGE, because there is no queue bridge in this mode.
+   *
+   * ```ts
+   * RhinoQModule.forPostgresAsync({
+   *   imports: [ConfigModule], inject: [ConfigService],
+   *   useFactory: (config: ConfigService) => ({ pool: config.get('RHINOQ_POOL') }),
+   * })
+   * ```
+   */
+  static forPostgresAsync(options: RhinoQPostgresModuleFactoryOptions): any {
+    if (!options || typeof options.useFactory !== 'function') {
+      throw new TypeError('RhinoQModule.forPostgresAsync requires useFactory');
+    }
+    const optionsProvider = { provide: RHINOQ_OPTIONS, inject: options.inject ?? [], useFactory: options.useFactory };
+    const integrationToken = options.integrationToken ?? RHINOQ_INTEGRATION;
+    const integrationProvider = {
+      provide: integrationToken,
+      inject: [RHINOQ_OPTIONS],
+      useFactory: (resolved: PostgresTaskIntegrationOptions) => createPostgresTaskIntegration(resolved),
+    };
+    const lifecycleProvider = {
+      provide: RhinoQLifecycle,
+      inject: [integrationToken],
+      useFactory: (integration: PostgresTaskIntegration) => new RhinoQLifecycle(integration),
+    };
+    return {
+      module: RhinoQModule,
+      imports: options.imports ?? [],
+      providers: [optionsProvider, integrationProvider, lifecycleProvider,
+        { provide: RHINOQ_TASKS, inject: [integrationToken], useFactory: (i: PostgresTaskIntegration) => i.tasks },
+        { provide: RHINOQ_HEALTH, inject: [integrationToken], useFactory: (i: PostgresTaskIntegration) => i.health.bind(i) },
+      ],
+      exports: [integrationToken, RHINOQ_TASKS, RHINOQ_HEALTH],
+    };
   }
 
   /** Start the typed Application Compiler once and export its Tasks/manifest/HTTP mount. */
@@ -130,8 +182,11 @@ function dynamicModule<T>(
   };
 }
 
+/** Both the BullMQ and PostgreSQL-only integrations expose this start/close pair. */
+interface RhinoQStartClose { start(): Promise<void>; close(): void }
+
 export class RhinoQLifecycle {
-  constructor(private readonly integration: RhinoQTaskIntegration) {}
+  constructor(private readonly integration: RhinoQStartClose) {}
   async onModuleInit(): Promise<void> { await this.integration.start(); }
   onModuleDestroy(): void { this.integration.close(); }
 }

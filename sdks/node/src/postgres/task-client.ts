@@ -34,6 +34,7 @@ import type {
 } from '../gateway/types.js';
 import type { TaskClient } from '../tasks/client.js';
 import { sha256RhinoQCheckpointInput } from '../tasks/checkpoint.js';
+import { TaskHandle } from '../tasks/handle.js';
 import type { SqlExecutor } from './producer.js';
 import { assertTenantId } from './tenant.js';
 import { migrateTaskSchema } from './task-schema.js';
@@ -444,7 +445,78 @@ export class PostgresTaskClient implements TaskClient {
     return this.readTask(taskId);
   }
 
+  /**
+   * Opens a stateful handle over one Task that threads `entityVersion` for you.
+   *
+   * The low-level surface (`transitionTask`/`reportTaskProgress`/…) takes an
+   * expected version on every call and returns a new one the caller must carry
+   * forward; a linear worker ends up spelling the whole state machine out at the
+   * call site. The handle holds the latest snapshot and passes its version
+   * automatically, so the worker writes intent — `await (await
+   * client.openTask(id)).start()` then `.reportProgress({...})` — not mechanics.
+   *
+   * Optimistic concurrency is unchanged: a losing write still raises
+   * RHINOQ_VERSION_CONFLICT, and the handle exposes `refresh()` to resume.
+   */
+  async openTask(taskId: string): Promise<TaskHandle> {
+    return new TaskHandle(this, await this.getTask(taskId));
+  }
+
   getTaskForOwner(taskId: string, ownerId: string, tenantId = 'default'): Promise<TaskSnapshot> {
+    return this.readTask(taskId, ownerId, tenantId);
+  }
+
+  /**
+   * The full snapshot, but only when the caller is behind.
+   *
+   * `getTask` runs SNAPSHOT_SQL, which aggregates every Execution of the Task
+   * into one jsonb array — O(N) in the item count on every read. Anything that
+   * watches a Task by re-reading (a detail view on a timer, a client that woke
+   * on a change notification) pays that O(N) each time even when nothing moved.
+   *
+   * `entityVersion` is monotonic, so "is there anything new" is a single cheap
+   * integer read on the Task row with no execution scan. When the answer is no,
+   * this returns null and never touches the executions table; when yes, the
+   * caller needed the data anyway. This is the read-side companion to the
+   * write-side change that made writes return just the version.
+   */
+  getTaskIfNewerThan(taskId: string, sinceVersion: number): Promise<TaskSnapshot | null> {
+    return this.readTaskIfNewer(taskId, sinceVersion);
+  }
+
+  /** Owner/tenant-fenced conditional read for application-facing code. */
+  getTaskForOwnerIfNewerThan(
+    taskId: string,
+    sinceVersion: number,
+    ownerId: string,
+    tenantId = 'default',
+  ): Promise<TaskSnapshot | null> {
+    if (!ownerId?.trim()) throw new TypeError('owner id is required');
+    return this.readTaskIfNewer(taskId, sinceVersion, ownerId, tenantId);
+  }
+
+  private async readTaskIfNewer(
+    taskId: string,
+    sinceVersion: number,
+    ownerId?: string,
+    tenantId?: string,
+  ): Promise<TaskSnapshot | null> {
+    if (!taskId?.trim()) throw new TypeError('task id is required');
+    if (!Number.isInteger(sinceVersion) || sinceVersion < 0) {
+      throw new RangeError('sinceVersion must be a non-negative integer');
+    }
+    // Cheap probe: the version lives on the Task row, so this reads no
+    // executions. Same owner/tenant predicate as the full read, so a caller
+    // outside the boundary sees NOT_FOUND here exactly as it would there.
+    const probe = await this.execute<{ version: string }>(
+      `SELECT version FROM rhinoq_task.tasks
+       WHERE id = $1 AND ($2::text IS NULL OR owner_id = $2)
+         AND ($3::text IS NULL OR tenant_id = $3)`,
+      [taskId, ownerId ?? null, tenantId ?? null],
+    );
+    const row = probe.rows[0];
+    if (!row) throw taskError('RHINOQ_TASK_NOT_FOUND', taskId);
+    if (Number(row.version) <= sinceVersion) return null;
     return this.readTask(taskId, ownerId, tenantId);
   }
 
@@ -1734,10 +1806,19 @@ function mapDatabaseError(error: unknown): RhinoQError {
   );
 }
 
+// A few codes carry a discoverable next action, so a caller can branch on the
+// field rather than parse the message. RHINOQ_PROGRESS_STATE is the one this
+// map exists for; the message already spells the action out, this makes it
+// structured.
+const TASK_ERROR_NEXT_ACTION: Record<string, string> = {
+  RHINOQ_PROGRESS_STATE: "Transition the task to 'running' before reporting progress.",
+};
+
 function taskError(code: string, detail: string, cause?: unknown): RhinoQError {
   const status = code.includes('NOT_FOUND') ? 404 :
     code.includes('CONFLICT') || code.includes('ALREADY') ? 409 : 400;
-  return new RhinoQError(code, detail, false, { status, cause });
+  const nextAction = TASK_ERROR_NEXT_ACTION[code];
+  return new RhinoQError(code, detail, false, { status, cause, ...(nextAction ? { nextAction } : {}) });
 }
 
 function validateVersion(version: number, name = 'expectedTaskVersion'): void {

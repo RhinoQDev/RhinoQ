@@ -12,6 +12,7 @@ export * from './worker/errors.js';
 export * from './worker/worker.js';
 export * from './bullmq/task-bridge.js';
 export * from './tasks/client.js';
+export * from './tasks/handle.js';
 export * from './tasks/http.js';
 export * from './tasks/sse.js';
 export * from './tasks/websocket.js';

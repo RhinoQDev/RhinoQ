@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-beta.21
+
+- Remediated fan-out contention on the PostgreSQL Task path (migrations 015–017, backward-compatible): the per-item effect claim now takes a narrow advisory lock instead of locking the parent Task row across the business callback; execution-count triggers moved to statement level; execution writes return the new version instead of the full snapshot; and committed Task changes announce over `pg_notify` with a per-process `LISTEN` hub so realtime stops polling per connection.
+- Bounded the connection pool for every Go binary (was the `database/sql` defaults of unlimited open and two idle), split the Gateway rate limiter per authenticated caller, and batched the worker's idle rate-limit probe into one query.
+- Added a NestJS PostgreSQL-only integration (`RhinoQModule.forPostgresAsync` / `createPostgresTaskIntegration`) that needs no BullMQ `QueueEvents`.
+- Added `TaskHandle` and `client.openTask(id)`, a stateful lifecycle API that threads `entityVersion` for a linear worker while leaving optimistic-concurrency conflicts visible.
+- Added `getTaskIfNewerThan` for a version-conditional read that skips the O(N) execution aggregation when the caller is current, and richer `RHINOQ_PROGRESS_STATE` errors (migration 018) that name the state, the valid states and the next action.
+- Moved the AWS SDK to optional peer dependencies so a PostgreSQL-only install no longer pulls it, and accepted inline S3 configuration via `createRhinoQApp({ artifacts: { s3: { … } } })`.
+
 ## 0.1.0-beta.20
 
 - Fixed PostgreSQL startup-option merging so tenant binding is preserved when a connection URL already carries options; CLI commands, examples and benchmarks now use tenant-bound pools consistently under forced RLS.

@@ -11,7 +11,7 @@ import {
 import { createNodeWorkbenchMiddleware, type WorkbenchHandlerOptions } from '../workbench/handler.js';
 import type { RuntimeAdapter } from './contracts.js';
 import { defineRhinoQTask, type RhinoQArtifactStorage, type RhinoQDeclaredTask, type RhinoQTaskOptions, type RhinoQTraceHooks } from '../tasks/declaration.js';
-import { createAwsS3ArtifactProviderFromEnv, type RhinoQArtifactProvider } from '../tasks/artifact-storage.js';
+import { createAwsS3ArtifactProvider, createAwsS3ArtifactProviderFromEnv, type AwsS3ArtifactOptions, type RhinoQArtifactProvider } from '../tasks/artifact-storage.js';
 import { ArtifactRetentionService, ArtifactUploadService, PostgresArtifactRetentionStore, PostgresArtifactUploadSessionStore } from '../tasks/artifact-upload.js';
 import type { TaskMetrics } from '../observe/metrics.js';
 import type { RhinoQPlanInspection } from '../tasks/plan-inspector.js';
@@ -38,8 +38,16 @@ export interface CreateRhinoQAppOptions {
   artifactStorage?: RhinoQArtifactStorage;
   /** One provider configures both private upload and owner-safe signed download. */
   artifactProvider?: RhinoQArtifactProvider;
-  /** Zero-boilerplate provider selection using RHINOQ_ARTIFACT_* environment variables. */
-  artifacts?: 's3';
+  /**
+   * Zero-boilerplate file support: `'s3'` reads RHINOQ_ARTIFACT_* environment
+   * variables; `{ s3: { bucket, ... } }` takes the same configuration inline,
+   * for hosts that configure in code or from a secrets manager rather than the
+   * environment. Either form wires the whole file path — direct multipart
+   * upload, owner-scoped signed download, and retention cleanup — so an
+   * application never assembles the artifact provider, the upload service and
+   * the download resolver by hand.
+   */
+  artifacts?: 's3' | { s3: AwsS3ArtifactOptions };
   trace?: RhinoQTraceHooks;
   metrics?: TaskMetrics;
   /** Optional event-driven realtime invalidation. It is always best-effort. */
@@ -241,8 +249,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
   if (!Array.isArray(options.adapters)) throw new TypeError('createRhinoQApp requires adapters');
   const artifactChoices = [options.artifactStorage, options.artifactProvider, options.artifacts].filter(Boolean).length;
   if (artifactChoices > 1) throw new TypeError('configure only one of artifacts, artifactProvider or artifactStorage');
-  if (options.artifacts !== undefined && options.artifacts !== 's3') throw new TypeError('artifacts must be "s3"');
-  const artifactProvider = options.artifactProvider ?? (options.artifacts === 's3' ? await createAwsS3ArtifactProviderFromEnv() : undefined);
+  const artifactProvider = options.artifactProvider ?? (await resolveArtifactsOption(options.artifacts));
   const tasks = options.tasks ?? await installPostgresTaskProfile(options.pool);
   const runtime = createRhinoQ({
     client: tasks,
@@ -257,4 +264,21 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
   const uploads = artifactProvider?.direct ? new ArtifactUploadService(artifactProvider, new PostgresArtifactUploadSessionStore(options.pool), (taskId, request) => tasks.registerTaskArtifact(taskId, request), options.metrics, async (taskId, ownerId, tenantId) => { await tasks.getTaskForOwner(taskId, ownerId, tenantId); }) : undefined;
   const retention = artifactProvider?.direct?.delete ? new ArtifactRetentionService(artifactProvider, new PostgresArtifactRetentionStore(options.pool), undefined, options.metrics) : undefined;
   return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, uploads, retention, options.realtime);
+}
+
+/**
+ * Turns the `artifacts` option into a provider, or nothing.
+ *
+ * `'s3'` reads the environment; `{ s3: {...} }` takes the configuration inline.
+ * Both produce the same fully-wired provider, so an application chooses between
+ * env and code without knowing that a provider, an upload service and a
+ * download resolver sit behind either.
+ */
+async function resolveArtifactsOption(
+  artifacts: CreateRhinoQAppOptions['artifacts'],
+): Promise<RhinoQArtifactProvider | undefined> {
+  if (artifacts === undefined) return undefined;
+  if (artifacts === 's3') return createAwsS3ArtifactProviderFromEnv();
+  if (typeof artifacts === 'object' && artifacts.s3) return createAwsS3ArtifactProvider(artifacts.s3);
+  throw new TypeError('artifacts must be "s3" or { s3: AwsS3ArtifactOptions }');
 }

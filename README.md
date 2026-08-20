@@ -566,7 +566,7 @@ example creates and finishes one durable Task without BullMQ:
 
 > [!IMPORTANT]
 > The runtime-neutral APIs below are available in the verified
-> `v0.1.0-beta.20` prerelease. Install the `next` channel or pin that exact
+> `v0.1.0-beta.21` prerelease. Install the `next` channel or pin that exact
 > version; the stable `latest` channel may still point to an older release.
 
 For a reproducible evaluation, pin the verified prerelease explicitly:
@@ -639,7 +639,7 @@ That second layer is optional on day one and uses the same operator workflow.
 
 RhinoQ is currently in public beta.
 
-- Latest verified public prerelease: `v0.1.0-beta.20`.
+- Latest verified public prerelease: `v0.1.0-beta.21`.
 
 Use RhinoQ for evaluation and controlled pilots. Production use is not yet
 recommended. The beta.10 release was superseded after its partial npm publish;

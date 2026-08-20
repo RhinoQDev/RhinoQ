@@ -448,3 +448,132 @@ function validateOptions(options: RhinoQTaskIntegrationOptions): void {
     throw new TypeError('reconciliation.observe must be a function');
   }
 }
+
+/**
+ * PostgreSQL-only Task integration — no BullMQ, no QueueEvents.
+ *
+ * The finding this closes: a NestJS application that runs on PostgreSQL alone
+ * still had to hand `RhinoQModule.forRootAsync` a BullMQ `QueueEvents`, because
+ * the only integration path built a `BullMQTaskBridge` and `validateOptions`
+ * required `events`. A developer who does not use BullMQ was forced to fake a
+ * `mockQueueEvents` object — a leaked abstraction, and a broken promise for a
+ * product whose own metadata advertises a "PostgreSQL queue".
+ *
+ * This path installs the isolated Task profile and exposes exactly what an
+ * application producing and reading Tasks needs — the Task client, the
+ * owner-scoped HTTP middleware, and a health probe — with nothing about a queue
+ * runtime in its option shape. There is no projector to own and no queue
+ * subscription to verify, so `start()`/`close()` are lifecycle no-ops kept only
+ * so the same Nest lifecycle wiring works for both paths.
+ *
+ * Applications that DO drive work through BullMQ keep using
+ * `createRhinoQTaskIntegration` / `RhinoQModule.forRootAsync`.
+ */
+export interface PostgresTaskIntegrationOptions {
+  pool: SqlPool;
+  /** Existing client may be supplied when schema installation is external. */
+  tasks?: TaskClient;
+  metrics?: TaskMetrics;
+  ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+  ownerFromNodeRequest?: NodeTaskMiddlewareOptions['ownerFromNodeRequest'];
+}
+
+export interface PostgresTaskIntegrationHealth {
+  status: 'ok' | 'degraded' | 'down';
+  database: EmbeddedHealth;
+  detail: string;
+}
+
+export class PostgresTaskIntegration {
+  readonly pool: SqlPool;
+  readonly tasks: TaskClient;
+  readonly postgresTasks?: PostgresTaskClient;
+  readonly metrics: TaskMetrics;
+  private readonly ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+  private readonly ownerFromNodeRequest?: NodeTaskMiddlewareOptions['ownerFromNodeRequest'];
+  private closed = false;
+
+  constructor(options: {
+    pool: SqlPool;
+    tasks: TaskClient;
+    postgresTasks?: PostgresTaskClient;
+    metrics: TaskMetrics;
+    ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
+    ownerFromNodeRequest?: NodeTaskMiddlewareOptions['ownerFromNodeRequest'];
+  }) {
+    this.pool = options.pool;
+    this.tasks = options.tasks;
+    this.postgresTasks = options.postgresTasks;
+    this.metrics = options.metrics;
+    this.ownerFromRequest = options.ownerFromRequest;
+    this.ownerFromNodeRequest = options.ownerFromNodeRequest;
+  }
+
+  /** No projector to acquire and no queue to subscribe to; schema readiness is done in construction. */
+  async start(): Promise<void> {
+    if (this.closed) throw new Error('PostgresTaskIntegration.start() after close()');
+  }
+
+  /** Nothing background is running; kept for lifecycle symmetry with the BullMQ path. */
+  close(): void {
+    this.closed = true;
+  }
+
+  /** Owner-scoped Task HTTP middleware using the host application's auth. */
+  middleware(
+    options: Omit<NodeTaskMiddlewareOptions, 'tasks'> = {},
+  ): ReturnType<typeof createNodeTaskMiddleware> {
+    const ownerFromRequest = options.ownerFromRequest ?? this.ownerFromRequest;
+    const ownerFromNodeRequest = options.ownerFromNodeRequest ?? this.ownerFromNodeRequest;
+    if (!this.postgresTasks || (!ownerFromRequest && !ownerFromNodeRequest)) {
+      throw new Error(
+        'PostgresTaskIntegration.middleware() requires the default PostgreSQL Task client and an owner resolver',
+      );
+    }
+    return createNodeTaskMiddleware({
+      ...options,
+      tasks: this.postgresTasks,
+      ...(ownerFromRequest ? { ownerFromRequest } : {}),
+      ...(ownerFromNodeRequest ? { ownerFromNodeRequest } : {}),
+    });
+  }
+
+  /** Health is a report, not a throwing probe: database reachability and schema version. */
+  async health(expectedSchemaVersion = TASK_SCHEMA_VERSION): Promise<PostgresTaskIntegrationHealth> {
+    const database = await checkEmbeddedHealth(this.pool as unknown as HealthQueryable, expectedSchemaVersion);
+    return {
+      status: database.status,
+      database,
+      detail: database.detail ?? '',
+    };
+  }
+}
+
+/**
+ * Builds the PostgreSQL-only Task integration.
+ *
+ * Async on purpose, exactly like `createRhinoQTaskIntegration`: schema
+ * readiness is part of construction so a consumer never observes a half-built
+ * client.
+ */
+export async function createPostgresTaskIntegration(
+  options: PostgresTaskIntegrationOptions,
+): Promise<PostgresTaskIntegration> {
+  if (!options || typeof options !== 'object') {
+    throw new TypeError('PostgresTaskIntegration options are required');
+  }
+  if (!options.pool || typeof options.pool.query !== 'function' ||
+      typeof options.pool.connect !== 'function') {
+    throw new TypeError('PostgresTaskIntegration requires a PostgreSQL pool');
+  }
+  const tasks = options.tasks ?? await installPostgresTaskProfile(options.pool);
+  const metrics = options.metrics ?? new TaskMetrics();
+  return new PostgresTaskIntegration({
+    pool: options.pool,
+    tasks,
+    postgresTasks: tasks instanceof PostgresTaskClient ? tasks : undefined,
+    metrics,
+    ownerFromRequest: options.ownerFromRequest,
+    ownerFromNodeRequest: options.ownerFromNodeRequest,
+  });
+}

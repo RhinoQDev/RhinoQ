@@ -113,22 +113,34 @@
     "fault:check": "node scripts/verify-fault-matrix.mjs",
     "release:check": "node scripts/verify-release.mjs"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@aws-sdk/client-s3": "^3.1111.0",
     "@aws-sdk/lib-storage": "^3.1111.0",
-    "@aws-sdk/s3-request-presigner": "^3.1111.0"
-  },
-  "devDependencies": {
+    "@aws-sdk/s3-request-presigner": "^3.1111.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.15.0",
+    "archiver": "^7.0.0",
     "pg": "^8.22.0",
     "typescript": "^5.0.0"
   },
   "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/lib-storage": "^3.0.0",
+    "@aws-sdk/s3-request-presigner": "^3.0.0",
     "archiver": ">=7.0.0",
     "pg": ">=8.11.0"
   },
   "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    },
+    "@aws-sdk/lib-storage": {
+      "optional": true
+    },
+    "@aws-sdk/s3-request-presigner": {
+      "optional": true
+    },
     "archiver": {
       "optional": true
     }

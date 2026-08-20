@@ -38,11 +38,11 @@ the same core without making BullMQ the product boundary.
 For custom runtimes, the development-preview `createRhinoQ()` API exposes
 Observe, Track and capability-gated Control over portable runtime events:
 
-> This portable surface is available in the verified `v0.1.0-beta.20`
+> This portable surface is available in the verified `v0.1.0-beta.21`
 > prerelease. Install the `next` channel or pin that exact version; the stable
 > `latest` channel may still point to an older release.
 
-Latest verified npm prerelease: `v0.1.0-beta.20`.
+Latest verified npm prerelease: `v0.1.0-beta.21`.
 
 ```ts
 const adapter = createManualRuntimeAdapter('manual', 'reports');

@@ -2997,6 +2997,81 @@ REFERENCING NEW TABLE AS changed OLD TABLE AS previous
 FOR EACH STATEMENT EXECUTE FUNCTION rhinoq_task.announce_tasks();
 `;
 
+/**
+ * An actionable RHINOQ_PROGRESS_STATE error.
+ *
+ * `report_progress` refused a call in the wrong state with a DETAIL of the bare
+ * state string — a developer got `RhinoQError [RHINOQ_PROGRESS_STATE]: pending`
+ * and nothing about what was wrong, which states are valid, or what to do. Every
+ * other decision in this file already carries a full sentence: `fail_version`
+ * names the command and both versions and tells you to re-read and retry. This
+ * brings progress-state up to the same bar, reusing that exact shape.
+ *
+ * Only the error text changes; the state machine is untouched.
+ */
+const TASK_SCHEMA_V18_NAME = '018_actionable_progress_state_error';
+const TASK_SCHEMA_V18_SQL = String.raw`
+CREATE OR REPLACE FUNCTION rhinoq_task.report_progress(
+  p_id text,
+  p_expected_version bigint,
+  p_completed bigint,
+  p_total bigint,
+  p_has_total boolean,
+  p_message text
+)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $fn$
+DECLARE
+  v_task rhinoq_task.tasks%ROWTYPE;
+  v_total bigint := CASE WHEN p_has_total THEN p_total ELSE NULL END;
+  v_message text := NULLIF(COALESCE(p_message, ''), '');
+BEGIN
+  SELECT * INTO v_task FROM rhinoq_task.tasks WHERE id = p_id FOR UPDATE;
+  IF NOT FOUND THEN
+    PERFORM rhinoq_task.fail('RHINOQ_TASK_NOT_FOUND', p_id);
+  END IF;
+  IF v_task.state NOT IN ('running', 'cancel_requested') THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P0001',
+      MESSAGE = 'RHINOQ_PROGRESS_STATE',
+      DETAIL = 'reportTaskProgress(' || p_id || '): cannot report progress while the task is ''' ||
+        v_task.state || '''. Progress is accepted only while a task is ''running'' or ' ||
+        '''cancel_requested''. Move the task to ''running'' first — a freshly created task goes ' ||
+        'pending -> queued -> running via transitionTask — then report progress.';
+  END IF;
+  IF p_completed < 0 OR (p_has_total AND (p_total < 0 OR p_total < p_completed)) THEN
+    PERFORM rhinoq_task.fail('RHINOQ_INVALID_PROGRESS');
+  END IF;
+  IF v_task.progress_completed = p_completed
+     AND v_task.progress_total IS NOT DISTINCT FROM v_total
+     AND v_task.progress_message IS NOT DISTINCT FROM v_message THEN
+    RETURN v_task.version;
+  END IF;
+  IF v_task.version <> p_expected_version THEN
+    PERFORM rhinoq_task.fail_version('reportTaskProgress', p_id, p_expected_version, v_task.version, 'Task');
+  END IF;
+  IF p_completed < v_task.progress_completed THEN
+    PERFORM rhinoq_task.fail('RHINOQ_PROGRESS_REGRESSION', p_id);
+  END IF;
+  IF v_task.progress_total IS NOT NULL
+     AND v_task.progress_total IS DISTINCT FROM v_total THEN
+    PERFORM rhinoq_task.fail('RHINOQ_PROGRESS_TOTAL_CHANGED', p_id);
+  END IF;
+
+  UPDATE rhinoq_task.tasks
+  SET progress_completed = p_completed,
+      progress_total = v_total,
+      progress_message = v_message,
+      version = version + 1,
+      updated_at = clock_timestamp()
+  WHERE id = p_id
+  RETURNING version INTO v_task.version;
+  RETURN v_task.version;
+END;
+$fn$;
+`;
+
 const TASK_SCHEMA_MIGRATIONS = [
   { version: 1, name: '001_task_core', sql: TASK_SCHEMA_SQL },
   { version: 2, name: '002_task_summary_aggregates', sql: TASK_SCHEMA_V2_SQL },
@@ -3015,6 +3090,7 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 15, name: TASK_SCHEMA_V15_NAME, sql: TASK_SCHEMA_V15_SQL },
   { version: 16, name: TASK_SCHEMA_V16_NAME, sql: TASK_SCHEMA_V16_SQL },
   { version: 17, name: TASK_SCHEMA_V17_NAME, sql: TASK_SCHEMA_V17_SQL },
+  { version: 18, name: TASK_SCHEMA_V18_NAME, sql: TASK_SCHEMA_V18_SQL },
 ] as const;
 
 export const TASK_RLS_TABLES = [

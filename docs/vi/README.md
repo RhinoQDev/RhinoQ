@@ -18,6 +18,8 @@ Dành cho người đóng góp và người vận hành:
   kiến trúc đầy đủ hai mặt phẳng, mô hình dữ liệu và bản đồ khoá.
 - [Kế hoạch nâng cấp hiệu năng và bảo mật](./nang-cap-hieu-nang-va-bao-mat.md) —
   các điểm ngắt mạch đã xác định, cách sửa và bộ đo thay thế.
+- [Backlog cải tiến tích hợp và hiệu năng](./backlog-tich-hop-va-hieu-nang.md) —
+  7 finding ma sát DX (đã kiểm chứng) + mục tiêu hiệu năng còn lại, xếp ưu tiên.
 
 ## RhinoQ giải quyết việc gì?
 
