@@ -35,15 +35,23 @@ const (
 type tokenBucket struct {
 	rate, tokens, burst float64
 	last                time.Time
+	// seeded is false until the first take establishes the clock reference.
+	// The bucket is driven entirely by the `now` passed to take, never by the
+	// wall clock, so a caller that injects a fixed time in a test is not fighting
+	// a real-time reference captured at construction.
+	seeded bool
 }
 
-func newTokenBucket(rate float64, burst int, now time.Time) *tokenBucket {
-	return &tokenBucket{rate: rate, tokens: float64(burst), burst: float64(burst), last: now}
+func newTokenBucket(rate float64, burst int) *tokenBucket {
+	return &tokenBucket{rate: rate, tokens: float64(burst), burst: float64(burst)}
 }
 
 // take removes one token, or reports how long until one exists.
 func (b *tokenBucket) take(now time.Time) (bool, time.Duration) {
-	if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
+	if !b.seeded {
+		b.last = now
+		b.seeded = true
+	} else if elapsed := now.Sub(b.last).Seconds(); elapsed > 0 {
 		b.tokens += elapsed * b.rate
 		if b.tokens > b.burst {
 			b.tokens = b.burst
@@ -94,7 +102,7 @@ func newRequestLimiter(rate float64, burst int, callerRate float64, callerBurst 
 		callerBurst = burst
 	}
 	return &requestLimiter{
-		gateway:     newTokenBucket(rate, burst, time.Now()),
+		gateway:     newTokenBucket(rate, burst),
 		callerRate:  callerRate,
 		callerBurst: callerBurst,
 		callers:     make(map[string]*tokenBucket),
@@ -114,7 +122,7 @@ func (l *requestLimiter) Allow(key string, now time.Time) (bool, time.Duration, 
 
 	caller, found := l.callers[key]
 	if !found {
-		caller = newTokenBucket(l.callerRate, l.callerBurst, now)
+		caller = newTokenBucket(l.callerRate, l.callerBurst)
 		l.callers[key] = caller
 	}
 	if ok, retry := caller.take(now); !ok {
