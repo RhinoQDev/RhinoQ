@@ -82,6 +82,19 @@ test('the middleware honours the Express mount path', async () => {
   assert.equal(JSON.parse(item.body).id, 'task-1');
 });
 
+test('the middleware normalizes an origin with trailing slashes without regex backtracking', async () => {
+  const { tasks, snapshot } = newTasks();
+  const middleware = createNodeTaskMiddleware({
+    tasks,
+    origin: `http://app.test${'/'.repeat(100_000)}`,
+    ownerFromRequest: () => 'owner-a',
+  });
+
+  const result = await callMiddleware(middleware, { method: 'GET', url: '/tasks', headers: {} });
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(JSON.parse(result.body), { tasks: [snapshot] });
+});
+
 test('Node middleware preserves a Nest or Passport principal attached to the original request', async () => {
   const { tasks } = newTasks();
   const middleware = createNodeTaskMiddleware({
@@ -167,7 +180,11 @@ test('the Fastify plugin registers both patterns and answers each', async () => 
   const routes = new Map();
   const fastify = { all(path, handler) { routes.set(path, handler); } };
 
-  registerFastifyTaskRoutes(fastify, { tasks, ownerFromRequest: () => 'owner-a' });
+  registerFastifyTaskRoutes(fastify, {
+    tasks,
+    origin: 'http://app.test////',
+    ownerFromRequest: () => 'owner-a',
+  });
 
   assert.deepEqual([...routes.keys()], ['/tasks', '/tasks/*']);
 

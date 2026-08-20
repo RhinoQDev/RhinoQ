@@ -90,7 +90,7 @@ export function createNodeTaskMiddleware(
   const sharedHandler = options.ownerFromRequest && !options.tenantFromNodeRequest ? createTaskRequestHandler({
     ...options, ownerFromRequest: options.ownerFromRequest,
   }) : undefined;
-  const origin = (options.origin ?? 'http://rhinoq.invalid').replace(/\/+$/, '');
+  const origin = trimTrailingSlashes(options.origin ?? 'http://rhinoq.invalid');
   const [base] = taskRoutePatterns(options.basePath);
 
   return (request, response, next) => {
@@ -162,7 +162,7 @@ export function registerFastifyTaskRoutes(
 ): void {
   if (!options.ownerFromRequest) throw new TypeError('Fastify Task routes require ownerFromRequest');
   const handler = createTaskRequestHandler({ ...options, ownerFromRequest: options.ownerFromRequest });
-  const origin = (options.origin ?? 'http://rhinoq.invalid').replace(/\/+$/, '');
+  const origin = trimTrailingSlashes(options.origin ?? 'http://rhinoq.invalid');
 
   const respond = async (request: FastifyRequestLike, reply: FastifyReplyLike): Promise<unknown> => {
     const hasBody = request.body !== undefined && request.body !== null && request.method !== 'GET';
@@ -198,6 +198,12 @@ async function toFetchRequest(request: NodeTaskRequest, origin: string): Promise
     headers: toHeaders(request.headers),
     body: await readBody(request),
   });
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.endsWith('/', end)) end -= 1;
+  return value.slice(0, end);
 }
 
 // Express's json() middleware may already have consumed the stream. When it
