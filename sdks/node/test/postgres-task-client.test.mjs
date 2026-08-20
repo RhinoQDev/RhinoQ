@@ -60,3 +60,36 @@ test('Postgres Task client explains a missing Task schema', async () => {
     },
   );
 });
+
+test('Postgres transitionTask shortcuts pending to running through queued', async () => {
+  const calls = [];
+  let state = 'pending';
+  let version = 1;
+  const client = new PostgresTaskClient({
+    async query(text, values) {
+      calls.push({ text, values });
+      if (text.includes('rhinoq_task.transition_task')) {
+        state = values[2];
+        version += 1;
+        return { rows: [] };
+      }
+      return {
+        rows: [{
+          id: 'task-shortcut', type: 'report.export', tenant_id: 'default', owner_id: null,
+          definition_version: 1, state, progress_completed: 0, progress_total: null,
+          progress_message: null, result_ref: null, cancellation_status: 'none',
+          cancellation_reason: null, version, created_at: '2026-08-20T00:00:00.000Z',
+          updated_at: '2026-08-20T00:00:00.000Z', executions: [],
+        }],
+      };
+    },
+  });
+
+  const result = await client.transitionTask('task-shortcut', 1, 'running');
+
+  assert.equal(result.state, 'running');
+  assert.deepEqual(calls.filter(({ text }) => text.includes('rhinoq_task.transition_task')).map(({ values }) => values), [
+    ['task-shortcut', 1, 'queued'],
+    ['task-shortcut', 2, 'running'],
+  ]);
+});

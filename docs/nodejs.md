@@ -30,6 +30,10 @@ therefore safe to forward without deduplicating them first.
 attempt and its stable native/external runtime identity. Both return the newest
 aggregate Snapshot; they do not dispatch work themselves.
 Callers must pass that version on writes and ignore an older polling response.
+When a low-level caller asks for `transitionTask(id, version, 'running')`, the
+Gateway and PostgreSQL clients first verify the current snapshot; an exact
+`pending` snapshot is advanced through fenced `queued` and `running` commands.
+The database state machine still authorizes each transition.
 The owner application surface also exposes snapshot-convergent SSE through
 `ApplicationTaskClient.streamTask()` and `streamTasks()`. Each stream carries
 authoritative snapshots, supports `Last-Event-ID` for one Task, sends
@@ -52,6 +56,25 @@ are not atomic SQL commands and do not auto-retry `RHINOQ_VERSION_CONFLICT`.
 For runtime-backed workers, prefer `defineRhinoQApplication()` with
 `workerHandler()` or `runWorker()`; that abstraction routes registered Task
 names while the selected runtime retains lease and retry authority.
+
+For a direct client worker that already receives one selected Task job, use
+`createTaskWorker({ client, type, handler })`:
+
+```ts
+const worker = createTaskWorker({
+  client,
+  type: 'report.export',
+  handler: async (payload, { progress }) => {
+    await progress({ completed: 1, total: 2 });
+    return generateReport(payload);
+  },
+});
+await worker({ taskId: 'report-42', payload: { reportId: '42' } });
+```
+
+This helper does not scan a queue or implement lease, heartbeat or retry
+policy. For those responsibilities, pass the registered handler to the
+selected runtime through the application compiler.
 
 `RHINOQ_POSTGRES_UNREACHABLE` is a retryable classification, not an automatic
 SDK retry. A lost acknowledgement can mean that a write committed, so the

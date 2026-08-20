@@ -624,8 +624,29 @@ For a direct client lifecycle, `openTask()` hides version threading while
 preserving optimistic-concurrency errors. `reportTaskProgressAutoVersion()`
 reads the current version once, and `completeTask(id, { resultRef })` composes
 start, result attachment and success; neither helper silently retries a race.
+Low-level `transitionTask(id, version, 'running')` also verifies the current
+snapshot and composes the fenced `pending -> queued -> running` path when that
+shortcut is valid; the database state machine remains authoritative.
 For runtime-backed workers, use the typed `defineRhinoQApplication()` path
 below so lease and retry correctness remain with the selected runtime.
+
+For a direct client worker that already receives one selected Task job:
+
+```ts
+const worker = createTaskWorker({
+  client,
+  type: 'report.export',
+  handler: async (payload, { progress }) => {
+    await progress({ completed: 1, total: 2 });
+    return generateReport(payload);
+  },
+});
+await worker({ taskId: 'report-42', payload: { reportId: '42' } });
+```
+
+The helper validates the registered type, carries versions and records the
+one-attempt outcome. The selected runtime still owns polling/claim, lease,
+heartbeat and retry policy.
 
 That small portable boundary replaces the generic plumbing around your business handler:
 

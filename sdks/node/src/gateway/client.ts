@@ -338,6 +338,21 @@ export class RhinoQClient {
     state: Exclude<TaskState, 'pending'>,
   ): Promise<TaskSnapshot> {
     validateEntityVersion(expectedVersion);
+    if (state === 'running') {
+      const current = await this.getTask(taskId);
+      if (current.state === 'pending' && current.entityVersion === expectedVersion) {
+        const queued = await this.send<TaskSnapshot>(
+          'POST',
+          `/v1/tasks/${requiredPath(taskId, 'task id')}/state`,
+          { expectedVersion, state: 'queued' },
+        );
+        return this.send<TaskSnapshot>(
+          'POST',
+          `/v1/tasks/${requiredPath(taskId, 'task id')}/state`,
+          { expectedVersion: queued.entityVersion, state },
+        );
+      }
+    }
     return this.send<TaskSnapshot>(
       'POST',
       `/v1/tasks/${requiredPath(taskId, 'task id')}/state`,

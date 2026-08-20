@@ -74,6 +74,7 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
     ['POST', 'http://gateway.test/v1/tasks/task_01/executions'],
     ['POST', 'http://gateway.test/v1/task-executions/exec_01/bind'],
     ['GET', 'http://gateway.test/v1/tasks/task_01'],
+    ['GET', 'http://gateway.test/v1/tasks/task_01'],
     ['POST', 'http://gateway.test/v1/tasks/task_01/state'],
     ['POST', 'http://gateway.test/v1/tasks/task_01/cancel'],
     ['POST', 'http://gateway.test/v1/tasks/task_01/cancellation'],
@@ -82,23 +83,23 @@ test('Gateway client exposes the versioned Task polling contract', async () => {
     ['GET', 'http://gateway.test/v1/tasks/task_01/result'],
   ]);
   assert.equal(requests[0].body.definitionVersion, 1);
-  assert.deepEqual(requests[4].body, {
+  assert.deepEqual(requests[5].body, {
     expectedVersion: 2,
     state: 'running',
   });
-  assert.deepEqual(requests[5].body, {
+  assert.deepEqual(requests[6].body, {
     expectedVersion: 2,
   });
-  assert.deepEqual(requests[6].body, {
+  assert.deepEqual(requests[7].body, {
     expectedVersion: 2,
     status: 'acknowledged',
     reason: 'worker reached a checkpoint',
   });
-  assert.deepEqual(requests[7].body, {
+  assert.deepEqual(requests[8].body, {
     expectedVersion: 2,
     progress: { completed: 1, total: 4 },
   });
-  assert.deepEqual(requests[8].body, {
+  assert.deepEqual(requests[9].body, {
     expectedVersion: 2,
     reference: 's3://reports/task_01.pdf',
   });
@@ -145,6 +146,28 @@ test('Gateway high-level progress and completion helpers retain the OCC boundary
   ]);
   assert.deepEqual(requests[1].body, { expectedVersion: 4, progress: { completed: 1 } });
   assert.ok(requests.some(({ url }) => url.endsWith('/result')));
+});
+
+test('Gateway transitionTask shortcuts pending to running through queued', async () => {
+  const requests = [];
+  const client = new RhinoQClient({
+    url: 'http://gateway.test',
+    fetch: async (url, options) => {
+      requests.push({ url, method: options.method, body: options.body ? JSON.parse(options.body) : undefined });
+      if (options.method === 'GET') return Response.json({ schemaVersion: 1, entityVersion: 1, id: 'task_shortcut', type: 'report.export', state: 'pending', progress: { completed: 0 }, hasResult: false, executions: [], createdAt: '', updatedAt: '' });
+      if (requests.at(-1).body.state === 'queued') return Response.json({ schemaVersion: 1, entityVersion: 2, id: 'task_shortcut', type: 'report.export', state: 'queued', progress: { completed: 0 }, hasResult: false, executions: [], createdAt: '', updatedAt: '' });
+      return Response.json({ schemaVersion: 1, entityVersion: 3, id: 'task_shortcut', type: 'report.export', state: 'running', progress: { completed: 0 }, hasResult: false, executions: [], createdAt: '', updatedAt: '' });
+    },
+  });
+
+  const result = await client.transitionTask('task_shortcut', 1, 'running');
+
+  assert.equal(result.state, 'running');
+  assert.deepEqual(requests.map(({ method, body }) => [method, body?.state, body?.expectedVersion]), [
+    ['GET', undefined, undefined],
+    ['POST', 'queued', 1],
+    ['POST', 'running', 2],
+  ]);
 });
 
 test('BullMQ Task bridge projects an existing job without owning the queue', async () => {

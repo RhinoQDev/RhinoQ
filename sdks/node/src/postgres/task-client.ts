@@ -1388,6 +1388,20 @@ export class PostgresTaskClient implements TaskClient {
     state: Exclude<TaskState, 'pending'>,
   ): Promise<TaskSnapshot> {
     validateVersion(expectedVersion);
+    if (state === 'running') {
+      const current = await this.getTask(taskId);
+      if (current.state === 'pending' && current.entityVersion === expectedVersion) {
+        await this.execute(
+          `SELECT rhinoq_task.transition_task($1, $2, $3)`,
+          [taskId, expectedVersion, 'queued'],
+        );
+        await this.execute(
+          `SELECT rhinoq_task.transition_task($1, $2, $3)`,
+          [taskId, expectedVersion + 1, state],
+        );
+        return this.getTask(taskId);
+      }
+    }
     await this.execute(
       `SELECT rhinoq_task.transition_task($1, $2, $3)`,
       [taskId, expectedVersion, state],

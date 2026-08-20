@@ -14,6 +14,13 @@
 - `TaskHandle.complete()` now covers the common start, result attachment and
   success path. The typed application compiler remains the high-level worker
   abstraction; lease and retry authority stays with the selected runtime.
+- Added `createTaskWorker({ client, type, handler })` for one runtime-selected
+  Task job. It validates the Task type, serializes durable progress and records
+  the outcome without taking over polling, leases or retry policy.
+- Low-level `transitionTask(..., 'running')` now composes the required
+  `pending -> queued -> running` commands when the current snapshot and version
+  prove the shortcut is safe; Gateway and PostgreSQL clients keep the database
+  state machine and optimistic-concurrency fences authoritative.
 
 ## 0.1.0-beta.21
 

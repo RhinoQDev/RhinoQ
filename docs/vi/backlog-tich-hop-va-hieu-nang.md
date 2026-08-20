@@ -18,11 +18,15 @@ Các finding DX trong report Issue #06 được đối chiếu lại với code 
   `definitionVersion` mặc định là `1` ở hai Node client.
 - F-02 đã sửa bằng `TaskHandle`, `reportTaskProgressAutoVersion()` và giữ
   `RHINOQ_VERSION_CONFLICT` khi có race; SDK không tự retry mù.
-- F-04 đã được bao phủ bởi `TaskHandle.start()`, tự đi qua
-  `pending -> queued -> running` đúng state machine.
-- F-03 không tạo thêm một vòng polling/lease riêng. Tương đương an toàn hiện
-  có là `defineRhinoQApplication()` + `workerHandler()`/`runWorker()`; runtime
-  vẫn là nơi sở hữu lease, retry và lifecycle correctness.
+- F-04 đã được sửa ở cả `TaskHandle.start()` và low-level
+  `transitionTask(..., 'running')`: khi snapshot hiện tại đúng là `pending` và
+  đúng `entityVersion`, client tự gửi hai command có version fence theo
+  `pending -> queued -> running`; state machine authoritative vẫn ở runtime/
+  database.
+- F-03 đã có `createTaskWorker({ client, type, handler })` cho một Task đã được
+  runtime chọn. Helper validate type, giấu version, serialize progress và ghi
+  outcome; không tự poll/claim/lease/retry. Với worker runtime đầy đủ, dùng
+  `defineRhinoQApplication()` + `workerHandler()`/`runWorker()`.
 - API matrix `completeTask()` đã có ở Gateway và PostgreSQL client, là helper
   composition có version fence; không quảng bá nhầm là một transaction atomic.
 
