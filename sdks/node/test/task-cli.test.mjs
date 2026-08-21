@@ -73,6 +73,98 @@ test('developer CLI help and Rule generator work without hidden services or over
   } finally { rmSync(cwd, { recursive:true, force:true }); }
 });
 
+test('dev demo serves the browser-first Workbench without PostgreSQL', async () => {
+  const child = spawn(process.execPath, [developerCLI, 'dev', '--demo', '--port=0'], {
+    cwd: mkdtempSync(join(tmpdir(), 'rhinoq-demo-')),
+    encoding: 'utf8',
+    env: { ...process.env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  try {
+    const url = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`demo did not start: ${stdout}\n${stderr}`)), 10_000);
+      const check = () => {
+        const match = stdout.match(/URL RhinoQ Workbench: (http:\/\/127\.0\.0\.1:\d+\/rhinoq)/);
+        if (!match) return;
+        clearTimeout(timer);
+        resolve(match[1]);
+      };
+      child.stdout.on('data', check);
+      check();
+    });
+    const page = await fetch(url);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /RhinoQ Workbench/);
+    const overview = await fetch(`${url}/api/overview`);
+    assert.equal(overview.status, 200);
+    const payload = await overview.json();
+    assert.equal(payload.actions, true);
+    assert.equal(payload.counts.failed, 1);
+    const failed = await fetch(`${url}/api/tasks/demo-failed/flight-recorder`);
+    assert.equal(failed.status, 200);
+    assert.match(await failed.text(), /demo-failed/);
+  } finally {
+    child.kill();
+    await once(child, 'close').catch(() => undefined);
+  }
+});
+
+test('up dry-run creates a PostgreSQL 16 local plan without Docker', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-up-dry-run-'));
+  try {
+    const result = spawnSync(process.execPath, [developerCLI, 'up', '--dry-run', '--db-port=55433'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /PostgreSQL 16 on 127\.0\.0\.1:55433/);
+    assert.match(readFileSync(join(cwd, '.rhinoq', 'compose.local.yml'), 'utf8'), /postgres:16-alpine/);
+    assert.match(readFileSync(join(cwd, '.env.rhinoq.local'), 'utf8'), /127\.0\.0\.1:55433/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('connect keeps adoption preview-first and add task creates a bounded vertical slice', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-connect-add-'));
+  try {
+    const connect = spawnSync(process.execPath, [developerCLI, 'connect'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(connect.status, 0, connect.stderr);
+    assert.match(connect.stdout, /nothing is written/i);
+    assert.equal(connect.stdout.includes('PASS generated'), false);
+
+    const preview = spawnSync(process.execPath, [developerCLI, 'add', 'task', 'report.export'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /preview only/i);
+
+    const apply = spawnSync(process.execPath, [developerCLI, 'add', 'task', 'report.export', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(apply.status, 0, apply.stderr);
+    const generated = readFileSync(join(cwd, 'src', 'rhinoq.tasks.mjs'), 'utf8');
+    assert.match(generated, /defineRhinoQApplication/);
+    assert.match(generated, /context\.progress\(0, 1/);
+    assert.match(generated, /context\.progress\(1, 1/);
+    assert.match(generated, /result:/);
+    const smokeTest = readFileSync(join(cwd, 'test', 'rhinoq.tasks.test.mjs'), 'utf8');
+    assert.match(smokeTest, /manifest/);
+    assert.match(smokeTest, /plan\.status/);
+    assert.match(smokeTest, /taskCenterPath/);
+    assert.match(apply.stdout, /\/task-center/);
+    const kept = spawnSync(process.execPath, [developerCLI, 'add', 'task', 'report.export', '--apply'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(kept.status, 0, kept.stderr);
+    assert.match(kept.stdout, /KEEP/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test('doctor --fix repairs only local plumbing when PostgreSQL is unavailable', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-doctor-fix-'));
+  try {
+    const result = spawnSync(process.execPath, [developerCLI, 'doctor', '--fix'], { cwd, encoding: 'utf8', env: {} });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /local files were fixed/i);
+    assert.match(readFileSync(join(cwd, '.rhinoq', 'config.json'), 'utf8'), /taskProfileVersion/);
+    assert.match(readFileSync(join(cwd, '.env.rhinoq.example'), 'utf8'), /DATABASE_URL/);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test('init report-export generates a fail-closed consumer without overwriting', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-init-report-'));
   try {
@@ -83,6 +175,10 @@ test('init report-export generates a fail-closed consumer without overwriting', 
     const app = readFileSync(join(root, 'app.mjs'), 'utf8');
     assert.match(app, /owner-a-session/);
     assert.match(app, /tenantFromNodeRequest/);
+    assert.match(app, /name: 'report\.export'/);
+    assert.match(app, /context\.progress\(0, 1/);
+    assert.match(app, /context\.progress\(1, 1/);
+    assert.match(app, /dispatch is intentionally not enabled/);
     const surface = JSON.parse(readFileSync(join(root, '.rhinoq', 'product-surface.json'), 'utf8'));
     assert.equal(surface.result, false);
     assert.equal(surface.verifier, false);

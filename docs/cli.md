@@ -1,9 +1,9 @@
 # RhinoQ CLI reference
 
-> Node application setup: `npx rhinoq setup` is the preview-first golden path
+> Node application setup: `npx rhinoq setup` is the preview-first integration path
 > that composes the Node SDK's existing init, adopt, doctor and eval commands.
 > Run it once without `--apply`, review the plan, then apply. See
-> [one-command setup](./setup.md). The Go CLI described below remains the
+> [setup guide](./setup.md). The Go CLI described below remains the
 > authoritative full-runtime operations CLI.
 
 The RhinoQ CLI prepares the PostgreSQL schema, validates a deployment, exposes
@@ -47,6 +47,36 @@ These commands consume explicit JSON or the bounded built-in catalog. They do
 not import arbitrary project source, install dependencies, mutate Task state or
 start a Control Plane. A build profile is a composition proposal until exact
 checksums, provenance and target-image smoke are attached.
+
+For first-value work in an existing Node repository, prefer these short paths:
+
+```bash
+npx rhinoq dev --demo                 # no infrastructure; synthetic UI evidence
+npx rhinoq up                         # PostgreSQL 16 + schema + fixture + Workbench
+npx rhinoq connect                    # preview-first adoption planner
+npx rhinoq add task report.export     # preview a Task slice + smoke test
+npx rhinoq add task report.export --apply
+npx rhinoq add task report.export --apply --test-out test/report-export.test.mjs
+npx rhinoq doctor --fix               # local files only; never guesses business rules
+```
+
+`adopt --scan` is the lower-level Integration Eraser command. Its default output
+is summary-first; pass `--all` for every bounded finding or `--json` for machine
+evidence. All adoption and generation commands remain preview-first.
+
+`add task --apply` writes the Task module and a small `node:test` smoke test that
+checks the compiled manifest/plan before any runtime or database is involved.
+The generated handler uses a manual observe-only adapter; replace it with the
+application-owned runtime before dispatching work. The handoff URL is
+`/task-center` once the app mounts RhinoQ HTTP.
+
+The release job also runs an offline clean-room smoke from a temporary empty
+directory. It exercises `connect`, `add task`, `doctor --fix`, `up --dry-run`
+and `dev --demo` without Docker, PostgreSQL, Redis or provider credentials:
+
+```bash
+npm run verify:first-value --prefix sdks/node
+```
 
 ## Run the preview CLI
 

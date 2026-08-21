@@ -115,6 +115,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Verify release documentation consistency
         run: node .github/scripts/verify-release-docs.mjs
+      - name: Verify first-value documentation paths
+        run: node .github/scripts/verify-first-value-docs.mjs
       - name: Verify compatibility matrix consistency
         run: node .github/scripts/verify-compatibility.mjs
       - name: Verify repository discovery metadata
@@ -122,6 +124,9 @@ jobs:
       - run: npm ci
         working-directory: sdks/node
       - run: npm test
+        working-directory: sdks/node
+      - name: Run clean-room first-value smoke
+        run: npm run verify:first-value
         working-directory: sdks/node
       - run: npm run fault:check
         working-directory: sdks/node

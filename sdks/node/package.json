@@ -108,6 +108,7 @@
     "prepack": "npm run build",
     "pack": "node scripts/pack.mjs",
     "pack:check": "npm pack --dry-run",
+    "verify:first-value": "node ../../scripts/verify-first-value-clean-room.mjs",
     "verify:installed": "node scripts/verify-installed.mjs",
     "contract:check": "node scripts/build-contracts.mjs --check",
     "fault:check": "node scripts/verify-fault-matrix.mjs",

@@ -5,8 +5,14 @@ RhinoQ Task surface. It is intentionally a bounded, static scanner:
 
 ```bash
 npx rhinoq adopt --scan
+npx rhinoq adopt --scan --all
 npx rhinoq adopt --scan --json
 ```
+
+The terminal view is summary-first: use `--all` for every bounded finding or
+`--json` for machine-readable evidence. The scanner honors both `.gitignore`
+and an optional project `.rhinoqignore`; generated files, vendor/dependency
+trees and nested repositories are excluded by default.
 
 The scanner reads supported source files under the current directory and emits
 file/line evidence for common adopter-owned glue:

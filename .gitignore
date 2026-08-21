@@ -37,6 +37,9 @@ storage/
 .tools/
 evaluations/
 
+# Disposable first-value profile output
+.rhinoq/compose.local.yml
+
 # Unpublished product research. These are strategy inputs, not implementation
 # truth, and they are deliberately excluded from the public repository. The
 # published sources are README.md, ARCHITECTURE.md, docs/ and the tests.

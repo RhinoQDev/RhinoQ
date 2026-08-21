@@ -1,8 +1,13 @@
 # RhinoQ quickstart
 
+To see the product without infrastructure first, run `npx rhinoq dev --demo`.
+It opens a disposable Workbench with synthetic progress, result and failure
+states. The real PostgreSQL-backed tour starts below.
+
 Use this page for the first successful run. It requires no queue, worker or
-application code. In about five minutes you will start a disposable PostgreSQL
-database and ask RhinoQ to create and read a real durable Task.
+application code. The shortest real path is `npx rhinoq up`: RhinoQ starts the
+disposable PostgreSQL 16 profile, applies the schema, creates a fixture and
+opens the Workbench in one process.
 
 RhinoQ is currently a prerelease for evaluation and controlled pilots. The
 commands below pin the verified `0.1.0-beta.21` release.
@@ -16,7 +21,24 @@ commands below pin the verified `0.1.0-beta.21` release.
 
 You do **not** need Redis, BullMQ, Go or provider credentials for this tour.
 
-## 1. Start PostgreSQL
+## 1. Install and start the real local profile
+
+```bash
+mkdir rhinoq-first-run
+cd rhinoq-first-run
+npm init -y
+npm install @rhinoq/node@0.1.0-beta.21 pg
+npx rhinoq up
+```
+
+Keep this command open while exploring the Workbench. It writes only ignored
+`.rhinoq/compose.local.yml` and `.env.rhinoq.local` files. Use
+`npx rhinoq up --dry-run` first if you want to inspect the plan without Docker.
+
+The remaining manual steps are useful when Docker policy or an existing
+PostgreSQL instance prevents `up` from being used.
+
+## 2. Start PostgreSQL manually
 
 PowerShell:
 
@@ -48,7 +70,7 @@ docker exec rhinoq-quickstart-db pg_isready -U rhinoq -d rhinoq
 
 Continue only after it prints `accepting connections`.
 
-## 2. Create a disposable Node project
+## 3. Create a disposable Node project
 
 ```bash
 mkdir rhinoq-first-run
@@ -60,7 +82,7 @@ npm install @rhinoq/node@0.1.0-beta.21 pg
 Using an empty directory keeps the tour separate from your application. No
 global npm installation is required.
 
-## 3. Point RhinoQ at PostgreSQL
+## 4. Point RhinoQ at PostgreSQL
 
 PowerShell:
 
@@ -76,7 +98,7 @@ export RHINOQ_DATABASE_URL='postgresql://rhinoq:rhinoq@127.0.0.1:55432/rhinoq'
 
 Set the variable in the same terminal that runs the next command.
 
-## 4. Run the bounded evaluation
+## 5. Run the bounded evaluation
 
 ```bash
 npx rhinoq eval
@@ -95,7 +117,7 @@ It intentionally reports `NOT VERIFIED` for browser interaction, an external
 provider and deployment faults. Those are separate tests, not failures in this
 quickstart.
 
-## 5. Choose the next path
+## 6. Choose the next path
 
 | If your application uses… | Continue with… |
 |---|---|

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Added the first-value CLI paths `npx rhinoq dev --demo`, `npx rhinoq up`,
+  `npx rhinoq connect`, `npx rhinoq add task` and `npx rhinoq doctor --fix`.
+  The demo is explicitly synthetic; the local profile is PostgreSQL-backed and
+  writes only ignored files. Task generation remains non-overwriting and keeps
+  runtime/owner/security decisions explicit.
+- Integration Eraser scans now exclude generated/vendor/nested-repository
+  noise, honor `.rhinoqignore`, report skipped evidence and print a
+  summary-first preview (`--all` opts into the full finding list).
+- Corrected S3 documentation to match the optional peer dependency contract;
+  the base Node install no longer claims to ship AWS SDK packages.
+- Added the owner-facing `TaskRunHandle` facade for start/refresh/wait/cancel,
+  result and credential-free Task Center URLs, composed on the existing
+  SSE/polling `TaskStore`.
+- Added CI first-value documentation checks so quickstart markers, canonical
+  commands and stale beta/PostgreSQL claims cannot silently drift.
+- Added a versioned DX comparison source of truth for the website: it uses the
+  current `@rhinoq/node` Task/compiler APIs, compares the same full feature
+  scope, and forbids unsupported queue/throughput claims.
+- `add task --apply` now creates a dependency-free manifest/plan smoke test and
+  prints the `/task-center` handoff; the release workflow runs an offline
+  clean-room first-value smoke for the preview-first CLI paths.
 - Made `TaskCreateRequest.definitionVersion` optional, defaulting to `1` in
   the Gateway and embedded PostgreSQL clients.
 - Added `RhinoQClient.openTask(id)` parity with the PostgreSQL Task client so

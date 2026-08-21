@@ -28,6 +28,19 @@ neutral operator-focused visual hierarchy.
 > claim a production SLA. Start with the [production status](./docs/production-readiness.md)
 > before deploying real workloads.
 
+## Try RhinoQ in one command
+
+Want to see the product before connecting an application?
+
+```bash
+npx rhinoq dev --demo
+```
+
+This opens a disposable local Workbench with one Task advancing with recorded
+progress, one completed result and one failed attempt. It uses no PostgreSQL,
+Redis, provider credential or production data. The demo is synthetic evidence;
+use `npx rhinoq up` for a real local PostgreSQL Task profile.
+
 ![RhinoQ Workbench showing Tasks, execution stages, and evidence detail](./marketing/rhinoq-workbench-quiet-operations.png)
 
 The operator Workbench keeps Tasks, execution state and business evidence in
@@ -112,7 +125,8 @@ application.
   repair remove repeated frontend and operator plumbing.
 - **Adopt incrementally.** Explicit composition and optional package subpaths
   let an application mount only the Task, artifact, media, realtime or existing
-  runtime capabilities it selects. The built-in AWS S3 artifact adapter ships its SDK dependencies; other specialist provider dependencies remain optional.
+  runtime capabilities it selects. S3 and other specialist provider packages
+  remain optional peers, so a base Task install stays small.
 - **Evidence before claims.** Code-reduction measurement, fault labs and
   reproducible benchmarks distinguish implemented behavior from production
   evidence; RhinoQ does not promise an SLA in public beta.
@@ -154,7 +168,7 @@ multi-cluster Control Plane remain evidence-gated roadmap work.
 The extension contract is documented in [module lifecycle](./docs/module-lifecycle.md);
 the capability ledger is available from `npx rhinoq capabilities --json`.
 
-## Quick start: one-command setup
+## Quick start: add RhinoQ to an existing repository
 
 `@rhinoq/node` is the canonical package: it contains the Node.js SDK, CLI,
 framework integrations and exported subpaths such as `/react`, `/nest` and
@@ -166,8 +180,10 @@ Use `rhinoq` when you specifically want the shorter install or CLI name.
 View them on npm: [@rhinoq/node](https://www.npmjs.com/package/@rhinoq/node) ·
 [rhinoq](https://www.npmjs.com/package/rhinoq).
 
-Run setup without flags first. It detects Node, NestJS, Go, PostgreSQL and
-BullMQ, chooses a recommended execution path, and prints every proposed change:
+`setup` is a preview-first integration planner. It detects Node, NestJS, Go,
+PostgreSQL and BullMQ, then prints every proposed change. It does not replace
+the browser-first demo above and it does not invent an owner mapping or Task
+semantics:
 
 ```bash
 npm install @rhinoq/node@next pg
@@ -176,23 +192,39 @@ npx rhinoq setup --apply
 ```
 
 `setup` never writes during preview and never overwrites an existing file. On
-apply it reuses the existing init/adopt/doctor/eval implementation, creates the
-environment and integration shells, and prints the Task Center and Workbench
-URLs. Use `--runtime bullmq|postgres|manual` when auto-detection is not the
-desired choice. PostgreSQL queue execution remains in the authoritative Go
-worker; the generated Node/Go boundary does not duplicate lease or retry logic.
+apply it reuses the existing init/adopt/doctor/eval implementation and creates
+integration shells. BullMQ setup requires an explicit `--mode single` or
+`--mode fanout` unless every queue has a `--task` declaration. Use
+`--runtime bullmq|postgres|manual` when auto-detection is not the desired
+choice. PostgreSQL queue execution remains in the authoritative Go worker; the
+generated Node/Go boundary does not duplicate lease or retry logic.
 See the [setup guide](./docs/setup.md).
 
-`setup` is for an existing repository. To create a disposable application that
-runs a real 50-item batch with PostgreSQL, Redis and BullMQ, use:
+For an existing app that needs a guided adoption preview, use `connect`; for a
+new Task declaration, use the non-overwriting vertical-slice generator:
 
 ```bash
-npx create-rhinoq-app@next my-batch
-cd my-batch
-npm start
+npx rhinoq connect
+npx rhinoq add task report.export
+npx rhinoq add task report.export --apply
 ```
 
-Only Docker and Node.js 22+ are required for that generated evaluation app.
+`connect` delegates to the same evidence-based adoption planner, while
+`add task` creates a real progress/result handler shell and leaves runtime,
+owner identity and security decisions explicit. With `--apply`, the generator
+also creates a dependency-free manifest/plan smoke test and points the next
+step at `/task-center`; it never silently rewrites an existing file.
+
+For a real local PostgreSQL profile with schema, fixture and Workbench, use:
+
+```bash
+npx rhinoq up
+```
+
+`up` requires Docker Desktop, uses the tested PostgreSQL 16 image, writes only
+ignored local files, waits for health, applies the Task schema, creates a
+bounded fixture and starts the local Workbench. Use `npx rhinoq up --dry-run`
+to inspect the plan without starting Docker.
 
 ## Background jobs for Node.js and NestJS: compile one Task application
 
@@ -224,6 +256,23 @@ profile removes repeated adapter/runtime/scope fields. Existing runtime adapters
 retain lifecycle authority; retry defaults to `never`, and external effects
 still require explicit idempotency and confirmation policy. The lower-level
 `app.task()` remains supported. See [Task application compiler](./docs/application-compiler.md).
+
+When application code already has a Task ID, `TaskRunHandle` removes the
+remaining observe plumbing without introducing another source of truth:
+
+```ts
+const run = new TaskRunHandle(ownerClient, taskId);
+run.start();
+const terminal = await run.wait({ timeoutMs: 60_000 });
+console.log(terminal.state, run.url('/app/tasks'));
+```
+
+It uses the existing SSE/polling fallback, exposes `cancel()` and `result()`,
+and rejects unsafe URLs. It does not invent an ETA or retry an uncertain
+external effect. See [TaskRunHandle](./docs/task-run-handle.md).
+
+<details>
+<summary>Advanced integration and operator reference</summary>
 
 For a deterministic large unit, opt into a bounded checkpoint without moving
 Task state-machine authority into the handler:
@@ -585,7 +634,7 @@ example creates and finishes one durable Task without BullMQ:
 For a reproducible evaluation, pin the verified prerelease explicitly:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.20 pg
+npm install @rhinoq/node@0.1.0-beta.21 pg
 ```
 
 Or generate the fail-closed consumer shell without overwriting existing files:
@@ -1661,7 +1710,7 @@ exists but is not the default browser polling shape.
 | Guarded recovery preview/idempotency/post-check | implemented; Go repair service remains mutation authority |
 | BullMQ lifecycle bridge and embedded PostgreSQL Task client | implemented and tested |
 | Standard NestJS/BullMQ integration with default projector/reconciler leases | implemented in prerelease; adopter remeasurement pending |
-| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.20 release candidate; verified only after the tag workflow passes |
+| Release archives, npm provenance, registry smoke, checksum bundle, SBOM and non-root image | beta.21 release candidate; verified only after the tag workflow passes |
 | Tenant-wide RBAC and isolation across every subsystem | not implemented |
 | Production-shaped design-partner evidence | not yet collected |
 
@@ -1706,16 +1755,21 @@ through a public issue.
 - [Start here: complete beginner guide](./docs/start-here.md)
 - [Five-minute setup](./docs/getting-started.md)
 - [Node.js adapters and BullMQ integration](./docs/nodejs.md)
+- [TaskRunHandle: start, wait, cancel and result](./docs/task-run-handle.md)
 - [NestJS integration package](./sdks/nest/README.md)
 - [ProviderOperation](./docs/provider-operations.md)
 - [Safe repair](./docs/safe-repair.md)
 - [Notifications](./docs/notifications.md)
 - [Failure semantics: why unknown is not a pass](./docs/failure-semantics.md)
 - [Benchmarks, with their limits](./docs/benchmarks.md)
+- [DX comparison source of truth](./docs/dx-comparison.md)
+- [First Value / README / DX master plan](./docs/vi/ke-hoach-tong-the-first-value-readme-dx.md)
 - [Retention](./docs/retention.md)
 - [Architecture](./ARCHITECTURE.md)
 - [Release process](./docs/releasing.md)
 - [Roadmap and honest blockers](./docs/roadmap.md)
+
+</details>
 
 RhinoQ is licensed under Apache-2.0. Contributions should follow
 [CONTRIBUTING.md](./CONTRIBUTING.md), [SECURITY.md](./SECURITY.md) and

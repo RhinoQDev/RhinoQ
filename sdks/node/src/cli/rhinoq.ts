@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
+import { execFile as execFileCallback } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, extname, relative, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { Pool } from 'pg';
 import { installPostgresTaskProfile } from '../postgres/task-client.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
@@ -28,11 +31,17 @@ import { compileRhinoQPlan, inspectRhinoQPlan, type RhinoQPlan, type RhinoQPlanM
 import { compileRhinoQBuildProfile, type RhinoQBuildProfile } from '../runtime/build-profile.js';
 import { listRhinoQProcessorPackCatalog } from '../tasks/processor-pack.js';
 import { listRhinoQCapabilities } from '../capabilities/registry.js';
+import { createDemoTaskSource } from './demo.js';
+
+const execFile = promisify(execFileCallback);
 
 async function main(): Promise<void> {
   const command = process.argv[2] ?? 'help';
   const args = process.argv.slice(3);
   switch (command) {
+    case 'up': await up(args); break;
+    case 'connect': await connect(args); break;
+    case 'add': await add(args); break;
     case 'setup': await setup(args); break;
     case 'init': await init(args); break;
     case 'adopt': await adopt(args); break;
@@ -52,12 +61,8 @@ async function main(): Promise<void> {
     case 'dev': await dev(args); break;
     case 'version': case '--version': case '-v': console.log(SDK_VERSION); break;
     case 'help': case '--help': case '-h':
-      console.log('Integration Eraser preview: npx rhinoq adopt --scan [--json]');
-      console.log('Plan workflow: npx rhinoq plan --from manifest.json --output .rhinoq/plan.json | npx rhinoq plan validate --from .rhinoq/plan.json | npx rhinoq plan diff --from .rhinoq/plan.json --against .rhinoq/plan.previous.json');
-      console.log('Capability ledger: npx rhinoq capabilities [--json]');
-      console.log('Module/build profile preview: npx rhinoq modules list | npx rhinoq modules doctor | npx rhinoq build-profile --with processor/ffmpeg@1.0.0');
-      console.log('Explain a bounded artifact: npx rhinoq explain plan --from .rhinoq/plan.json | npx rhinoq explain task report.export --from .rhinoq/plan.json | npx rhinoq explain module processor/ffmpeg');
-      console.log('Start from your goal:\n  npx rhinoq setup                        # preview the complete golden path\n  npx rhinoq setup --apply                # configure without overwriting\n  npx rhinoq init                         # install the Task profile only\n  npx rhinoq init --example report-export # generate a consumer shell\n  npx rhinoq eval                         # verify DB, fixture and both UI surfaces\n  npx rhinoq measure --before old --after new # measure consumer-owned source\n  npx rhinoq fixture async                # create a visible generic Task\n  npx rhinoq dev                          # open the local Workbench\n\nCompose the product surface:\n  Use createRhinoQApp() for one pool, Task API, Task Center and Workbench mount.\n  Use defineRhinoQApplication() for a typed registry and shared execution profile.\n\nAdopt an existing BullMQ app:\n  npx rhinoq adopt --mode single [--apply]\n\nExplicitly simulated demos:\n  npx rhinoq demo transport-fallback\n  npx rhinoq demo missing-output --confirm-disposable\n\nFailure Lab:\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n');
+      console.log('First value: npx rhinoq dev --demo | npx rhinoq up | npx rhinoq eval');
+      console.log('This Node CLI checks the isolated Task profile only; use the Go CLI for engine fencing, leases and reaper checks.');
       help(); break;
     default: fail(`unknown command ${JSON.stringify(command)}`, 'Run: npx rhinoq help');
   }
@@ -360,7 +365,7 @@ async function countConsumerSource(directory: string): Promise<SourceCount> {
 async function setup(args: string[]): Promise<void> {
   let apply = false;
   let runtime: SetupRuntime = 'auto';
-  let mode: 'single' | 'fanout' = 'single';
+  let mode: 'single' | 'fanout' | undefined;
   let ownerProperty: string | undefined;
   let localPostgres = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -396,7 +401,8 @@ async function setup(args: string[]): Promise<void> {
   console.log(`  capability detect   ${setupCapabilitySummary(detected, resolved)}`);
   console.log(`  execution runtime   ${selected}${runtime === 'auto' ? ' (auto-selected)' : ''}`);
   console.log(`  PostgreSQL          ${resolved ? `reuse ${resolved.source}` : localPostgres ? 'generate disposable local service' : 'configuration required'}`);
-  console.log(`  Task semantics      ${mode}`);
+  const semantics = selected === 'bullmq' && !mode ? 'NEEDS DECISION: choose single or fanout' : mode ?? 'not applicable for this runtime';
+  console.log(`  Task semantics      ${semantics}`);
   console.log(`  integration         ${generated}`);
   console.log('  product surface     owner API + Task Center + Workbench + operator login (project profile mount)');
   console.log('  operations          health + readiness + metrics + reconciliation');
@@ -406,19 +412,22 @@ async function setup(args: string[]): Promise<void> {
   if (selected === 'postgres' && !go) console.log('  prerequisite        MISSING go.mod for native Go worker');
   if (!apply) {
     console.log('INFO preview only; no schema or file was changed.');
-    console.log(`NEXT review the plan, then run: npx rhinoq setup --runtime ${selected} --mode ${mode}${localPostgres ? ' --local-postgres' : ''} --apply`);
+    console.log(`NEXT review the plan, then run: npx rhinoq setup --runtime ${selected}${mode ? ` --mode ${mode}` : selected === 'bullmq' ? ' --mode single|fanout' : ''}${localPostgres ? ' --local-postgres' : ''} --apply`);
     return;
+  }
+  if (selected === 'bullmq' && !mode) {
+    fail('BullMQ setup needs Task semantics before apply', 'Choose --mode single or --mode fanout, then rerun setup --apply');
   }
   if (selected === 'bullmq' && !detected.bullmq) fail('BullMQ setup selected but bullmq is not installed', 'Install bullmq, or choose --runtime postgres/manual');
   if (selected === 'postgres' && !go) fail('native PostgreSQL queue setup requires a Go project', 'Run go mod init, or choose --runtime manual/bullmq');
 
   await init([]);
   await mkdir(resolve('.rhinoq'), { recursive: true });
-  await writeNew(resolve('.rhinoq', 'setup.json'), `${JSON.stringify({ schemaVersion: 2, runtime: selected, mode, generated, projectProfile: selected === 'manual', capabilities: setupCapabilities(detected, resolved) }, null, 2)}\n`);
+  await writeNew(resolve('.rhinoq', 'setup.json'), `${JSON.stringify({ schemaVersion: 2, runtime: selected, ...(mode ? { mode } : {}), generated, projectProfile: selected === 'manual', capabilities: setupCapabilities(detected, resolved) }, null, 2)}\n`);
   await writeNew(resolve('.env.rhinoq.example'), setupEnvironmentTemplate(selected));
 
   if (selected === 'bullmq') {
-    const adoptArgs = ['--mode', mode, '--apply'];
+    const adoptArgs = ['--mode', mode!, '--apply'];
     if (ownerProperty) adoptArgs.push('--owner-property', ownerProperty);
     if (localPostgres) adoptArgs.push('--local-postgres');
     await adopt(adoptArgs);
@@ -439,6 +448,89 @@ async function setup(args: string[]): Promise<void> {
   console.log('URL Task Center: /task-center');
   console.log('URL Workbench sign in: /operator-login');
   console.log('NEXT connect authenticated owner/tenant identity and your business Task handler; RhinoQ will not guess either.');
+}
+
+/** Start a disposable real local stack, then hand it to the same Workbench. */
+async function up(args: string[]): Promise<void> {
+  let dbPort = 55432;
+  let workbenchPort = 8788;
+  let dryRun = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === '--dry-run') { dryRun = true; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--db-port') dbPort = boundedPort(key, value, 1);
+    else if (key === '--port') workbenchPort = boundedPort(key, value, 1);
+    else fail(`unknown up option ${JSON.stringify(key)}`, 'Run: npx rhinoq up [--db-port=55432] [--port=8788]');
+  }
+  const compose = resolve('.rhinoq', 'compose.local.yml');
+  await mkdir(dirname(compose), { recursive: true });
+  const composeWritten = await writeNew(compose, localPostgresTemplate(dbPort));
+  if (!composeWritten) {
+    try {
+      const existing = await readFile(compose, 'utf8');
+      const existingPort = existing.match(/127\.0\.0\.1:(\d+):5432/)?.[1];
+      if (existingPort) dbPort = boundedPort('--db-port', existingPort, 1);
+    } catch { /* the subsequent Docker command will report the real problem */ }
+  }
+  const databaseURL = `postgresql://rhinoq:rhinoq@127.0.0.1:${dbPort}/rhinoq`;
+  let operatorToken = process.env.RHINOQ_OPERATOR_TOKEN?.trim() || randomBytes(32).toString('hex');
+  const envPath = resolve('.env.rhinoq.local');
+  const envWritten = await writeNew(envPath, `RHINOQ_DATABASE_URL=${databaseURL}\nRHINOQ_OPERATOR_TOKEN=${operatorToken}\n`);
+  if (!envWritten) {
+    try {
+      const existingEnv = await readFile(envPath, 'utf8');
+      const existingToken = existingEnv.match(/^RHINOQ_OPERATOR_TOKEN=(.+)$/m)?.[1]?.trim();
+      if (existingToken) operatorToken = existingToken;
+    } catch { /* use the process token */ }
+  }
+  console.log(`PASS local stack plan: PostgreSQL 16 on 127.0.0.1:${dbPort}`);
+  console.log(`INFO local environment: ${envPath}`);
+  if (dryRun) {
+    console.log('INFO dry run; Docker was not started and no schema was changed.');
+    console.log(`NEXT docker compose -f ${relative(resolve('.'), compose)} up -d`);
+    return;
+  }
+  try {
+    await runExternal('docker', ['info']);
+  } catch {
+    fail('Docker is not available', 'Start Docker Desktop, then rerun: npx rhinoq up');
+  }
+  try {
+    await runExternal('docker', ['compose', '-f', compose, 'up', '-d']);
+  } catch (error) {
+    fail(`could not start local PostgreSQL: ${safe(error)}`, `Inspect: docker compose -f ${relative(resolve('.'), compose)} logs`);
+  }
+  let ready = false;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      await runExternal('docker', ['compose', '-f', compose, 'exec', '-T', 'rhinoq-postgres', 'pg_isready', '-U', 'rhinoq', '-d', 'rhinoq']);
+      ready = true;
+      break;
+    } catch {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000));
+    }
+  }
+  if (!ready) fail('PostgreSQL did not become ready within 30 seconds', `Inspect: docker compose -f ${relative(resolve('.'), compose)} logs rhinoq-postgres`);
+  process.env.RHINOQ_DATABASE_URL = databaseURL;
+  process.env.RHINOQ_OPERATOR_TOKEN = operatorToken;
+  await init([]);
+  await fixture(['async']);
+  console.log(`PASS local RhinoQ stack is ready; starting Workbench on port ${workbenchPort}.`);
+  console.log(`INFO stop the UI with Ctrl+C; stop the database with: docker compose -f ${relative(resolve('.'), compose)} down`);
+  await dev([`--port=${workbenchPort}`]);
+}
+
+function boundedPort(key: string, value: string | undefined, minimum: number): number {
+  const port = Number(requiredOption(key, value));
+  if (!Number.isInteger(port) || port < minimum || port > 65535) fail(`${key} must be ${minimum}..65535`, `Run: npx rhinoq up --${key.slice(2)}=8788`);
+  return port;
+}
+
+async function runExternal(command: string, args: string[]): Promise<string> {
+  const result = await execFile(command, args, { cwd: resolve('.'), maxBuffer: 2 * 1024 * 1024 });
+  return `${result.stdout ?? ''}${result.stderr ?? ''}`;
 }
 
 function setupEnvironmentTemplate(runtime: Exclude<SetupRuntime, 'auto'>): string {
@@ -506,7 +598,7 @@ function requireDatabase(command: string): ResolvedDatabaseConfig {
   if (!resolved) {
     fail(
       'no PostgreSQL connection in the environment',
-      `Set RHINOQ_DATABASE_URL or DATABASE_URL, or set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE (RHINOQ_DB_* also works), then run: npx rhinoq ${command}`,
+      `Set RHINOQ_DATABASE_URL (or DATABASE_URL, or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE), then run: npx rhinoq ${command}`,
     );
   }
   return resolved;
@@ -567,12 +659,142 @@ async function init(args: string[] = []): Promise<void> {
   console.log('NEXT add a verification: npx rhinoq verify add completed-report-has-output');
 }
 
+/**
+ * Friendly existing-app entry point. `connect` deliberately delegates the
+ * safety-sensitive detection and preview to the adoption workflow so there
+ * is one source of truth for queue semantics, owner mapping and file writes.
+ */
+async function connect(args: string[]): Promise<void> {
+  console.log('RhinoQ connect — keep your runtime, add the Task product surface');
+  console.log('  1. inspect existing queues and status glue');
+  console.log('  2. decide Task semantics and owner identity');
+  console.log('  3. preview a non-overwriting integration');
+  console.log('INFO nothing is written until you rerun with --apply.');
+  await adopt(args);
+}
+
+async function add(args: string[]): Promise<void> {
+  const subject = args[0];
+  if (subject !== 'task') {
+    fail('add currently supports the task generator only', 'Run: npx rhinoq add task report.export [--apply]');
+  }
+  let name: string | undefined = args[1] && !args[1]!.startsWith('--') ? args[1] : undefined;
+  let output = 'src/rhinoq.tasks.mjs';
+  let testOutput = 'test/rhinoq.tasks.test.mjs';
+  let apply = false;
+  for (let index = name ? 2 : 1; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === '--apply') { apply = true; continue; }
+    if (!raw.startsWith('--') && !name) { name = raw; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--out') output = requiredOption(key, value);
+    else if (key === '--test-out') testOutput = requiredOption(key, value);
+    else if (key === '--name') name = requiredOption(key, value);
+    else fail(`unknown add task option ${JSON.stringify(key)}`, 'Run: npx rhinoq add task report.export [--out src/rhinoq.tasks.mjs] [--test-out test/rhinoq.tasks.test.mjs] [--apply]');
+  }
+  if (!name) fail('add task requires a Task name', 'Run: npx rhinoq add task report.export [--apply]');
+  const normalized = normalizeTaskName(name);
+  const outputPath = resolve(output);
+  const testPath = resolve(testOutput);
+  const key = toTaskKey(normalized);
+  const content = taskSliceTemplate(normalized, key);
+  const testContent = taskSliceTestTemplate(normalized, relative(dirname(testPath), outputPath), key);
+  console.log('RhinoQ Task slice');
+  console.log(`  task name   ${normalized}`);
+  console.log(`  task key    ${key}`);
+  console.log(`  output      ${outputPath}`);
+  console.log('  includes    typed declaration, real progress calls, result metadata, worker handler and a smoke test');
+  console.log(`  test        ${testPath}`);
+  console.log('  UI handoff  /task-center (after the application mounts its HTTP surface)');
+  console.log('  runtime     manual adapter placeholder; replace with the app-owned adapter before dispatch');
+  if (!apply) {
+    console.log('INFO preview only; nothing was written.');
+    console.log(`NEXT npx rhinoq add task ${normalized} --apply`);
+    return;
+  }
+  await mkdir(dirname(outputPath), { recursive: true });
+  const written = await writeNew(outputPath, content);
+  if (!written) return;
+  await mkdir(dirname(testPath), { recursive: true });
+  await writeNew(testPath, testContent);
+  console.log(`PASS generated ${outputPath}`);
+  console.log(`PASS generated ${testPath}`);
+  console.log(`NEXT import { application } from './${relative(dirname(outputPath), outputPath).replace(/\\/g, '/').replace(/^\.\//, '')}' and call application.start({ pool, ... })`);
+  console.log('NEXT replace the manual adapter with BullMQ/SQS/custom dispatch before calling dispatch().');
+  console.log('NEXT run npx rhinoq doctor after the app owns DATABASE_URL and the Task schema.');
+}
+
+function normalizeTaskName(value: string): string {
+  const normalized = value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!normalized || !/^[A-Za-z0-9]/.test(normalized)) {
+    fail(`invalid Task name ${JSON.stringify(value)}`, 'Use a stable name such as report.export');
+  }
+  if (!normalized.includes('.')) console.log('INFO Task names are easier to search when they use a domain.action form.');
+  return normalized;
+}
+
+function toTaskKey(name: string): string {
+  const parts = name.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  const key = parts.map((part, index) => index === 0
+    ? part.charAt(0).toLowerCase() + part.slice(1)
+    : part.charAt(0).toUpperCase() + part.slice(1)).join('');
+  return /^[A-Za-z_$]/.test(key) ? key : `task${key}`;
+}
+
+function taskSliceTemplate(name: string, key: string): string {
+  return `import { createManualRuntimeAdapter, defineRhinoQApplication } from '@rhinoq/node';
+
+// This adapter is intentionally observe/handler-only. Replace it with the
+// runtime adapter owned by your application before calling dispatch().
+const runtime = createManualRuntimeAdapter('manual', 'application');
+
+export const application = defineRhinoQApplication({
+  profile: { name: 'application', adapters: [runtime] },
+  tasks: (task) => ({
+    ${key}: task({
+      name: '${name}',
+      run: async (input, context) => {
+        await context.progress(0, 1, 'Started');
+        // TODO: replace this bounded example with business work.
+        const output = { input };
+        await context.progress(1, 1, 'Completed');
+        return output;
+      },
+      result: (output) => ({ ref: 'inline:${name}', mediaType: 'application/json' }),
+    }),
+  }),
+});
+
+export const manifest = application.manifest();
+export const plan = application.plan();
+export const taskCenterPath = '/task-center';
+`;
+}
+
+function taskSliceTestTemplate(name: string, importPath: string, key: string): string {
+  const modulePath = importPath.replace(/\\/g, '/');
+  const specifier = modulePath.startsWith('.') ? modulePath : `./${modulePath}`;
+  return `import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { manifest, plan, taskCenterPath } from '${specifier}';
+
+test(${JSON.stringify(`${name} is registered before runtime wiring`)}, () => {
+  const entry = manifest.tasks.find((task) => task.key === ${JSON.stringify(key)});
+  assert.equal(entry?.name, ${JSON.stringify(name)});
+  assert.equal(plan.status, 'ready');
+  assert.equal(plan.tasks.length, 1);
+  assert.equal(taskCenterPath, '/task-center');
+});
+`;
+}
+
 async function initReportExportExample(): Promise<void> {
   const root = resolve('rhinoq-report-export');
   await mkdir(root, { recursive: true });
   const files: Record<string, string> = {
-    'package.json': `${JSON.stringify({ name: 'rhinoq-report-export', private: true, type: 'module', scripts: { start: 'node app.mjs' }, dependencies: { '@rhinoq/node': '^0.1.0-beta.20', pg: '^8.22.0' } }, null, 2)}\n`,
-    '.env.example': 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app\nRHINOQ_OPERATOR_TOKEN=replace-me\n# Optional S3 artifact golden path\nRHINOQ_ARTIFACT_BUCKET=\nRHINOQ_ARTIFACT_REGION=\nRHINOQ_ARTIFACT_MAX_BYTES=10737418240\n',
+    'package.json': `${JSON.stringify({ name: 'rhinoq-report-export', private: true, type: 'module', engines: { node: '>=22' }, scripts: { start: 'node --env-file=.env app.mjs' }, dependencies: { '@rhinoq/node': `^${SDK_VERSION}`, pg: '^8.22.0' } }, null, 2)}\n`,
+    '.env.example': 'DATABASE_URL=postgres://postgres:postgres@localhost:5432/app\n# Local-only placeholder. Replace it before sharing the app.\nRHINOQ_OPERATOR_TOKEN=local-demo-token-change-me\n# Optional S3 artifact golden path\nRHINOQ_ARTIFACT_BUCKET=\nRHINOQ_ARTIFACT_REGION=\nRHINOQ_ARTIFACT_MAX_BYTES=10737418240\n',
     '.rhinoq/product-surface.json': `${JSON.stringify({ owner: true, tenant: true, result: false, verifier: false, runtimeIdentity: true, durableStore: false }, null, 2)}\n`,
     'app.mjs': reportExportAppTemplate(),
     'README.md': '# RhinoQ report-export consumer\n\nRun `npm install`, configure `DATABASE_URL`, then `npm start`.\n\nDemo sessions are server-side and stable: `owner-a-session` and `owner-b-session`. Replace them with real authentication before deployment. Result and verifier callbacks intentionally remain fail-closed until configured; run `npx rhinoq doctor --product-surface` in this directory.\n',
@@ -611,10 +833,22 @@ const app = await createRhinoQApp({
   ownerFromNodeRequest: (request) => identity(request).ownerId,
   tenantFromNodeRequest: (request) => identity(request).tenantId,
 });
+const reportExport = app.task({
+  name: 'report.export', adapter: 'manual', runtime: 'manual', scope: 'report-export',
+  run: async ({ reportId }, context) => {
+    await context.progress(0, 1, 'Preparing report');
+    // Keep the business handler here; provider credentials and verification
+    // remain application-owned and fail closed until configured.
+    await context.progress(1, 1, 'Report ready');
+    return { reportId };
+  },
+  result: ({ reportId }) => ({ ref: \`report:\${reportId}\`, mediaType: 'application/json' }),
+});
 const http = app.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN });
 createServer((request, response) => http(request, response)).listen(8787, '127.0.0.1', () => {
   console.log('Task Center http://127.0.0.1:8787/task-center');
   console.log('Workbench sign in http://127.0.0.1:8787/operator-login');
+  console.log(\`Task handler registered: \${reportExport.name} (manual adapter; dispatch is intentionally not enabled)\`);
 });
 `;
 }
@@ -639,6 +873,7 @@ async function adopt(args: string[]): Promise<void> {
   let apply = false;
   let scan = false;
   let json = false;
+  let all = false;
   let observe = false;
   let adapter: 'manual' | 'sqs' | 'bullmq' | 'custom' | undefined;
   let localPostgres = false;
@@ -655,6 +890,7 @@ async function adopt(args: string[]): Promise<void> {
     if (raw === '--apply') { apply = true; continue; }
     if (raw === '--scan') { scan = true; continue; }
     if (raw === '--json') { json = true; continue; }
+    if (raw === '--all') { all = true; continue; }
     if (raw === '--observe') { observe = true; continue; }
     if (raw === '--local-postgres') { localPostgres = true; continue; }
     const [key, inline] = raw.split('=', 2);
@@ -689,7 +925,7 @@ async function adopt(args: string[]): Promise<void> {
     }
     const report = await scanRhinoQIntegrationEraser(resolve('.'));
     if (json) console.log(JSON.stringify(report, null, 2));
-    else printIntegrationEraserReport(report);
+    else printIntegrationEraserReport(report, all);
     return;
   }
   if (json) fail('--json is only available with --scan', 'Run: npx rhinoq adopt --scan --json');
@@ -722,10 +958,12 @@ async function adopt(args: string[]): Promise<void> {
   if (!database && !localPostgres) console.log('  local evaluation   add --local-postgres to generate a non-overwriting Compose service');
   if (!apply) {
     console.log('INFO preview only; nothing was written.');
-    console.log(`NEXT ${missing.length > 0 ? `install ${missing.join(' and ')}, then ` : ''}generate without overwriting: npx rhinoq adopt --mode ${mode ?? 'single'} --apply`);
+    console.log(`NEXT ${missing.length > 0 ? `install ${missing.join(' and ')}, then ` : ''}${mode ? `generate without overwriting: npx rhinoq adopt --mode ${mode} --apply` : 'choose --mode single or --mode fanout, then rerun the preview'}`);
     return;
   }
-  if (!mode && (!detected.nest || declaredTasks.size === 0)) fail('adopt --apply requires an explicit Task mode or per-queue --task declarations', 'Choose --mode single, or declare --task mail-queue=mail.send:single');
+  if (!mode && declaredTasks.size === 0) {
+    fail('adopt --apply requires an explicit Task mode or a declaration for every detected queue', 'Choose --mode single/fanout, or declare each queue with --task queue=task.name:single');
+  }
   if (missing.length > 0) fail('adoption prerequisites are missing', `Run: npm install @rhinoq/node ${missing.join(' ')}`);
   if (!database && localPostgres) {
     const compose = resolve('compose.rhinoq.yml');
@@ -764,22 +1002,39 @@ async function adopt(args: string[]): Promise<void> {
   }
 }
 
-function printIntegrationEraserReport(report: RhinoQIntegrationEraserReport): void {
+function printIntegrationEraserReport(report: RhinoQIntegrationEraserReport, showAll = false): void {
   console.log('RhinoQ Integration Eraser scan');
   console.log('  mode                 preview-only; repository was not modified');
   console.log(`  source files         ${report.filesScanned} scanned (${report.linesScanned} lines)`);
-  console.log(`  detected             ${report.detected.length ? report.detected.join(', ') : 'none'}`);
+  console.log(`  ignored/generated    ${report.skippedIgnoredFiles}`);
+  console.log('  Detected');
+  if (report.detected.length) {
+    const counts = new Map(report.detected.map((label) => [label, report.findings.filter((finding) => {
+      if (label === 'status routes') return finding.category === 'status-route';
+      if (label === 'polling hooks') return finding.category === 'polling-hook';
+      if (label === 'BullMQ lifecycle listeners') return finding.category === 'bullmq-listener';
+      if (label === 'upload proxies') return finding.category === 'upload-proxy';
+      return finding.category === 'retry-timer';
+    }).length]));
+    for (const [label, count] of counts) console.log(`    ${label}: ${count}`);
+  } else console.log('    none');
   console.log(`  replaceable estimate ${report.replaceableEstimate.files} files / ${report.replaceableEstimate.matchingLines} high-confidence matching lines`);
   console.log('  estimate note        static evidence only; not a deletion, savings or reliability claim');
   console.log('  still application    auth, handler, business verification');
-  if (report.findings.length) {
-    console.log('  findings');
-    for (const finding of report.findings) {
+  const findings = showAll ? report.findings : report.findings.slice(0, 10);
+  if (findings.length) {
+    console.log(`  ${showAll ? 'findings' : 'High-confidence/review findings (first 10; use --all for full evidence)'}`);
+    for (const finding of findings) {
       console.log(`    ${finding.confidence.toUpperCase()} ${finding.category} ${finding.file}:${finding.line}`);
       console.log(`      evidence: ${finding.evidence || '<blank line>'}`);
       console.log(`      candidate: ${finding.replacement}`);
       if (finding.reviewReason) console.log(`      review: ${finding.reviewReason}`);
     }
+  }
+  const decisions = report.findings.filter((finding) => finding.confidence === 'review');
+  console.log('  Needs a decision');
+  if (decisions.length) for (const finding of decisions.slice(0, showAll ? decisions.length : 5)) {
+    console.log(`    ${finding.file}:${finding.line} — ${finding.reviewReason ?? 'manual review required'}`);
   }
   for (const warning of report.warnings) console.log(`  WARN ${warning}`);
   console.log(`  preview changes      ${report.preview.changes.length} manual-review patch proposal(s)`);
@@ -853,16 +1108,16 @@ export async function startRhinoQObserve({ pool, runtimeAdapter, ownerFromReques
 `;
 }
 
-function localPostgresTemplate(): string {
+function localPostgresTemplate(hostPort = 55432): string {
   return `services:
   rhinoq-postgres:
-    image: postgres:17-alpine
+    image: postgres:16-alpine
     environment:
       POSTGRES_USER: rhinoq
       POSTGRES_PASSWORD: rhinoq
       POSTGRES_DB: rhinoq
     ports:
-      - "127.0.0.1:55432:5432"
+      - "127.0.0.1:${hostPort}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rhinoq -d rhinoq"]
       interval: 2s
@@ -1485,6 +1740,14 @@ async function doctor(args: string[] = []): Promise<void> {
     ] as const) console.log(`${value[field] === true ? 'PASS' : 'WARN'} ${field}: ${value[field] === true ? 'configured' : consequence}`);
     if (args.length === 1) return;
   }
+  if (args.includes('--fix')) {
+    await doctorFix();
+    if (!database()) {
+      console.log('INFO no PostgreSQL connection was available; local files were fixed, runtime checks were not run.');
+      console.log('NEXT set DATABASE_URL (or PGHOST/PGDATABASE and friends), then run: npx rhinoq doctor');
+      return;
+    }
+  }
   const resolved = requireDatabase('doctor');
   console.log('INFO scope: Task schema, local Rule files and client packages.');
   console.log('INFO not checked here: worker identity, lease/heartbeat/reaper timing,');
@@ -1507,6 +1770,27 @@ async function doctor(args: string[] = []): Promise<void> {
   else console.log('INFO REDIS_URL is absent; this is fine unless the app uses BullMQ.');
   console.log('NEXT create the visible failure fixture: npx rhinoq fixture failure');
   console.log('NEXT before a pilot, run the runtime checks too: rhinoq doctor --ci');
+}
+
+async function doctorFix(): Promise<void> {
+  await mkdir(resolve('.rhinoq', 'rules'), { recursive: true });
+  const configPath = resolve('.rhinoq', 'config.json');
+  const configWritten = await writeNew(configPath, `${JSON.stringify({
+    schemaVersion: 1,
+    databaseEnv: database()?.source ?? 'DATABASE_URL',
+    taskProfileVersion: TASK_SCHEMA_VERSION,
+  }, null, 2)}\n`);
+  const envPath = resolve('.env.rhinoq.example');
+  const envWritten = await writeNew(envPath, [
+    '# Local connection only; never commit real credentials.',
+    'DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/app',
+    'RHINOQ_OPERATOR_TOKEN=replace-with-at-least-32-random-bytes',
+    'RHINOQ_REPLICA_ID=local-dev',
+    '',
+  ].join('\n'));
+  console.log(`PASS doctor --fix ${configWritten ? 'created' : 'kept'} ${configPath}`);
+  console.log(`PASS doctor --fix ${envWritten ? 'created' : 'kept'} ${envPath}`);
+  console.log('INFO --fix only repairs local plumbing; it never chooses Task semantics, owner identity or security policy.');
 }
 
 /**
@@ -2083,6 +2367,10 @@ async function createAsyncFixture(tasks: Awaited<ReturnType<typeof installPostgr
 }
 
 async function dev(args: string[]): Promise<void> {
+  if (args.includes('--demo')) {
+    await demoDev(args);
+    return;
+  }
   const portValue = Number(args.find((item) => item.startsWith('--port='))?.slice(7) ?? 8788);
   if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) fail('port must be 1..65535', 'Example: npx rhinoq dev --port=8788');
   const pool = new Pool(withPostgresOption(requireDatabase('dev').pool, '-c rhinoq.tenant_id=default'));
@@ -2114,6 +2402,56 @@ async function dev(args: string[]): Promise<void> {
   process.once('SIGINT', close); process.once('SIGTERM', close);
 }
 
+/**
+ * Disposable browser-first demo. It deliberately uses the same Workbench
+ * middleware as a real store, but no PostgreSQL, Redis, provider or token.
+ */
+async function demoDev(args: string[]): Promise<void> {
+  const rawPort = args.find((item) => item.startsWith('--port='))?.slice(7) ?? '8788';
+  const portValue = Number(rawPort);
+  if (!Number.isInteger(portValue) || portValue < 0 || portValue > 65535) {
+    fail('demo port must be 0..65535', 'Example: npx rhinoq dev --demo --port=8788');
+  }
+  const source = createDemoTaskSource();
+  source.start();
+  const workbench = createNodeWorkbenchMiddleware({
+    tasks: source,
+    basePath: '/rhinoq',
+    actions: true,
+    // Demo data is intentionally cross-owner but disposable. Production
+    // applications must put the same middleware behind operator auth.
+    requireOperator: () => true,
+    navigation: { overviewPath: '/rhinoq', tasksPath: '/rhinoq' },
+  });
+  const server = createServer((request, response) => {
+    if (request.url === '/') {
+      response.writeHead(302, { location: '/rhinoq', 'cache-control': 'no-store' });
+      response.end();
+      return;
+    }
+    workbench(request, response);
+  });
+  const close = () => {
+    source.stop();
+    server.close(() => process.exit(0));
+  };
+  process.once('SIGINT', close); process.once('SIGTERM', close);
+  await new Promise<void>((resolveListen, reject) => {
+    server.once('error', reject);
+    server.listen(portValue, '127.0.0.1', resolveListen);
+  }).catch((error) => {
+    source.stop();
+    fail(`could not start demo server: ${safe(error)}`, 'Use npx rhinoq dev --demo --port=0 to choose a free port');
+  });
+  const address = server.address();
+  const port = address && typeof address !== 'string' ? address.port : portValue;
+  console.log('PASS RhinoQ disposable demo is running (no PostgreSQL, Redis or provider).');
+  console.log(`URL RhinoQ Workbench: http://127.0.0.1:${port}/rhinoq`);
+  console.log('INFO demo Tasks: one running with live progress, one completed result, one failed attempt.');
+  console.log('WARN demo data is local and synthetic; it is not production evidence.');
+  console.log('NEXT press Ctrl+C to stop.');
+}
+
 async function detectPackages(): Promise<{ pg: boolean; bullmq: boolean; nest: boolean; sharp: boolean; s3: boolean; cloudinary: boolean }> {
   try {
     const pkg = JSON.parse(await readFile(resolve('package.json'), 'utf8')) as { dependencies?: Record<string,string>; devDependencies?: Record<string,string> };
@@ -2139,4 +2477,4 @@ async function writeNew(path: string, content: string): Promise<boolean> { try {
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }
-function help(): void { console.log(`RhinoQ developer CLI\n\n  npx rhinoq init\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq doctor\n  npx rhinoq notify add ops --webhook https://example.com/hooks/rhinoq --secret-env RHINOQ_NOTIFY_SECRET_OPS\n  npx rhinoq notify list [--json]\n  npx rhinoq notify test ops\n  npx rhinoq notify remove ops\n  npx rhinoq fixture failure\n  npx rhinoq dev\n\nverify apply on an existing Rule prints what changed and needs --force, because\na new version does not reopen Findings recorded against the old one.\nverify delete previews by default; --apply performs it.\n\nPostgreSQL connection, in order: RHINOQ_DATABASE_URL, DATABASE_URL, then the\ndiscrete PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE/PGSSLMODE variables\n(RHINOQ_DB_HOST/_PORT/_USER/_PASSWORD/_NAME/_SSLMODE win over those). Discrete\nconfiguration needs at least a host and a database name.\n\nnotify reads and writes the same .rhinoq/notifications.json as the Go CLI, and\nnever stores a secret: an entry names an environment variable. "notify test"\nsends one synthetic signed event and writes nothing - no Finding, no delivery\nrecord. "notify send" is Go-only: a real delivery goes through the durable\ndelivery ledger the engine owns.\n\nThis CLI checks the isolated Task profile only. For runtime checks - fencing,\nlease/heartbeat timing, the reaper and migration state - build and run the Go\nCLI: rhinoq doctor.\n\nEvery failure includes the next action.`); }
+function help(): void { console.log(`RhinoQ developer CLI\n\nStart here (the shortest paths):\n  npx rhinoq dev --demo                 open a browser-first disposable demo\n  npx rhinoq up                         start the real local PostgreSQL profile\n  npx rhinoq setup                      preview integration without writing\n  npx rhinoq setup --apply              configure without overwriting\n  npx rhinoq init --example report-export generate a consumer example\n  npx rhinoq dev                         open the local Workbench (PostgreSQL)\n\nUse with an existing app:\n  npx rhinoq connect                     guided, preview-first adoption\n  npx rhinoq connect --apply             apply only after reviewing the plan\n  npx rhinoq add task report.export      preview a working Task slice\n  npx rhinoq add task report.export --apply generate without overwriting\n  npx rhinoq adopt --mode single        preview a BullMQ integration\n  npx rhinoq adopt --mode single --apply apply only after reviewing the plan\n  npx rhinoq adopt --scan                read-only integration inventory\n  npx rhinoq measure --before old --after new\n\nProduct composition:\n  createRhinoQApp()                     one pool, Task API, Task Center and Workbench\n  defineRhinoQApplication()             typed registry and worker handlers\n\nAdvanced operations:\n  npx rhinoq doctor [--fix]             database/runtime diagnosis or local plumbing fix\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq fixture async              create a visible generic Task (database)\n  npx rhinoq demo transport-fallback    explicitly simulated transport evidence\n  npx rhinoq demo missing-output --confirm-disposable\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n  npx rhinoq capabilities [--json]      evidence-aware capability ledger\n  npx rhinoq plan --from .rhinoq/plan.json\n\nPostgreSQL configuration: RHINOQ_DATABASE_URL, DATABASE_URL, or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE.\nThe Task profile is authoritative for state, leases, retries and effects; this Node CLI never replaces that correctness layer.\nEvery failure includes one next action.`); }

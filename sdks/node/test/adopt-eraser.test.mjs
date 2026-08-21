@@ -68,3 +68,20 @@ test('adopt --scan refuses mutation flags', () => {
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('Integration Eraser excludes generated files, nested repositories and .rhinoqignore paths', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'rhinoq-eraser-ignore-'));
+  try {
+    mkdirSync(join(cwd, 'src', 'generated'), { recursive: true });
+    mkdirSync(join(cwd, 'vendor-copy', '.git'), { recursive: true });
+    writeFileSync(join(cwd, '.rhinoqignore'), 'src/ignored.ts\n');
+    writeFileSync(join(cwd, 'src', 'live.ts'), `router.get('/tasks/:id/status', (_req, res) => res.json({ ok: true }));\n`);
+    writeFileSync(join(cwd, 'src', 'ignored.ts'), `router.get('/tasks/:id/status', (_req, res) => res.json({ ignored: true }));\n`);
+    writeFileSync(join(cwd, 'src', 'generated', 'status.ts'), `// @generated\nrouter.get('/tasks/:id/status', (_req, res) => res.json({ generated: true }));\n`);
+    writeFileSync(join(cwd, 'vendor-copy', 'status.ts'), `router.get('/tasks/:id/status', (_req, res) => res.json({ vendor: true }));\n`);
+    const report = JSON.parse(spawnSync(process.execPath, [developerCLI, 'adopt', '--scan', '--json'], { cwd, encoding: 'utf8', env: {} }).stdout);
+    assert.equal(report.filesScanned, 1);
+    assert.ok(report.skippedIgnoredFiles >= 3);
+    assert.deepEqual(report.findings.map((finding) => finding.file), ['src/live.ts']);
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});

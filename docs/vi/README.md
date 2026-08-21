@@ -11,6 +11,7 @@ Nếu mới dùng RhinoQ, hãy đọc theo thứ tự này:
 5. [Checklist trước khi chạy production](./production-checklist.md)
 6. [Ma trận bao phủ hệ sinh thái async (English)](../async-capability-coverage.md)
 7. [Kế hoạch nâng cấp RhinoQ](../ke-hoach-nang-cap-rhinoq.md)
+8. [Kế hoạch First Value / README / DX](./ke-hoach-tong-the-first-value-readme-dx.md)
 
 Dành cho người đóng góp và người vận hành:
 

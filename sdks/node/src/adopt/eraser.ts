@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { access, readdir, readFile, stat } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 
 /** A deliberately read-only finding from the Integration Eraser preview. */
@@ -29,6 +29,7 @@ export interface RhinoQIntegrationEraserReport {
   filesScanned: number;
   linesScanned: number;
   skippedLargeFiles: number;
+  skippedIgnoredFiles: number;
   truncated: boolean;
   detected: string[];
   findings: RhinoQIntegrationEraserFinding[];
@@ -60,10 +61,13 @@ const SOURCE_EXTENSIONS = new Set([
   '.cjs', '.go', '.java', '.js', '.jsx', '.mjs', '.py', '.rb', '.rs', '.ts', '.tsx',
 ]);
 const IGNORED_DIRECTORIES = new Set([
-  '.git', '.next', '.nuxt', '.rhinoq', '.turbo', '.vite', '__tests__', 'bench',
-  'build', 'coverage', 'dist', 'fixtures', 'mocks', 'node_modules', 'target',
-  'test', 'tests', 'tmp', 'vendor',
+  '.git', '.next', '.nuxt', '.rhinoq', '.turbo', '.vite', '.cache', '.parcel-cache',
+  '.svelte-kit', '.vercel', '__tests__', 'bench', 'build', 'codegen', 'coverage',
+  'dist', 'fixtures', 'generated', 'mocks', 'node_modules', 'out', 'storybook-static',
+  'target', 'test', 'tests', 'tmp', 'vendor',
 ]);
+
+const IGNORED_FILE_SUFFIXES = new Set(['.d.ts', '.map', '.snap', '.lock']);
 
 const DETECTION_RULES: ReadonlyArray<{
   category: RhinoQIntegrationEraserFinding['category'];
@@ -150,6 +154,7 @@ export async function scanRhinoQIntegrationEraser(
   let filesScanned = 0;
   let linesScanned = 0;
   let skippedLargeFiles = 0;
+  let skippedIgnoredFiles = candidates.ignoredFiles;
 
   for (const file of candidates.files) {
     let size: number;
@@ -166,6 +171,10 @@ export async function scanRhinoQIntegrationEraser(
     try {
       source = await readFile(file, 'utf8');
     } catch {
+      continue;
+    }
+    if (isGeneratedSource(source)) {
+      skippedIgnoredFiles += 1;
       continue;
     }
     const lines = source.split(/\r?\n/);
@@ -197,6 +206,7 @@ export async function scanRhinoQIntegrationEraser(
   const warnings: string[] = [];
   if (candidates.truncated) warnings.push(`file scan stopped at the ${maxFiles}-file bound`);
   if (skippedLargeFiles) warnings.push(`${skippedLargeFiles} source file(s) exceeded the ${maxBytesPerFile}-byte bound`);
+  if (skippedIgnoredFiles) warnings.push(`${skippedIgnoredFiles} generated/ignored source file(s) were excluded; use a focused root or review your .rhinoqignore`);
   if (findings.length >= maxFindings) warnings.push(`finding output stopped at the ${maxFindings}-finding bound`);
   if (!findings.length) warnings.push('no supported integration pattern was detected; absence is not proof that glue is absent');
 
@@ -213,6 +223,7 @@ export async function scanRhinoQIntegrationEraser(
     filesScanned,
     linesScanned,
     skippedLargeFiles,
+    skippedIgnoredFiles,
     truncated: candidates.truncated,
     detected,
     findings,
@@ -270,9 +281,11 @@ function findRuleMatch(
   return undefined;
 }
 
-async function collectSourceFiles(root: string, maxFiles: number): Promise<{ files: string[]; truncated: boolean }> {
+async function collectSourceFiles(root: string, maxFiles: number): Promise<{ files: string[]; truncated: boolean; ignoredFiles: number }> {
   const files: string[] = [];
   const pending = [root];
+  const ignorePatterns = await readIgnorePatterns(root);
+  let ignoredFiles = 0;
   let truncated = false;
   while (pending.length) {
     const directory = pending.pop()!;
@@ -287,18 +300,69 @@ async function collectSourceFiles(root: string, maxFiles: number): Promise<{ fil
       if (entry.isSymbolicLink()) continue;
       const path = resolve(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!IGNORED_DIRECTORIES.has(entry.name)) pending.push(path);
+        if (IGNORED_DIRECTORIES.has(entry.name) || matchesIgnore(path, root, ignorePatterns)) {
+          ignoredFiles += 1;
+          continue;
+        }
+        try {
+          await access(resolve(path, '.git'));
+          ignoredFiles += 1;
+          continue;
+        } catch { /* not a nested repository */ }
+        pending.push(path);
         continue;
       }
       if (!entry.isFile() || !SOURCE_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
+      if (isIgnoredFileName(entry.name) || matchesIgnore(path, root, ignorePatterns)) {
+        ignoredFiles += 1;
+        continue;
+      }
       if (files.length >= maxFiles) {
         truncated = true;
-        return { files, truncated };
+        return { files, truncated, ignoredFiles };
       }
       files.push(path);
     }
   }
-  return { files, truncated };
+  return { files, truncated, ignoredFiles };
+}
+
+async function readIgnorePatterns(root: string): Promise<string[]> {
+  const patterns: string[] = [];
+  for (const name of ['.gitignore', '.rhinoqignore']) {
+    try {
+      const source = await readFile(resolve(root, name), 'utf8');
+      patterns.push(...source.split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#') && !line.startsWith('!')));
+    } catch { /* ignore files are optional */ }
+  }
+  return patterns;
+}
+
+function matchesIgnore(path: string, root: string, patterns: string[]): boolean {
+  if (!patterns.length) return false;
+  const relativePath = relative(root, path).split('\\').join('/');
+  return patterns.some((pattern) => {
+    const normalized = pattern.replace(/^\//, '').replace(/\/$/, '');
+    if (!normalized) return false;
+    if (normalized.includes('*')) {
+      const expression = new RegExp(`^${normalized.split('*').map(escapeRegExp).join('.*')}(?:/|$)`);
+      return expression.test(relativePath);
+    }
+    return relativePath === normalized || relativePath.startsWith(`${normalized}/`);
+  });
+}
+
+function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function isGeneratedSource(source: string): boolean {
+  return /(^|\n)\s*(?:\/\/|#|\/\*)\s*(?:@generated|generated by|code generated|do not edit)/i.test(source.slice(0, 1_000));
+}
+
+function isIgnoredFileName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.endsWith('.d.ts') || IGNORED_FILE_SUFFIXES.has(extname(lower));
 }
 
 function toReportPath(root: string, file: string): string {
