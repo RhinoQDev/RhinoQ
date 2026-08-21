@@ -4,17 +4,30 @@
 [Canonical `@rhinoq/node` package](https://www.npmjs.com/package/@rhinoq/node) ·
 [GitHub repository](https://github.com/madebyduy/RhinoQ)
 
-Open-source background jobs and async Tasks for Node.js and NestJS. RhinoQ
-adds durable Task state, progress, retry history, cancellation, realtime SSE,
-an embeddable React UI and safe recovery around work executed by PostgreSQL or
-BullMQ.
+> Add a durable, user-facing Task experience around the workers you already run.
+> Keep BullMQ or choose PostgreSQL; get progress, results, cancellation, retry
+> history, realtime updates and safe recovery in one product surface.
+
+RhinoQ adds durable Task state, progress, retry history, cancellation, realtime
+SSE, an embeddable React UI, a user Task Center and safe recovery around work
+executed by PostgreSQL or BullMQ.
 
 `rhinoq` is the short, unscoped distribution alias for `@rhinoq/node`. Both
 commands install the same Node.js SDK and CLI. New applications can use either
 name; library authors normally prefer the scoped package. Do not install both:
 the alias already depends on and re-exports the matching canonical release.
 
-Latest verified npm prerelease: `v0.1.0-beta.21`.
+Latest verified npm prerelease: `v0.1.0-beta.22`.
+
+## See the product before installing infrastructure
+
+```bash
+npx rhinoq dev --demo
+```
+
+This disposable Workbench needs no PostgreSQL, Redis or provider credentials.
+It shows recorded progress, a completed result and a failed attempt. The demo
+is synthetic evidence; use `npx rhinoq up` for a real PostgreSQL-backed profile.
 
 ## Start in an existing application
 
@@ -23,6 +36,11 @@ npm install rhinoq@next pg
 npx rhinoq setup
 npx rhinoq setup --apply
 ```
+
+For a guided, preview-first adoption path, use `npx rhinoq connect`. To create a
+new Task slice, use `npx rhinoq add task report.export --apply`; it generates a
+progress/result handler, a manifest/plan smoke test and a `/task-center`
+handoff without overwriting existing files.
 
 The first `setup` command is a read-only preview. It detects Node.js, NestJS,
 Go, PostgreSQL and BullMQ, recommends an execution path, and shows the files

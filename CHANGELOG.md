@@ -43,6 +43,15 @@
   prove the shortcut is safe; Gateway and PostgreSQL clients keep the database
   state machine and optimistic-concurrency fences authoritative.
 
+## 0.1.0-beta.22
+
+- Refreshed the npm-facing first-value path: package descriptions now lead with
+  the durable Task experience, and both package READMEs show the demo, local
+  profile and existing-worker onboarding commands before infrastructure detail.
+- Synchronized the Node SDK, `rhinoq` alias, lockfile and operator guides on the
+  beta.22 release candidate so the npm artifact and GitHub release describe the
+  same verified surface.
+
 ## 0.1.0-beta.21
 
 - Remediated fan-out contention on the PostgreSQL Task path (migrations 015–017, backward-compatible): the per-item effect claim now takes a narrow advisory lock instead of locking the parent Task row across the business callback; execution-count triggers moved to statement level; execution writes return the new version instead of the full snapshot; and committed Task changes announce over `pg_notify` with a per-process `LISTEN` hub so realtime stops polling per connection.

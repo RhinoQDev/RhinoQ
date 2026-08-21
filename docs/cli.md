@@ -121,14 +121,14 @@ go run ./cmd/rhinoq help
 go run ./cmd/rhinoq workbench --demo
 ```
 
-The latest verified tagged CLI prerelease is beta.21. Its intended installation
+The latest verified tagged CLI prerelease is beta.22. Its intended installation
 command is:
 
 ```bash
-go install github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.21
+go install github.com/madebyduy/RhinoQ/cmd/rhinoq@v0.1.0-beta.22
 ```
 
-The beta.21 release workflow completed, including signed checksums and prebuilt
+The beta.22 release workflow completed, including signed checksums and prebuilt
 binaries. Do not put `@latest` into production automation while RhinoQ remains
 in prerelease; pin the exact tag above.
 

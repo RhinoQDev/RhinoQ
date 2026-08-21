@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "RhinoQ Owner Task API",
-    "version": "0.1.0-beta.21",
+    "version": "0.1.0-beta.22",
     "description": "Owner- and tenant-scoped Task product surface. Host authentication supplies identity."
   },
   "servers": [{ "url": "/tasks" }],

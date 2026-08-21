@@ -3,15 +3,54 @@
 [View `@rhinoq/node` on npm](https://www.npmjs.com/package/@rhinoq/node) ·
 [GitHub repository](https://github.com/madebyduy/RhinoQ)
 
-Open-source background jobs and async Tasks for Node.js and NestJS. Add durable
-Task state, progress, retry history, cancellation, realtime SSE, embeddable
-React components, a user Task Center and an operator Workbench without building
-that application plumbing yourself.
+> Add a durable, user-facing Task experience around the workers you already run.
+> Keep BullMQ or choose PostgreSQL; get progress, results, cancellation, retry
+> history, realtime updates and safe recovery in one product surface.
+
+RhinoQ is an open-source async Task platform for Node.js and NestJS. It adds
+durable Task state, progress, retry history, cancellation, realtime SSE,
+embeddable React components, a user Task Center and an operator Workbench
+without making you rebuild that plumbing.
 
 RhinoQ can keep your existing BullMQ workers or run its native PostgreSQL queue
 through the authoritative Go worker. Your execution runtime and business logic
 stay yours; RhinoQ does not invent authentication, tenant identity, provider
 credentials or business retry safety.
+
+## See the product before installing infrastructure
+
+```bash
+npx rhinoq dev --demo
+```
+
+This opens a disposable local Workbench with one Task advancing with recorded
+progress, one completed result and one failed attempt. It needs no PostgreSQL,
+Redis, provider credential or production data. The demo is synthetic evidence;
+use the real local path below when you want PostgreSQL-backed state.
+
+## Start a real local profile
+
+```bash
+npm install @rhinoq/node@next pg
+npx rhinoq up --dry-run
+npx rhinoq up
+```
+
+`up` starts the tested PostgreSQL 16 profile, applies the Task schema, creates a
+bounded fixture and opens the Workbench. It writes only ignored local files.
+
+## Keep an existing worker and add the Task surface
+
+```bash
+npx rhinoq connect
+npx rhinoq add task report.export
+npx rhinoq add task report.export --apply
+```
+
+These paths are preview-first and non-overwriting. `connect` keeps the existing
+runtime; `add task --apply` generates a progress/result handler, a manifest/plan
+smoke test and the `/task-center` handoff. The generated manual adapter is
+observe-only until the application registers its real runtime.
 
 ## Install and get one working path
 
@@ -49,11 +88,11 @@ URL. It does not add another queue or invent an ETA.
 For custom runtimes, the development-preview `createRhinoQ()` API exposes
 Observe, Track and capability-gated Control over portable runtime events:
 
-> This portable surface is available in the verified `v0.1.0-beta.21`
+> This portable surface is available in the verified `v0.1.0-beta.22`
 > prerelease. Install the `next` channel or pin that exact version; the stable
 > `latest` channel may still point to an older release.
 
-Latest verified npm prerelease: `v0.1.0-beta.21`.
+Latest verified npm prerelease: `v0.1.0-beta.22`.
 
 ```ts
 const adapter = createManualRuntimeAdapter('manual', 'reports');
@@ -347,7 +386,7 @@ authentication has populated it. It mounts `/tasks`, `/tasks/*` and
 `/task-center`. RhinoQ refuses owner middleware without an explicit resolver;
 it never trusts an owner header by default.
 
-The Node `init` path creates the isolated Task profile. `beta.21` is the current
+The Node `init` path creates the isolated Task profile. `beta.22` is the current
 release that contains the complete Verified Rule loop; an older tarball answers
 `FAIL verify requires 'add <rule-name>'`. For Verified Rules, start the full Go
 Gateway, set `RHINOQ_AGENT_URL` and a token of at least 32 bytes, then run:
@@ -443,7 +482,7 @@ Node.js support has two deliberately separate paths:
   The Go engine remains responsible for ordering, leases, fencing, retries and
   Effect Ledger transitions.
 
-This package is a development preview. The beta.21 release workflow publishes
+This package is a development preview. The beta.22 release workflow publishes
 the prerelease on `next`; `latest` may remain on an older release. Pin an exact
 version after publication if that matters to you. The preview targets Node.js
 22+.
@@ -470,7 +509,7 @@ Install the resulting archive and your PostgreSQL driver in the target
 application:
 
 ```bash
-npm install /absolute/path/to/rhinoq-node-0.1.0-beta.21.tgz pg
+npm install /absolute/path/to/rhinoq-node-0.1.0-beta.22.tgz pg
 ```
 
 #### Confirm what the application actually installed
@@ -493,7 +532,7 @@ For an application evaluation without a source checkout, install from npm and
 pin the exact version rather than a moving tag:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.21 pg
+npm install @rhinoq/node@0.1.0-beta.22 pg
 ```
 
 A published copy carries the same provenance a locally packed one does. It is
