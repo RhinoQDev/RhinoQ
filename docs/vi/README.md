@@ -12,6 +12,7 @@ Nếu mới dùng RhinoQ, hãy đọc theo thứ tự này:
 6. [Ma trận bao phủ hệ sinh thái async (English)](../async-capability-coverage.md)
 7. [Kế hoạch nâng cấp RhinoQ](../ke-hoach-nang-cap-rhinoq.md)
 8. [Kế hoạch First Value / README / DX](./ke-hoach-tong-the-first-value-readme-dx.md)
+9. [Kế hoạch liên kết dữ liệu và tính năng bứt phá](./ke-hoach-lien-ket-va-tinh-nang-but-pha.md)
 
 Dành cho người đóng góp và người vận hành:
 
