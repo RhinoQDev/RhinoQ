@@ -2,14 +2,18 @@
 
 Documentation: **English** · [Tiếng Việt](./docs/vi/README.md)
 
-## Open-source background jobs and async Tasks for Node.js, NestJS and Go
+## Durable tasks for Node.js, NestJS and Go
+
+Break long-running work into resumable Steps. With the PostgreSQL Task profile,
+a compatible completed `context.step()` result is reused after a worker restart,
+while incomplete work is retried under a new fenced lease.
 
 RhinoQ is an open-source async Task and background-job platform for Node.js,
 NestJS and Go. Run jobs with RhinoQ's native PostgreSQL queue or keep an
-existing BullMQ runtime. RhinoQ adds durable Task state, progress tracking,
-retry history, cancellation, reconciliation, an owner-scoped Task API,
-realtime SSE with polling fallback, embeddable React components, a user Task
-Center and an operator Workbench around your business handler.
+existing BullMQ runtime. It adds durable Task state, progress tracking, retry
+history, cancellation, reconciliation, an owner-scoped Task API, realtime SSE
+with polling fallback, embeddable React components, a user Task Center and an
+operator Workbench around your business handler.
 
 Task Center and Workbench keep the same lightweight, self-contained product
 surface while using clearly separated panels, restrained semantic color and a
@@ -291,6 +295,123 @@ run: async (input, context) => {
 Checkpoint state is version/checksum fenced, capped at 64 KiB and separate from
 external-effect confirmation. Delete or retain it according to the adopter's
 cleanup policy after the execution is terminal.
+
+### Durable Steps (P0)
+
+`context.step()` is the crash-resume primitive for one Task item. The
+PostgreSQL Task profile gives every step a stable key, version, attempt and
+fenced lease. A compatible completed step returns its persisted result on a
+later worker attempt; incomplete work alone is eligible to run again.
+
+While its callback is pending, the Node runtime renews that same fenced lease.
+If renewal is lost, it discards the callback result instead of writing stale state.
+
+```ts
+const app = await createRhinoQApp({
+  pool,
+  adapters: [bullmqAdapter],
+  // GatewayClient.effect() delegates to the existing Go ProviderOperation ledger.
+  effectClient: gateway,
+});
+
+const exportReport = app.task({
+  name: 'report.export', adapter: 'bullmq', runtime: 'bullmq', scope: 'reports',
+  version: 1,
+  run: async ({ reportId }, context) => {
+    const rendered = await context.step('render', { version: 1, retry: { attempts: 3 } },
+      async () => renderReport(reportId));
+
+    await context.effect('notify-owner', {
+      provider: 'mail', operation: 'send-report', key: `report:${reportId}`,
+      request: { reportId }, confirmation: 'readback',
+      execute: async (idempotencyKey) => mail.send({ reportId, idempotencyKey }),
+      verify: async (operation) => mail.wasSent(operation.idempotencyKey),
+    });
+    return rendered;
+  },
+});
+```
+
+`context.effect()` does not create a second ledger: it requires the existing
+Go-owned ProviderOperation client. `accepted`, `uncertain`, and
+`not_happened` outcomes stop Task progress until ledger-controlled recovery.
+Inline Step results are limited to 64 KiB; return a registered Artifact for a
+larger output. `timeoutMs` is validated now, but runtime interruption of a
+running user callback is not part of P0. Checkpoints remain a separate bounded
+cursor API for deterministic loops; they are not a substitute for Steps.
+See the [Durable Task Runtime roadmap](./docs/durable-task-roadmap.md) and the
+[durable heavy-workload gap map](./docs/durable-heavy-workload-gap-map.md) for
+the real-PostgreSQL rollout gate and explicitly deferred P2 work.
+
+### Shared resource admission and cancellation (P1)
+
+For capacity that must be shared across application worker processes, configure
+one stable `resourcePool` and a unique `workerId` for each live worker or
+deployment. PostgreSQL owns admission, expiry and `(owner, epoch)` fencing; it
+does not use Node process memory as a scheduler. The pool is tenant-scoped, so
+the same key has a separate budget per tenant. Every process using a pool key
+must declare the same capacity; PostgreSQL rejects a mismatch.
+
+```ts
+const app = await createRhinoQApp({
+  pool,
+  adapters: [bullmqAdapter],
+  workerId: process.env.HOSTNAME!,
+  resourcePool: {
+    key: 'video-workers',
+    capacity: { cpu: 8, memoryBytes: 32 * 1024 ** 3, diskBytes: 500 * 1024 ** 3, network: 16 },
+    leaseMs: 60_000,
+    retryAfterMs: 5_000,
+  },
+});
+
+const transcode = app.task({
+  name: 'video.transcode', adapter: 'bullmq', runtime: 'bullmq', scope: 'media',
+  workspace: { minimumFreeBytes: 50 * 1024 ** 3 },
+  resources: { cpu: 2, memoryBytes: 8 * 1024 ** 3, diskBytes: 50 * 1024 ** 3, network: 2 },
+  run: async ({ inputPath }, context) =>
+    context.media.transcode(inputPath, context.workspace!.path('output.mp4')),
+});
+```
+
+A task that cannot be admitted throws `RhinoQResourceUnavailableError` before
+the handler starts, with a retry hint for the selected runtime. A running
+handler renews its lease; if renewal fails, its result is discarded. The
+adapter's own retry policy remains authoritative—RhinoQ does not create a
+second queue or capacity scheduler.
+
+The worker polls the authoritative Task state while it is running. Only a
+persisted `cancel_requested` state is a user cancellation: it aborts the
+context, marks an owned Durable Step `cancelled`, and transitions the Task to
+`cancelled`. SIGINT/SIGTERM, deployment and generic worker `AbortSignal`
+interruptions instead surface `RhinoQWorkerShutdownError` (`retryable: true`)
+to the selected runtime. An effect is never force-cancelled after it might have
+reached a provider: no new effect starts once cancellation is observed, while
+the existing Effect Ledger still resolves an external result under its
+confirmation policy.
+
+The supported first media path remains the existing workspace/path-based
+FFmpeg context (`context.media.transcode`, `probe`, `thumbnail`) followed by
+`context.output.video()` or `context.artifact.filePath()`. It has process abort
+and output verification. With the built-in S3-compatible artifact provider,
+a non-empty `filePath()` or `output.video()` is also uploaded through the
+existing persisted multipart session: a restarted worker rechecks the Task's
+owner and tenant, reconciles provider parts, uploads only missing parts, and
+uses the existing readback/`uncertain` completion policy before registering
+the Artifact.
+
+That recovery path requires the same source file to be available and unchanged
+when the handler is replayed (for example, a deterministic file path or a
+workspace output regenerated by a durable handler). RhinoQ hashes the source
+before it resumes and fails closed if it differs. `context.artifact.stream()`
+remains backpressured and abortable, but an arbitrary one-shot stream cannot
+be resumed after a worker crash. Jobs queued by an older SDK do not carry the
+owner/tenant envelope metadata required by the worker multipart path; let
+them finish on the streaming path or redispatch them after upgrading.
+
+The stream-to-FFmpeg restart path itself remains unclaimed: durable artifact
+recovery starts only after a replayable file exists.
+
 
 For the shortest project setup, bind the shared composition once:
 

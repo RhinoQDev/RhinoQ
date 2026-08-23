@@ -114,6 +114,40 @@ test('application compiler binds every declaration to the started application', 
   await started.close();
 });
 
+test('runWorker forwards shutdown to an in-flight Task handler as retryable abort', async () => {
+  const adapter = createManualRuntimeAdapter('manual', 'reports');
+  const compiler = defineRhinoQApplication({
+    profile: { name: 'reports', adapters: [adapter] },
+    tasks: (task) => ({ waiting: task({
+      name: 'report.waiting',
+      run: async (_input, context) => new Promise((_, reject) => {
+        context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+      }),
+    }) }),
+  });
+  const started = await compiler.start({
+    pool: { async query() { throw new Error('profile was declared installed for this composition test'); } },
+    tasks: {}, ownerFromNodeRequest: () => 'owner-a',
+  });
+  const stop = new AbortController();
+  let receivedHandler;
+  let closed = 0;
+  const running = started.runWorker({
+    signal: stop.signal, processSignals: false,
+    create(handler) { receivedHandler = handler; return { async close() { closed += 1; } }; },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const inFlight = receivedHandler({ data: {
+    taskName: 'report.waiting', definitionVersion: 1, taskId: 'task-1', executionId: 'execution-1', payload: {},
+  } });
+  await new Promise((resolve) => setImmediate(resolve));
+  stop.abort();
+  await assert.rejects(inFlight, (error) => error?.retryable === true && error?.name === 'RhinoQWorkerShutdownError');
+  await running;
+  assert.equal(closed, 1);
+  await started.close();
+});
+
 test('short capability factories compile markers and safe data-path plans', () => {
   const adapter = createManualRuntimeAdapter('manual', 'reports');
   const compiler = defineRhinoQApplication({

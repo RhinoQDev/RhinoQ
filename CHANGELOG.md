@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Added PostgreSQL migrations `020_shared_resource_leases` and
+  `021_durable_step_cancellation`. `createRhinoQApp({ resourcePool, workerId
+  })` now makes tenant-scoped CPU/memory/disk/network admission available to
+  task declarations. PostgreSQL owns capacity fencing and reclaims expired
+  leases on later admission; the Node worker renews while a handler runs and
+  discards a result after lease loss.
+- A persisted Task `cancel_requested` now aborts the Node handler context,
+  terminalizes an owned Durable Step and transitions the Task to `cancelled`.
+  Generic shutdown/deploy worker signals surface retryable
+  `RhinoQWorkerShutdownError` instead. Effects are not force-cancelled after a
+  possible provider call; the existing Effect Ledger remains the confirmation
+  authority.
+- Promoted the existing path/workspace FFmpeg context as the supported first
+  heavy-workload adapter. The built-in S3 provider now lets replayable
+  `context.artifact.filePath()` and `context.output.*` files resume the
+  existing owner/tenant-fenced multipart session after a worker restart,
+  reconcile provider parts and preserve the existing readback/`uncertain`
+  completion policy. One-shot streams remain backpressured and abortable but
+  are intentionally not restartable; stream-to-FFmpeg restart still requires
+  its own fixture.
+
 - Added the first-value CLI paths `npx rhinoq dev --demo`, `npx rhinoq up`,
   `npx rhinoq connect`, `npx rhinoq add task` and `npx rhinoq doctor --fix`.
   The demo is explicitly synthetic; the local profile is PostgreSQL-backed and
@@ -42,6 +63,16 @@
   `pending -> queued -> running` commands when the current snapshot and version
   prove the shortcut is safe; Gateway and PostgreSQL clients keep the database
   state machine and optimistic-concurrency fences authoritative.
+- Added PostgreSQL schema migration 019 for tenant-fenced durable Steps and
+  per-attempt leases. `context.step()` reuses compatible completed results,
+  fences stale completion/failure writes and persists bounded inline results or
+  Artifact references; existing checkpoints remain separate cursor state.
+- `context.step()` now renews a pending Step lease and refuses a stale commit
+  if renewal is lost. Independent Steps can run through direct `Promise.all()`;
+  their per-async-call effect identity is isolated so a successful sibling
+  remains reusable when another sibling fails.
+- Added `context.effect()` as a narrow facade over the Go-owned
+  ProviderOperation ledger, plus Workbench Flight Recorder and deterministic
 
 ## 0.1.0-beta.22
 

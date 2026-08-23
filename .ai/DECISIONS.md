@@ -920,3 +920,84 @@
 - **Consequences:** A default install gains about 7.7 MiB and 38 transitive packages in the current workspace, but S3 works out of the box and the source/bundle does not duplicate the SDK. Consumers that never use artifacts still pay the install footprint, which is the deliberate trade-off for the documented batteries-included S3 path.
 - **Rollback:** Move the three packages back to optional peer dependencies only if install footprint becomes a release blocker; then restore explicit S3 installation instructions and add a separate provider package or install profile before removing the runtime path.
 - **Owner:** Node SDK + architecture
+## ADR-0042 — Durable Steps extend the Task profile; checkpoints and the Effect Ledger remain separate
+
+- **Status:** accepted
+- **Context:** a checkpoint stores an application-controlled cursor for one
+  Execution. It cannot atomically persist a completed unit result, fence a
+  stale worker, or decide whether user code may be replayed. Creating another
+  Node retry store, effect ledger or timeline would split existing authority.
+- **Decision:** migration 019 adds tenant-fenced `durable_steps` and
+  `durable_step_attempts` to the additive `rhinoq_task` profile. PostgreSQL
+  command functions acquire a fenced per-step lease, reuse only a compatible
+  completed `(task_id,item_key,step_key,task_version,step_version)` result,
+  and atomically write completion or failure. Each mutation advances the
+  parent Task version so existing change notification, SSE and Workbench reads
+  converge. `ctx.effect()` accepts only an injected facade over the existing
+  Go-owned ProviderOperation ledger; unknown, pending and not-applied results
+  block Task progress. Checkpoints retain their bounded cursor contract.
+- **Consequences:** Node supplies ergonomic declarations and never decides
+  lease fencing or an external result. While a Step callback is pending, Node
+  renews its currently fenced lease and discards the callback result if renewal
+  fails. Flight Recorder and Incident Explanation read the new Step records
+  alongside existing Execution and ProviderOperation evidence. Inline Step
+  results are capped at 64 KiB; larger results must be artifacts. Per-step
+  timeout interruption and automatic durable-await transformation remain later
+  runtime work, not P0 claims.
+- **Rollback:** stop calling `ctx.step()` and leave the additive records in
+  place; no existing checkpoint, Execution or ProviderOperation row changes
+  meaning.
+- **Owner:** Node SDK + PostgreSQL adapter + product
+
+## ADR-0043 — Tenant-scoped resource leases and terminal user cancellation
+
+- **Status:** accepted
+- **Context:** worker-local counters cannot prevent capacity oversubscription
+  across processes. A generic `AbortSignal` also cannot prove whether an
+  interruption came from a user, a rolling deployment or shutdown; treating all
+  aborts as terminal would silently discard retryable work.
+- **Decision:** migration 020 adds RLS-protected, tenant-scoped resource pools
+  and leases. PostgreSQL serializes admission per pool row, reaps expired
+  leases during a later admission, and fences renew/release with
+  `(lease_owner, lease_epoch)`. A capacity mismatch for the same tenant/pool
+  key fails closed. The Node worker only renews its current lease and discards
+  a result after renewal loss. Migration 021 adds fenced durable-Step
+  cancellation. The application worker polls authoritative Task state: only
+  `cancel_requested` creates terminal `RhinoQUserCancellationError`; generic
+  worker interruption becomes retryable `RhinoQWorkerShutdownError`.
+- **Consequences:** `createRhinoQApp({ resourcePool, workerId })` is the
+  composition boundary for shared admission. Effects are not force-cancelled:
+  once a provider outcome may exist, the existing Effect Ledger confirmation
+  policy remains authoritative. The first P1 media adapter is the existing
+  path/workspace FFmpeg context; no resumable streaming-media claim is made.
+- **Rollback:** remove `resources` from affected declarations and stop the
+  cancellation monitor or worker. Additive lease/Step records may expire or
+  remain as audit evidence; do not delete them without a migration review.
+- **Owner:** Node SDK + PostgreSQL adapter + product
+
+## ADR-0044 — Durable worker multipart accepts only replayable local files
+
+- **Status:** accepted
+- **Context:** the existing direct-upload session already persists owner/tenant
+  scope, provider upload identity, parts, checksum, completion readback and an
+  `uncertain` state. A generic worker `AsyncIterable`, however, may be a
+  one-time encoder or network response; after a crash a new worker cannot seek
+  to a missing part without risking different bytes or a blind replay.
+- **Decision:** keep browser uploads on signed parts and extend the existing
+  S3-compatible direct provider with a worker-only `uploadPart` operation.
+  `context.artifact.filePath()` and output helpers use it only for a non-empty
+  replayable file. They derive a stable session ID from Task/Execution/Artifact,
+  re-authorize the envelope owner/tenant against the Task, hash the file before
+  resume, reconcile provider parts, upload only missing byte ranges, and use
+  the existing readback/`uncertain` completion protocol. A changed source fails
+  closed. One-shot `stream()` retains backpressure and cancellation but no
+  durable-resume claim.
+- **Consequences:** no new upload table, completion policy or object-store
+  state machine is introduced. A handler must regenerate or retain the same
+  file on replay. Existing queued envelopes lacking owner/tenant metadata fall
+  back to their existing stream behavior unless they call the new file path,
+  in which case they are refused rather than uploaded without authentication.
+- **Rollback:** disable the worker `uploadPart` capability or use
+  `context.artifact.stream()`; persisted sessions stay readable by the
+  existing cleanup and browser-resume paths.
+- **Owner:** Node SDK + PostgreSQL adapter + product

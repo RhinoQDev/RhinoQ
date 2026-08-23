@@ -12,6 +12,7 @@ import type {
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
 import { taskFlightRecorder, taskFlightRecorderDiagnostic, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
+import type { DurableStepRecord } from '../tasks/durable.js';
 import { taskUIModel, type TaskUIModel } from '../tasks/ui.js';
 import { safeOperatorURL, type RuntimeHealthReader, type RuntimeJobLink } from '../observe/runtime-health.js';
 import { workbenchPage } from './page.js';
@@ -30,6 +31,7 @@ export interface WorkbenchTaskSource {
   listTaskWaitpoints?(taskId: string): Promise<TaskWaitpoint[]>;
   listTaskVerifications?(taskId: string): Promise<TaskVerificationRecord[]>;
   listTaskArtifacts?(taskId: string): Promise<TaskArtifact[]>;
+  listDurableSteps?(taskId: string, itemKey?: string): Promise<DurableStepRecord[]>;
   /** Join the Go-owned provider ledger by its explicit taskId correlation. */
   listProviderOperationsByTask?(taskId: string): Promise<ProviderOperationRecord[]>;
   requestTaskCancellation?(taskId: string, expectedVersion: number): Promise<TaskSnapshot>;
@@ -574,11 +576,12 @@ async function taskDetail(
   providerOperationsByTask?: (taskId: string) => Promise<ProviderOperationRecord[]>,
   runtimeJobLink?: RuntimeJobLink,
   runtimeReports?: () => Promise<RuntimeAdapterReport[]>,
-): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder; incidentExplanation: IncidentExplanation; evidencePassport: TaskEvidencePassport }> {
+): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; steps: DurableStepRecord[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder; incidentExplanation: IncidentExplanation; evidencePassport: TaskEvidencePassport }> {
   const task = await tasks.getTask(taskId);
-  const [refs, results, waitpoints, verifications, artifacts, providerOperations, reports] = await Promise.all([
+  const [refs, results, steps, waitpoints, verifications, artifacts, providerOperations, reports] = await Promise.all([
     tasks.listTaskExecutionRuntimeRefs?.(taskId).catch(() => undefined),
     tasks.getTaskExecutionResults(taskId).catch(() => undefined),
+    tasks.listDurableSteps?.(taskId).catch(() => undefined),
     tasks.listTaskWaitpoints?.(taskId).catch(() => undefined),
     tasks.listTaskVerifications?.(taskId).catch(() => undefined),
     tasks.listTaskArtifacts?.(taskId).catch(() => undefined),
@@ -622,6 +625,7 @@ async function taskDetail(
   });
 
   const resolvedWaitpoints = waitpoints ?? [];
+  const resolvedSteps = steps ?? [];
   const evidencePassport = taskEvidencePassport({
     task,
     executionResults: results?.executions,
@@ -635,9 +639,11 @@ async function taskDetail(
     ui: taskUIModel(task),
     items,
     waitpoints: resolvedWaitpoints,
+    steps: resolvedSteps,
     flightRecorder: taskFlightRecorder({
       task,
       executionResults: results?.executions,
+      steps: resolvedSteps,
       waitpoints: resolvedWaitpoints,
       verifications: verifications ?? [],
       artifacts: artifacts ?? [],
@@ -645,6 +651,7 @@ async function taskDetail(
     }),
     incidentExplanation: explainTaskIncident({
       task,
+      steps: resolvedSteps,
       verifications: verifications ?? [],
       providerOperations: providerOperations ?? [],
       runtimeReports: reports,

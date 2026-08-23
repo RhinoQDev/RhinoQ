@@ -12,12 +12,26 @@ import { waitForApproval, waitForInput, waitForWebhook, type WaitForInputOptions
 import type { RhinoQRuntimeIntegration } from '../runtime/integration.js';
 import type { RhinoQDataPathOverrides } from './data-path.js';
 import { createRhinoQTaskCheckpoint, type RhinoQTaskCheckpoint, type RhinoQTaskCheckpointClient } from './checkpoint.js';
+import { createDurableTaskContext, isRhinoQUserCancellation, RhinoQUserCancellationError, RhinoQWorkerShutdownError, type DurableEffectClient, type DurableStepClient, type DurableTaskContext } from './durable.js';
+import {
+  createRhinoQResourceLeaseHeartbeat,
+  normalizeRhinoQResourceVector,
+  requiresRhinoQResources,
+  validateRhinoQResourcePool,
+  type RhinoQResourceLeaseClient,
+  type RhinoQResourcePoolOptions,
+} from './resource-lease.js';
+import type { ArtifactUploadService } from './artifact-upload.js';
 
 export interface RhinoQTaskRunContext {
   taskId: string;
   executionId: string;
   itemKey?: string;
   signal?: AbortSignal;
+  /** A completed compatible step is reused after a worker crash or restart. */
+  step: DurableTaskContext['step'];
+  /** Safe external mutation backed by the existing ProviderOperation ledger. */
+  effect: DurableTaskContext['effect'];
   progress(completed: number, total?: number, message?: string): Promise<void> | void;
   artifact: {
     file(data: Uint8Array | string, options: RhinoQArtifactFileOptions): Promise<import('../gateway/types.js').TaskArtifact>;
@@ -71,13 +85,40 @@ export interface RhinoQArtifactStorage {
   putStream?(input: RhinoQArtifactStreamInput): Promise<{ reference: string; expiresAt?: string }>;
 }
 
+export interface RhinoQTaskCancellationClient {
+  getTask(taskId: string): Promise<TaskSnapshot>;
+  transitionTask(taskId: string, expectedVersion: number, state: 'cancelled'): Promise<TaskSnapshot>;
+}
+
 export interface RhinoQTaskServices {
   artifacts?: {
     storage: RhinoQArtifactStorage;
     register(taskId: string, request: import('../gateway/types.js').TaskArtifactCreateRequest): Promise<import('../gateway/types.js').TaskArtifact>;
+    /** Optional S3-compatible recovery path for replayable local files only. */
+    durableMultipart?: {
+      uploads: ArtifactUploadService;
+      /** Verifies the envelope's owner and tenant against the authoritative Task before provider access. */
+      authorizeTask(taskId: string, ownerId: string, tenantId: string): Promise<void>;
+    };
   };
   waitpoints?: WaitpointLifecycleClient;
   checkpoints?: RhinoQTaskCheckpointClient;
+  /** Authoritative durable-step commands. The PostgreSQL profile supplies this. */
+  steps?: DurableStepClient;
+  /** Existing Go-owned ProviderOperation Effect Ledger facade. */
+  effects?: DurableEffectClient;
+  /** Stable worker identity used only when acquiring a durable step lease. */
+  workerId?: string;
+  /** Authoritative shared-capacity admission. A pool is tenant-scoped in PostgreSQL. */
+  resources?: {
+    client: RhinoQResourceLeaseClient;
+    pool: RhinoQResourcePoolOptions;
+  };
+  /** Polls the authoritative Task state; only cancel_requested creates a terminal user cancellation. */
+  cancellation?: {
+    client: RhinoQTaskCancellationClient;
+    pollIntervalMs?: number;
+  };
   trace?: RhinoQTraceHooks;
   /** Read-only notification hook; realtime delivery must never change Task correctness. */
   onMutation?(mutation: RhinoQTaskMutation): Promise<void> | void;
@@ -109,6 +150,14 @@ export type RhinoQTaskCapability = 'task' | 'batch' | 'media' | 'effect' | 'sche
 export interface RhinoQTaskResourcePolicy {
   timeoutMs?: number;
   concurrency?: number;
+  /** Integer CPU credits reserved from the configured shared pool. */
+  cpu?: number;
+  /** Bytes reserved from the configured shared pool; separate from maxRssBytes. */
+  memoryBytes?: number;
+  /** Bytes reserved from the configured shared pool; separate from workspace checks. */
+  diskBytes?: number;
+  /** Integer, application-defined network credits reserved from the shared pool. */
+  network?: number;
   maxRssBytes?: number;
   workspaceBytes?: number;
   minDiskFreeBytes?: number;
@@ -218,6 +267,20 @@ export function defineRhinoQTask<Input, Output>(
   if (options.execution?.priority !== undefined && !Number.isInteger(options.execution.priority)) {
     throw new RangeError('Task execution priority must be an integer');
   }
+  const resourceDemand = normalizeRhinoQResourceVector(options.resources);
+  if (requiresRhinoQResources(resourceDemand)) {
+    if (!services.resources) {
+      throw new TypeError('Task resource admission requires createRhinoQApp({ resourcePool }) or an authoritative resource lease service');
+    }
+    if (!services.workerId) {
+      throw new TypeError('Task resource admission requires a stable createRhinoQApp({ workerId }) identity for lease fencing');
+    }
+    validateRhinoQResourcePool(services.resources.pool);
+  }
+  if (services.cancellation?.pollIntervalMs !== undefined &&
+      (!Number.isSafeInteger(services.cancellation.pollIntervalMs) || services.cancellation.pollIntervalMs < 250 || services.cancellation.pollIntervalMs > 60_000)) {
+    throw new RangeError('Task cancellation pollIntervalMs must be 250..60000');
+  }
 
   const declaration: RhinoQDeclaredTask<Input, Output> = {
     name,
@@ -250,8 +313,9 @@ export function defineRhinoQTask<Input, Output>(
         ...(execution.delayMs === undefined ? {} : { delayMs: execution.delayMs }),
         ...(execution.priority === undefined ? {} : { priority: execution.priority }),
         payload: {
-          taskName: name, taskId: id, executionId,
+          taskName: name, taskId: id, executionId, ownerId, tenantId: request.tenantId?.trim() || 'default',
           definitionVersion: version,
+          itemKey: request.itemKey?.trim() || 'default',
           retry,
           payload: request.payload,
           ...(options.effect ? { effect: options.effect } : {}),
@@ -309,42 +373,107 @@ export function defineRhinoQTask<Input, Output>(
     workerHandler() {
       return async (job) => {
         const envelope = taskEnvelope<Input>(job?.data, name, version);
+        const cancellation = createTaskCancellationMonitor(services, envelope.taskId, job.signal);
         const waitpoints = waitpointHelper(services, envelope.taskId);
         const operation = async () => {
+          await cancellation.ready;
           const progress = createRhinoQProgressCoalescer(async (update) => job.updateProgress?.(update));
           let workspace: RhinoQTaskWorkspace | undefined;
           let failed = false;
+          let resourceHeartbeat: ReturnType<typeof createRhinoQResourceLeaseHeartbeat> | undefined;
           try {
+            cancellation.signal.throwIfAborted();
+            if (requiresRhinoQResources(resourceDemand)) {
+              const resourceService = services.resources!;
+              const pool = validateRhinoQResourcePool(resourceService.pool);
+              const lease = await resourceService.client.acquireResourceLease({
+                pool, taskId: envelope.taskId, executionId: envelope.executionId,
+                owner: services.workerId!, resources: resourceDemand,
+              });
+              resourceHeartbeat = createRhinoQResourceLeaseHeartbeat(resourceService.client, lease, pool.leaseMs!);
+            }
             workspace = options.workspace ? await createTaskWorkspace({ parent: options.workspace.parent, minimumFreeBytes: options.workspace.minimumFreeBytes, prefix: `rhinoq-${safeWorkspaceSegment(envelope.taskId)}-` }) : undefined;
             const reportProgress: RhinoQTaskRunContext['progress'] = async (completed, total, message) => {
               await progress.report({ completed, ...(total === undefined ? {} : { total }), ...(message ? { message } : {}) });
             };
-            return await Promise.resolve(options.run(envelope.payload, {
+            const durable = createDurableTaskContext({
               taskId: envelope.taskId,
               executionId: envelope.executionId,
-              signal: job.signal,
+              itemKey: envelope.itemKey,
+              taskVersion: version,
+              signal: cancellation.signal,
+              steps: services.steps,
+              effects: services.effects,
+              workerId: services.workerId,
+            });
+            const workerArtifactIdentity = envelope.ownerId && envelope.tenantId ? { ownerId: envelope.ownerId, tenantId: envelope.tenantId } : undefined;
+            const artifact = artifactHelper(services, envelope.taskId, envelope.executionId, cancellation.signal, reportProgress, undefined, workerArtifactIdentity);
+            const outputHelpers = outputHelper(services, envelope.taskId, envelope.executionId, cancellation.signal, reportProgress, workerArtifactIdentity);
+            const output = await Promise.resolve(options.run(envelope.payload, {
+              taskId: envelope.taskId,
+              executionId: envelope.executionId,
+              itemKey: envelope.itemKey,
+              signal: cancellation.signal,
+              step: durable.step,
+              effect: durable.effect,
               progress: reportProgress,
-              artifact: artifactHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress),
-              output: outputHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress),
-              media: createRhinoQMediaContext(outputHelper(services, envelope.taskId, envelope.executionId, job.signal, reportProgress), job.signal),
-              io: createRhinoQTaskIO(job.signal),
+              artifact,
+              output: outputHelpers,
+              media: createRhinoQMediaContext(outputHelpers, cancellation.signal),
+              io: createRhinoQTaskIO(cancellation.signal),
               checkpoint: createRhinoQTaskCheckpoint(services.checkpoints, envelope.taskId, envelope.executionId, version),
               ...(workspace ? { workspace } : {}),
               ...waitpoints,
             }));
+            await resourceHeartbeat?.stop();
+            resourceHeartbeat?.assertOwned();
+            cancellation.signal.throwIfAborted();
+            return output;
           } catch (error) {
+            if (isRhinoQUserCancellation(error)) {
+              try {
+                await terminalizeUserCancellation(services, envelope.taskId);
+              } catch (terminalError) {
+                if (error instanceof Error && terminalError instanceof Error) error.cause ??= terminalError;
+              }
+            }
             failed = true;
             throw error;
           } finally {
             try {
               await progress.close();
             } catch (error) {
-              if (!failed) throw error;
+              if (!failed) {
+                try {
+                  await workspace?.cleanup();
+                } finally {
+                  if (resourceHeartbeat) {
+                    try {
+                      await resourceHeartbeat.stop();
+                      await services.resources!.client.releaseResourceLease(resourceHeartbeat.lease());
+                    } catch (releaseError) {
+                      if (!failed) throw releaseError;
+                    }
+                  }
+                }
+                throw error;
+              }
             }
-            await workspace?.cleanup();
+            try {
+              await workspace?.cleanup();
+            } finally {
+              if (resourceHeartbeat) {
+                try {
+                  await resourceHeartbeat.stop();
+                  await services.resources!.client.releaseResourceLease(resourceHeartbeat.lease());
+                } catch (releaseError) {
+                  if (!failed) throw releaseError;
+                }
+              }
+            }
           }
         };
-        return services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation();
+        return Promise.resolve(services.trace ? services.trace.run('rhinoq.task.run', { 'rhinoq.task.name': name, 'rhinoq.task.id': envelope.taskId, 'rhinoq.execution.id': envelope.executionId }, envelope.trace, operation) : operation()).finally(() => cancellation.stop());
       };
     },
     resultMetadata(output) { return options.result?.(output); },
@@ -371,8 +500,9 @@ function artifactHelper(
   signal?: AbortSignal,
   progress?: RhinoQTaskRunContext['progress'],
   registrationQueue?: { enqueue<T>(operation: () => Promise<T>): Promise<T> },
+  workerArtifactIdentity?: { ownerId: string; tenantId: string },
 ): RhinoQTaskRunContext['artifact'] {
-  const identity = (options: RhinoQArtifactFileOptions) => {
+  const artifactIdentity = (options: RhinoQArtifactFileOptions) => {
     const name = required(options?.name, 'artifact name');
     const contentType = required(options?.contentType, 'artifact contentType');
     const id = options.id?.trim() || `artifact-${createHash('sha256').update(`${taskId}\0${executionId}\0${name}`).digest('hex').slice(0, 32)}`;
@@ -393,7 +523,7 @@ function artifactHelper(
   return Object.freeze({
     async file(data, options) {
       if (!services.artifacts) throw new TypeError('context.artifact.file requires createRhinoQApp({ artifactProvider })');
-      const { id, name, contentType } = identity(options);
+      const { id, name, contentType } = artifactIdentity(options);
       const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
       const checksumSha256 = createHash('sha256').update(bytes).digest('hex');
       const stored = await services.artifacts.storage.put({ id, taskId, executionId, name, contentType, data: bytes, checksumSha256 });
@@ -403,7 +533,7 @@ function artifactHelper(
       if (!services.artifacts?.storage.putStream) throw new TypeError('context.artifact.stream requires an artifactProvider with streaming upload support');
       if (!source || typeof source[Symbol.asyncIterator] !== 'function') throw new TypeError('artifact stream must be an AsyncIterable');
       if (options.sizeBytes !== undefined && (!Number.isSafeInteger(options.sizeBytes) || options.sizeBytes < 0)) throw new RangeError('artifact stream sizeBytes must be a non-negative safe integer');
-      const { id, name, contentType } = identity(options);
+      const { id, name, contentType } = artifactIdentity(options);
       const hash = createHash('sha256');
       let sizeBytes = 0;
       const measured = (async function* () {
@@ -427,15 +557,31 @@ function artifactHelper(
       if (options?.sizeBytes !== undefined && options.sizeBytes !== info.size) throw new RangeError(`artifact file size is ${info.size} bytes; expected ${options.sizeBytes}`);
       const name = options?.name?.trim() || basename(path);
       const contentType = options?.contentType?.trim() || contentTypeFor(name);
+      const durableMultipart = services.artifacts?.durableMultipart;
+      if (durableMultipart && info.size > 0) {
+        if (!workerArtifactIdentity) throw new TypeError('durable worker artifact upload requires an ownerId and tenantId in the Task envelope; redispatch an envelope produced by this RhinoQ version');
+        const artifactOptions = { ...(options ?? {}), name, contentType };
+        const { id } = artifactIdentity(artifactOptions);
+        await durableMultipart.authorizeTask(taskId, workerArtifactIdentity.ownerId, workerArtifactIdentity.tenantId);
+        const uploaded = await durableMultipart.uploads.uploadWorkerFile({
+          path, taskId, executionId, artifactId: id, name, contentType,
+          ownerId: workerArtifactIdentity.ownerId, tenantId: workerArtifactIdentity.tenantId,
+          ...(signal ? { signal } : {}),
+          ...(options?.reportProgress ? { onProgress: ({ uploadedBytes, totalBytes }) => progress?.(uploadedBytes, totalBytes, `Uploading ${name}`) } : {}),
+        });
+        const checksumSha256 = uploaded.session.checksumSha256;
+        if (!checksumSha256) throw new Error('durable worker artifact upload completed without a checksum');
+        return register(artifactOptions, { id, name, contentType, sizeBytes: uploaded.session.sizeBytes, checksumSha256, reference: uploaded.session.reference, expiresAt: uploaded.session.artifactExpiresAt });
+      }
       return this.stream(createReadStream(path), { ...options, name, contentType, sizeBytes: info.size });
     },
   });
 }
 
-function outputHelper(services: RhinoQTaskServices, taskId: string, executionId: string, signal?: AbortSignal, progress?: RhinoQTaskRunContext['progress']): RhinoQTaskOutputHelpers {
+function outputHelper(services: RhinoQTaskServices, taskId: string, executionId: string, signal?: AbortSignal, progress?: RhinoQTaskRunContext['progress'], workerArtifactIdentity?: { ownerId: string; tenantId: string }): RhinoQTaskOutputHelpers {
   type FileOptions = { name?: string; contentType?: string; lineage?: string[] };
   type ZipOptions = { name?: string; maxItems?: number; lineage?: string[] };
-  const artifact = artifactHelper(services, taskId, executionId, signal, progress);
+  const artifact = artifactHelper(services, taskId, executionId, signal, progress, undefined, workerArtifactIdentity);
   const registrationQueue = {
     tail: Promise.resolve(),
     enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -444,7 +590,7 @@ function outputHelper(services: RhinoQTaskServices, taskId: string, executionId:
       return result;
     },
   };
-  const orderedArtifact = artifactHelper(services, taskId, executionId, signal, progress, registrationQueue);
+  const orderedArtifact = artifactHelper(services, taskId, executionId, signal, progress, registrationQueue, workerArtifactIdentity);
   const file = (path: string, options: FileOptions = {}) => artifact.filePath(path, { ...options, reportProgress: true });
   const orderedFile = (path: string, options: FileOptions = {}) => orderedArtifact.filePath(path, { ...options, reportProgress: true });
   const paths = (values: string[], maximum = 100, hardMaximum = 1_000) => {
@@ -495,19 +641,86 @@ function videoTypeFor(path: string): string { const value = contentTypeFor(path)
 function archiveTypeFor(path: string): string { const value = contentTypeFor(path); if (!['application/zip','application/x-tar','application/gzip'].includes(value)) throw new TypeError('output.archive requires .zip, .tar, .gz or explicit contentType'); return value; }
 async function optionalTaskImport(specifier: string): Promise<Record<string, unknown>> { try { return await import(specifier) as Record<string, unknown>; } catch (error) { throw new Error(`context.output.zip requires ${specifier}; install archiver`, { cause: error }); } }
 
-function taskEnvelope<Input>(value: unknown, name: string, version: number): { taskId: string; executionId: string; payload: Input; trace?: Record<string, string> } {
+function createTaskCancellationMonitor(
+  services: RhinoQTaskServices,
+  taskId: string,
+  upstream?: AbortSignal,
+): { signal: AbortSignal; ready: Promise<void>; stop(): Promise<void> } {
+  const controller = new AbortController();
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inspection: Promise<void> = Promise.resolve();
+  const forwardUpstreamAbort = () => {
+    if (controller.signal.aborted) return;
+    const reason = upstream?.reason;
+    controller.abort(reason instanceof RhinoQUserCancellationError
+      ? reason
+      : new RhinoQWorkerShutdownError('Worker shutdown or deployment interrupted the Task.', { cause: reason }));
+  };
+  if (upstream?.aborted) forwardUpstreamAbort();
+  else upstream?.addEventListener('abort', forwardUpstreamAbort, { once: true });
+
+  const inspect = async () => {
+    if (stopped || controller.signal.aborted || !services.cancellation) return;
+    try {
+      const task = await services.cancellation.client.getTask(taskId);
+      if (task.state === 'cancel_requested') {
+        controller.abort(new RhinoQUserCancellationError(taskId, task.cancellation?.reason ?? 'Task cancelled by user.'));
+      }
+    } catch {
+      // An unavailable read is not proof of a user cancellation. The runtime
+      // retains retry ownership; the next bounded poll can still observe it.
+    }
+  };
+  const schedule = () => {
+    if (stopped || controller.signal.aborted || !services.cancellation) return;
+    const delay = services.cancellation.pollIntervalMs ?? 1_000;
+    timer = setTimeout(() => {
+      inspection = inspect().finally(schedule);
+    }, delay);
+    timer.unref?.();
+  };
+  inspection = inspect().finally(schedule);
+  return {
+    signal: controller.signal,
+    ready: inspection,
+    async stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      upstream?.removeEventListener('abort', forwardUpstreamAbort);
+      await inspection;
+    },
+  };
+}
+
+async function terminalizeUserCancellation(services: RhinoQTaskServices, taskId: string): Promise<void> {
+  const client = services.cancellation?.client;
+  if (!client) return;
+  const task = await client.getTask(taskId);
+  if (task.state === 'cancel_requested') {
+    await client.transitionTask(taskId, task.entityVersion, 'cancelled');
+  }
+}
+
+function taskEnvelope<Input>(value: unknown, name: string, version: number): { taskId: string; executionId: string; itemKey: string; payload: Input; ownerId?: string; tenantId?: string; trace?: Record<string, string> } {
   if (!value || typeof value !== 'object') throw new TypeError('RhinoQ Task worker received an invalid envelope');
-  const envelope = value as { taskName?: unknown; definitionVersion?: unknown; taskId?: unknown; executionId?: unknown; payload?: Input; trace?: unknown };
+  const envelope = value as { taskName?: unknown; definitionVersion?: unknown; taskId?: unknown; executionId?: unknown; itemKey?: unknown; payload?: Input; ownerId?: unknown; tenantId?: unknown; trace?: unknown };
   if (envelope.taskName !== name || envelope.definitionVersion !== version) {
     throw new TypeError(`RhinoQ Task worker refuses an undeclared Task envelope; expected ${name}@${version}`);
   }
   if (typeof envelope.taskId !== 'string' || !envelope.taskId.trim() || typeof envelope.executionId !== 'string' || !envelope.executionId.trim()) {
     throw new TypeError('RhinoQ Task envelope requires taskId and executionId');
   }
+  if (envelope.itemKey !== undefined && (typeof envelope.itemKey !== 'string' || !envelope.itemKey.trim())) {
+    throw new TypeError('RhinoQ Task envelope itemKey must be a non-empty string when supplied');
+  }
   const trace = envelope.trace && typeof envelope.trace === 'object'
     ? Object.fromEntries(Object.entries(envelope.trace).filter((entry): entry is [string, string] => typeof entry[1] === 'string').slice(0, 32))
     : undefined;
-  return { taskId: envelope.taskId, executionId: envelope.executionId, payload: envelope.payload as Input, ...(trace ? { trace } : {}) };
+  return { taskId: envelope.taskId, executionId: envelope.executionId, itemKey: envelope.itemKey?.trim() || 'default', payload: envelope.payload as Input,
+    ...(typeof envelope.ownerId === 'string' && envelope.ownerId.trim() ? { ownerId: envelope.ownerId.trim() } : {}),
+    ...(typeof envelope.tenantId === 'string' && envelope.tenantId.trim() ? { tenantId: envelope.tenantId.trim() } : {}),
+    ...(trace ? { trace } : {}) };
 }
 
 function required(value: string | undefined, label: string): string {

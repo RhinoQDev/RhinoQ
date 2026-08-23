@@ -31,7 +31,7 @@ test('one Task declaration drives stable dispatch identity and the worker handle
   assert.equal(calls[0].command.executionId, 'report-42:attempt:1');
   assert.deepEqual(calls[0].command.retry, { maxAttempts: 3, backoff: { type: 'exponential', delayMs: 1000 } });
   assert.deepEqual(calls[0].command.payload, {
-    taskName: 'report.export', taskId: 'report-42', executionId: 'report-42:attempt:1', definitionVersion: 1,
+    taskName: 'report.export', taskId: 'report-42', executionId: 'report-42:attempt:1', ownerId: 'owner-a', tenantId: 'default', definitionVersion: 1, itemKey: 'default',
     retry: { mode: 'runtime', maxAttempts: 3, backoff: { type: 'exponential', delayMs: 1000 } },
     payload: { reportId: '42' },
   });

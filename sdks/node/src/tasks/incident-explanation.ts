@@ -2,6 +2,7 @@ import type {
   ProviderOperationRecord, TaskSnapshot, TaskVerificationRecord,
 } from '../gateway/types.js';
 import type { RuntimeAdapterReport } from '../runtime/contracts.js';
+import type { DurableStepRecord } from './durable.js';
 
 export interface IncidentExplanation {
   schemaVersion: 1;
@@ -24,6 +25,7 @@ export interface IncidentExplanation {
 export interface IncidentExplanationInput {
   task: TaskSnapshot;
   verifications?: TaskVerificationRecord[];
+  steps?: DurableStepRecord[];
   providerOperations?: ProviderOperationRecord[];
   runtimeReports?: RuntimeAdapterReport[];
 }
@@ -43,11 +45,16 @@ export function explainTaskIncident(input: IncidentExplanationInput): IncidentEx
   const stalled = latest.filter((execution) => execution.state === 'stalled');
   const succeededWithoutResult = latest.filter((execution) => execution.state === 'succeeded' && !execution.hasResult);
   const uncertainProvider = (input.providerOperations ?? []).filter((operation) => operation.state === 'uncertain');
+  const failedSteps = (input.steps ?? []).filter((step) => step.state === 'failed');
+  const runningSteps = (input.steps ?? []).filter((step) => step.state === 'running');
   const evidence: IncidentExplanation['evidence'] = [
     { kind: 'task_state', statement: `Task state is ${task.state}.` },
     { kind: 'task_snapshot', statement: `Authoritative Task snapshot version ${task.entityVersion}, updated ${task.updatedAt}.` },
     { kind: 'attempts', statement: `${latest.length} current item attempt(s): ${failed.length} failed, ${stalled.length} stalled, ${succeededWithoutResult.length} succeeded without a recorded result.` },
   ];
+  if (input.steps?.length) evidence.push({
+    kind: 'durable_steps', statement: `${input.steps.length} durable step(s): ${failedSteps.length} failed, ${runningSteps.length} running; each result is fenced by its attempt lease.`,
+  });
   if (latestVerification) evidence.push({
     kind: 'verification',
     statement: `Latest verification ${latestVerification.verifier} is ${latestVerification.status}; readback recorded ${latestVerification.verifiedAt}${evidenceFields(latestVerification.evidence)}.`,
@@ -68,6 +75,7 @@ export function explainTaskIncident(input: IncidentExplanationInput): IncidentEx
   if (uncertainProvider.length) causes.push({ id: 'provider-unknown', statement: 'A provider call may have happened but is not confirmed.', basis: 'provider operation state' });
   if (!latestVerification) causes.push({ id: 'verification-missing', statement: 'The business result has not been independently checked.', basis: 'verification history' });
 
+  if (failedSteps.length) causes.push({ id: 'step-failure', statement: `Durable step(s) failed: ${failedSteps.slice(0, 3).map((step) => step.key).join(', ')}.`, basis: 'durable step state' });
   const cancel = cancellationAvailability(task, input.runtimeReports);
   const actions: IncidentExplanation['recommendedActions'] = [{
     id: 'recheck-evidence', label: 'Recheck outcome evidence', availability: 'available',
@@ -86,7 +94,7 @@ export function explainTaskIncident(input: IncidentExplanationInput): IncidentEx
     schemaVersion: 1,
     taskId: task.id,
     summary: summary(task.state, businessOutcome, failed.length, stalled.length),
-    technicalState: `Task=${task.state}; current items=${latest.length}; cancellation=${task.cancellation?.status ?? 'none'}.`,
+    technicalState: `Task=${task.state}; current items=${latest.length}; durable steps=${input.steps?.length ?? 0}; cancellation=${task.cancellation?.status ?? 'none'}.`,
     businessOutcome,
     evidence: evidence.slice(0, 20),
     affected: { tasks: 1, items: latest.length, ...(task.ownerId ? { owners: 1 as const } : {}) },

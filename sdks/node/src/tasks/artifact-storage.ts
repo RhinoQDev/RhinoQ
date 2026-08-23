@@ -13,6 +13,8 @@ export interface RhinoQArtifactDirectUpload {
   name: string;
   create(input: { sessionId: string; artifactId: string; name: string; contentType: string; sizeBytes: number; partSize: number; ownerId: string; tenantId: string }): Promise<{ uploadId: string; reference: string }>;
   signPart(input: { uploadId: string; reference: string; partNumber: number }): Promise<{ url: string; expiresAt: string }>;
+  /** Worker-only byte transfer for a persisted multipart session. Browser clients keep using signPart(). */
+  uploadPart?(input: { uploadId: string; reference: string; partNumber: number; body: Uint8Array; signal?: AbortSignal }): Promise<{ etag: string }>;
   listParts(input: { uploadId: string; reference: string }): Promise<Array<{ partNumber: number; etag: string; sizeBytes: number }>>;
   complete(input: { uploadId: string; reference: string; parts: Array<{ partNumber: number; etag: string }> }): Promise<void>;
   abort(input: { uploadId: string; reference: string }): Promise<void>;
@@ -112,6 +114,7 @@ export async function createAwsS3ArtifactProvider(options: AwsS3ArtifactOptions)
       return { uploadId: result.UploadId, reference: `s3://${bucket}/${key}` };
     },
     async signPart(input) { const { key } = parse(input.reference); const seconds = 900; const url = await getSignedUrl(client, new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: input.uploadId, PartNumber: input.partNumber }), { expiresIn: seconds }); requireHTTPS(url); return { url, expiresAt: new Date(Date.now()+seconds*1000).toISOString() }; },
+    async uploadPart(input) { const { key } = parse(input.reference); const result = await (client as { send(command: unknown, options?: { abortSignal?: AbortSignal }): Promise<{ ETag?: string }> }).send(new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: input.uploadId, PartNumber: input.partNumber, Body: input.body }), input.signal ? { abortSignal: input.signal } : undefined); const etag = result.ETag?.trim(); if (!etag) throw new TypeError('S3 UploadPart response has no ETag'); return { etag }; },
     async listParts(input) { const { key }=parse(input.reference);const parts=[];let marker: number|undefined;do{const page=await (client as {send(command:unknown):Promise<{Parts?:Array<{PartNumber?:number;ETag?:string;Size?:number}>;IsTruncated?:boolean;NextPartNumberMarker?:number}>}).send(new ListPartsCommand({Bucket:bucket,Key:key,UploadId:input.uploadId,...(marker?{PartNumberMarker:marker}:{})}));for(const part of page.Parts??[]){if(Number.isInteger(part.PartNumber)&&part.ETag&&Number.isSafeInteger(part.Size))parts.push({partNumber:part.PartNumber!,etag:part.ETag,sizeBytes:part.Size!});}marker=page.IsTruncated?page.NextPartNumberMarker:undefined;}while(marker);return parts; },
     async complete(input) { const { key } = parse(input.reference); await (client as { send(command: unknown): Promise<unknown> }).send(new CompleteMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: input.uploadId, MultipartUpload: { Parts: input.parts.map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })) } })); },
     async abort(input) { const { key } = parse(input.reference); await (client as { send(command: unknown): Promise<unknown> }).send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: input.uploadId })); },

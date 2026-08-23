@@ -273,7 +273,7 @@ async function runApplicationWorker(handler: RhinoQApplicationWorkerHandler, opt
   }
   let worker: RhinoQApplicationWorkerRuntime | undefined;
   try {
-    worker = await options.create(handler);
+    worker = await options.create((job) => invokeWithShutdownSignal(handler, job, controller.signal));
     if (!worker || typeof worker.close !== 'function') throw new TypeError('worker create must return an object with close()');
     if (!controller.signal.aborted) await new Promise<void>((resolve) => controller.signal.addEventListener('abort', () => resolve(), { once: true }));
     await closeWorkerWithin(worker, timeoutMs);
@@ -295,6 +295,34 @@ async function closeWorkerWithin(worker: RhinoQApplicationWorkerRuntime, timeout
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+async function invokeWithShutdownSignal(
+  handler: RhinoQApplicationWorkerHandler,
+  job: RhinoQApplicationWorkerJob,
+  shutdown: AbortSignal,
+): Promise<unknown> {
+  if (!job.signal && !shutdown.aborted) {
+    return handler({ ...job, signal: shutdown });
+  }
+  const controller = new AbortController();
+  const forward = (source: AbortSignal) => {
+    if (!controller.signal.aborted) controller.abort(source.reason);
+  };
+  const onShutdown = () => forward(shutdown);
+  const onJobAbort = () => forward(job.signal!);
+  if (shutdown.aborted) onShutdown();
+  else shutdown.addEventListener('abort', onShutdown, { once: true });
+  if (job.signal?.aborted) onJobAbort();
+  else job.signal?.addEventListener('abort', onJobAbort, { once: true });
+  try {
+    return await handler({ ...job, signal: controller.signal });
+  } finally {
+    // A successful job can settle before either signal aborts; remove listeners
+    // so its captured envelope is not retained by a long-lived worker signal.
+    shutdown.removeEventListener('abort', onShutdown);
+    job.signal?.removeEventListener('abort', onJobAbort);
   }
 }
 

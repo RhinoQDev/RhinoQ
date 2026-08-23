@@ -11,6 +11,7 @@ import {
 import { createNodeWorkbenchMiddleware, type WorkbenchHandlerOptions } from '../workbench/handler.js';
 import type { RuntimeAdapter } from './contracts.js';
 import { defineRhinoQTask, type RhinoQArtifactStorage, type RhinoQDeclaredTask, type RhinoQTaskOptions, type RhinoQTraceHooks } from '../tasks/declaration.js';
+import type { DurableEffectClient } from '../tasks/durable.js';
 import { createAwsS3ArtifactProvider, createAwsS3ArtifactProviderFromEnv, type AwsS3ArtifactOptions, type RhinoQArtifactProvider } from '../tasks/artifact-storage.js';
 import { ArtifactRetentionService, ArtifactUploadService, PostgresArtifactRetentionStore, PostgresArtifactUploadSessionStore } from '../tasks/artifact-upload.js';
 import type { TaskMetrics } from '../observe/metrics.js';
@@ -21,6 +22,7 @@ import {
   type CreateRhinoQOptions,
   type RhinoQRuntimeIntegration,
 } from './integration.js';
+import { validateRhinoQResourcePool, type RhinoQResourcePoolOptions } from '../tasks/resource-lease.js';
 
 export interface CreateRhinoQAppOptions {
   pool: SqlPool;
@@ -35,6 +37,15 @@ export interface CreateRhinoQAppOptions {
   adoptionReplicaId?: string;
   /** Primarily for composition tests or hosts that installed the profile already. */
   tasks?: PostgresTaskClient;
+  /** Existing Go-owned ProviderOperation ledger facade for ctx.effect(). */
+  effectClient?: DurableEffectClient;
+  /** Stable process/deployment identity used when acquiring Step leases. */
+  workerId?: string;
+  /**
+   * Tenant-scoped PostgreSQL capacity shared by every application worker using
+   * this pool key. A Task reserves it only when resources.{cpu,memoryBytes,diskBytes,network} is non-zero.
+   */
+  resourcePool?: RhinoQResourcePoolOptions;
   artifactStorage?: RhinoQArtifactStorage;
   /** One provider configures both private upload and owner-safe signed download. */
   artifactProvider?: RhinoQArtifactProvider;
@@ -98,6 +109,9 @@ export class RhinoQPortableApp {
     private readonly artifactStorage?: RhinoQArtifactStorage,
     private readonly artifactProvider?: RhinoQArtifactProvider,
     private readonly trace?: RhinoQTraceHooks,
+    private readonly effectClient?: DurableEffectClient,
+    private readonly workerId?: string,
+    private readonly resourcePool?: RhinoQResourcePoolOptions,
     readonly artifacts?: ArtifactUploadService,
     readonly artifactRetention?: ArtifactRetentionService,
     private readonly realtime?: CreateRhinoQAppOptions['realtime'],
@@ -109,7 +123,19 @@ export class RhinoQPortableApp {
       checkpoints: this.tasks,
       ...(this.trace ? { trace: this.trace } : {}),
       ...(this.realtime ? { onMutation: (mutation: { taskId: string; ownerId: string; tenantId?: string; entityVersion: number }) => this.realtime!.invalidate(mutation.taskId, { ownerId: mutation.ownerId, ...(mutation.tenantId ? { tenantId: mutation.tenantId } : {}) }, mutation.entityVersion) } : {}),
-      ...((this.artifactProvider?.storage ?? this.artifactStorage) ? { artifacts: { storage: (this.artifactProvider?.storage ?? this.artifactStorage)!, register: (taskId, request) => this.tasks.registerTaskArtifact(taskId, request) } } : {}),
+      steps: this.tasks,
+      ...(this.effectClient ? { effects: this.effectClient } : {}),
+      cancellation: { client: this.tasks },
+      ...(this.workerId ? { workerId: this.workerId } : {}),
+      ...(this.resourcePool ? { resources: { client: this.tasks, pool: this.resourcePool } } : {}),
+      ...((this.artifactProvider?.storage ?? this.artifactStorage) ? { artifacts: {
+        storage: (this.artifactProvider?.storage ?? this.artifactStorage)!,
+        register: (taskId, request) => this.tasks.registerTaskArtifact(taskId, request),
+        ...(this.artifacts && this.artifactProvider?.direct?.uploadPart ? { durableMultipart: {
+          uploads: this.artifacts,
+          authorizeTask: async (taskId, ownerId, tenantId) => { await this.tasks.getTaskForOwner(taskId, ownerId, tenantId); },
+        } } : {}),
+      } } : {}),
     });
   }
 
@@ -250,6 +276,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
   const artifactChoices = [options.artifactStorage, options.artifactProvider, options.artifacts].filter(Boolean).length;
   if (artifactChoices > 1) throw new TypeError('configure only one of artifacts, artifactProvider or artifactStorage');
   const artifactProvider = options.artifactProvider ?? (await resolveArtifactsOption(options.artifacts));
+  const resourcePool = options.resourcePool ? validateRhinoQResourcePool(options.resourcePool) : undefined;
   const tasks = options.tasks ?? await installPostgresTaskProfile(options.pool);
   const runtime = createRhinoQ({
     client: tasks,
@@ -263,7 +290,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
   await runtime.start();
   const uploads = artifactProvider?.direct ? new ArtifactUploadService(artifactProvider, new PostgresArtifactUploadSessionStore(options.pool), (taskId, request) => tasks.registerTaskArtifact(taskId, request), options.metrics, async (taskId, ownerId, tenantId) => { await tasks.getTaskForOwner(taskId, ownerId, tenantId); }) : undefined;
   const retention = artifactProvider?.direct?.delete ? new ArtifactRetentionService(artifactProvider, new PostgresArtifactRetentionStore(options.pool), undefined, options.metrics) : undefined;
-  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, uploads, retention, options.realtime);
+  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, options.effectClient, options.workerId, resourcePool, uploads, retention, options.realtime);
 }
 
 /**

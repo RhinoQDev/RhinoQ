@@ -1,11 +1,15 @@
+import { TASK_SCHEMA_V19_NAME, TASK_SCHEMA_V19_SQL } from './durable-step-schema.js';
+import { TASK_SCHEMA_V20_NAME, TASK_SCHEMA_V20_SQL } from './resource-lease-schema.js';
+import { TASK_SCHEMA_V21_NAME, TASK_SCHEMA_V21_SQL } from './durable-step-cancel-schema.js';
 import type { SqlExecutor } from './producer.js';
 
-export const TASK_SCHEMA_VERSION = 14;
-export const TASK_SCHEMA_NAME = '013_tenant_fenced_access';
+export const TASK_SCHEMA_VERSION = 21;
+export const TASK_SCHEMA_NAME = TASK_SCHEMA_V21_NAME;
 const TASK_SCHEMA_V10_NAME = '010_durable_task_notifications';
 const TASK_SCHEMA_V9_NAME = '009_tenant_verification_artifacts';
 const TASK_SCHEMA_V11_NAME = '011_durable_artifact_upload_sessions';
 const TASK_SCHEMA_V14_NAME = '014_task_row_level_security';
+const TASK_SCHEMA_V13_NAME = '013_tenant_fenced_access';
 
 /**
  * Task-only PostgreSQL profile.
@@ -3085,12 +3089,15 @@ const TASK_SCHEMA_MIGRATIONS = [
   { version: 10, name: TASK_SCHEMA_V10_NAME, sql: TASK_SCHEMA_V10_SQL },
   { version: 11, name: TASK_SCHEMA_V11_NAME, sql: TASK_SCHEMA_V11_SQL },
   { version: 12, name: '012_selective_execution_checkpoints', sql: TASK_SCHEMA_V12_SQL },
-  { version: 13, name: TASK_SCHEMA_NAME, sql: TASK_SCHEMA_V13_SQL },
+  { version: 13, name: TASK_SCHEMA_V13_NAME, sql: TASK_SCHEMA_V13_SQL },
   { version: 14, name: TASK_SCHEMA_V14_NAME, sql: TASK_SCHEMA_V14_SQL },
   { version: 15, name: TASK_SCHEMA_V15_NAME, sql: TASK_SCHEMA_V15_SQL },
   { version: 16, name: TASK_SCHEMA_V16_NAME, sql: TASK_SCHEMA_V16_SQL },
   { version: 17, name: TASK_SCHEMA_V17_NAME, sql: TASK_SCHEMA_V17_SQL },
   { version: 18, name: TASK_SCHEMA_V18_NAME, sql: TASK_SCHEMA_V18_SQL },
+  { version: 19, name: TASK_SCHEMA_V19_NAME, sql: TASK_SCHEMA_V19_SQL },
+  { version: 20, name: TASK_SCHEMA_V20_NAME, sql: TASK_SCHEMA_V20_SQL },
+  { version: 21, name: TASK_SCHEMA_V21_NAME, sql: TASK_SCHEMA_V21_SQL },
 ] as const;
 
 export const TASK_RLS_TABLES = [
@@ -3101,7 +3108,11 @@ export const TASK_RLS_TABLES = [
   'verifications',
   'artifacts',
   'notification_outbox',
+  'durable_steps',
+  'durable_step_attempts',
   'artifact_upload_sessions',
+  'resource_pools',
+  'resource_leases',
 ] as const;
 
 export interface TaskRlsReport {

@@ -65,5 +65,5 @@ test('recorded parts reject invalid shape and declared-size overflow',async()=>{
   const store=new MemoryStore(),provider={storage:{put(){}},resolve(){},direct:{name:'fake',async create(){return{uploadId:'u',reference:'fake://key'};},async signPart(){return{url:'https://upload.invalid',expiresAt:new Date().toISOString()};},async listParts(){return[];},async complete(){},async abort(){},async verify(input){return{sizeBytes:input.expectedSizeBytes};}}};
   const service=new ArtifactUploadService(provider,store);const {session}=await service.create({ownerId:'o',name:'x',contentType:'x/test',sizeBytes:1});
   await assert.rejects(()=>service.recordPart(session.id,'o','default',session.version,{partNumber:0,etag:'e',sizeBytes:1}),/requires/);
-  await assert.rejects(()=>service.recordPart(session.id,'o','default',session.version,{partNumber:1,etag:'e',sizeBytes:2}),/exceed/);
+  await assert.rejects(()=>service.recordPart(session.id,'o','default',session.version,{partNumber:1,etag:'e',sizeBytes:2}),/does not match/);
 });

@@ -36,7 +36,16 @@ import type {
 import type { TaskClient } from '../tasks/client.js';
 import { sha256RhinoQCheckpointInput } from '../tasks/checkpoint.js';
 import { TaskHandle } from '../tasks/handle.js';
+import type { DurableStepAcquireRequest, DurableStepAcquireResult, DurableStepClient, DurableStepLease, DurableStepRecord } from '../tasks/durable.js';
 import type { SqlExecutor } from './producer.js';
+import {
+  RhinoQResourceUnavailableError,
+  normalizeRhinoQResourceVector,
+  validateRhinoQResourcePool,
+  type RhinoQResourceLease,
+  type RhinoQResourceLeaseAcquireRequest,
+  type RhinoQResourceLeaseClient,
+} from '../tasks/resource-lease.js';
 import { assertTenantId } from './tenant.js';
 import { migrateTaskSchema } from './task-schema.js';
 import type { SqlConnection, SqlPool } from './task-schema.js';
@@ -111,6 +120,29 @@ interface VerificationRow {
   id: string; task_id: string; verifier: string; status: TaskVerificationRecord['status']; summary: string | null;
   evidence: unknown; finding_rule_id: string | null; finding_subject_type: string | null; finding_subject_id: string | null;
   finding_invariant_version: number | null; finding_deep_link: string | null; verified_at: Date | string; created_at: Date | string;
+}
+
+interface DurableStepRow {
+  id: string; task_id: string; execution_id: string; item_key: string; step_key: string;
+  task_version: number | string; step_version: number | string;
+  state: DurableStepRecord['state']; result: unknown; result_ref: string | null;
+  failure_reason: string | null; attempt: number | string; version: number | string;
+  created_at: Date | string; updated_at: Date | string; completed_at: Date | string | null;
+}
+
+interface DurableStepAcquireRow extends DurableStepRow {
+  action: DurableStepAcquireResult['action'];
+  attempt_id: string | null;
+  lease_owner: string | null;
+  lease_epoch: number | string | null;
+  lease_until: Date | string | null;
+}
+
+interface ResourceLeaseRow {
+  id: string; pool_key: string; task_id: string; execution_id: string;
+  lease_owner: string; lease_epoch: number | string; cpu: number | string;
+  memory_bytes: number | string; disk_bytes: number | string; network: number | string;
+  lease_until: Date | string;
 }
 
 interface ArtifactRow {
@@ -293,7 +325,7 @@ export interface PostgresTaskClientOptions {
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
 
-export class PostgresTaskClient implements TaskClient {
+export class PostgresTaskClient implements TaskClient, DurableStepClient, RhinoQResourceLeaseClient {
   private readonly executor: SqlExecutor;
   private readonly lockTimeoutMs: number;
 
@@ -441,6 +473,134 @@ export class PostgresTaskClient implements TaskClient {
       WHERE w.id=$1 AND ($2::text IS NULL OR t.owner_id=$2) AND ($3::text IS NULL OR t.tenant_id=$3)`, [id, ownerId ?? null, tenantId ?? null]);
     const row = result.rows[0]; if (!row) throw new RhinoQError('RHINOQ_WAITPOINT_NOT_FOUND', 'Waitpoint not found', false, { status: 404 });
     return mapWaitpoint(row);
+  }
+
+  /**
+   * Acquires one fenced durable Step. The SQL command owns compatibility,
+   * retry budget and stale-worker rejection; Node only encodes a stable id.
+   */
+  async acquireDurableStep(request: DurableStepAcquireRequest): Promise<DurableStepAcquireResult> {
+    validateDurableStepAcquire(request);
+    const id = `step-${(await sha256RhinoQCheckpointInput(`${request.taskId}\0${request.itemKey}\0${request.stepKey}`)).slice(0, 32)}`;
+    const result = await this.execute<DurableStepAcquireRow>(
+      `SELECT * FROM rhinoq_task.acquire_durable_step($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, request.taskId, request.executionId, request.itemKey, request.taskVersion,
+        request.stepKey, request.stepVersion, request.owner, request.leaseMs, request.maxAttempts],
+    );
+    const row = result.rows[0];
+    if (!row) throw new RhinoQError('RHINOQ_DURABLE_STEP_NOT_RETURNED', 'Durable Step was not returned after acquire', false);
+    return mapDurableStepAcquire(row);
+  }
+
+  async renewDurableStep(lease: DurableStepLease, leaseMs: number): Promise<DurableStepLease> {
+    validateDurableStepLease(lease);
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 3_600_000) throw new RangeError('durable Step leaseMs must be 1000..3600000');
+    const result = await this.execute<{ attempt_id: string; lease_owner: string; lease_epoch: number | string; lease_until: Date | string }>(
+      `SELECT * FROM rhinoq_task.renew_durable_step($1,$2,$3,$4,$5)`,
+      [lease.stepId, lease.attemptId, lease.owner, lease.epoch, leaseMs],
+    );
+    const row = result.rows[0];
+    if (!row || row.attempt_id !== lease.attemptId || row.lease_owner !== lease.owner || Number(row.lease_epoch) !== lease.epoch) {
+      throw new RhinoQError('RHINOQ_DURABLE_STEP_NOT_RETURNED', 'Durable Step lease was not returned after renewal', false);
+    }
+    return { ...lease, expiresAt: timestamp(row.lease_until) };
+  }
+
+  async completeDurableStep(lease: DurableStepLease, value: unknown, resultRef?: string): Promise<DurableStepRecord> {
+    validateDurableStepLease(lease);
+    const result = await this.execute<DurableStepRow>(
+      `SELECT * FROM rhinoq_task.complete_durable_step($1,$2,$3,$4,$5::jsonb,$6)`,
+      [lease.stepId, lease.attemptId, lease.owner, lease.epoch, encodeDurableStepResult(value), optionalResultRef(resultRef)],
+    );
+    const row = result.rows[0];
+    if (!row) throw new RhinoQError('RHINOQ_DURABLE_STEP_NOT_RETURNED', 'Durable Step was not returned after completion', false);
+    return mapDurableStep(row);
+  }
+
+  async failDurableStep(lease: DurableStepLease, error: unknown): Promise<DurableStepRecord> {
+    validateDurableStepLease(lease);
+    const result = await this.execute<DurableStepRow>(
+      `SELECT * FROM rhinoq_task.fail_durable_step($1,$2,$3,$4,$5)`,
+      [lease.stepId, lease.attemptId, lease.owner, lease.epoch, durableStepFailureReason(error)],
+    );
+    const row = result.rows[0];
+    if (!row) throw new RhinoQError('RHINOQ_DURABLE_STEP_NOT_RETURNED', 'Durable Step was not returned after failure', false);
+    return mapDurableStep(row);
+  }
+
+  async cancelDurableStep(lease: DurableStepLease, reason?: string): Promise<DurableStepRecord> {
+    validateDurableStepLease(lease);
+    if (reason !== undefined && reason.length > 2_048) throw new RangeError('durable Step cancellation reason must be at most 2048 characters');
+    const result = await this.execute<DurableStepRow>(
+      `SELECT * FROM rhinoq_task.cancel_durable_step($1,$2,$3,$4,$5)`,
+      [lease.stepId, lease.attemptId, lease.owner, lease.epoch, reason ?? null],
+    );
+    const row = result.rows[0];
+    if (!row) throw new RhinoQError('RHINOQ_DURABLE_STEP_NOT_RETURNED', 'Durable Step was not returned after cancellation', false);
+    return mapDurableStep(row);
+  }
+
+  async listDurableSteps(taskId: string, itemKey?: string): Promise<DurableStepRecord[]> {
+    if (!taskId?.trim()) throw new TypeError('durable step task id is required');
+    if (itemKey !== undefined && (!itemKey.trim() || itemKey.length > 256)) {
+      throw new RangeError('durable step itemKey must be 1..256 characters');
+    }
+    const result = await this.execute<DurableStepRow>(
+      `SELECT id,task_id,execution_id,item_key,step_key,task_version,step_version,state,result,result_ref,failure_reason,attempt,version,created_at,updated_at,completed_at
+       FROM rhinoq_task.durable_steps
+       WHERE task_id=$1 AND ($2::text IS NULL OR item_key=$2)
+       ORDER BY item_key,created_at,id`,
+      [taskId, itemKey?.trim() || null],
+    );
+    return result.rows.map(mapDurableStep);
+  }
+
+
+  async acquireResourceLease(request: RhinoQResourceLeaseAcquireRequest): Promise<RhinoQResourceLease> {
+    const pool = validateRhinoQResourcePool(request?.pool);
+    const taskId = resourceIdentifier(request?.taskId, 'resource taskId');
+    const executionId = resourceIdentifier(request?.executionId, 'resource executionId');
+    const owner = resourceIdentifier(request?.owner, 'resource lease owner');
+    const resources = normalizeRhinoQResourceVector(request?.resources, 'resource request');
+    if (resources.cpu === 0 && resources.memoryBytes === 0 && resources.diskBytes === 0 && resources.network === 0) {
+      throw new RangeError('resource request must contain at least one positive dimension');
+    }
+    const id = `resource-${(await sha256RhinoQCheckpointInput(`${taskId}\0${executionId}\0${pool.key}`)).slice(0, 32)}`;
+    try {
+      const result = await this.execute<ResourceLeaseRow>(
+        `SELECT * FROM rhinoq_task.acquire_resource_lease($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [id, pool.key, taskId, executionId, owner, pool.capacity.cpu, pool.capacity.memoryBytes,
+          pool.capacity.diskBytes, pool.capacity.network, resources.cpu, resources.memoryBytes,
+          resources.diskBytes, resources.network, pool.leaseMs ?? 60_000],
+      );
+      const row = result.rows[0];
+      if (!row) throw new RhinoQError('RHINOQ_RESOURCE_LEASE_NOT_RETURNED', 'Resource lease was not returned after admission', false);
+      return mapResourceLease(row);
+    } catch (error) {
+      if (error instanceof RhinoQError && error.code === 'RHINOQ_RESOURCE_UNAVAILABLE') {
+        throw new RhinoQResourceUnavailableError(pool.key, resources, pool.retryAfterMs ?? 5_000, { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  async renewResourceLease(lease: RhinoQResourceLease, leaseMs: number): Promise<RhinoQResourceLease> {
+    validateResourceLease(lease);
+    if (!Number.isSafeInteger(leaseMs) || leaseMs < 1_000 || leaseMs > 3_600_000) throw new RangeError('resource leaseMs must be 1000..3600000');
+    const result = await this.execute<ResourceLeaseRow>(
+      `SELECT * FROM rhinoq_task.renew_resource_lease($1,$2,$3,$4)`,
+      [lease.id, lease.owner, lease.epoch, leaseMs],
+    );
+    const row = result.rows[0];
+    if (!row || row.id !== lease.id || row.lease_owner !== lease.owner || Number(row.lease_epoch) !== lease.epoch) {
+      throw new RhinoQError('RHINOQ_RESOURCE_LEASE_NOT_RETURNED', 'Resource lease was not returned after renewal', false);
+    }
+    return mapResourceLease(row);
+  }
+
+  async releaseResourceLease(lease: RhinoQResourceLease): Promise<void> {
+    validateResourceLease(lease);
+    await this.execute(`SELECT rhinoq_task.release_resource_lease($1,$2,$3)`, [lease.id, lease.owner, lease.epoch]);
   }
 
   getTask(taskId: string): Promise<TaskSnapshot> {
@@ -1684,6 +1844,40 @@ function validateCheckpointRequest(executionId: string, key: string, request: Ta
   }
 }
 
+function mapResourceLease(row: ResourceLeaseRow): RhinoQResourceLease {
+  return {
+    id: row.id,
+    poolKey: row.pool_key,
+    taskId: row.task_id,
+    executionId: row.execution_id,
+    owner: row.lease_owner,
+    epoch: Number(row.lease_epoch),
+    resources: {
+      cpu: Number(row.cpu),
+      memoryBytes: Number(row.memory_bytes),
+      diskBytes: Number(row.disk_bytes),
+      network: Number(row.network),
+    },
+    expiresAt: timestamp(row.lease_until),
+  };
+}
+
+function resourceIdentifier(value: string | undefined, label: string): string {
+  const result = value?.trim();
+  if (!result || result.length > 512) throw new RangeError(`${label} must be 1..512 characters`);
+  return result;
+}
+
+function validateResourceLease(lease: RhinoQResourceLease): void {
+  resourceIdentifier(lease?.id, 'resource lease id');
+  resourceIdentifier(lease?.poolKey, 'resource lease pool key');
+  resourceIdentifier(lease?.taskId, 'resource lease task id');
+  resourceIdentifier(lease?.executionId, 'resource lease execution id');
+  resourceIdentifier(lease?.owner, 'resource lease owner');
+  if (!Number.isSafeInteger(lease?.epoch) || lease.epoch < 1) throw new RangeError('resource lease epoch must be a positive safe integer');
+  normalizeRhinoQResourceVector(lease.resources, 'resource lease resources');
+}
+
 function mapVerification(row: VerificationRow): TaskVerificationRecord {
   const hasFinding = row.finding_rule_id && row.finding_subject_type && row.finding_subject_id && row.finding_invariant_version;
   return { schemaVersion: 1, id: row.id, taskId: row.task_id, verifier: row.verifier, status: row.status,
@@ -1700,7 +1894,85 @@ function mapArtifact(row: ArtifactRow): TaskArtifactRecord {
     ...(row.execution_id ? { executionId: row.execution_id } : {}), name: row.name, contentType: row.content_type,
     sizeBytes: Number(row.size_bytes), checksumSha256: row.checksum_sha256, reference: row.reference,
     expiresAt: timestamp(row.expires_at), lineage, createdAt: timestamp(row.created_at), updatedAt: timestamp(row.updated_at) };
+
 }
+function mapDurableStep(row: DurableStepRow): DurableStepRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    ...(row.execution_id ? { executionId: row.execution_id } : {}),
+    itemKey: row.item_key,
+    key: row.step_key,
+    taskVersion: Number(row.task_version),
+    stepVersion: Number(row.step_version),
+    state: row.state,
+    ...(row.result === null || row.result === undefined ? {} : { result: decodeDurableStepResult(row.result) }),
+    ...(row.result_ref ? { resultRef: row.result_ref } : {}),
+    ...(row.failure_reason ? { error: row.failure_reason } : {}),
+    attempt: Number(row.attempt),
+    createdAt: timestamp(row.created_at),
+    updatedAt: timestamp(row.updated_at),
+    ...(row.completed_at ? { completedAt: timestamp(row.completed_at) } : {}),
+  };
+}
+
+function mapDurableStepAcquire(row: DurableStepAcquireRow): DurableStepAcquireResult {
+  const record = mapDurableStep(row);
+  if (row.action === 'reused') {
+    return { action: 'reused', state: record.state, ...(Object.prototype.hasOwnProperty.call(record, 'result') ? { result: record.result } : {}), ...(record.resultRef ? { resultRef: record.resultRef } : {}) };
+  }
+  if (row.action !== 'acquired' || !row.attempt_id || !row.lease_owner || row.lease_epoch === null || !row.lease_until) {
+    throw new TypeError('PostgreSQL returned an invalid durable Step lease');
+  }
+  return {
+    action: 'acquired', state: record.state,
+    lease: { stepId: record.id, attemptId: row.attempt_id, owner: row.lease_owner,
+      epoch: Number(row.lease_epoch), expiresAt: timestamp(row.lease_until), attempt: record.attempt },
+  };
+}
+
+function validateDurableStepAcquire(request: DurableStepAcquireRequest): void {
+  if (!request?.taskId?.trim() || !request.executionId?.trim() || !request.itemKey?.trim() || !request.stepKey?.trim() || !request.owner?.trim()) {
+    throw new TypeError('durable Step requires task, execution, item, key and lease owner');
+  }
+  if (request.itemKey.length > 256 || request.stepKey.length > 256) throw new RangeError('durable Step item and key must be at most 256 characters');
+  for (const [label, value] of Object.entries({ taskVersion: request.taskVersion, stepVersion: request.stepVersion, leaseMs: request.leaseMs, maxAttempts: request.maxAttempts })) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`durable Step ${label} must be a positive integer`);
+  }
+  if (request.leaseMs < 1_000 || request.leaseMs > 3_600_000) throw new RangeError('durable Step leaseMs must be 1000..3600000');
+  if (request.maxAttempts > 100) throw new RangeError('durable Step maxAttempts must be 1..100');
+}
+
+function validateDurableStepLease(lease: DurableStepLease): void {
+  if (!lease?.stepId?.trim() || !lease.attemptId?.trim() || !lease.owner?.trim() || !Number.isSafeInteger(lease.epoch) || lease.epoch < 1) {
+    throw new TypeError('a fenced durable Step lease is required');
+  }
+}
+
+function encodeDurableStepResult(value: unknown): string {
+  let encoded: string | undefined;
+  try { encoded = JSON.stringify({ value }); } catch (error) { throw new TypeError('durable Step result must be JSON serializable', { cause: error }); }
+  if (!encoded || new TextEncoder().encode(encoded).byteLength > 65_536) throw new RangeError('durable Step result must be JSON up to 64 KiB; return an artifact for larger output');
+  return encoded;
+}
+
+function decodeDurableStepResult(value: unknown): unknown {
+  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) return (value as { value: unknown }).value;
+  throw new TypeError('PostgreSQL returned an invalid durable Step result');
+
+}
+function optionalResultRef(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const result = value.trim();
+  if (!result || result.length > 2048) throw new RangeError('durable Step resultRef must be 1..2048 characters when supplied');
+  return result;
+}
+
+function durableStepFailureReason(error: unknown): string {
+  const value = error instanceof Error ? `${error.name}: ${error.message}` : String(error ?? 'Step handler failed.');
+  return value.trim().slice(0, 2048) || 'Step handler failed.';
+}
+
 
 function mapNotification(row: NotificationRow): TaskNotificationRecord {
   return {

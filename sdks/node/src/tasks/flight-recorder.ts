@@ -6,6 +6,7 @@ import type {
   TaskArtifact,
   ProviderOperationRecord,
 } from '../gateway/types.js';
+import type { DurableStepRecord } from './durable.js';
 import { explainTask } from './ui.js';
 
 export type TaskFlightRecorderEventKind =
@@ -13,6 +14,7 @@ export type TaskFlightRecorderEventKind =
   | 'task.state'
   | 'execution.state'
   | 'execution.result'
+  | 'step.state'
   | 'waitpoint.state'
   | 'verification.outcome'
   | 'provider.operation'
@@ -41,6 +43,7 @@ export interface TaskFlightRecorderEvent {
   executionId?: string;
   itemKey?: string;
   attempt?: number;
+  stepKey?: string;
   hasResult?: boolean;
   provider?: string;
   artifactId?: string;
@@ -90,6 +93,7 @@ export interface TaskFlightRecorderInput {
   task: TaskSnapshot;
   executionResults?: TaskExecutionResult[];
   waitpoints?: TaskWaitpoint[];
+  steps?: DurableStepRecord[];
   verifications?: TaskVerificationRecord[];
   providerOperations?: ProviderOperationRecord[];
   artifacts?: TaskArtifact[];
@@ -106,7 +110,7 @@ export interface TaskFlightRecorderInput {
  * richer attempt/effect audit records when those records are available.
  */
 export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRecorder {
-  const { task, executionResults = [], waitpoints = [], verifications = [], providerOperations = [], artifacts = [], waterfall = [] } = input;
+  const { task, executionResults = [], steps = [], waitpoints = [], verifications = [], providerOperations = [], artifacts = [], waterfall = [] } = input;
   const now = (input.now ?? (() => new Date()))();
   const generatedAt = now.toISOString();
   const resultByExecution = new Map(executionResults.map((result) => [result.executionId, result]));
@@ -156,6 +160,20 @@ export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRe
         : [];
       return [stateEvent, ...resultEvent];
     }),
+    ...steps.map((step) => ({
+      id: `${step.id}:state:${step.updatedAt}`,
+      observedAt: step.updatedAt,
+      kind: 'step.state' as const,
+      label: `Step ${step.key}`,
+      state: step.state,
+      ...(step.error ? { message: step.error } : {}),
+      ...(step.executionId ? { executionId: step.executionId } : {}),
+      itemKey: step.itemKey,
+      stepKey: step.key,
+      attempt: step.attempt,
+      hasResult: step.state === 'completed' &&
+        (Object.prototype.hasOwnProperty.call(step, 'result') || Boolean(step.resultRef)),
+    })),
     ...waitpoints.flatMap((waitpoint) => [
       {
         id: `${waitpoint.id}:created`,
