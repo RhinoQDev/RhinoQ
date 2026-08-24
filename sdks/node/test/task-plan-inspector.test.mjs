@@ -45,6 +45,17 @@ test('Plan Inspector reports an explicit not-configured state', () => {
   assert.match(report.needsDecision[0], /typed application compiler/);
 });
 
+test('Plan Inspector exposes deployment and redacted capability-link evidence', () => {
+  const inspection = inspectRhinoQPlan({
+    schemaVersion: 1, profile: 'reports', tasks: [],
+    deployment: { kind: 'rhinoq-deployment', schemaVersion: 1, app: 'reports', stage: 'dev', namespace: 'reports-dev', tenantBoundary: 'single-tenant-process', fingerprint: 'fixture:deployment' },
+    capabilityGraph: { kind: 'rhinoq-capability-graph', schemaVersion: 1, fingerprint: 'fixture:links', unresolvedOptional: [], links: [{ capability: 'storage:artifacts', provider: 'storage/s3', requiredBy: ['task:report.export'], binding: { properties: {}, secretRefs: ['secret://aws/rhinoq'], permissions: ['s3:GetObject'] } }] },
+  });
+  assert.equal(inspection.deployment.namespace, 'reports-dev');
+  assert.deepEqual(inspection.capabilityLinks[0].secretRefs, ['secret://aws/rhinoq']);
+  assert.equal(JSON.stringify(inspection).includes('secret-value'), false);
+});
+
 test('plan JSON adapter reports confidence and refuses unsupported input without mutation', () => {
   const legacy = adaptRhinoQPlanJson({ schemaVersion: 1, profile: 'reports', tasks: [] });
   assert.equal(legacy.source, 'legacy-manifest');

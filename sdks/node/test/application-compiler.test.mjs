@@ -5,6 +5,7 @@ import {
   defineRhinoQApplication,
   defineRhinoQExecutionProfile,
   compileRhinoQPlan,
+  compileRhinoQPlanResult,
 } from '../dist/index.js';
 
 test('application compiler applies one profile and emits a stable Task manifest', () => {
@@ -58,8 +59,40 @@ test('application compiler exposes one deterministic canonical plan without chan
   assert.deepEqual(first.requirements, ['adapter:manual', 'codec:png', 'output:checksum', 'runtime:manual', 'scope:reports', 'workspace:1024']);
   assert.match(first.fingerprint, /^fnv1a32:[0-9a-f]{8}$/);
   assert.equal(compileRhinoQPlan(JSON.parse(JSON.stringify(first))).fingerprint, first.fingerprint);
+  assert.deepEqual(compileRhinoQPlanResult(first).phases.map((item) => item.status), ['completed', 'completed', 'completed', 'completed']);
   assert.ok(Object.isFrozen(first));
   assert.ok(Object.isFrozen(first.tasks));
+  assert.deepEqual(create().diagnostics(), []);
+});
+
+test('compiler returns five-part structured diagnostics without touching runtime state', () => {
+  const result = compileRhinoQPlanResult({ schemaVersion: 2, profile: 'reports', tasks: [] });
+  assert.equal(result.status, 'invalid');
+  assert.equal(result.plan, undefined);
+  assert.equal(result.diagnostics[0].code, 'RHINOQ_PLAN_SCHEMA_UNSUPPORTED');
+  assert.equal(result.diagnostics[0].phase, 'normalize');
+  assert.match(result.diagnostics[0].whatRhinoQDid, /before starting an adapter/);
+  assert.match(result.diagnostics[0].verify, /rhinoq plan/);
+  assert.ok(Object.isFrozen(result));
+  assert.ok(Object.isFrozen(result.diagnostics));
+  assert.deepEqual(result.phases.map((item) => [item.phase, item.status]), [
+    ['normalize', 'failed'], ['validate', 'not-run'], ['link', 'not-run'], ['project', 'not-run'],
+  ]);
+});
+
+test('application compiler fingerprints typed capability links in the canonical plan', () => {
+  const adapter = createManualRuntimeAdapter('manual', 'reports');
+  const application = defineRhinoQApplication({
+    profile: { name: 'reports', adapters: [adapter] },
+    capabilityLinks: {
+      components: [{ id: 'storage/s3', version: 1, contractVersion: 1, provides: ['storage:artifacts'], binding: { secrets: { credential: { ref: 'secret://aws/rhinoq' } } } }],
+      requirements: [{ capability: 'storage:artifacts', requiredBy: 'task:report.export' }],
+    },
+    tasks: (task) => ({ report: task.task('report.export', async (input) => input) }),
+  });
+  assert.equal(application.plan().capabilityGraph.links[0].provider, 'storage/s3');
+  assert.deepEqual(application.plan().capabilityGraph.links[0].binding.secretRefs, ['secret://aws/rhinoq']);
+  assert.equal(application.manifest().capabilityGraph.fingerprint, application.plan().capabilityGraph.fingerprint);
 });
 
 test('application compiler rejects duplicate names, unknown adapters and unsafe effects', () => {

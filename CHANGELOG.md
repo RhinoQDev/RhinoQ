@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- Unified canonical plan validation behind `compileRhinoQPlanResult()`. CLI,
+  CI and Workbench integrations can now consume stable five-part structured
+  compiler diagnostics without catching ad-hoc error strings; the existing
+  throwing `compileRhinoQPlan()` API and manifest schema v1 remain compatible.
+  Typed application compilers expose the same evidence through
+  `compiler.diagnostics()`. Compilation now executes explicit pure
+  normalize/validate/link/project phases and reports a phase trace.
+- Added deterministic typed capability linking through
+  `linkRhinoQCapabilities()` and `capabilityLinks`. Required capabilities must
+  resolve to exactly one component; optional gaps remain explicit, and only
+  public binding metadata, permissions and secret references enter the
+  canonical manifest/plan fingerprint.
+- Added `defineRhinoQDeployment()` and `rhinoQDeploymentResource()` for
+  deterministic app/stage namespaces. Deployment identity is fingerprinted in
+  the canonical manifest/plan, keeps the current single-tenant-process
+  boundary explicit and is never treated as authorization or a credential.
+- Added `createRhinoQProviderComponent()`, which keeps the pure capability
+  declaration separate from explicit provision/validate/cleanup lifecycle
+  callbacks. Plan compilation cannot start or mutate a provider.
+- Added an SST deployment adapter with separate compile and materialize phases.
+  `compileRhinoQSSTDeployment()` emits deterministic worker/migration intent;
+  `materializeRhinoQSSTDeployment()` requires adopter-owned factories and
+  explicit capability resource links, with no SST dependency in core. The
+  narrow `@rhinoq/node/sst` subpath avoids exposing worker/application runtime
+  APIs to infrastructure configuration.
+- Unified plan validation, diff, compiler doctor and dev preflight through the
+  pure `runRhinoQCompilerWorkflow()`. `doctor --plan-from ... --plan-only` runs
+  without PostgreSQL; `dev --plan-from ...` validates deployment identity and
+  handler metadata before starting the local surface. Diffs now include stage
+  and capability-graph identity changes.
+- Workbench Plan Inspector now exposes deployment namespace and redacted
+  capability-to-provider link evidence alongside Task capsules.
+
 - Added PostgreSQL migrations `020_shared_resource_leases` and
   `021_durable_step_cancellation`. `createRhinoQApp({ resourcePool, workerId
   })` now makes tenant-scoped CPU/memory/disk/network admission available to

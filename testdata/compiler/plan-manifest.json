@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "profile": "reports",
+  "deployment": {
+    "kind": "rhinoq-deployment",
+    "schemaVersion": 1,
+    "app": "reports",
+    "stage": "test",
+    "namespace": "reports-test",
+    "tenantBoundary": "single-tenant-process",
+    "fingerprint": "fixture:deployment"
+  },
+  "tasks": [
+    {
+      "key": "report",
+      "name": "report.export",
+      "version": 1,
+      "adapter": "manual",
+      "runtime": "manual",
+      "scope": "reports",
+      "retry": { "mode": "never" },
+      "externalEffect": false
+    }
+  ]
+}

@@ -103,6 +103,11 @@ const plan = rhinoq.plan();
 // plan.limitations: boundaries that remain application/provider-owned
 ```
 
+Compilation is an explicit pure pipeline: `normalize → validate → link →
+project`. `compileRhinoQPlanResult()` reports which phases completed or failed
+alongside its structured diagnostics. None of the phases opens a database,
+resolves credentials, provisions modules or starts runtime code.
+
 The plan is deterministic and contains no credentials, handler source or
 payload. Persist it explicitly when a release process needs a diff, then use
 the read-only CLI flow:
@@ -112,11 +117,64 @@ npx rhinoq plan --from manifest.json --output .rhinoq/plan.json
 npx rhinoq plan --from .rhinoq/plan.json
 npx rhinoq plan validate --from .rhinoq/plan.json
 npx rhinoq plan diff --from .rhinoq/plan.json --against .rhinoq/plan.previous.json
+npx rhinoq doctor --plan-from .rhinoq/plan.json --plan-only
+npx rhinoq dev --plan-from .rhinoq/plan.json
 ```
 
 The CLI reads JSON artifacts only; it does not import arbitrary application
 source or change runtime configuration. `needs-decision` is a deliberate
 blocker for the validate command, not an inferred provider success.
+These entry points call the same pure `runRhinoQCompilerWorkflow()` projection;
+diff additionally reports deployment and capability-graph identity changes.
+`doctor --plan-only` does not require PostgreSQL, while regular `doctor` keeps
+its existing database/runtime checks after compiler validation. `dev` validates
+the plan before opening the local Workbench.
+
+Capability linking is also compile-time and read-only. A requirement resolves
+to exactly one component; a missing required provider or multiple providers
+fails closed. Bindings contain public scalar metadata, permission names and
+secret references—never secret values:
+
+```ts
+const rhinoq = defineRhinoQApplication({
+  profile,
+  capabilityLinks: {
+    components: [{
+      id: 'storage/s3', version: 1, contractVersion: 1,
+      provides: ['storage:artifacts'],
+      binding: {
+        properties: { region: 'ap-southeast-1' },
+        secrets: { credential: { ref: 'secret://aws/rhinoq' } },
+        permissions: ['s3:GetObject', 's3:PutObject'],
+      },
+    }],
+    requirements: [{ capability: 'storage:artifacts', requiredBy: 'task:report.export' }],
+  },
+  tasks,
+});
+```
+
+The resulting graph and its fingerprint are embedded in `manifest()` and
+`plan()`. Provisioning, credential resolution and readiness remain explicit
+application/module lifecycle operations; linking cannot run a provider or
+mutate Task state.
+
+Stages use a separate deployment identity:
+
+```ts
+const deployment = defineRhinoQDeployment({
+  app: 'reports',
+  stage: process.env.RHINOQ_STAGE ?? 'dev',
+  region: 'ap-southeast-1',
+});
+
+defineRhinoQApplication({ profile, deployment, tasks });
+```
+
+`reports-dev` and `reports-pr-123` therefore have distinct deterministic
+resource/evidence namespaces and plan fingerprints. Stage does not grant owner
+or tenant access, does not contain credentials and does not change public Task
+names. The current deployment boundary remains one tenant per Go Agent process.
 
 When `start({ http })` is used, the same bounded manifest is available to the
 operator Workbench's read-only [Plan Inspector](./plan-inspector.md) at

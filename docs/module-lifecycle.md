@@ -14,6 +14,12 @@ processor packs expose it as `pack.module`. Runtime adapters may expose the
 same contract in their optional `module` field. `cleanup()` is idempotent and
 validation cannot run before provisioning.
 
+Provider and storage integrations can use `createRhinoQProviderComponent()`.
+It deliberately returns two separate values: `declaration` is pure input for
+capability linking and canonical plans, while `lifecycle` owns the explicit
+imperative callbacks. Compiling or diffing a plan therefore cannot provision,
+validate or clean up a provider by accident.
+
 The boundary is intentionally narrow:
 
 - modules may own provider handles, readiness checks, workspace cleanup and

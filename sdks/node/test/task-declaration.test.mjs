@@ -140,8 +140,11 @@ test('output helpers infer file names and MIME types while bounding multiple fil
       storage: { async put() { throw new Error('buffered path must not run'); }, async putStream(input) { for await (const _ of input.source) {} return { reference: `s3://bucket/${input.name}` }; } },
       async register(_taskId, request) { registered.push(request); return request; },
     } });
-    await task.workerHandler()({ data: { taskName: 'export.files', definitionVersion: 1, taskId: 't1', executionId: 'e1', payload: {} } });
-    assert.deepEqual(registered.map((item) => [item.name, item.contentType]), [['report.pdf', 'application/pdf'], ['clip.mp4', 'video/mp4']]);
+    const outputs = await task.workerHandler()({ data: { taskName: 'export.files', definitionVersion: 1, taskId: 't1', executionId: 'e1', payload: {} } });
+    assert.deepEqual(outputs.map((item) => [item.name, item.contentType]), [['report.pdf', 'application/pdf'], ['clip.mp4', 'video/mp4']]);
+    // Concurrent uploads may register in completion order; registration is a
+    // set while the returned result preserves the caller's input order.
+    assert.deepEqual(registered.map((item) => [item.name, item.contentType]).sort(), [['clip.mp4', 'video/mp4'], ['report.pdf', 'application/pdf']]);
     await assert.rejects(() => task.execute({}, { output: {}, artifact: {}, taskId: 't', executionId: 'e', progress() {}, waitForInput() {}, waitForApproval() {}, waitForWebhook() {} }), /context\.output/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

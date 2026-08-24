@@ -1001,3 +1001,98 @@
   `context.artifact.stream()`; persisted sessions stay readable by the
   existing cleanup and browser-resume paths.
 - **Owner:** Node SDK + PostgreSQL adapter + product
+
+## ADR-0045 — One pure compiler result carries plans and structured diagnostics
+
+- **Status:** accepted
+- **Context:** the typed application compiler, JSON Plan Inspector, CLI and
+  Workbench already consume one canonical plan, but invalid input was reduced
+  to ad-hoc thrown strings. Adding stage, linking and deployment adapters on
+  top of separate validators would create conflicting readiness decisions.
+- **Decision:** compilation remains a read-only projection of the existing
+  Task declaration and returns a transport-safe result containing either one
+  canonical versioned plan or structured five-part diagnostics. The throwing
+  `compileRhinoQPlan()` facade remains for compatibility and delegates to the
+  same result. Later normalization, capability-linking and projection phases
+  extend this pipeline rather than introducing another declaration language.
+  Typed requirements resolve to exactly one namespaced component; the graph
+  stores public scalar bindings, permissions and secret references, never
+  runtime secret values.
+- **Boundary:** compilation cannot open a database, start an adapter, resolve
+  secret values or mutate configuration. Diagnostics explain safety but never
+  decide Task, lease, retry, Effect or Outcome state; those remain Go and
+  authoritative-store responsibilities.
+- **Consequences:** CLI, CI, setup, doctor and Workbench can render identical
+  error codes and verification commands. Manifest schema v1 and its existing
+  fingerprint stay compatible in this slice.
+- **Rollback:** callers may ignore result diagnostics and keep using the
+  throwing facade without changing the manifest or runtime protocol.
+- **Owner:** SDK + DX
+
+## ADR-0046 — Stage is deterministic deployment identity, not authorization
+
+- **Status:** accepted
+- **Context:** preview, staging and production deployments need distinct
+  resource/evidence namespaces. Reusing tenant or owner identity as a stage
+  would blur an authorization boundary, while provider-specific account IDs
+  would make the application plan non-portable.
+- **Decision:** `defineRhinoQDeployment()` creates a versioned identity from a
+  DNS-safe application and stage plus optional public region/target labels.
+  Its namespace and fingerprint enter the canonical manifest/plan. The only
+  supported tenant boundary remains `single-tenant-process`, matching the Go
+  Agent deployment contract. Resource helpers may prefix application-owned
+  names from this identity.
+- **Boundary:** stage never grants owner, tenant, database or provider access;
+  it contains no credential and does not select/provision a cloud provider.
+  Authentication and tenant checks remain application/runtime responsibilities.
+- **Consequences:** dev, PR, staging and production plans have stable distinct
+  identities and diffs without changing Task names or state-machine semantics.
+- **Rollback:** omit `deployment` from the application declaration; manifest v1
+  readers continue to accept the additive optional field.
+- **Owner:** SDK + deployment DX
+
+## ADR-0047 — SST deployment uses compiled intent and adopter-owned factories
+
+- **Status:** accepted
+- **Context:** an official SST path can reduce provisioning glue, but importing
+  a particular SST version into the core SDK or guessing VPC/database/image
+  choices would create dependency churn and unsafe topology assumptions.
+- **Decision:** `compileRhinoQSSTDeployment()` translates a canonical plan into
+  deterministic worker and optional migration intent. A separate
+  `materializeRhinoQSSTDeployment()` receives factories and resource references
+  from `sst.config.ts`. All compiled capability links must be supplied before
+  either factory runs. Commands and images are explicit adopter inputs.
+- **Boundary:** compile performs no cloud action; materialization declares SST
+  resources but never executes migrations or handlers. No credential value,
+  provider client, Task transition, lease, retry or Effect decision enters the
+  adapter. Go/Application/PostgreSQL authority is unchanged.
+- **Consequences:** RhinoQ supports SST without a runtime dependency and can
+  test the adapter using fake factories. Applications retain full control of
+  networking, IAM, database, image build and SST component versions.
+- **Rollback:** remove the adapter calls and materialize the same canonical
+  plan through another deployment system; no runtime or storage contract
+  changes.
+- **Owner:** SDK + deployment DX
+
+## ADR-0048 — Plan, diff, compiler doctor and dev share one pure workflow
+
+- **Status:** accepted
+- **Context:** separate CLI validation paths can disagree about plan readiness,
+  especially after adding deployment and capability graph identity. Database
+  doctor checks are valuable but cannot substitute for deterministic compiler
+  checks, and dev must not infer missing stage/provider facts.
+- **Decision:** `runRhinoQCompilerWorkflow()` is the shared read-only projection
+  for validate, diff, compiler doctor and dev preflight. The Node CLI consumes
+  it for plan validate/diff, `doctor --plan-from` and `dev --plan-from`. Regular
+  doctor continues into its existing PostgreSQL checks unless `--plan-only` is
+  explicit. Diff includes Task, deployment and capability graph changes.
+- **Boundary:** workflow evaluation opens no database, imports no application
+  source, starts no adapter and writes no configuration. Dev only starts its
+  existing local surface after preflight. Runtime correctness remains outside
+  this projection.
+- **Consequences:** CLI, CI and programmatic users receive the same status and
+  structured diagnostics for one artifact, while runtime diagnosis remains a
+  separate evidenced phase.
+- **Rollback:** entry points may call the existing plan projection directly;
+  the canonical artifact and runtime protocol do not change.
+- **Owner:** SDK + CLI DX

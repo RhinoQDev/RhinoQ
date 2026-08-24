@@ -2,7 +2,9 @@ import type { TaskSnapshot } from '../gateway/types.js';
 import type { RhinoQDeclaredTask, RhinoQTaskDispatch, RhinoQTaskOptions, RhinoQTaskRetryPolicy, RhinoQTaskResourcePolicy, RhinoQTaskSchedulePolicy } from '../tasks/declaration.js';
 import type { RuntimeAdapter } from './contracts.js';
 import { compileRhinoQDataPathPlan, type RhinoQDataPathOverrides, type RhinoQDataPathPlan } from '../tasks/data-path.js';
-import { compileRhinoQPlan, inspectRhinoQPlan, type RhinoQPlan } from '../tasks/plan-inspector.js';
+import { compileRhinoQPlanResult, inspectRhinoQPlan, type RhinoQCompilerDiagnostic, type RhinoQPlan } from '../tasks/plan-inspector.js';
+import { linkRhinoQCapabilities, type RhinoQCapabilityComponent, type RhinoQCapabilityRequirement } from './capability-link.js';
+import type { RhinoQDeploymentIdentity } from './deployment.js';
 import {
   createRhinoQApp,
   type CreateRhinoQAppOptions,
@@ -75,11 +77,20 @@ export interface RhinoQApplicationManifest {
   readonly schemaVersion: 1;
   readonly profile: string;
   readonly tasks: readonly Readonly<RhinoQTaskManifestEntry>[];
+  readonly capabilityGraph?: ReturnType<typeof linkRhinoQCapabilities>;
+  readonly deployment?: RhinoQDeploymentIdentity;
 }
 
 export interface DefineRhinoQApplicationOptions<Definitions extends BlueprintRecord> {
   profile: RhinoQExecutionProfile;
   tasks(task: RhinoQApplicationTaskFactory): Definitions;
+  /** Read-only capability graph; provisioning and runtime values stay application-owned. */
+  capabilityLinks?: {
+    components: readonly RhinoQCapabilityComponent[];
+    requirements: readonly RhinoQCapabilityRequirement[];
+  };
+  /** Deterministic namespace metadata; it is not owner/tenant authorization. */
+  deployment?: RhinoQDeploymentIdentity;
 }
 
 export interface StartRhinoQApplicationOptions extends Omit<CreateRhinoQAppOptions, 'adapters'> {
@@ -95,6 +106,8 @@ export interface DefineRhinoQProjectOptions<Definitions extends BlueprintRecord>
   profile: RhinoQExecutionProfile;
   identity: RhinoQProjectIdentity;
   tasks(task: RhinoQApplicationTaskFactory): Definitions;
+  capabilityLinks?: DefineRhinoQApplicationOptions<Definitions>['capabilityLinks'];
+  deployment?: RhinoQDeploymentIdentity;
   /** Optional application-owned provider/trace/metrics composition. */
   application?: Omit<CreateRhinoQAppOptions, 'pool' | 'adapters' | keyof RhinoQProjectIdentity>;
   /** One operator token is enough for the mounted owner API, Task Center and Workbench. */
@@ -150,6 +163,8 @@ export interface RhinoQApplicationCompiler<Definitions extends BlueprintRecord> 
   readonly definitions: Definitions;
   manifest(): RhinoQApplicationManifest;
   plan(): RhinoQPlan;
+  /** Structured, transport-safe compiler feedback. Empty for a valid plan. */
+  diagnostics(): readonly RhinoQCompilerDiagnostic[];
   start(options: StartRhinoQApplicationOptions): Promise<RhinoQStartedApplication<Definitions>>;
 }
 
@@ -165,17 +180,24 @@ export function defineRhinoQApplication<Definitions extends BlueprintRecord>(
   if (typeof options?.tasks !== 'function') throw new TypeError('application tasks factory is required');
   const definitions = Object.freeze(options.tasks(createTaskFactory()));
   const entries = compileEntries(definitions, profile);
+  const capabilityGraph = options.capabilityLinks ? linkRhinoQCapabilities(options.capabilityLinks) : undefined;
+  const deployment = options.deployment;
   const manifest = Object.freeze({
     schemaVersion: 1 as const,
     profile: profile.name,
     tasks: Object.freeze(entries.map(({ options: _options, ...entry }) => Object.freeze(entry))),
+    ...(capabilityGraph ? { capabilityGraph } : {}),
+    ...(deployment ? { deployment } : {}),
   });
-  const plan = compileRhinoQPlan(manifest);
+  const compilation = compileRhinoQPlanResult(manifest);
+  if (!compilation.plan) throw new TypeError(compilation.diagnostics[0]?.whatHappened ?? 'RhinoQ application plan is invalid');
+  const plan = compilation.plan;
 
   return Object.freeze({
     definitions,
     manifest: () => manifest,
     plan: () => plan,
+    diagnostics: () => compilation.diagnostics,
     async start(startOptions: StartRhinoQApplicationOptions) {
       const { http: httpOptions, ...appOptions } = startOptions;
       const app = await createRhinoQApp({ ...appOptions, adapters: profile.adapters });
@@ -231,7 +253,12 @@ export function defineRhinoQProject<Definitions extends BlueprintRecord>(
     throw new TypeError('project identity requires ownerFromRequest or ownerFromNodeRequest');
   }
   if (!options.http?.operatorToken?.trim()) throw new TypeError('project http.operatorToken is required');
-  const compiler = defineRhinoQApplication({ profile: options.profile, tasks: options.tasks });
+  const compiler = defineRhinoQApplication({
+    profile: options.profile,
+    tasks: options.tasks,
+    ...(options.capabilityLinks ? { capabilityLinks: options.capabilityLinks } : {}),
+    ...(options.deployment ? { deployment: options.deployment } : {}),
+  });
   return Object.freeze({
     ...compiler,
     async start(startOptions: RhinoQProjectStartOptions = {}) {

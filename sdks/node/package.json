@@ -73,6 +73,11 @@
       "import": "./dist/artifacts-entry.js",
       "require": "./dist/cjs/artifacts-entry.js"
     },
+    "./sst": {
+      "types": "./dist/sst-entry.d.ts",
+      "import": "./dist/sst-entry.js",
+      "require": "./dist/cjs/sst-entry.js"
+    },
     "./openapi.json": "./dist/openapi.json",
     "./package.json": "./package.json"
   },

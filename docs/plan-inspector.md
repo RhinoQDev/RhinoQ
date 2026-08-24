@@ -8,8 +8,10 @@ read-only endpoint is:
 GET /admin/api/plan
 ```
 
-The page shows each Task's factory marker, compiled adapter/runtime/scope,
-retry policy, bounded data path and readiness. A data-path provider gap is
+The page shows deployment stage/namespace, resolved capability-to-provider
+links, and each Task's factory marker, compiled adapter/runtime/scope, retry
+policy, bounded data path and readiness. Secret references may be shown as
+references; secret values are never part of the inspector contract. A provider gap is
 shown as `needs-decision`; it is never silently converted into a default or a
 mutation. When the application was not created by the typed compiler, the
 endpoint explicitly returns `not-configured`.

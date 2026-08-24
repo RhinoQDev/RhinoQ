@@ -27,7 +27,8 @@ import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
 import { recoverFailureLab, runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
 import { adoptionChecklist } from '../runtime/adoption.js';
 import { scanRhinoQIntegrationEraser, type RhinoQIntegrationEraserReport } from '../adopt/eraser.js';
-import { compileRhinoQPlan, inspectRhinoQPlan, type RhinoQPlan, type RhinoQPlanManifest } from '../tasks/plan-inspector.js';
+import { compileRhinoQPlan, type RhinoQPlan, type RhinoQPlanManifest } from '../tasks/plan-inspector.js';
+import { runRhinoQCompilerWorkflow } from '../tasks/compiler-workflow.js';
 import { compileRhinoQBuildProfile, type RhinoQBuildProfile } from '../runtime/build-profile.js';
 import { listRhinoQProcessorPackCatalog } from '../tasks/processor-pack.js';
 import { listRhinoQCapabilities } from '../capabilities/registry.js';
@@ -144,18 +145,19 @@ async function plan(args: string[]): Promise<void> {
     return;
   }
   if (action === 'validate') {
-    const inspection = inspectRhinoQPlan(current);
-    if (inspection.status !== 'ready') {
-      if (json) console.log(JSON.stringify({ plan: current, inspection }, null, 2));
-      fail(`plan requires decisions: ${inspection.needsDecision.join('; ')}`, 'Resolve the listed Task data-path decisions and regenerate the plan');
+    const workflow = runRhinoQCompilerWorkflow({ action: 'validate', plan: current });
+    if (workflow.status !== 'ready') {
+      if (json) console.log(JSON.stringify({ plan: current, workflow }, null, 2));
+      fail(`plan requires decisions: ${workflow.diagnostics.map((item) => item.whatHappened).join('; ')}`, 'Resolve the listed Task data-path decisions and regenerate the plan');
     }
-    if (json) console.log(JSON.stringify({ plan: current, inspection }, null, 2));
+    if (json) console.log(JSON.stringify({ plan: current, workflow }, null, 2));
     else console.log(`PASS plan ${current.fingerprint} is ready (${current.tasks.length} Task(s), profile ${current.profile}).`);
     return;
   }
   if (!against) fail('plan diff requires --against <path>', 'Run: npx rhinoq plan diff --from .rhinoq/plan.json --against .rhinoq/plan.previous.json');
   const previous = await readCanonicalPlan(resolve(against));
-  const diff = diffPlans(previous, current);
+  const workflow = runRhinoQCompilerWorkflow({ action: 'diff', previous, plan: current });
+  const diff = workflow.diff!;
   if (json) console.log(JSON.stringify(diff, null, 2));
   else {
     console.log(`Plan diff ${previous.fingerprint} -> ${current.fingerprint}`);
@@ -200,22 +202,6 @@ function printPlan(planValue: RhinoQPlan, json: boolean): void {
   console.log(`  requirements  ${planValue.requirements.join(', ') || '(none)'}`);
   if (planValue.needsDecision.length) console.log(`  needsDecision ${planValue.needsDecision.join('; ')}`);
   if (planValue.limitations.length) console.log(`  limitations   ${planValue.limitations.join('; ')}`);
-}
-
-function diffPlans(previous: RhinoQPlan, current: RhinoQPlan): {
-  schemaVersion: 1;
-  previous: string;
-  current: string;
-  added: string[];
-  removed: string[];
-  changed: string[];
-} {
-  const before = new Map(previous.tasks.map((task) => [task.name, JSON.stringify(task)]));
-  const after = new Map(current.tasks.map((task) => [task.name, JSON.stringify(task)]));
-  const added = [...after.keys()].filter((name) => !before.has(name)).sort();
-  const removed = [...before.keys()].filter((name) => !after.has(name)).sort();
-  const changed = [...after.keys()].filter((name) => before.has(name) && before.get(name) !== after.get(name)).sort();
-  return { schemaVersion: 1, previous: previous.fingerprint, current: current.fingerprint, added, removed, changed };
 }
 
 async function capabilities(args: string[]): Promise<void> {
@@ -1727,6 +1713,15 @@ async function gatewayRequest(path: string, init: RequestInit, allowMissing = fa
 // name because they answer the same question for different planes, so this one
 // says out loud what it did not look at: a PASS here is not a runtime PASS.
 async function doctor(args: string[] = []): Promise<void> {
+  const planFrom = compilerPlanPath(args);
+  if (planFrom) {
+    const current = await readCanonicalPlan(resolve(planFrom));
+    const workflow = runRhinoQCompilerWorkflow({ action: 'doctor', plan: current });
+    console.log(`PASS compiler plan ${current.fingerprint} checked by doctor (${workflow.diagnostics.length} diagnostic(s)).`);
+    for (const item of workflow.diagnostics) console.log(`${item.severity.toUpperCase()} ${item.code}: ${item.whatHappened}`);
+    if (workflow.status !== 'ready') fail('compiler plan is not ready for this deployment', 'Resolve compiler diagnostics and regenerate the plan');
+    if (args.includes('--plan-only')) return;
+  }
   if (args.includes('--product-surface')) {
     const path = resolve('.rhinoq/product-surface.json');
     let value: Record<string, unknown> = {};
@@ -2367,6 +2362,13 @@ async function createAsyncFixture(tasks: Awaited<ReturnType<typeof installPostgr
 }
 
 async function dev(args: string[]): Promise<void> {
+  const planFrom = compilerPlanPath(args);
+  if (planFrom) {
+    const current = await readCanonicalPlan(resolve(planFrom));
+    const workflow = runRhinoQCompilerWorkflow({ action: 'dev', plan: current });
+    if (workflow.status !== 'ready' || !workflow.dev) fail('compiler plan is not ready for dev', 'Add deployment identity, resolve diagnostics and regenerate the plan');
+    console.log(`PASS dev plan ${current.fingerprint} namespace=${workflow.dev.namespace} handlers=${workflow.dev.handlers.join(',') || '(none)'}`);
+  }
   if (args.includes('--demo')) {
     await demoDev(args);
     return;
@@ -2400,6 +2402,13 @@ async function dev(args: string[]): Promise<void> {
   server.listen(portValue, '127.0.0.1', () => console.log(`PASS RhinoQ Workbench: http://127.0.0.1:${portValue}/rhinoq\nNEXT press Ctrl+C to stop.`));
   const close = () => { expiry.stop(); server.close(() => pool.end().finally(() => process.exit(0))); };
   process.once('SIGINT', close); process.once('SIGTERM', close);
+}
+
+function compilerPlanPath(args: readonly string[]): string | undefined {
+  const inline = args.find((item) => item.startsWith('--plan-from='));
+  if (inline) return inline.slice('--plan-from='.length) || undefined;
+  const index = args.indexOf('--plan-from');
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
 /**
@@ -2477,4 +2486,4 @@ async function writeNew(path: string, content: string): Promise<boolean> { try {
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }
-function help(): void { console.log(`RhinoQ developer CLI\n\nStart here (the shortest paths):\n  npx rhinoq dev --demo                 open a browser-first disposable demo\n  npx rhinoq up                         start the real local PostgreSQL profile\n  npx rhinoq setup                      preview integration without writing\n  npx rhinoq setup --apply              configure without overwriting\n  npx rhinoq init --example report-export generate a consumer example\n  npx rhinoq dev                         open the local Workbench (PostgreSQL)\n\nUse with an existing app:\n  npx rhinoq connect                     guided, preview-first adoption\n  npx rhinoq connect --apply             apply only after reviewing the plan\n  npx rhinoq add task report.export      preview a working Task slice\n  npx rhinoq add task report.export --apply generate without overwriting\n  npx rhinoq adopt --mode single        preview a BullMQ integration\n  npx rhinoq adopt --mode single --apply apply only after reviewing the plan\n  npx rhinoq adopt --scan                read-only integration inventory\n  npx rhinoq measure --before old --after new\n\nProduct composition:\n  createRhinoQApp()                     one pool, Task API, Task Center and Workbench\n  defineRhinoQApplication()             typed registry and worker handlers\n\nAdvanced operations:\n  npx rhinoq doctor [--fix]             database/runtime diagnosis or local plumbing fix\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq fixture async              create a visible generic Task (database)\n  npx rhinoq demo transport-fallback    explicitly simulated transport evidence\n  npx rhinoq demo missing-output --confirm-disposable\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n  npx rhinoq capabilities [--json]      evidence-aware capability ledger\n  npx rhinoq plan --from .rhinoq/plan.json\n\nPostgreSQL configuration: RHINOQ_DATABASE_URL, DATABASE_URL, or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE.\nThe Task profile is authoritative for state, leases, retries and effects; this Node CLI never replaces that correctness layer.\nEvery failure includes one next action.`); }
+function help(): void { console.log(`RhinoQ developer CLI\n\nStart here (the shortest paths):\n  npx rhinoq dev --demo                 open a browser-first disposable demo\n  npx rhinoq up                         start the real local PostgreSQL profile\n  npx rhinoq setup                      preview integration without writing\n  npx rhinoq setup --apply              configure without overwriting\n  npx rhinoq init --example report-export generate a consumer example\n  npx rhinoq dev                         open the local Workbench (PostgreSQL)\n\nUse with an existing app:\n  npx rhinoq connect                     guided, preview-first adoption\n  npx rhinoq connect --apply             apply only after reviewing the plan\n  npx rhinoq add task report.export      preview a working Task slice\n  npx rhinoq add task report.export --apply generate without overwriting\n  npx rhinoq adopt --mode single        preview a BullMQ integration\n  npx rhinoq adopt --mode single --apply apply only after reviewing the plan\n  npx rhinoq adopt --scan                read-only integration inventory\n  npx rhinoq measure --before old --after new\n\nProduct composition:\n  createRhinoQApp()                     one pool, Task API, Task Center and Workbench\n  defineRhinoQApplication()             typed registry and worker handlers\n\nAdvanced operations:\n  npx rhinoq doctor [--fix]             database/runtime diagnosis or local plumbing fix\n  npx rhinoq doctor --plan-from <file> --plan-only\n  npx rhinoq dev --plan-from <file>     validate deployment plan before dev\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq fixture async              create a visible generic Task (database)\n  npx rhinoq demo transport-fallback    explicitly simulated transport evidence\n  npx rhinoq demo missing-output --confirm-disposable\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n  npx rhinoq capabilities [--json]      evidence-aware capability ledger\n  npx rhinoq plan --from .rhinoq/plan.json\n\nPostgreSQL configuration: RHINOQ_DATABASE_URL, DATABASE_URL, or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE.\nThe Task profile is authoritative for state, leases, retries and effects; this Node CLI never replaces that correctness layer.\nEvery failure includes one next action.`); }

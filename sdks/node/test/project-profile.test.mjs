@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   createManualRuntimeAdapter,
+  defineRhinoQDeployment,
   defineRhinoQProject,
 } from '../dist/index.js';
 
@@ -17,12 +18,19 @@ test('project profile binds pool, identity and operator surface once', async () 
     identity: { ownerFromNodeRequest: () => 'owner-a' },
     http: { operatorToken: 'operator-secret', taskCenterTitle: 'Reports' },
     application: { tasks },
+    deployment: defineRhinoQDeployment({ app: 'reports', stage: 'test' }),
+    capabilityLinks: {
+      components: [{ id: 'storage/test', version: 1, contractVersion: 1, provides: ['storage:artifacts'] }],
+      requirements: [{ capability: 'storage:artifacts', requiredBy: 'task:report.export' }],
+    },
     tasks: (rhinoq) => ({
       exportReport: rhinoq.task('report.export', async (input) => input),
     }),
   });
 
   assert.equal(project.manifest().profile, 'reports');
+  assert.equal(project.plan().deployment.namespace, 'reports-test');
+  assert.equal(project.plan().capabilityGraph.links[0].provider, 'storage/test');
   const started = await project.start();
   assert.equal(started.manifest.tasks[0].name, 'report.export');
   assert.equal(typeof started.http, 'function');

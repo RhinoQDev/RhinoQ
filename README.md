@@ -150,10 +150,26 @@ application.
   fingerprint, task requirements, provider/runtime limitations and explicit
   `needs-decision` items. The CLI can show, validate and diff a JSON plan
   artifact without importing application source or changing configuration.
+  `compiler.diagnostics()` and `compileRhinoQPlanResult()` expose the same
+  transport-safe five-part diagnostics to CLI, CI and Workbench; invalid input
+  is rejected before an adapter starts or a database is opened.
+- **Typed capability linking.** Compile-time requirements resolve to exactly
+  one namespaced provider component and are fingerprinted into the canonical
+  plan. Bindings carry only public metadata, permissions and secret references;
+  missing or ambiguous providers fail closed before provisioning.
+- **Stage-aware deployment identity.** `defineRhinoQDeployment()` gives dev,
+  PR, staging and production plans deterministic resource/evidence namespaces.
+  Stage metadata is fingerprinted but never treated as tenant authorization or
+  a provider credential.
+- **SST deployment adapter.** A canonical plan compiles into deterministic
+  worker/migration resource intent, then an adopter-supplied SST materializer
+  binds the existing cluster, image and linked resources. Core does not depend
+  on SST or guess cloud topology. See [SST deployment](./docs/sst-deployment.md).
 - **Replaceable modules with explicit lifecycle.** Runtime and processor
   boundaries can expose load/provision/validate/cleanup state. Native provider
   packages remain application-owned, and module lifecycle never owns leases,
-  retries, effects or Task state.
+  retries, effects or Task state. Provider components expose a separate pure
+  declaration so plan compilation cannot invoke lifecycle callbacks.
 - **Evidence-aware capability ledger.** `npx rhinoq capabilities --json`
   separates implemented behavior from bounded/provider-required/roadmap status
   and records the evidence level and remaining limit beside each claim.

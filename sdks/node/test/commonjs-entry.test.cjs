@@ -55,4 +55,5 @@ test('CommonJS capability subpaths are independently requireable', () => {
   assert.equal(typeof require('@rhinoq/node/bullmq').bullMQCancellation, 'function');
   assert.equal(typeof require('@rhinoq/node/sqs').createSQSRuntimeAdapter, 'function');
   assert.equal(typeof require('@rhinoq/node/server').createNodeTaskMiddleware, 'function');
+  assert.equal(typeof require('@rhinoq/node/sst').compileRhinoQSSTDeployment, 'function');
 });

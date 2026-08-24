@@ -183,6 +183,7 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   <section class="panel" id="planPanel" hidden>
     <div class="head"><strong>Plan Inspector</strong><span class="muted" id="planSummary"></span></div>
     <div class="guidance"><strong id="planStatus"></strong><p id="planDecisions"></p></div>
+    <p class="muted" id="planIdentity"></p>
     <div class="scroll"><table id="planTable"><tbody></tbody></table></div>
   </section>
   <section class="panel" id="autopilotPanel" hidden>
@@ -260,6 +261,9 @@ function renderPlan(plan) {
   $('planSummary').textContent = (plan.profile || 'application') + ' â€¢ ' + plan.tasks.length + ' Task(s)';
   $('planStatus').textContent = plan.status === 'ready' ? 'Ready from compiled manifest' : 'Needs decision before this plan is complete';
   $('planDecisions').textContent = plan.needsDecision.length ? plan.needsDecision.join(' â€¢ ') : (plan.note || 'Read-only plan evidence.');
+  const deployment = plan.deployment ? plan.deployment.namespace + ' (' + plan.deployment.tenantBoundary + ')' : 'deployment identity not configured';
+  const links = (plan.capabilityLinks || []).map((link) => link.capability + ' â†’ ' + link.provider).join(' â€¢ ') || 'no capability links';
+  $('planIdentity').textContent = 'Deployment: ' + deployment + ' â€¢ Links: ' + links;
   $('planTable').innerHTML = '<thead><tr><th>Task</th><th>Factory</th><th>Capsule</th><th>Data path</th><th>Readiness</th></tr></thead><tbody>' +
     plan.tasks.map((task) => '<tr><td><strong>' + esc(task.name) + '</strong><br><span class="muted">' + esc(task.key) + ' v' + esc(task.version) + '</span></td><td>' +
       esc(task.factory) + '</td><td><code>' + esc(task.compiledCapsule.adapter) + '</code><br><span class="muted">' + esc(task.compiledCapsule.runtime) + ' / ' + esc(task.compiledCapsule.scope) + '</span></td><td>' +
