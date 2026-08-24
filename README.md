@@ -8,7 +8,7 @@ Break long-running work into resumable Steps. With the PostgreSQL Task profile,
 a compatible completed `context.step()` result is reused after a worker restart,
 while incomplete work is retried under a new fenced lease.
 
-RhinoQ is an open-source async Task and background-job platform for Node.js,
+RhinoQ is an open-source async Task and background job platform for Node.js,
 NestJS and Go. Run jobs with RhinoQ's native PostgreSQL queue or keep an
 existing BullMQ runtime. It adds durable Task state, progress tracking, retry
 history, cancellation, reconciliation, an owner-scoped Task API, realtime SSE

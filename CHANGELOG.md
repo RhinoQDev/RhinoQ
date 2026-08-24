@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed discovery metadata verification for the README's background job entry,
+  and aligned the PostgreSQL Task-profile integration assertion with schema
+  version 21's Durable Step and shared-resource tables.
 - Unified canonical plan validation behind `compileRhinoQPlanResult()`. CLI,
   CI and Workbench integrations can now consume stable five-part structured
   compiler diagnostics without catching ad-hoc error strings; the existing

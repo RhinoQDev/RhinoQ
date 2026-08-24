@@ -255,7 +255,21 @@ test('Task-only profile enforces tenant reads and stores verification and artifa
     );
     assert.deepEqual(
       tables.rows.map((row) => row.table_name),
-      ['artifact_upload_sessions', 'artifacts', 'checkpoints', 'executions', 'migrations', 'notification_outbox', 'tasks', 'verifications', 'waitpoints'],
+      [
+        'artifact_upload_sessions',
+        'artifacts',
+        'checkpoints',
+        'durable_step_attempts',
+        'durable_steps',
+        'executions',
+        'migrations',
+        'notification_outbox',
+        'resource_leases',
+        'resource_pools',
+        'tasks',
+        'verifications',
+        'waitpoints',
+      ],
     );
 
     let task = await tasks.createTask({
