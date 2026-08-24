@@ -191,6 +191,11 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
     <div class="guidance"><strong id="autopilotStatus"></strong><p id="autopilotNote"></p></div>
     <div class="scroll"><table id="autopilotTable"><tbody></tbody></table></div>
   </section>
+  <section class="panel" id="adoptionPanel" hidden>
+    <div class="head"><strong>Native Adoption &amp; Safety</strong><span class="muted" id="adoptionIdentity"></span></div>
+    <div class="guidance"><strong id="adoptionStatus"></strong><p id="adoptionSummary"></p></div>
+    <div class="scroll"><table id="adoptionTable"><tbody></tbody></table></div>
+  </section>
   <div class="buckets" id="buckets"></div>
   <div class="panel">
     <div class="head"><strong id="listTitle">Tasks</strong><span class="muted" id="listNote"></span></div>
@@ -207,6 +212,7 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
       <p id="guidanceExplanation"></p>
       <p class="muted" id="guidanceProgress"></p>
       <p class="next" id="guidanceNext"></p>
+      <p class="muted"><code id="terminalInspect"></code></p>
     </div>
     <div class="scroll"><table id="detail"><tbody></tbody></table></div>
   </div>
@@ -281,6 +287,17 @@ function renderAutopilot(report) {
     ? '<thead><tr><th>Signal</th><th>Evidence</th><th>Expected effect</th><th>Guardrail / rollback</th></tr></thead><tbody>' + report.recommendations.map((item) =>
       '<tr><td><strong>' + esc(item.id) + '</strong><br><span class="muted">' + esc(item.metric) + ' ' + esc(item.value) + ' / ' + esc(item.threshold) + ' ' + esc(item.unit) + '</span></td><td>' + esc(item.evidence) + '</td><td>' + esc(item.expectedEffect) + '</td><td>' + esc(item.guardrail) + '<br><span class="muted">' + esc(item.rollback) + '</span></td></tr>').join('') + '</tbody>'
     : '<tbody><tr><td class="empty">No bounded recommendation is active.</td></tr></tbody>';
+}
+
+function renderAdoption(plan) {
+  const panel = $('adoptionPanel');
+  if (!plan || plan.status === 'not-configured') { panel.hidden = true; return; }
+  panel.hidden = false;
+  $('adoptionIdentity').textContent = plan.fingerprint;
+  $('adoptionStatus').textContent = plan.status === 'ready' ? 'Ready for shadow evidence' : plan.requiredApprovals.length + ' application decision(s) required';
+  $('adoptionSummary').textContent = 'Handlers ' + plan.inventory.handlers + ' · producers ' + plan.inventory.producers + ' · external effects ' + plan.inventory.externalEffects + '. No source file was modified by this plan.';
+  $('adoptionTable').innerHTML = '<thead><tr><th>Severity</th><th>Location</th><th>What happened</th><th>Required action</th></tr></thead><tbody>' +
+    plan.diagnostics.slice(0, 50).map((item) => '<tr><td>' + esc(item.severity) + '</td><td><code>' + esc(item.subject.file + ':' + item.subject.line) + '</code></td><td><strong>' + esc(item.code) + '</strong><br><span class="muted">' + esc(item.whatHappened) + '</span></td><td>' + esc(item.howToFix) + '</td></tr>').join('') + '</tbody>';
 }
 
 function ago(iso) {
@@ -372,6 +389,7 @@ function renderDetail() {
   $('guidanceExplanation').textContent = explanation?.explanation || 'Review the recorded task details.';
   $('guidanceProgress').textContent = explanation?.progressText || '';
   $('guidanceNext').textContent = 'Next action: ' + (explanation?.recommendedAction?.label || 'Review task details');
+  $('terminalInspect').textContent = 'Terminal: npx rhinoq inspect ' + detail.task.id;
   const cancellable = ['pending', 'queued', 'running'].includes(detail.task.state);
   const cancelAction = detail.incidentExplanation?.recommendedActions?.find((action) => action.id === 'request-cancellation');
   $('cancelBtn').hidden = !(snap.actions && cancellable && (!cancelAction || cancelAction.availability === 'available'));
@@ -560,6 +578,14 @@ async function loadAutopilot() {
   } catch { /* The Workbench remains useful when no observation source is configured. */ }
 }
 
+async function loadAdoption() {
+  try {
+    const response = await fetch(base + '/api/adoption-plan', { headers: { accept: 'application/json' } });
+    const report = await response.json();
+    if (response.ok) renderAdoption(report);
+  } catch { /* Native adoption evidence is optional. */ }
+}
+
 function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
@@ -592,6 +618,7 @@ skeleton();
 connect();
 void loadPlan();
 void loadAutopilot();
+void loadAdoption();
 </script>
 </body>
 </html>`;

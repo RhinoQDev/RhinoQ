@@ -418,6 +418,25 @@ Do not call the system production-ready without reproducible fault-test logs and
 benchmarks. No throughput, latency or reliability promise is made without the
 matching evidence.
 
+### Native adoption and terminal observation
+
+The Node adoption scanner and Safety Compiler are read-only projections. They
+may inventory handlers, producers and possible effect/cancellation boundaries,
+but cannot choose owner identity, business keys, idempotency or verification.
+Shadow adoption observes the existing runtime; promotion is an approval
+artifact and the explicit runtime integration remains the ownership boundary.
+
+Terminal watch treats PostgreSQL change notifications as identity-only hints
+and re-reads authoritative tenant-scoped Task summaries. Polling remains the
+disconnect safety net. CLI and Workbench share deterministic incident and
+evidence projections; neither may retry, cancel or confirm an Effect by
+interpreting output text.
+
+Notification routes are configuration filters. The Go Application reads the
+authoritative Finding and the existing durable delivery ledger owns
+destination/event deduplication, grace and audit. Node never sends a real
+Finding from the watcher.
+
 ## 10. Accepted decisions
 
 - PostgreSQL is the default authoritative store.

@@ -15,6 +15,7 @@ import {
   loadNotifyRegistry,
   notificationBody,
   resolveNotifyDestination,
+  routeNotifyDestinations,
   sendNotification,
   sendTestNotification,
 } from '../dist/index.js';
@@ -182,6 +183,16 @@ test('the default secret variable name is derived from the destination', () => {
   assert.equal(defaultSecretEnv('team-a.eu'), 'RHINOQ_NOTIFY_SECRET_TEAM_A_EU');
 });
 
+test('notification routes select reviewed severity, Rule and subject filters deterministically', () => {
+  const registry = { schemaVersion: 1, destinations: [
+    { name: 'all', kind: 'webhook', url: 'https://example.com/all' },
+    { name: 'critical', kind: 'webhook', url: 'https://example.com/critical', minimumSeverity: 'critical' },
+    { name: 'payments', kind: 'slack', url: 'https://example.com/payments', minimumSeverity: 'high', ruleIds: ['refund-confirmed'], subjectTypes: ['payment'] },
+  ] };
+  assert.deepEqual(routeNotifyDestinations(registry, { severity: 'high', ruleId: 'refund-confirmed', subjectType: 'payment' }).map((item) => item.name), ['all', 'payments']);
+  assert.deepEqual(routeNotifyDestinations(registry, { severity: 'medium', ruleId: 'refund-confirmed', subjectType: 'payment' }).map((item) => item.name), ['all']);
+});
+
 // The registry is a contract shared with the Go CLI. Guessing at a version
 // this SDK does not write is how two tools disagree about what a field means.
 test('a registry written by a future schema is refused, and a missing one is empty', async () => {
@@ -211,6 +222,7 @@ test('the CLI adds, lists and removes a destination without storing a secret', (
       developerCLI, 'notify', 'add', 'ops',
       '--webhook', 'https://example.com/hooks/rhinoq',
       '--secret-env', 'RHINOQ_NOTIFY_SECRET_OPS',
+      '--minimum-severity', 'high', '--rule', 'refund-confirmed', '--subject-type', 'payment',
     ], { cwd, encoding: 'utf8', env });
     assert.equal(added.status, 0, added.stderr);
     assert.match(added.stdout, /PASS destination "ops" added to/);
@@ -218,6 +230,9 @@ test('the CLI adds, lists and removes a destination without storing a secret', (
     const stored = JSON.parse(readFileSync(registryPath, 'utf8'));
     assert.equal(stored.schemaVersion, 1);
     assert.equal(stored.destinations[0].secretEnv, 'RHINOQ_NOTIFY_SECRET_OPS');
+    assert.equal(stored.destinations[0].minimumSeverity, 'high');
+    assert.deepEqual(stored.destinations[0].ruleIds, ['refund-confirmed']);
+    assert.deepEqual(stored.destinations[0].subjectTypes, ['payment']);
     // The registry records the variable name, never its value.
     assert.doesNotMatch(readFileSync(registryPath, 'utf8'), /s3cret/);
     assert.equal(stored.destinations[0].secret, undefined);

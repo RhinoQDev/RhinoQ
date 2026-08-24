@@ -95,6 +95,7 @@ intentionally leaves to a specialist/runtime provider.
 | ad-hoc health endpoints | readiness, liveness and metrics |
 | unsafe manual repair runbooks | preview, separate approval, idempotent execution and post-check |
 | “completed means correct” assumptions | optional verification, Rules, Findings and provider evidence |
+| watching dashboards for failures | terminal Task stream, grouped incidents, structured next actions and durable notification routes |
 
 The shortest integration uses RhinoQ's public Task contract and one mounted
 HTTP surface. Existing applications can retain their endpoints through the
@@ -131,6 +132,16 @@ application.
   let an application mount only the Task, artifact, media, realtime or existing
   runtime capabilities it selects. S3 and other specialist provider packages
   remain optional peers, so a base Task install stays small.
+- **Native adoption Autopilot.** `npx rhinoq adopt --plan` inventories handlers,
+  producers, queue glue, retry/cancellation boundaries and possible external
+  effects. It emits a fingerprinted Safety Compiler artifact; shadow evidence
+  and explicit application approvals are required before promotion. RhinoQ
+  never invents authentication, business identity, idempotency or verification.
+- **Terminal-first operations.** `npx rhinoq watch`, `inspect` and `open` surface
+  authoritative Task changes, grouped symptoms and deterministic next actions
+  without requiring Workbench to stay open. PostgreSQL change notifications are
+  wake-up hints only; every event is read back and bounded polling remains the
+  disconnect safety net.
 - **Evidence before claims.** Code-reduction measurement, fault labs and
   reproducible benchmarks distinguish implemented behavior from production
   evidence; RhinoQ does not promise an SLA in public beta.
@@ -161,10 +172,11 @@ application.
   PR, staging and production plans deterministic resource/evidence namespaces.
   Stage metadata is fingerprinted but never treated as tenant authorization or
   a provider credential.
-- **SST deployment adapter.** A canonical plan compiles into deterministic
+- **Optional SST deployment adapter.** A canonical plan can compile into deterministic
   worker/migration resource intent, then an adopter-supplied SST materializer
   binds the existing cluster, image and linked resources. Core does not depend
-  on SST or guess cloud topology. See [SST deployment](./docs/sst-deployment.md).
+  on SST or guess cloud topology. This is an advanced optional adapter, not the
+  RhinoQ golden path. See [SST deployment](./docs/sst-deployment.md).
 - **Replaceable modules with explicit lifecycle.** Runtime and processor
   boundaries can expose load/provision/validate/cleanup state. Native provider
   packages remain application-owned, and module lifecycle never owns leases,
@@ -182,8 +194,11 @@ data-path compiler slice, a read-only Integration Eraser preview and a
 read-only Plan Inspector in Workbench are implemented and tested. Project
 profile auto-mount, selective checkpoints, a bounded Autopilot executor and
 processor-pack catalog boundaries now also exist and are tested; Autopilot
-automatic actions, provider-specific runtime evidence, auto-patching and a
-multi-cluster Control Plane remain evidence-gated roadmap work.
+provider-specific runtime evidence, automatic source rewriting and a
+multi-cluster Control Plane remain evidence-gated roadmap work. Native adoption
+planning, shadow evidence, fail-closed promotion evaluation and terminal-first
+operations are implemented; source changes still require the explicit,
+non-overwriting generator or an application-owned review.
 
 The extension contract is documented in [module lifecycle](./docs/module-lifecycle.md);
 the capability ledger is available from `npx rhinoq capabilities --json`.
@@ -219,6 +234,23 @@ integration shells. BullMQ setup requires an explicit `--mode single` or
 choice. PostgreSQL queue execution remains in the authoritative Go worker; the
 generated Node/Go boundary does not duplicate lease or retry logic.
 See the [setup guide](./docs/setup.md).
+
+For a safety inventory before generating anything, and for operations without
+keeping a browser open:
+
+```bash
+npx rhinoq adopt --plan --out .rhinoq/adoption-plan.json
+npx rhinoq adopt --shadow --adapter custom --apply
+npx rhinoq watch --severity warning
+npx rhinoq inspect <task-id>
+npx rhinoq open <task-id>
+```
+
+`watch` groups identical symptoms instead of printing one stack per Task. It is
+an interactive terminal surface, not a production pager. Use reviewed durable
+notification routes when nobody is expected to keep a terminal open. See
+[Native adoption](./docs/native-adoption.md) and
+[Terminal operations](./docs/terminal-operations.md).
 
 For an existing app that needs a guided adoption preview, use `connect`; for a
 new Task declaration, use the non-overwriting vertical-slice generator:
@@ -1711,6 +1743,17 @@ export RHINOQ_NOTIFY_SECRET_OPS="$(openssl rand -hex 32)"
 rhinoq notify add ops --webhook https://example.com/hooks/rhinoq --secret-env RHINOQ_NOTIFY_SECRET_OPS
 rhinoq notify test ops
 rhinoq notify list
+```
+
+Routes are optional additive filters. This example sends high/critical payment
+Findings for one Rule to `ops`, then lets Go read the authoritative Finding and
+deliver through the existing durable ledger:
+
+```bash
+rhinoq notify add ops --kind slack --url-env RHINOQ_OPS_WEBHOOK \
+  --minimum-severity high --rule refund-confirmed --subject-type payment
+rhinoq notify route --rule refund-confirmed --subject-type payment \
+  --subject payment-42 --version 1
 ```
 
 `notify test` sends one synthetic HMAC-signed event and writes nothing — no

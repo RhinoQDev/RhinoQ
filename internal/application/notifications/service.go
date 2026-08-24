@@ -148,7 +148,7 @@ func (s *Service) prepareFinding(ctx context.Context, key finding.Key, options O
 		RuleID: record.RuleID, SubjectType: record.SubjectType, SubjectID: record.SubjectID,
 		InvariantVersion: record.ObservedInvariantVersion, Status: string(record.Status),
 		OccurrenceCount: record.OccurrenceCount, ObservedAt: record.UpdatedAt}
-	message.Severity, message.Escalation = findingSeverity(record.Status)
+	message.Severity, message.Escalation = SeverityForFindingStatus(record.Status)
 	message.Link = findingLink(options.FindingBaseURL, record)
 	if options.IncludeEvidence {
 		message.Evidence = record.LatestEvidence
@@ -156,7 +156,8 @@ func (s *Service) prepareFinding(ctx context.Context, key finding.Key, options O
 	return record, message, nil
 }
 
-func findingSeverity(status finding.Status) (string, bool) {
+// SeverityForFindingStatus is the single routing and message severity policy.
+func SeverityForFindingStatus(status finding.Status) (string, bool) {
 	switch status {
 	case finding.Regressed:
 		return "critical", true

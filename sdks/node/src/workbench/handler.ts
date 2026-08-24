@@ -11,16 +11,18 @@ import type {
   ProviderOperationRecord,
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
-import { taskFlightRecorder, taskFlightRecorderDiagnostic, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
+import { taskFlightRecorderDiagnostic, type TaskFlightRecorder } from '../tasks/flight-recorder.js';
 import type { DurableStepRecord } from '../tasks/durable.js';
 import { taskUIModel, type TaskUIModel } from '../tasks/ui.js';
 import { safeOperatorURL, type RuntimeHealthReader, type RuntimeJobLink } from '../observe/runtime-health.js';
 import { workbenchPage } from './page.js';
-import { explainTaskIncident, type IncidentExplanation } from '../tasks/incident-explanation.js';
+import type { IncidentExplanation } from '../tasks/incident-explanation.js';
 import type { RuntimeAdapterReport } from '../runtime/contracts.js';
 import type { RhinoQPlanInspection } from '../tasks/plan-inspector.js';
 import type { RhinoQAutopilotReport } from '../observe/autopilot.js';
-import { taskEvidencePassport, type TaskEvidencePassport } from '../tasks/evidence-passport.js';
+import type { RhinoQAdoptionPlan } from '../adopt/autopilot.js';
+import type { TaskEvidencePassport } from '../tasks/evidence-passport.js';
+import { inspectRhinoQTask } from '../tasks/operator-inspection.js';
 
 /** The reads the Workbench performs. `PostgresTaskClient` satisfies it. */
 export interface WorkbenchTaskSource {
@@ -80,6 +82,8 @@ export interface WorkbenchHandlerOptions {
   applicationPlan?: RhinoQPlanInspection;
   /** Optional deterministic observe/recommend report; never mutates Tasks. */
   autopilot?(): Promise<RhinoQAutopilotReport> | RhinoQAutopilotReport;
+  /** Optional read-only native adoption and Safety Compiler evidence. */
+  adoptionPlan?: RhinoQAdoptionPlan;
 }
 
 const DEFAULT_STATES: TaskState[] = [
@@ -241,6 +245,10 @@ export function createWorkbenchHandler(
           needsDecision: ['start the typed application compiler to expose a plan'],
           note: 'read-only compiled manifest; no configuration was generated or changed',
         });
+      }
+
+      if (request.method === 'GET' && relative.length === 2 && relative[0] === 'api' && relative[1] === 'adoption-plan') {
+        return json(options.adoptionPlan ?? { schemaVersion: 1, status: 'not-configured', diagnostics: [] });
       }
 
       if (request.method === 'GET' && relative[0] === 'api' && relative[1] === 'tasks' && relative.length === 2) {
@@ -577,17 +585,11 @@ async function taskDetail(
   runtimeJobLink?: RuntimeJobLink,
   runtimeReports?: () => Promise<RuntimeAdapterReport[]>,
 ): Promise<{ task: TaskSnapshot; ui: TaskUIModel; items: WorkbenchItem[]; steps: DurableStepRecord[]; waitpoints: TaskWaitpoint[]; flightRecorder: TaskFlightRecorder; incidentExplanation: IncidentExplanation; evidencePassport: TaskEvidencePassport }> {
-  const task = await tasks.getTask(taskId);
-  const [refs, results, steps, waitpoints, verifications, artifacts, providerOperations, reports] = await Promise.all([
+  const [inspection, refs] = await Promise.all([
+    inspectRhinoQTask(tasks, taskId, { providerOperationsByTask, runtimeReports }),
     tasks.listTaskExecutionRuntimeRefs?.(taskId).catch(() => undefined),
-    tasks.getTaskExecutionResults(taskId).catch(() => undefined),
-    tasks.listDurableSteps?.(taskId).catch(() => undefined),
-    tasks.listTaskWaitpoints?.(taskId).catch(() => undefined),
-    tasks.listTaskVerifications?.(taskId).catch(() => undefined),
-    tasks.listTaskArtifacts?.(taskId).catch(() => undefined),
-    (providerOperationsByTask ?? tasks.listProviderOperationsByTask?.bind(tasks))?.(taskId).catch(() => undefined),
-    runtimeReports?.().catch(() => undefined),
   ]);
+  const { task } = inspection;
 
   const runtimeRefs = new Map<string, { externalId: string; runtime: string; runtimeScope?: string }>();
   for (const ref of refs?.executions ?? []) {
@@ -600,7 +602,7 @@ async function taskDetail(
     }
   }
   const reasons = new Map<string, string>();
-  for (const result of results?.executions ?? []) {
+  for (const result of inspection.executionResults.executions ?? []) {
     if (result.failureReason) {
       reasons.set(result.executionId, result.failureReason);
     }
@@ -624,39 +626,15 @@ async function taskDetail(
     };
   });
 
-  const resolvedWaitpoints = waitpoints ?? [];
-  const resolvedSteps = steps ?? [];
-  const evidencePassport = taskEvidencePassport({
-    task,
-    executionResults: results?.executions,
-    waitpoints: resolvedWaitpoints,
-    verifications: verifications ?? [],
-    artifacts: artifacts ?? [],
-    providerOperations: providerOperations ?? [],
-  });
   return {
     task,
     ui: taskUIModel(task),
     items,
-    waitpoints: resolvedWaitpoints,
-    steps: resolvedSteps,
-    flightRecorder: taskFlightRecorder({
-      task,
-      executionResults: results?.executions,
-      steps: resolvedSteps,
-      waitpoints: resolvedWaitpoints,
-      verifications: verifications ?? [],
-      artifacts: artifacts ?? [],
-      providerOperations: providerOperations ?? [],
-    }),
-    incidentExplanation: explainTaskIncident({
-      task,
-      steps: resolvedSteps,
-      verifications: verifications ?? [],
-      providerOperations: providerOperations ?? [],
-      runtimeReports: reports,
-    }),
-    evidencePassport,
+    waitpoints: [...inspection.waitpoints],
+    steps: [...inspection.steps],
+    flightRecorder: inspection.flightRecorder,
+    incidentExplanation: inspection.incidentExplanation,
+    evidencePassport: inspection.evidencePassport,
   };
 }
 

@@ -26,6 +26,25 @@ Set `GracePeriod` to avoid paging on short-lived drift and `FindingBaseURL` to
 include a direct Workbench link. Open drift is high severity; a regression is
 critical and bypasses the grace period.
 
+## Reviewed routing
+
+The shared `.rhinoq/notifications.json` registry supports additive
+`minimumSeverity`, `ruleIds` and `subjectTypes` filters. Configure them from
+either CLI; real routing and delivery remain Go-owned:
+
+```bash
+rhinoq notify add payments --kind slack --url-env RHINOQ_PAYMENTS_SLACK \
+  --minimum-severity high --rule refund-confirmed --subject-type payment
+rhinoq notify route --rule refund-confirmed --subject-type payment \
+  --subject payment-42 --version 1
+```
+
+`notify route` reads the exact authoritative Finding, derives severity from the
+same Application policy that builds the message, and selects every matching
+destination. Each selected destination then uses the existing durable
+event/destination ledger. A non-match is a successful no-op. Node can edit and
+preview the registry but deliberately cannot send a real Finding.
+
 Delivery can remain synchronous with `SendFindingNotification`, or be queued
 and claimed by the durable multi-node scheduler. The scheduler uses a
 PostgreSQL row lease plus `FOR UPDATE SKIP LOCKED`, persists the next attempt,
@@ -56,7 +75,7 @@ node can claim the work after the backoff. A `dead` row is an operator decision,
 not an invitation to retry blindly. Because the payload is durable, opt-in
 evidence may contain business data; protect the table and apply the same
 retention policy as the receiver-facing message.
-# Notification delivery boundary
+## Notification delivery boundary
 
 The Node sender supports a bounded same-process transport retry with
 `maxAttempts` (1–5) and linear `backoffMs`. Every attempt carries the same

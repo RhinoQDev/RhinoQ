@@ -5,8 +5,9 @@ import { randomBytes } from 'node:crypto';
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, extname, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { Pool } from 'pg';
-import { installPostgresTaskProfile } from '../postgres/task-client.js';
+import { Client, Pool } from 'pg';
+import { installPostgresTaskProfile, PostgresTaskClient } from '../postgres/task-client.js';
+import { TaskChangeHub } from '../postgres/change-hub.js';
 import { TASK_SCHEMA_VERSION } from '../postgres/task-schema.js';
 import { SDK_VERSION } from '../gateway/types.js';
 import { resolveDatabaseConfig, withPostgresOption, type ResolvedDatabaseConfig } from './database-config.js';
@@ -27,12 +28,17 @@ import { WaitpointExpiryScheduler } from '../tasks/waitpoint-scheduler.js';
 import { recoverFailureLab, runFailureLab, type FailureLabScenario } from '../lab/failure-lab.js';
 import { adoptionChecklist } from '../runtime/adoption.js';
 import { scanRhinoQIntegrationEraser, type RhinoQIntegrationEraserReport } from '../adopt/eraser.js';
+import { compileRhinoQAdoptionPlan, compileRhinoQAdoptionPromotionEvidence, evaluateRhinoQAdoptionPromotion, type RhinoQAdoptionPlan, type RhinoQAdoptionPromotionEvidence } from '../adopt/autopilot.js';
+import type { ShadowAdoptionReport } from '../runtime/integration.js';
+import { compileRhinoQTaskProductHandoff } from '../adopt/product-handoff.js';
 import { compileRhinoQPlan, type RhinoQPlan, type RhinoQPlanManifest } from '../tasks/plan-inspector.js';
 import { runRhinoQCompilerWorkflow } from '../tasks/compiler-workflow.js';
 import { compileRhinoQBuildProfile, type RhinoQBuildProfile } from '../runtime/build-profile.js';
 import { listRhinoQProcessorPackCatalog } from '../tasks/processor-pack.js';
 import { listRhinoQCapabilities } from '../capabilities/registry.js';
 import { createDemoTaskSource } from './demo.js';
+import { buildRhinoQWorkbenchTaskURL, formatRhinoQTerminalGroup, watchRhinoQTasks, type RhinoQTerminalSeverity } from '../observe/terminal.js';
+import { inspectRhinoQTask } from '../tasks/operator-inspection.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -53,6 +59,9 @@ async function main(): Promise<void> {
     case 'modules': await modules(args); break;
     case 'build-profile': await buildProfile(args); break;
     case 'explain': await explain(args); break;
+    case 'watch': await watch(args); break;
+    case 'inspect': await inspectTask(args); break;
+    case 'open': await openTask(args); break;
     case 'notify': await notify(args); break;
     case 'fixture': await fixture(args); break;
     case 'eval': await evaluateProduct(args); break;
@@ -858,6 +867,11 @@ async function demo(args: string[]): Promise<void> {
 async function adopt(args: string[]): Promise<void> {
   let apply = false;
   let scan = false;
+  let nativePlan = false;
+  let promote = false;
+  let promotionPlanPath: string | undefined;
+  let promotionEvidencePath: string | undefined;
+  const promotionApprovals: string[] = [];
   let json = false;
   let all = false;
   let observe = false;
@@ -875,6 +889,9 @@ async function adopt(args: string[]): Promise<void> {
     const raw = args[index]!;
     if (raw === '--apply') { apply = true; continue; }
     if (raw === '--scan') { scan = true; continue; }
+    if (raw === '--plan') { nativePlan = true; continue; }
+    if (raw === '--shadow') { observe = true; continue; }
+    if (raw === '--promote') { promote = true; continue; }
     if (raw === '--json') { json = true; continue; }
     if (raw === '--all') { all = true; continue; }
     if (raw === '--observe') { observe = true; continue; }
@@ -890,6 +907,9 @@ async function adopt(args: string[]): Promise<void> {
       if (value !== 'single' && value !== 'fanout') fail('--mode must be single or fanout', 'Run: npx rhinoq adopt --mode single');
       mode = value;
     } else if (key === '--out') output = resolve(requiredOption(key, value));
+    else if (key === '--from') promotionPlanPath = resolve(requiredOption(key, value));
+    else if (key === '--evidence') promotionEvidencePath = resolve(requiredOption(key, value));
+    else if (key === '--approve') promotionApprovals.push(requiredOption(key, value));
     else if (key === '--queue') selectedQueues.push(requiredOption(key, value));
     else if (key === '--task') {
       const declaration = taskDeclaration(requiredOption(key, value));
@@ -902,10 +922,49 @@ async function adopt(args: string[]): Promise<void> {
     else if (key === '--task-center-path') taskCenterPath = routePath(requiredOption(key, value));
     else fail(`unknown adopt option ${JSON.stringify(key)}`, 'Run: npx rhinoq adopt --mode single [--apply]');
   }
+  if (promote) {
+    if (apply || scan || nativePlan || observe || json || all || adapter || localPostgres || mode || selectedQueues.length || declaredTasks.size || ownerProperty || verifyURL) {
+      fail('--promote only evaluates explicit plan and shadow evidence artifacts', 'Run: npx rhinoq adopt --promote --from <plan.json> --evidence <shadow.json>');
+    }
+    if (!promotionPlanPath || !promotionEvidencePath) fail('--promote requires --from and --evidence', 'Run: npx rhinoq adopt --promote --from <plan.json> --evidence <shadow.json>');
+    const planArtifact = JSON.parse(await readFile(promotionPlanPath, 'utf8')) as RhinoQAdoptionPlan;
+    const rawEvidence = JSON.parse(await readFile(promotionEvidencePath, 'utf8')) as RhinoQAdoptionPromotionEvidence | ShadowAdoptionReport;
+    let evidence: RhinoQAdoptionPromotionEvidence;
+    if ('mode' in rawEvidence && rawEvidence.mode === 'observe') {
+      evidence = compileRhinoQAdoptionPromotionEvidence(planArtifact, rawEvidence, promotionApprovals);
+    } else {
+      const compiledEvidence = rawEvidence as RhinoQAdoptionPromotionEvidence;
+      evidence = promotionApprovals.length
+        ? { ...compiledEvidence, approvals: [...new Set([...(compiledEvidence.approvals ?? []), ...promotionApprovals])].sort() }
+        : compiledEvidence;
+    }
+    const promotion = evaluateRhinoQAdoptionPromotion(planArtifact, evidence);
+    console.log(JSON.stringify(promotion, null, 2));
+    if (promotion.status === 'blocked') process.exitCode = 1;
+    return;
+  }
+  if (nativePlan) {
+    const hasGenerationOption = apply || observe || Boolean(adapter) || localPostgres || Boolean(mode) ||
+      selectedQueues.length > 0 || declaredTasks.size > 0 || Boolean(ownerProperty) ||
+      routesPath !== '/tasks' || taskCenterPath !== '/task-center' || Boolean(verifyURL) || Boolean(promotionPlanPath) || Boolean(promotionEvidencePath) || promotionApprovals.length > 0;
+    if (scan || hasGenerationOption) fail('--plan is a bounded read-only scan and cannot be combined with adoption generation options', 'Run: npx rhinoq adopt --plan [--json] [--out .rhinoq/adoption-plan.json]');
+    const report = await scanRhinoQIntegrationEraser(resolve('.'));
+    const adoptionPlan = compileRhinoQAdoptionPlan(report);
+    if (output) {
+      await mkdir(dirname(output), { recursive: true });
+      await writeFile(output, `${JSON.stringify(adoptionPlan, null, 2)}\n`, { flag: 'wx' }).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') fail(`adoption plan ${output} already exists`, 'Choose a new --out path or remove the old reviewed artifact explicitly');
+        throw error;
+      });
+    }
+    if (json) console.log(JSON.stringify(adoptionPlan, null, 2));
+    else printNativeAdoptionPlan(adoptionPlan, output);
+    return;
+  }
   if (scan) {
     const hasGenerationOption = observe || Boolean(adapter) || localPostgres || Boolean(mode) || Boolean(output) ||
       selectedQueues.length > 0 || declaredTasks.size > 0 || Boolean(ownerProperty) ||
-      routesPath !== '/tasks' || taskCenterPath !== '/task-center' || Boolean(verifyURL);
+      routesPath !== '/tasks' || taskCenterPath !== '/task-center' || Boolean(verifyURL) || promotionApprovals.length > 0;
     if (apply || hasGenerationOption) {
       fail('--scan is preview-only and cannot be combined with adoption generation options', 'Run: npx rhinoq adopt --scan [--json]');
     }
@@ -972,6 +1031,19 @@ async function adopt(args: string[]): Promise<void> {
     console.log('INFO no integration file was changed.');
     return;
   }
+  if (taskManifest.length) {
+    const handoff = compileRhinoQTaskProductHandoff({
+      tasks: taskManifest.map((task) => ({ name: task.taskType, runtime: 'bullmq', mode: task.mode })),
+      ownerAPIPath: routesPath,
+      taskCenterPath,
+      workbenchPath: '/admin',
+      ownerIdentityConfigured: Boolean(detected.nest && ownerProperty),
+      operatorGateConfigured: false,
+    });
+    const handoffPath = resolve('.rhinoq', 'adoption-handoff.json');
+    await mkdir(dirname(handoffPath), { recursive: true });
+    if (await writeNew(handoffPath, `${JSON.stringify(handoff, null, 2)}\n`)) console.log(`PASS generated Task product handoff ${handoffPath}`);
+  } else console.log('INFO Task product handoff deferred until at least one queue-to-Task declaration is explicit.');
   if (detected.nest) {
     const appModule = await findNestAppModule(resolve('src'));
     if (!appModule) fail('generated RhinoQ Nest module but no AppModule was found', `Import ${relative(resolve('src'), output)} into the application composition root`);
@@ -996,11 +1068,7 @@ function printIntegrationEraserReport(report: RhinoQIntegrationEraserReport, sho
   console.log('  Detected');
   if (report.detected.length) {
     const counts = new Map(report.detected.map((label) => [label, report.findings.filter((finding) => {
-      if (label === 'status routes') return finding.category === 'status-route';
-      if (label === 'polling hooks') return finding.category === 'polling-hook';
-      if (label === 'BullMQ lifecycle listeners') return finding.category === 'bullmq-listener';
-      if (label === 'upload proxies') return finding.category === 'upload-proxy';
-      return finding.category === 'retry-timer';
+      return finding.category === integrationCategory(label);
     }).length]));
     for (const [label, count] of counts) console.log(`    ${label}: ${count}`);
   } else console.log('    none');
@@ -1025,6 +1093,42 @@ function printIntegrationEraserReport(report: RhinoQIntegrationEraserReport, sho
   for (const warning of report.warnings) console.log(`  WARN ${warning}`);
   console.log(`  preview changes      ${report.preview.changes.length} manual-review patch proposal(s)`);
   console.log(`  rollback             ${report.preview.rollback.kind === 'patch-preview' ? 'reverse patch preview available' : 'none required'}; no files were written, patched or deleted`);
+}
+
+function integrationCategory(label: string): RhinoQIntegrationEraserReport['findings'][number]['category'] | undefined {
+  return labelToCategory[label as keyof typeof labelToCategory];
+}
+
+const labelToCategory = {
+  'status routes': 'status-route',
+  'polling hooks': 'polling-hook',
+  'BullMQ lifecycle listeners': 'bullmq-listener',
+  'upload proxies': 'upload-proxy',
+  'retry timers': 'retry-timer',
+  'job handlers': 'job-handler',
+  'job producers': 'job-producer',
+  'external effects': 'external-effect',
+  'cancellation boundaries': 'cancellation-boundary',
+} as const;
+
+function printNativeAdoptionPlan(plan: RhinoQAdoptionPlan, output?: string): void {
+  console.log(`RhinoQ native adoption plan ${plan.fingerprint}`);
+  console.log(`  status              ${plan.status}`);
+  console.log(`  handlers            ${plan.inventory.handlers}`);
+  console.log(`  producers           ${plan.inventory.producers}`);
+  console.log(`  external effects    ${plan.inventory.externalEffects}`);
+  console.log(`  cancellation edges  ${plan.inventory.cancellationBoundaries}`);
+  console.log(`  replaceable glue    ${plan.inventory.replaceableGlue} matching line(s); static evidence, not a savings claim`);
+  for (const diagnostic of plan.diagnostics.slice(0, 20)) {
+    console.log(`\n${diagnostic.severity.toUpperCase()} ${diagnostic.code} ${diagnostic.subject.file}:${diagnostic.subject.line}`);
+    console.log(`  What happened  ${diagnostic.whatHappened}`);
+    console.log(`  Why it matters ${diagnostic.whyItMatters}`);
+    console.log(`  RhinoQ did     ${diagnostic.whatRhinoQDid}`);
+    console.log(`  Fix             ${diagnostic.howToFix}`);
+    console.log(`  Verify          ${diagnostic.verify}`);
+  }
+  if (output) console.log(`\nPASS wrote immutable adoption review artifact ${output}`);
+  console.log(`\nNEXT ${plan.shadow.command}`);
 }
 
 async function adoptObserve(options: {
@@ -2016,6 +2120,9 @@ async function notifyAdd(args: string[]): Promise<void> {
     ...(options.includeEvidence ? { includeEvidence: true } : {}),
     ...(options.gracePeriodMs ? { gracePeriodMs: options.gracePeriodMs } : {}),
     ...(options.findingBaseUrl ? { findingBaseUrl: options.findingBaseUrl } : {}),
+    ...(options.minimumSeverity !== 'info' ? { minimumSeverity: options.minimumSeverity } : {}),
+    ...(options.ruleIds.length ? { ruleIds: [...new Set(options.ruleIds)].sort() } : {}),
+    ...(options.subjectTypes.length ? { subjectTypes: [...new Set(options.subjectTypes)].sort() } : {}),
     createdAt: new Date().toISOString(),
   };
   if (existing >= 0) registry.destinations[existing] = entry;
@@ -2048,7 +2155,7 @@ async function notifyList(args: string[]): Promise<void> {
     return;
   }
   for (const entry of redacted) {
-    console.log(`${entry.name}\t${entry.kind}\t${entry.url ?? `$${entry.urlEnv ?? ''}`}\t${entry.secretEnv ? 'signed' : 'UNSIGNED'}`);
+    console.log(`${entry.name}\t${entry.kind}\t${entry.url ?? `$${entry.urlEnv ?? ''}`}\t${entry.secretEnv ? 'signed' : 'UNSIGNED'}\tseverity>=${entry.minimumSeverity ?? 'info'}`);
   }
   console.log(`\n${redacted.length} destination(s) in ${path}`);
   if (redacted.length === 0) {
@@ -2106,13 +2213,16 @@ type NotifyOptions = {
   includeEvidence: boolean;
   gracePeriodMs: number;
   findingBaseUrl: string;
+  minimumSeverity: 'info' | 'medium' | 'high' | 'critical';
+  ruleIds: string[];
+  subjectTypes: string[];
   replace: boolean;
 };
 
 function parseNotifyOptions(args: string[]): NotifyOptions {
   const options: NotifyOptions = {
     kind: 'webhook', url: '', urlEnv: '', secretEnv: '', timeoutMs: 10_000,
-    includeEvidence: false, gracePeriodMs: 0, findingBaseUrl: '', replace: false,
+    includeEvidence: false, gracePeriodMs: 0, findingBaseUrl: '', minimumSeverity: 'info', ruleIds: [], subjectTypes: [], replace: false,
   };
   let kindWasSet = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -2135,6 +2245,13 @@ function parseNotifyOptions(args: string[]): NotifyOptions {
       case '--timeout': options.timeoutMs = durationMs(requiredOption(key, value), key); break;
       case '--grace': options.gracePeriodMs = durationMs(requiredOption(key, value), key); break;
       case '--link-base': options.findingBaseUrl = requiredOption(key, value); break;
+      case '--minimum-severity': {
+        const severity = requiredOption(key, value);
+        if (severity !== 'info' && severity !== 'medium' && severity !== 'high' && severity !== 'critical') fail('--minimum-severity must be info, medium, high or critical', 'Example: --minimum-severity high');
+        options.minimumSeverity = severity; break;
+      }
+      case '--rule': options.ruleIds.push(requiredOption(key, value)); break;
+      case '--subject-type': options.subjectTypes.push(requiredOption(key, value)); break;
       default: fail(`unknown notify option ${JSON.stringify(key)}`, 'Run: npx rhinoq notify add ops --webhook <url> --secret-env <VAR>');
     }
   }
@@ -2361,6 +2478,138 @@ async function createAsyncFixture(tasks: Awaited<ReturnType<typeof installPostgr
   console.log('NEXT open the generic RhinoQ timeline: npx rhinoq dev');
 }
 
+async function watch(args: string[]): Promise<void> {
+  let once = false;
+  let json = false;
+  let quiet = false;
+  let initial: 'attention' | 'all' | 'none' = 'attention';
+  let taskType: string | undefined;
+  let minimumSeverity: RhinoQTerminalSeverity | undefined;
+  let tenant = 'default';
+  let pollIntervalMs = 1_000;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === '--once') { once = true; continue; }
+    if (raw === '--json') { json = true; continue; }
+    if (raw === '--quiet') { quiet = true; continue; }
+    if (raw === '--all') { initial = 'all'; continue; }
+    if (raw === '--no-initial') { initial = 'none'; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--type') taskType = requiredOption(key, value);
+    else if (key === '--tenant') tenant = requiredOption(key, value);
+    else if (key === '--severity') {
+      if (value !== 'info' && value !== 'warning' && value !== 'error') fail('--severity must be info, warning or error', 'Example: npx rhinoq watch --severity warning');
+      minimumSeverity = value;
+    } else if (key === '--poll-ms') pollIntervalMs = Number(requiredOption(key, value));
+    else fail(`unknown watch option ${JSON.stringify(key)}`, 'Run: npx rhinoq watch [--once] [--all] [--severity warning] [--json]');
+  }
+  if (!tenant.trim()) fail('--tenant must not be empty', 'Example: npx rhinoq watch --tenant default');
+  const resolved = requireDatabase('watch');
+  const pool = new Pool(withPostgresOption(resolved.pool, `-c rhinoq.tenant_id=${postgresSetting(tenant)}`));
+  const tasks = new PostgresTaskClient(pool);
+  const hub = new TaskChangeHub({
+    connect: async () => {
+      const connection = new Client(resolved.pool);
+      await connection.connect();
+      return connection;
+    },
+    onError: (error) => { if (!json && !quiet) console.error(`WARN realtime hint unavailable; bounded polling remains active: ${safe(error)}`); },
+  });
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  await hub.start().catch((error) => { if (!json && !quiet) console.error(`WARN LISTEN unavailable; bounded polling remains active: ${safe(error)}`); });
+  if (!json && !quiet) console.log(`RhinoQ watch · tenant=${tenant} · ${hub.connected ? 'realtime hints + polling safety net' : 'polling safety net'}`);
+  try {
+    for await (const groups of watchRhinoQTasks(tasks, {
+      once, initial, taskType, minimumSeverity, pollIntervalMs, signal: controller.signal, changes: hub,
+    })) {
+      if (json) {
+        for (const group of groups) console.log(JSON.stringify(group));
+      } else {
+        for (const group of groups) {
+          const rendered = formatRhinoQTerminalGroup(group, { quiet });
+          if (rendered) console.log(rendered);
+        }
+      }
+    }
+  } finally {
+    process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
+    await hub.stop();
+    await pool.end();
+  }
+}
+
+async function inspectTask(args: string[]): Promise<void> {
+  const taskId = args.find((item) => !item.startsWith('--'));
+  if (!taskId) fail('inspect requires a Task ID', 'Run: npx rhinoq inspect <task-id> [--json]');
+  const json = args.includes('--json');
+  let tenant = 'default';
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === taskId || raw === '--json') continue;
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--tenant') tenant = requiredOption(key, value);
+    else fail(`unknown inspect option ${JSON.stringify(key)}`, 'Run: npx rhinoq inspect <task-id> [--tenant default] [--json]');
+  }
+  const resolved = requireDatabase('inspect');
+  const pool = new Pool(withPostgresOption(resolved.pool, `-c rhinoq.tenant_id=${postgresSetting(tenant)}`));
+  try {
+    const inspection = await inspectRhinoQTask(new PostgresTaskClient(pool), taskId);
+    if (json) { console.log(JSON.stringify(inspection, null, 2)); return; }
+    const incident = inspection.incidentExplanation;
+    console.log(`RhinoQ Task ${inspection.task.id}`);
+    console.log(`  type       ${inspection.task.type}`);
+    console.log(`  state      ${inspection.task.state}`);
+    console.log(`  version    ${inspection.task.entityVersion}`);
+    console.log(`  outcome    ${incident.businessOutcome}`);
+    console.log(`\nSUMMARY\n  ${incident.summary}`);
+    console.log('\nEVIDENCE');
+    for (const item of incident.evidence) console.log(`  - ${item.statement}`);
+    if (incident.likelyCauses.length) {
+      console.log('\nLIKELY CAUSES');
+      for (const item of incident.likelyCauses) console.log(`  - ${item.statement} (${item.basis})`);
+    }
+    console.log('\nRECOMMENDED ACTIONS');
+    for (const item of incident.recommendedActions) console.log(`  ${item.availability === 'available' ? '✓' : item.availability === 'unsupported' ? '×' : '?'} ${item.label}: ${item.reason}`);
+    for (const missing of inspection.missingEvidence) console.log(`\nWARN ${missing}`);
+    console.log(`\nNEXT npx rhinoq open ${inspection.task.id}`);
+  } finally { await pool.end(); }
+}
+
+async function openTask(args: string[]): Promise<void> {
+  const taskId = args.find((item) => !item.startsWith('--'));
+  if (!taskId) fail('open requires a Task ID', 'Run: npx rhinoq open <task-id> [--print]');
+  let baseURL = process.env.RHINOQ_WORKBENCH_URL?.trim() || 'http://127.0.0.1:8788/rhinoq';
+  let printOnly = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const raw = args[index]!;
+    if (raw === taskId) continue;
+    if (raw === '--print') { printOnly = true; continue; }
+    const [key, inline] = raw.split('=', 2);
+    const value = inline ?? args[++index];
+    if (key === '--base-url') baseURL = requiredOption(key, value);
+    else fail(`unknown open option ${JSON.stringify(key)}`, 'Run: npx rhinoq open <task-id> [--base-url https://...] [--print]');
+  }
+  const url = buildRhinoQWorkbenchTaskURL(baseURL, taskId);
+  console.log(url);
+  if (printOnly) return;
+  try {
+    if (process.platform === 'win32') await execFile('cmd.exe', ['/d', '/s', '/c', 'start', '', url]);
+    else if (process.platform === 'darwin') await execFile('open', [url]);
+    else await execFile('xdg-open', [url]);
+  } catch (error) {
+    fail(`could not open the Workbench: ${safe(error)}`, `Open this URL manually: ${url}`);
+  }
+}
+
+function postgresSetting(value: string): string {
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) fail('tenant contains characters unsafe for a PostgreSQL startup setting', 'Use a tenant ID containing letters, digits, dot, underscore, colon or dash');
+  return value;
+}
+
 async function dev(args: string[]): Promise<void> {
   const planFrom = compilerPlanPath(args);
   if (planFrom) {
@@ -2375,8 +2624,23 @@ async function dev(args: string[]): Promise<void> {
   }
   const portValue = Number(args.find((item) => item.startsWith('--port='))?.slice(7) ?? 8788);
   if (!Number.isInteger(portValue) || portValue < 1 || portValue > 65535) fail('port must be 1..65535', 'Example: npx rhinoq dev --port=8788');
-  const pool = new Pool(withPostgresOption(requireDatabase('dev').pool, '-c rhinoq.tenant_id=default'));
+  const resolved = requireDatabase('dev');
+  const pool = new Pool(withPostgresOption(resolved.pool, '-c rhinoq.tenant_id=default'));
   const tasks = await installPostgresTaskProfile(pool);
+  const terminalController = new AbortController();
+  const changeHub = new TaskChangeHub({
+    connect: async () => { const connection = new Client(resolved.pool); await connection.connect(); return connection; },
+    onError: (error) => console.error(`WARN terminal realtime hint failed; polling remains active: ${safe(error)}`),
+  });
+  await changeHub.start().catch((error) => console.error(`WARN terminal LISTEN unavailable; polling remains active: ${safe(error)}`));
+  const terminalRun = (async () => {
+    for await (const groups of watchRhinoQTasks(tasks, { initial: 'none', signal: terminalController.signal, changes: changeHub })) {
+      for (const group of groups) {
+        const rendered = formatRhinoQTerminalGroup(group, { quiet: args.includes('--quiet') });
+        if (rendered) console.log(rendered);
+      }
+    }
+  })().catch((error) => { if (!terminalController.signal.aborted) console.error(`WARN terminal watcher stopped: ${safe(error)}`); });
   const expiry = new WaitpointExpiryScheduler({
     tasks,
     everyMs: 30_000,
@@ -2400,7 +2664,10 @@ async function dev(args: string[]): Promise<void> {
     workbench(request, response);
   });
   server.listen(portValue, '127.0.0.1', () => console.log(`PASS RhinoQ Workbench: http://127.0.0.1:${portValue}/rhinoq\nNEXT press Ctrl+C to stop.`));
-  const close = () => { expiry.stop(); server.close(() => pool.end().finally(() => process.exit(0))); };
+  const close = () => {
+    expiry.stop(); terminalController.abort();
+    server.close(() => Promise.all([terminalRun, changeHub.stop(), pool.end()]).finally(() => process.exit(0)));
+  };
   process.once('SIGINT', close); process.once('SIGTERM', close);
 }
 
@@ -2423,6 +2690,15 @@ async function demoDev(args: string[]): Promise<void> {
   }
   const source = createDemoTaskSource();
   source.start();
+  const terminalController = new AbortController();
+  const terminalRun = (async () => {
+    for await (const groups of watchRhinoQTasks(source, { initial: 'all', pollIntervalMs: 500, signal: terminalController.signal })) {
+      for (const group of groups) {
+        const rendered = formatRhinoQTerminalGroup(group, { quiet: args.includes('--quiet') });
+        if (rendered) console.log(rendered);
+      }
+    }
+  })().catch((error) => { if (!terminalController.signal.aborted) console.error(`WARN demo terminal watcher stopped: ${safe(error)}`); });
   const workbench = createNodeWorkbenchMiddleware({
     tasks: source,
     basePath: '/rhinoq',
@@ -2441,15 +2717,15 @@ async function demoDev(args: string[]): Promise<void> {
     workbench(request, response);
   });
   const close = () => {
-    source.stop();
-    server.close(() => process.exit(0));
+    source.stop(); terminalController.abort();
+    server.close(() => terminalRun.finally(() => process.exit(0)));
   };
   process.once('SIGINT', close); process.once('SIGTERM', close);
   await new Promise<void>((resolveListen, reject) => {
     server.once('error', reject);
     server.listen(portValue, '127.0.0.1', resolveListen);
   }).catch((error) => {
-    source.stop();
+    source.stop(); terminalController.abort();
     fail(`could not start demo server: ${safe(error)}`, 'Use npx rhinoq dev --demo --port=0 to choose a free port');
   });
   const address = server.address();
@@ -2486,4 +2762,4 @@ async function writeNew(path: string, content: string): Promise<boolean> { try {
 function safe(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function nextAction(error: unknown): string { const message=safe(error); if (/connect|ECONN|database/i.test(message)) return 'Start PostgreSQL and verify the connection variables, then run: npx rhinoq doctor'; return 'Run: npx rhinoq help'; }
 function fail(message: string, next: string): never { console.error(`FAIL ${message}\nNEXT ${next}`); process.exitCode=1; throw new Error('__reported__'); }
-function help(): void { console.log(`RhinoQ developer CLI\n\nStart here (the shortest paths):\n  npx rhinoq dev --demo                 open a browser-first disposable demo\n  npx rhinoq up                         start the real local PostgreSQL profile\n  npx rhinoq setup                      preview integration without writing\n  npx rhinoq setup --apply              configure without overwriting\n  npx rhinoq init --example report-export generate a consumer example\n  npx rhinoq dev                         open the local Workbench (PostgreSQL)\n\nUse with an existing app:\n  npx rhinoq connect                     guided, preview-first adoption\n  npx rhinoq connect --apply             apply only after reviewing the plan\n  npx rhinoq add task report.export      preview a working Task slice\n  npx rhinoq add task report.export --apply generate without overwriting\n  npx rhinoq adopt --mode single        preview a BullMQ integration\n  npx rhinoq adopt --mode single --apply apply only after reviewing the plan\n  npx rhinoq adopt --scan                read-only integration inventory\n  npx rhinoq measure --before old --after new\n\nProduct composition:\n  createRhinoQApp()                     one pool, Task API, Task Center and Workbench\n  defineRhinoQApplication()             typed registry and worker handlers\n\nAdvanced operations:\n  npx rhinoq doctor [--fix]             database/runtime diagnosis or local plumbing fix\n  npx rhinoq doctor --plan-from <file> --plan-only\n  npx rhinoq dev --plan-from <file>     validate deployment plan before dev\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq fixture async              create a visible generic Task (database)\n  npx rhinoq demo transport-fallback    explicitly simulated transport evidence\n  npx rhinoq demo missing-output --confirm-disposable\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n  npx rhinoq capabilities [--json]      evidence-aware capability ledger\n  npx rhinoq plan --from .rhinoq/plan.json\n\nPostgreSQL configuration: RHINOQ_DATABASE_URL, DATABASE_URL, or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE.\nThe Task profile is authoritative for state, leases, retries and effects; this Node CLI never replaces that correctness layer.\nEvery failure includes one next action.`); }
+function help(): void { console.log(`RhinoQ developer CLI\n\nStart here (the shortest paths):\n  npx rhinoq dev --demo                 open a browser-first disposable demo\n  npx rhinoq up                         start the real local PostgreSQL profile\n  npx rhinoq setup                      preview integration without writing\n  npx rhinoq setup --apply              configure without overwriting\n  npx rhinoq init --example report-export generate a consumer example\n  npx rhinoq dev                         terminal Task stream + local Workbench\n\nUse with an existing app:\n  npx rhinoq connect                     guided, preview-first adoption\n  npx rhinoq connect --apply             apply only after reviewing the plan\n  npx rhinoq add task report.export      preview a working Task slice\n  npx rhinoq add task report.export --apply generate without overwriting\n  npx rhinoq adopt --plan                native handler/effect safety inventory\n  npx rhinoq adopt --shadow --adapter custom --apply\n  npx rhinoq adopt --promote --from <plan> --evidence <shadow>\n  npx rhinoq adopt --mode single        preview a BullMQ integration\n  npx rhinoq adopt --mode single --apply apply only after reviewing the plan\n  npx rhinoq measure --before old --after new\n\nTerminal-first operations:\n  npx rhinoq watch [--all] [--severity warning] [--json]\n  npx rhinoq inspect <task-id> [--json]\n  npx rhinoq open <task-id> [--print]\n\nProduct composition:\n  createRhinoQApp()                     one pool, Task API, Task Center and Workbench\n  defineRhinoQApplication()             typed registry and worker handlers\n\nAdvanced operations:\n  npx rhinoq doctor [--fix]             database/runtime diagnosis or local plumbing fix\n  npx rhinoq doctor --plan-from <file> --plan-only\n  npx rhinoq dev --plan-from <file>     validate deployment plan before dev\n  npx rhinoq verify add completed-report-has-output\n  npx rhinoq verify apply completed-report-has-output --subject-type report\n  npx rhinoq verify run completed-report-has-output\n  npx rhinoq verify delete completed-report-has-output [--apply]\n  npx rhinoq fixture async              create a visible generic Task (database)\n  npx rhinoq demo transport-fallback    explicitly simulated transport evidence\n  npx rhinoq demo missing-output --confirm-disposable\n  npx rhinoq lab run completed-but-missing-output --recover --confirm-disposable\n  npx rhinoq capabilities [--json]      evidence-aware capability ledger\n  npx rhinoq plan --from .rhinoq/plan.json\n\nPostgreSQL configuration: RHINOQ_DATABASE_URL, DATABASE_URL, or PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE.\nThe Task profile is authoritative for state, leases, retries and effects; this Node CLI never replaces that correctness layer.\nEvery failure includes one next action.`); }

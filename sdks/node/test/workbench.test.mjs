@@ -103,6 +103,7 @@ test('the page is self-contained: no external origin is referenced', async () =>
   assert.match(html, /Runtime health/);
   assert.match(html, /Plan Inspector/);
   assert.match(html, /Autopilot/);
+  assert.match(html, /Native Adoption &amp; Safety/);
   assert.match(html, /Evidence Passport/);
   assert.match(html, /Operator workspace/);
   assert.match(html, /Async work, explained/);
@@ -213,6 +214,25 @@ test('Incident Explainer has a focused authorized endpoint', async () => {
   assert.equal(body.taskId, 'task-1');
   assert.equal(body.businessOutcome, 'unknown');
   assert.ok(Array.isArray(body.recommendedActions));
+});
+
+test('Native adoption Safety Compiler evidence is operator-only and read-only', async () => {
+  const adoptionPlan = {
+    schemaVersion: 1, kind: 'rhinoq-native-adoption-plan', fingerprint: 'abc', root: '/app', status: 'needs-confirmation',
+    scan: { filesScanned: 1, linesScanned: 10, truncated: false },
+    inventory: { handlers: 1, producers: 1, externalEffects: 1, cancellationBoundaries: 0, replaceableGlue: 1 },
+    diagnostics: [{ code: 'RHINOQ_ADOPT_EXTERNAL_EFFECT_POLICY_REQUIRED', severity: 'error', decision: 'needs-confirmation', subject: { file: 'src/job.ts', line: 4, category: 'external-effect' }, whatHappened: 'effect', whyItMatters: 'duplicate', whatRhinoQDid: 'did not mutate', howToFix: 'approve policy', verify: 'rerun', approvalKey: 'approve:effect' }],
+    requiredApprovals: ['approve:effect'], shadow: { required: true, reason: 'evidence', command: 'npx rhinoq adopt --shadow' },
+    stillApplicationOwned: ['auth', 'handler', 'business verification', 'effect policy'],
+  };
+  const handler = createWorkbenchHandler({ tasks: source(), requireOperator: () => true, adoptionPlan });
+  const response = await get(handler, '/rhinoq/api/adoption-plan');
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.fingerprint, 'abc');
+  assert.equal(body.diagnostics[0].code, 'RHINOQ_ADOPT_EXTERNAL_EFFECT_POLICY_REQUIRED');
+  const denied = await get(createWorkbenchHandler({ tasks: source(), requireOperator: () => false, adoptionPlan }), '/rhinoq/api/adoption-plan');
+  assert.equal(denied.status, 403);
 });
 
 test('Plan Inspector is operator-only and exposes compiled readiness without mutation controls', async () => {

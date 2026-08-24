@@ -819,6 +819,7 @@ Usage:
   rhinoq notify remove <name>
   rhinoq notify test <name>
   rhinoq notify send <name> --rule <id> --subject-type <type> --subject <id> --version <n>
+  rhinoq notify route --rule <id> --subject-type <type> --subject <id> --version <n>
 
 Add flags:
   --kind <webhook|slack>  destination type; default webhook
@@ -830,6 +831,9 @@ Add flags:
                           inside the window never reaches a person
   --include-evidence      send Finding evidence; it may contain business data
   --link-base <url>       base URL used to build an openable Finding link
+  --minimum-severity <s>  route info, medium, high or critical and above
+  --rule <id>             route only this Rule ID; repeatable
+  --subject-type <type>   route only this subject type; repeatable
   --replace               overwrite an existing destination with this name
 
 Destinations live in .rhinoq/notifications.json, or the path in
@@ -847,8 +851,9 @@ at the far end.
 repeating it for the same event and destination reports "deduplicated" rather
 than paging somebody twice.
 
-Automatic multi-node scheduling is not implemented in this prerelease; call
-send from your own scheduler or the Rule scheduler host.
+"notify route" reads the authoritative Finding severity and sends it to every
+matching reviewed destination. Each destination still passes through the same
+durable event/destination ledger; routing never runs in the Node watcher.
 
 Example:
   export RHINOQ_NOTIFY_SECRET_OPS="$(openssl rand -hex 32)"

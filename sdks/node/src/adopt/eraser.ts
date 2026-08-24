@@ -3,7 +3,16 @@ import { extname, relative, resolve } from 'node:path';
 
 /** A deliberately read-only finding from the Integration Eraser preview. */
 export interface RhinoQIntegrationEraserFinding {
-  category: 'status-route' | 'polling-hook' | 'bullmq-listener' | 'upload-proxy' | 'retry-timer';
+  category:
+    | 'status-route'
+    | 'polling-hook'
+    | 'bullmq-listener'
+    | 'upload-proxy'
+    | 'retry-timer'
+    | 'job-handler'
+    | 'job-producer'
+    | 'external-effect'
+    | 'cancellation-boundary';
   confidence: 'high' | 'review';
   file: string;
   line: number;
@@ -128,6 +137,38 @@ const DETECTION_RULES: ReadonlyArray<{
     review: (context) =>
       /\b(?:setInterval|setTimeout)\s*\(/i.test(context) && /\b(?:delay|again)\b/i.test(context),
     reviewReason: 'timer may implement retry behavior, but its failure and lease semantics need human review',
+  },
+  {
+    category: 'job-handler',
+    label: 'job handlers',
+    replacement: 'RhinoQ typed Task declaration around the existing business handler',
+    high: (context) => /\b(?:Worker|Processor|process)\s*\(|@Processor\s*\(|@Process\s*\(/i.test(context),
+    review: (context) => /\b(?:handler|processor|consumer|worker)\b/i.test(context) && /\b(?:job|queue|task)\b/i.test(context),
+    reviewReason: 'worker vocabulary found, but a callable job handler was not proven statically',
+  },
+  {
+    category: 'job-producer',
+    label: 'job producers',
+    replacement: 'RhinoQ typed Task dispatcher with stable business and owner identity',
+    high: (context) => /\.(?:add|send|publish|enqueue)\s*\(/i.test(context) && /\b(?:queue|job|task|message)\b/i.test(context),
+    review: (context) => /\b(?:enqueue|producer|publish|dispatch)\b/i.test(context),
+    reviewReason: 'dispatch vocabulary found, but a queue producer and stable identity were not proven statically',
+  },
+  {
+    category: 'external-effect',
+    label: 'external effects',
+    replacement: 'RhinoQ context.effect() with application-approved idempotency and confirmation policy',
+    high: (context) => /\b(?:stripe|s3|mailer|email|twilio|sendgrid|fetch|axios|putObject|sendEmail|refund|charge)\b/i.test(context) && /\b(?:await|send|create|post|put|delete|request)\b/i.test(context),
+    review: (context) => /\b(?:provider|webhook|payment|storage|email|http)\b/i.test(context),
+    reviewReason: 'provider vocabulary found; a retryable external mutation and its idempotency policy need human review',
+  },
+  {
+    category: 'cancellation-boundary',
+    label: 'cancellation boundaries',
+    replacement: 'RhinoQ cancellation capability with explicit safe/unsupported/uncertain behavior',
+    high: (context) => /\b(?:AbortController|AbortSignal|cancelRequested|requestCancellation|job\.discard|job\.remove)\b/i.test(context),
+    review: (context) => /\b(?:cancel|abort|terminate|kill)\b/i.test(context),
+    reviewReason: 'cancellation vocabulary found, but terminal safety and external-effect behavior need human review',
   },
 ];
 

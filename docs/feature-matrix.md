@@ -45,6 +45,9 @@ execution platforms.
 | Polyglot workers | Node only | Node worker preview adds protocol negotiation, handler-filtered claim, heartbeat, cancellation and graceful shutdown through the optional HTTP gateway |
 | Transactional enqueue from any language | not applicable | `rhinoq.enqueue()` SQL function with job allowlist implemented and executed by the PostgreSQL suite |
 | Migration/diagnostics CLI | application-specific | read-only plan/status/SQL, explicit checksum-locked apply and database-aware doctor implemented |
+| Native adoption compiler | application-specific glue | read-only scan/plan, durable shadow report and fail-closed promotion evaluation implemented; business semantics and source changes require explicit adopter decisions |
+| Terminal operations | dashboard or custom scripts | `watch`, `inspect` and `open` implemented with authoritative refresh, polling fallback, grouped incidents, structured next actions and JSON/quiet/filter modes |
+| Notification routing | custom pager glue | severity/rule/subject routing implemented before the Go-owned durable delivery ledger; Node registry remains configuration/DX only |
 | Developer UI | separate product | embedded loopback-only Workbench preview implemented: payload-free jobs, Needs Attention, Findings, Rules, evidence, subject recheck and opt-in guarded repair; no remote hosting |
 
 ## Task profiles are not equivalent

@@ -53,8 +53,11 @@ type notifyDestination struct {
 	// itself within the window never reaches a person.
 	GracePeriodMs int64 `json:"gracePeriodMs,omitempty"`
 	// FindingBaseURL turns a notification into a link an operator can open.
-	FindingBaseURL string `json:"findingBaseUrl,omitempty"`
-	CreatedAt      string `json:"createdAt,omitempty"`
+	FindingBaseURL  string   `json:"findingBaseUrl,omitempty"`
+	MinimumSeverity string   `json:"minimumSeverity,omitempty"`
+	RuleIDs         []string `json:"ruleIds,omitempty"`
+	SubjectTypes    []string `json:"subjectTypes,omitempty"`
+	CreatedAt       string   `json:"createdAt,omitempty"`
 }
 
 type notifyRegistry struct {
@@ -78,13 +81,27 @@ func runNotify(args []string, getenv func(string) string, output io.Writer) int 
 		return runNotifyTest(args[1:], getenv, output)
 	case "send":
 		return runNotifySend(args[1:], getenv, output)
+	case "route":
+		return runNotifyRoute(args[1:], getenv, output)
 	default:
 		fmt.Fprintln(output, notifyUsage)
 		return 2
 	}
 }
 
-const notifyUsage = "Usage: rhinoq notify <add|list|remove|test|send>"
+const notifyUsage = "Usage: rhinoq notify <add|list|remove|test|send|route>"
+
+type notifyStringList []string
+
+func (values *notifyStringList) String() string { return strings.Join(*values, ",") }
+func (values *notifyStringList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("value must not be empty")
+	}
+	*values = append(*values, value)
+	return nil
+}
 
 func notifyRegistryPath(getenv func(string) string) string {
 	if custom := strings.TrimSpace(getenv("RHINOQ_NOTIFY_CONFIG")); custom != "" {
@@ -109,6 +126,15 @@ func loadNotifyRegistry(path string) (notifyRegistry, error) {
 		return notifyRegistry{}, fmt.Errorf(
 			"%s uses schema version %d; this CLI writes version %d",
 			path, registry.SchemaVersion, notifyRegistryVersion)
+	}
+	for _, destination := range registry.Destinations {
+		minimum := destination.MinimumSeverity
+		if minimum == "" {
+			minimum = "info"
+		}
+		if severityRank(minimum) < 0 {
+			return notifyRegistry{}, fmt.Errorf("destination %q has invalid minimumSeverity %q", destination.Name, destination.MinimumSeverity)
+		}
 	}
 	return registry, nil
 }
@@ -153,6 +179,11 @@ func runNotifyAdd(args []string, getenv func(string) string, output io.Writer) i
 	includeEvidence := flags.Bool("include-evidence", false, "send Finding evidence; it may contain business data")
 	grace := flags.Duration("grace", 0, "delay a first notification by this long")
 	linkBase := flags.String("link-base", "", "base URL used to build a Finding link")
+	minimumSeverity := flags.String("minimum-severity", "info", "minimum routed severity: info, medium, high or critical")
+	var ruleIDs notifyStringList
+	var subjectTypes notifyStringList
+	flags.Var(&ruleIDs, "rule", "route only this Rule ID; repeatable")
+	flags.Var(&subjectTypes, "subject-type", "route only this subject type; repeatable")
 	replace := flags.Bool("replace", false, "overwrite an existing destination with this name")
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -167,9 +198,15 @@ func runNotifyAdd(args []string, getenv func(string) string, output io.Writer) i
 		URL: strings.TrimSpace(*endpoint), URLEnv: strings.TrimSpace(*urlEnv),
 		SecretEnv: strings.TrimSpace(*secretEnv),
 		TimeoutMs: timeout.Milliseconds(), IncludeEvidence: *includeEvidence,
-		GracePeriodMs:  grace.Milliseconds(),
-		FindingBaseURL: strings.TrimSpace(*linkBase),
-		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		GracePeriodMs:   grace.Milliseconds(),
+		FindingBaseURL:  strings.TrimSpace(*linkBase),
+		MinimumSeverity: strings.ToLower(strings.TrimSpace(*minimumSeverity)),
+		RuleIDs:         sortedUnique(ruleIDs), SubjectTypes: sortedUnique(subjectTypes),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if severityRank(destination.MinimumSeverity) < 0 {
+		fmt.Fprintln(output, "FAIL --minimum-severity must be info, medium, high or critical")
+		return 2
 	}
 	// The shorthands exist because "--slack <url>" is what somebody typing this
 	// for the first time will try.
@@ -301,7 +338,7 @@ func runNotifyList(args []string, getenv func(string) string, output io.Writer) 
 		return printJSON(output, map[string]any{"destinations": redacted})
 	}
 	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(table, "NAME\tKIND\tENDPOINT\tSIGNED\tSECRET READY\tEVIDENCE")
+	fmt.Fprintln(table, "NAME\tKIND\tENDPOINT\tSIGNED\tSECRET READY\tEVIDENCE\tROUTE")
 	for _, destination := range registry.Destinations {
 		endpoint := redactURL(destination.URL)
 		if destination.URLEnv != "" {
@@ -322,8 +359,19 @@ func runNotifyList(args []string, getenv func(string) string, output io.Writer) 
 		if destination.IncludeEvidence {
 			evidence = "included"
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			destination.Name, destination.Kind, endpoint, signed, ready, evidence)
+		minimum := destination.MinimumSeverity
+		if minimum == "" {
+			minimum = "info"
+		}
+		route := "severity≥" + minimum
+		if len(destination.RuleIDs) > 0 {
+			route += " rules=" + strings.Join(destination.RuleIDs, ",")
+		}
+		if len(destination.SubjectTypes) > 0 {
+			route += " subjects=" + strings.Join(destination.SubjectTypes, ",")
+		}
+		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			destination.Name, destination.Kind, endpoint, signed, ready, evidence, route)
 	}
 	_ = table.Flush()
 	fmt.Fprintf(output, "\n%d destination(s) in %s\n", len(registry.Destinations), path)
@@ -508,4 +556,144 @@ func runNotifySend(args []string, getenv func(string) string, output io.Writer) 
 	fmt.Fprintf(output, "PASS %s · event %s · severity %s\n",
 		receipt.Status, receipt.ID, receipt.Severity)
 	return 0
+}
+
+// runNotifyRoute reads the authoritative Finding, selects reviewed registry
+// routes, then delegates every send to the existing durable delivery service.
+// It never constructs a Finding or retries a Task.
+func runNotifyRoute(args []string, getenv func(string) string, output io.Writer) int {
+	flags := flag.NewFlagSet("notify route", flag.ContinueOnError)
+	flags.SetOutput(output)
+	ruleID := flags.String("rule", "", "Rule ID")
+	subjectType := flags.String("subject-type", "", "business subject type")
+	subjectID := flags.String("subject", "", "business subject ID")
+	version := flags.Int("version", -1, "Rule invariant version")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *ruleID == "" || *subjectType == "" || *subjectID == "" || *version < 0 {
+		fmt.Fprintln(output, "Usage: rhinoq notify route --rule <id> --subject-type <type> --subject <id> --version <n>")
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, closer, err := openIntegrityClient(ctx, getenv)
+	if err != nil {
+		return printOperationError(output, err)
+	}
+	defer closer.Close()
+	records, err := client.ListFindings(ctx, rhinoq.FindingQuery{
+		RuleID: *ruleID, SubjectType: *subjectType, SubjectID: *subjectID,
+		IncludeSuppressed: true, Limit: 100,
+	})
+	if err != nil {
+		return printOperationError(output, err)
+	}
+	var record *rhinoq.FindingRecord
+	for index := range records {
+		if records[index].InvariantVersion == *version {
+			record = &records[index]
+			break
+		}
+	}
+	if record == nil {
+		fmt.Fprintln(output, "FAIL Finding was not found for the exact Rule, subject and invariant version")
+		return 1
+	}
+	severity, _ := rhinoq.FindingNotificationSeverity(record.Status)
+	registry, err := loadNotifyRegistry(notifyRegistryPath(getenv))
+	if err != nil {
+		return printOperationError(output, err)
+	}
+	routes := routeNotifyEntries(registry.Destinations, severity, *ruleID, *subjectType)
+	if len(routes) == 0 {
+		fmt.Fprintf(output, "PASS no notification route matched severity=%s rule=%s subjectType=%s\n", severity, *ruleID, *subjectType)
+		return 0
+	}
+	failed := 0
+	for _, entry := range routes {
+		destination, ok := resolveNotifyDestination(getenv, entry.Name, output)
+		if !ok {
+			failed++
+			continue
+		}
+		receipt, sendErr := client.SendFindingNotification(ctx, rhinoq.FindingKey{
+			RuleID: *ruleID, SubjectType: *subjectType, SubjectID: *subjectID, InvariantVersion: *version,
+		}, destination)
+		if sendErr != nil {
+			failed++
+			fmt.Fprintf(output, "FAIL route %s: %v\n", entry.Name, sendErr)
+			continue
+		}
+		fmt.Fprintf(output, "PASS route %s: %s event=%s severity=%s\n", entry.Name, receipt.Status, receipt.ID, receipt.Severity)
+	}
+	if failed > 0 {
+		fmt.Fprintf(output, "FAIL %d/%d notification route(s) failed; durable delivery evidence was retained where creation succeeded\n", failed, len(routes))
+		return 1
+	}
+	return 0
+}
+
+func routeNotifyEntries(entries []notifyDestination, severity, ruleID, subjectType string) []notifyDestination {
+	result := make([]notifyDestination, 0, len(entries))
+	for _, entry := range entries {
+		minimum := entry.MinimumSeverity
+		if minimum == "" {
+			minimum = "info"
+		}
+		if severityRank(severity) < severityRank(minimum) {
+			continue
+		}
+		if len(entry.RuleIDs) > 0 && !containsString(entry.RuleIDs, ruleID) {
+			continue
+		}
+		if len(entry.SubjectTypes) > 0 && !containsString(entry.SubjectTypes, subjectType) {
+			continue
+		}
+		result = append(result, entry)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
+
+func severityRank(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "info":
+		return 0
+	case "medium":
+		return 1
+	case "high":
+		return 2
+	case "critical":
+		return 3
+	default:
+		return -1
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedUnique(values []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }

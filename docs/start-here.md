@@ -36,13 +36,28 @@ runtime:
 ```bash
 npm install @rhinoq/node@next pg
 npx rhinoq init
+npx rhinoq adopt --plan --out .rhinoq/adoption-plan.json
 npx rhinoq adopt --mode single --apply
 npx rhinoq doctor
 npx rhinoq dev
 ```
 
-You can watch progress, cancel queued work, open the owner-facing Task Center
-and investigate retry history or attention states in the operator Workbench.
+The plan is read-only: it inventories handlers, producers, retry timers,
+cancellation boundaries and possible external effects, then stops for explicit
+application decisions instead of guessing them. You can watch progress in the
+same terminal, cancel queued work, open the owner-facing Task Center and
+investigate retry history or attention states in the operator Workbench:
+
+```bash
+npx rhinoq watch --severity warning
+npx rhinoq inspect <task-id>
+npx rhinoq open <task-id>
+```
+
+`watch` uses database change notifications as a wake-up hint and keeps an
+authoritative polling fallback. It groups repeated symptoms to avoid terminal
+spam. A terminal does not replace an unattended pager; configure durable
+notification routes for production incidents.
 The application code uses the same shape you would put around an existing worker:
 
 ```js
@@ -392,7 +407,12 @@ docker compose down -v
 Why `-v`: it also removes the demo's disposable database volume. Do not use
 that flag on a Compose project whose data you intend to keep.
 
-## Open the dashboard
+## Operate from the terminal or open the dashboard
+
+The dashboard is optional for routine observation. `npx rhinoq dev` prints the
+terminal stream while it serves the local visual surface; use `watch` alone in
+a separate shell, `inspect` for one evidence bundle, and `open` only when the
+visual timeline will help. See [Terminal operations](./terminal-operations.md).
 
 RhinoQ has two local visual surfaces:
 
@@ -495,9 +515,17 @@ RhinoQ does not replace the application's Redis connection or worker. Preview
 the wiring before it writes anything:
 
 ```bash
+npx rhinoq adopt --plan --out .rhinoq/adoption-plan.json
+npx rhinoq adopt --shadow --adapter custom --apply
 npx rhinoq adopt --mode single
 npx rhinoq adopt --mode single --apply
 ```
+
+The native plan/shadow/promote path is runtime-neutral. Promotion emits an
+approval artifact only after its plan fingerprint, reviewed decisions, durable
+shadow report and unresolved-event count agree; it never rewrites application
+source. Read [Native adoption](./native-adoption.md) before applying the
+runtime-specific module below.
 
 `single` means one BullMQ job is the whole user-facing Task. Choose `fanout`
 when a Task owns several jobs; the CLI never guesses this because the wrong

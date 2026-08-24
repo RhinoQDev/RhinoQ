@@ -37,6 +37,7 @@ test('adopt --scan reports bounded integration evidence without writing or delet
       'BullMQ lifecycle listeners',
       'upload proxies',
       'retry timers',
+      'external effects',
     ]);
     assert.equal(report.replaceableEstimate.files, 5);
     assert.equal(report.replaceableEstimate.matchingLines, 5);

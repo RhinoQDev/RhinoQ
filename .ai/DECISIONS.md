@@ -1096,3 +1096,81 @@
 - **Rollback:** entry points may call the existing plan projection directly;
   the canonical artifact and runtime protocol do not change.
 - **Owner:** SDK + CLI DX
+
+## ADR-0049 — Native adoption compiles evidence; it does not infer business policy
+
+- **Status:** accepted
+- **Context:** Existing applications have handlers, producers, status routes,
+  queue listeners, retry loops and provider calls accumulated over years. A
+  codemod that rewrites these from syntax alone would have to guess owner
+  identity, Task aggregation, cancellation semantics, idempotency keys and the
+  definition of a correct business result.
+- **Decision:** the bounded Integration Eraser feeds a deterministic
+  `rhinoq-native-adoption-plan`. The Safety Compiler identifies handler,
+  producer, external-effect, retry and cancellation boundaries and emits
+  structured remediation. Apply remains non-overwriting. Shadow adoption uses
+  the existing portable observe-only runtime and durable adoption report.
+  Promotion is a fingerprinted approval artifact and fails closed unless all
+  decisions are approved, shadow evidence is durable, at least one event was
+  observed, identities resolve and capability gaps are empty. Generated
+  integrations carry a Task product handoff for owner API, Task Center,
+  Workbench and terminal acceptance checks.
+- **Boundary:** static scanning never imports application source, generates an
+  idempotency key, chooses authentication or declares business correctness.
+  Promotion evaluation performs no runtime mutation. The existing explicit
+  runtime integration remains the only ownership-transfer point.
+- **Consequences:** `adopt --plan`, `--shadow` and `--promote` form a preview,
+  evidence and approval loop without a big-bang rewrite. A truncated scan or
+  missing handler proof cannot become promotion evidence. SST is neither a
+  dependency nor the golden path; this is a RhinoQ-native product workflow.
+- **Rollback:** stop consuming the additive plan/handoff artifacts and use the
+  existing `adopt --scan`, `--observe` and explicit integration generator.
+- **Owner:** Node SDK + product
+
+## ADR-0050 — Terminal operations share authoritative operator projections
+
+- **Status:** accepted
+- **Context:** Requiring an operator to keep Workbench open turns RhinoQ into a
+  passive dashboard. A separate CLI event store, however, would disagree with
+  Task state and could turn best-effort notifications into correctness facts.
+- **Decision:** `rhinoq watch` treats PostgreSQL `LISTEN/NOTIFY` as an identity-
+  only wake-up hint, re-reads Task summaries and keeps bounded polling as a
+  disconnect safety net. Pure projections assign severity and next actions;
+  identical symptoms group before rendering. `rhinoq inspect` and Workbench
+  call the same read-only Task/Execution/Step/Waitpoint/verification/provider
+  projection. Missing optional evidence stays explicit. `rhinoq open` builds a
+  validated deep link to the selected Workbench Task.
+- **Boundary:** the Node CLI does not claim, retry, cancel, confirm an Effect or
+  decide a business outcome. Tenant-scoped PostgreSQL reads remain the source
+  of truth. Terminal output is an interactive observation surface, not a
+  durable production notification channel.
+- **Consequences:** local `dev` and standalone `watch` surface actionable Task
+  transitions without a browser, support quiet/filter/JSON modes and avoid one
+  line per identical fan-out symptom. Workbench remains the deeper evidence and
+  guarded-action surface.
+- **Rollback:** remove the additive commands and continue using Workbench/SSE;
+  no stored Task or event contract changes.
+- **Owner:** Node SDK + operator DX
+
+## ADR-0051 — Notification routes select destinations before Go-owned delivery
+
+- **Status:** accepted
+- **Context:** One destination for every Finding either pages too much or
+  forces each application to rebuild severity routing. Sending from the Node
+  watcher would duplicate durable deduplication, grace and audit behavior.
+- **Decision:** the shared notification registry accepts additive minimum
+  severity, Rule ID and subject-type filters. The Go CLI reads the authoritative
+  Finding, derives severity from the same Application notification policy,
+  selects reviewed destinations and calls the existing durable
+  event/destination delivery service for each match. Node may configure and
+  preview routes but cannot deliver a real Finding.
+- **Boundary:** no route guesses who owns a page, mutates a Finding or retries a
+  Task. Secrets remain environment references. A terminal watcher stopping has
+  no effect on durable delivery evidence.
+- **Consequences:** teams can route high payment Findings to one destination
+  and lower-severity general Findings elsewhere without introducing another
+  ledger. Every selected destination retains existing deduplication, grace,
+  signing and audit semantics.
+- **Rollback:** omit the additive registry fields and use `notify send <name>`;
+  schema version 1 remains readable.
+- **Owner:** Go Application + CLI + Node configuration DX

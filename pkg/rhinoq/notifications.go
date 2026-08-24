@@ -11,6 +11,7 @@ import (
 	adapter "github.com/madebyduy/RhinoQ/internal/adapters/notification"
 	app "github.com/madebyduy/RhinoQ/internal/application/notifications"
 	notificationcontract "github.com/madebyduy/RhinoQ/internal/contracts/notification"
+	"github.com/madebyduy/RhinoQ/internal/domain/finding"
 	"github.com/madebyduy/RhinoQ/internal/domain/notificationdelivery"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
@@ -32,6 +33,13 @@ type NotificationReceipt struct {
 	SentAt   time.Time `json:"sentAt"`
 	Status   string    `json:"status"`
 	Severity string    `json:"severity"`
+}
+
+// FindingNotificationSeverity exposes the same deterministic severity used by
+// the Application notification service so CLIs can select destinations before
+// asking that service to create/send durable deliveries.
+func FindingNotificationSeverity(status string) (string, bool) {
+	return app.SeverityForFindingStatus(finding.Status(status))
 }
 
 // NotificationDelivery is the scheduler's public, secret-free work item.

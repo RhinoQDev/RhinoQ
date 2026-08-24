@@ -52,6 +52,21 @@ runtime; `add task --apply` generates a progress/result handler, a manifest/plan
 smoke test and the `/task-center` handoff. The generated manual adapter is
 observe-only until the application registers its real runtime.
 
+Before generation, compile a native adoption/Safety plan; while evaluating or
+operating the app, use the terminal without keeping Workbench open:
+
+```bash
+npx rhinoq adopt --plan --out .rhinoq/adoption-plan.json
+npx rhinoq adopt --shadow --adapter custom --apply
+npx rhinoq watch --severity warning
+npx rhinoq inspect <task-id>
+npx rhinoq open <task-id>
+```
+
+The scanner does not invent owner identity, idempotency, provider confirmation
+or business verification. `watch` treats PostgreSQL notifications as wake-up
+hints and always re-reads authoritative Task state with polling fallback.
+
 ## Install and get one working path
 
 ```bash

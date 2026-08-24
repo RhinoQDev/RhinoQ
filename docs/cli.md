@@ -231,6 +231,13 @@ rhinoq workbench
 | `rhinoq notify list` | list destinations with endpoints redacted | No | No |
 | `rhinoq notify test <name>` | send one synthetic signed event | No | No |
 | `rhinoq notify send <name>` | deliver one real Finding | DB | DB |
+| `rhinoq notify route` | route one authoritative Finding by severity/Rule/subject type | DB | DB |
+| `npx rhinoq adopt --plan` | compile a read-only native adoption and Safety plan | No | Optional artifact |
+| `npx rhinoq adopt --shadow` | generate observe-only durable adoption integration | No | Non-overwriting files with `--apply` |
+| `npx rhinoq adopt --promote` | evaluate reviewed plan and shadow evidence | No | No |
+| `npx rhinoq watch` | stream grouped authoritative Task changes in the terminal | DB | No |
+| `npx rhinoq inspect <task-id>` | explain one Task from joined operator evidence | DB | No |
+| `npx rhinoq open <task-id>` | open/print a direct Workbench Task link | No | No |
 | `rhinoq workbench` | open the local developer UI; actions require `--actions` | DB | No by default |
 | `rhinoq workbench --demo` | open sample data without PostgreSQL | No | No |
 

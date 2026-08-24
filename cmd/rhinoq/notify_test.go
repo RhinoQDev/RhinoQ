@@ -147,6 +147,41 @@ func TestNotifyAddRejectsPlaintextHTTPToARemoteHost(t *testing.T) {
 	}
 }
 
+func TestNotifyRoutingFiltersSeverityRuleAndSubject(t *testing.T) {
+	entries := []notifyDestination{
+		{Name: "all"},
+		{Name: "critical", MinimumSeverity: "critical"},
+		{Name: "payments", MinimumSeverity: "high", RuleIDs: []string{"refund-confirmed"}, SubjectTypes: []string{"payment"}},
+	}
+	routed := routeNotifyEntries(entries, "high", "refund-confirmed", "payment")
+	if len(routed) != 2 || routed[0].Name != "all" || routed[1].Name != "payments" {
+		t.Fatalf("unexpected high routes: %#v", routed)
+	}
+	routed = routeNotifyEntries(entries, "medium", "refund-confirmed", "payment")
+	if len(routed) != 1 || routed[0].Name != "all" {
+		t.Fatalf("unexpected medium routes: %#v", routed)
+	}
+}
+
+func TestNotifyAddPersistsRoutingWithoutSecrets(t *testing.T) {
+	getenv := notifyEnv(t, nil)
+	var output bytes.Buffer
+	if code := runNotifyAdd([]string{
+		"ops", "--webhook", "https://example.com/hooks/rhinoq",
+		"--minimum-severity", "high", "--rule", "refund-confirmed", "--subject-type", "payment",
+	}, getenv, &output); code != 0 {
+		t.Fatalf("notify add returned %d: %s", code, output.String())
+	}
+	registry, err := loadNotifyRegistry(notifyRegistryPath(getenv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := registry.Destinations[0]
+	if entry.MinimumSeverity != "high" || len(entry.RuleIDs) != 1 || entry.RuleIDs[0] != "refund-confirmed" || len(entry.SubjectTypes) != 1 || entry.SubjectTypes[0] != "payment" {
+		t.Fatalf("routing fields were not preserved: %#v", entry)
+	}
+}
+
 func TestNotifyAddWarnsAboutAnUnsignedWebhook(t *testing.T) {
 	getenv := notifyEnv(t, nil)
 	var output bytes.Buffer

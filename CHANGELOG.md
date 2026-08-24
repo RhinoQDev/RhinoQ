@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Added RhinoQ-native adoption planning and Safety Compiler diagnostics for
+  handlers, producers, integration glue, retry/cancellation boundaries and
+  possible external effects. `adopt --shadow` reuses the durable observe-only
+  path; `adopt --promote` evaluates fingerprinted approvals and shadow evidence
+  without mutating runtime ownership. Explicit adoption generation now emits a
+  non-overwriting Task product handoff.
+- Added terminal-first `watch`, `inspect` and `open` commands. Watch treats
+  PostgreSQL change notifications as hints, re-reads authoritative Task
+  summaries, retains polling fallback, groups repeated symptoms and supports
+  attention/all, severity, type, quiet, one-shot and JSON modes. Inspect shares
+  the Workbench operator projection and reports missing evidence explicitly.
+- Added additive severity, Rule and subject-type notification routes. The Go
+  CLI reads the authoritative Finding and sends each match through the existing
+  durable event/destination ledger; Node configures the shared secret-reference
+  registry but still refuses real Finding delivery.
 - Fixed discovery metadata verification for the README's background job entry,
   and aligned the PostgreSQL Task-profile integration assertion with schema
   version 21's Durable Step and shared-resource tables.

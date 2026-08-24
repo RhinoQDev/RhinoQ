@@ -16,6 +16,7 @@ import { dirname, resolve } from 'node:path';
 export const NOTIFY_REGISTRY_VERSION = 1;
 
 export type NotifyKind = 'webhook' | 'slack';
+export type NotifySeverity = 'info' | 'medium' | 'high' | 'critical';
 
 export interface NotifyDestinationEntry {
   name: string;
@@ -30,12 +31,24 @@ export interface NotifyDestinationEntry {
   includeEvidence?: boolean;
   gracePeriodMs?: number;
   findingBaseUrl?: string;
+  /** Route only messages at or above this severity. Defaults to info. */
+  minimumSeverity?: NotifySeverity;
+  /** Optional exact Rule IDs. Empty means every Rule. */
+  ruleIds?: string[];
+  /** Optional exact subject types. Empty means every subject type. */
+  subjectTypes?: string[];
   createdAt?: string;
 }
 
 export interface NotifyRegistry {
   schemaVersion: number;
   destinations: NotifyDestinationEntry[];
+}
+
+export interface NotifyRouteInput {
+  severity: NotifySeverity;
+  ruleId: string;
+  subjectType: string;
 }
 
 /** A destination with its environment values resolved, ready to send. */
@@ -83,6 +96,11 @@ export async function loadNotifyRegistry(path: string): Promise<NotifyRegistry> 
     throw new Error(
       `${path} uses schema version ${String(parsed?.schemaVersion)}; this SDK writes version ${NOTIFY_REGISTRY_VERSION}`,
     );
+  }
+  for (const entry of parsed.destinations ?? []) {
+    if (entry.minimumSeverity && !['info', 'medium', 'high', 'critical'].includes(entry.minimumSeverity)) {
+      throw new Error(`${path} destination ${JSON.stringify(entry.name)} has invalid minimumSeverity ${JSON.stringify(entry.minimumSeverity)}`);
+    }
   }
   return { schemaVersion: parsed.schemaVersion, destinations: parsed.destinations ?? [] };
 }
@@ -141,4 +159,19 @@ export function resolveNotifyDestination(
 /** Default environment variable name for a destination's HMAC secret. */
 export function defaultSecretEnv(name: string): string {
   return `RHINOQ_NOTIFY_SECRET_${name.replace(/[-. ]/g, '_').toUpperCase()}`;
+}
+
+/** Pure routing only; the Go-owned delivery ledger remains the sender/dedup authority. */
+export function routeNotifyDestinations(registry: NotifyRegistry, input: NotifyRouteInput): readonly NotifyDestinationEntry[] {
+  if (!registry || registry.schemaVersion !== NOTIFY_REGISTRY_VERSION) throw new TypeError('a current RhinoQ notification registry is required');
+  if (!['info', 'medium', 'high', 'critical'].includes(input?.severity)) throw new TypeError('notification severity must be info, medium, high or critical');
+  if (!input.ruleId?.trim() || !input.subjectType?.trim()) throw new TypeError('notification route requires ruleId and subjectType');
+  const rank: Record<NotifySeverity, number> = { info: 0, medium: 1, high: 2, critical: 3 };
+  return Object.freeze(registry.destinations.filter((entry) => {
+    const minimum = entry.minimumSeverity ?? 'info';
+    if (rank[input.severity] < rank[minimum]) return false;
+    if (entry.ruleIds?.length && !entry.ruleIds.includes(input.ruleId)) return false;
+    if (entry.subjectTypes?.length && !entry.subjectTypes.includes(input.subjectType)) return false;
+    return true;
+  }).sort((left, right) => left.name.localeCompare(right.name)));
 }
