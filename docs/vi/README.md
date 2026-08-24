@@ -6,13 +6,13 @@ Nếu mới dùng RhinoQ, hãy đọc theo thứ tự này:
 
 1. [Bắt đầu trong 5 phút](./bat-dau.md)
 2. [Khai báo một Task](./khai-bao-task.md)
-3. [File, video lớn, nhiều file và ZIP](./tep-va-artifact.md)
-4. [API, SSE, WebSocket tùy chọn và giao diện](./api-va-giao-dien.md)
+3. [API, SSE, WebSocket tùy chọn và giao diện](./api-va-giao-dien.md)
+4. Chỉ khi Task trả file: [File, video lớn, nhiều file và ZIP](./tep-va-artifact.md)
 5. [Checklist trước khi chạy production](./production-checklist.md)
-6. [Ma trận bao phủ hệ sinh thái async (English)](../async-capability-coverage.md)
-7. [Kế hoạch nâng cấp RhinoQ](../ke-hoach-nang-cap-rhinoq.md)
-8. [Kế hoạch First Value / README / DX](./ke-hoach-tong-the-first-value-readme-dx.md)
-9. [Kế hoạch liên kết dữ liệu và tính năng bứt phá](./ke-hoach-lien-ket-va-tinh-nang-but-pha.md)
+
+Không cần đọc tài liệu kiến trúc hay kế hoạch nâng cấp để tích hợp Task đầu
+tiên. `setup` là lệnh bắt đầu mặc định; `connect`/`adopt` dành cho trường hợp
+bạn chủ động giữ runtime hiện tại.
 
 Dành cho người đóng góp và người vận hành:
 
@@ -22,6 +22,10 @@ Dành cho người đóng góp và người vận hành:
   các điểm ngắt mạch đã xác định, cách sửa và bộ đo thay thế.
 - [Backlog cải tiến tích hợp và hiệu năng](./backlog-tich-hop-va-hieu-nang.md) —
   7 finding ma sát DX (đã kiểm chứng) + mục tiêu hiệu năng còn lại, xếp ưu tiên.
+- [Ma trận bao phủ hệ sinh thái async (English)](../async-capability-coverage.md).
+- [Kế hoạch nâng cấp RhinoQ](../ke-hoach-nang-cap-rhinoq.md).
+- [Kế hoạch First Value / README / DX](./ke-hoach-tong-the-first-value-readme-dx.md).
+- [Kế hoạch liên kết dữ liệu và tính năng bứt phá](./ke-hoach-lien-ket-va-tinh-nang-but-pha.md).
 
 ## RhinoQ giải quyết việc gì?
 

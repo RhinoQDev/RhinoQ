@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reworked the root, Node SDK and existing-application documentation around one
+  default `setup` path, a short runtime decision table and progressive
+  disclosure. Advanced capability, architecture and project-planning material
+  is now linked as reference instead of interrupting first integration.
 - Added RhinoQ-native adoption planning and Safety Compiler diagnostics for
   handlers, producers, integration glue, retry/cancellation boundaries and
   possible external effects. `adopt --shadow` reuses the durable observe-only

@@ -15,12 +15,12 @@ Existing files are still never overwritten.
 ```bash
 npm install @rhinoq/node@next pg
 npx rhinoq setup
-npx rhinoq setup --apply
 ```
 
-Preview performs no writes. Apply creates only missing files and refuses to
-overwrite application-owned files. Commit or review the diff before starting
-the application.
+Preview performs no writes and prints the exact apply command for the detected
+runtime. Run that command after reviewing it. Apply creates only missing files
+and refuses to overwrite application-owned files. Commit or review the diff
+before starting the application.
 
 Setup detects `package.json`, NestJS, BullMQ, optional S3/Cloudinary/Sharp
 packages, `go.mod` and PostgreSQL configuration. Selection is deterministic: detected BullMQ is preferred;
@@ -32,6 +32,9 @@ npx rhinoq setup --runtime bullmq --mode single --owner-property user.id --apply
 npx rhinoq setup --runtime postgres --apply
 npx rhinoq setup --runtime manual --apply
 ```
+
+BullMQ has no generic `setup --apply` shortcut: `single` versus `fanout` is a
+Task semantic and must be chosen explicitly.
 
 `--local-postgres` may generate disposable loopback evaluation infrastructure.
 It is not a production database decision.

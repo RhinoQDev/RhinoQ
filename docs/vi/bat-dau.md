@@ -77,8 +77,12 @@ phải lỗi; quickstart không giả vờ đã kiểm chứng môi trường pr
 ```bash
 npm install @rhinoq/node@next pg
 npx rhinoq setup
-npx rhinoq setup --apply
+# Chạy đúng lệnh NEXT mà preview in ra, ví dụ:
+npx rhinoq setup --runtime bullmq --mode single --apply
 ```
 
-Lần chạy đầu chỉ preview. `--apply` không ghi đè file đang có. Sau đó đọc
+`setup` là golden path mặc định. `connect`/`adopt` chỉ dùng khi bạn chủ động
+giữ runtime hiện tại và cần chọn rõ `single` hoặc `fanout`. Lần chạy đầu chỉ
+preview. Không có lệnh `setup --apply` chung cho BullMQ vì RhinoQ không được
+đoán `single`/`fanout`. `--apply` không ghi đè file đang có. Sau đó đọc
 [Khai báo một Task](./khai-bao-task.md).
