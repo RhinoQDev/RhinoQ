@@ -81,6 +81,7 @@ export interface TaskRequestHandlerOptions {
     result: TaskResult,
     request: Request,
     ownerId: string,
+    tenantId: string,
   ): Promise<unknown> | unknown;
   /** Convert a private artifact reference into a short-lived owner-safe response. */
   resolveArtifact?(
@@ -384,7 +385,7 @@ export function createTaskRequestHandler(
           }, 501);
         }
         const result = await options.tasks.getTaskResultForOwner(taskId, ownerId, tenantId);
-        const resolved = await options.resolveResult(result, request, ownerId);
+        const resolved = await options.resolveResult(result, request, ownerId, tenantId);
         return resolved instanceof Response ? resolved : json(resolved);
       }
       if (

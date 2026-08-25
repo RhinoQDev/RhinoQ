@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { TaskRunHandle } from '../dist/index.js';
+import { TaskRunHandle, sendRhinoQResponse } from '../dist/index.js';
 
 function snapshot(state, version) {
   return {
@@ -59,4 +59,29 @@ test('TaskRunHandle respond returns a result or safe 202 without cancelling work
   assert.equal(accepted.status, 202);
   assert.equal(accepted.headers.get('location'), 'https://app.example.test/task-center/task-report-42');
   assert.equal(cancellations, 0);
+});
+
+test('TaskRunHandle completed response omits an unavailable result instead of exposing a reference', async () => {
+  const run = new TaskRunHandle({
+    async getTask() { return snapshot('succeeded', 2); },
+    async getTaskResult() { return undefined; },
+    async cancelTask() { throw new Error('not called'); },
+  }, 'task-report-42');
+  const response = await run.respond({ waitUpToMs: 20 });
+  assert.deepEqual(await response.json(), { taskId: 'task-report-42', state: 'succeeded' });
+});
+
+test('sendRhinoQResponse adapts Web Response to a Fastify-compatible reply', async () => {
+  const reply = {
+    headers: {},
+    code(value) { this.statusCode = value; return this; },
+    header(name, value) { this.headers[name] = value; },
+    send(body) { this.body = body; },
+  };
+  await sendRhinoQResponse(reply, new Response(JSON.stringify({ accepted: true }), {
+    status: 202, headers: { location: '/task-center/task-1', 'content-type': 'application/json' },
+  }));
+  assert.equal(reply.statusCode, 202);
+  assert.equal(reply.headers.location, '/task-center/task-1');
+  assert.deepEqual(JSON.parse(reply.body), { accepted: true });
 });

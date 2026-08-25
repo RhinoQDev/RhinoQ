@@ -23,6 +23,7 @@ import {
   type RhinoQRuntimeIntegration,
 } from './integration.js';
 import { validateRhinoQResourcePool, type RhinoQResourcePoolOptions } from '../tasks/resource-lease.js';
+import type { TaskResult } from '../gateway/types.js';
 
 export interface CreateRhinoQAppOptions {
   pool: SqlPool;
@@ -67,6 +68,8 @@ export interface CreateRhinoQAppOptions {
   realtime?: {
     invalidate(taskId: string, identity: { ownerId: string; tenantId?: string }, minimumVersion?: number): Promise<void> | void;
   };
+  /** One owner-safe resolver shared by task.respond() and the mounted Task API. */
+  resultResolver?(result: TaskResult, context: { ownerId: string; tenantId: string; request?: Request }): Promise<unknown> | unknown;
 }
 
 export interface RhinoQAppHTTPOptions {
@@ -117,6 +120,7 @@ export class RhinoQPortableApp {
     readonly artifacts?: ArtifactUploadService,
     readonly artifactRetention?: ArtifactRetentionService,
     private readonly realtime?: CreateRhinoQAppOptions['realtime'],
+    private readonly resultResolver?: CreateRhinoQAppOptions['resultResolver'],
     readonly role: NonNullable<CreateRhinoQAppOptions['role']> = 'all',
   ) {}
 
@@ -129,6 +133,15 @@ export class RhinoQPortableApp {
       steps: this.tasks,
       ...(this.effectClient ? { effects: this.effectClient } : {}),
       cancellation: { client: this.tasks },
+      runClient: (identity: { ownerId: string; tenantId: string }) => ({
+        getTask: (taskId: string) => this.tasks.getTaskForOwner(taskId, identity.ownerId, identity.tenantId),
+        getTaskSummary: (taskId: string) => this.tasks.getTaskSummaryForOwner(taskId, identity.ownerId, identity.tenantId),
+        listTaskExecutions: (taskId: string, cursor?: string, limit?: number) => this.tasks.listTaskExecutionsForOwner(taskId, identity.ownerId, cursor, limit, identity.tenantId),
+        getTaskResult: async (taskId: string) => this.resultResolver
+          ? this.resultResolver(await this.tasks.getTaskResultForOwner(taskId, identity.ownerId, identity.tenantId), identity)
+          : undefined,
+        cancelTask: async () => { throw new TypeError('TaskRunHandle cancellation requires application-owned runtime cancellation policy'); },
+      }),
       ...(this.workerId ? { workerId: this.workerId } : {}),
       ...(this.resourcePool ? { resources: { client: this.tasks, pool: this.resourcePool } } : {}),
       ...((this.artifactProvider?.storage ?? this.artifactStorage) ? { artifacts: {
@@ -163,7 +176,9 @@ export class RhinoQPortableApp {
       // needs an application composition that selects refs and handles every
       // outcome. Without that hook the honest product capability is false.
       cancel: Boolean(options.cancelTask),
-      ...(options.resolveResult ? { resolveResult: options.resolveResult } : {}),
+      ...(options.resolveResult ? { resolveResult: options.resolveResult }
+        : this.resultResolver ? { resolveResult: (result: TaskResult, request: Request, ownerId: string, tenantId: string) => this.resultResolver!(result, { ownerId, tenantId, request }) }
+          : {}),
       ...(options.resolveArtifact ? { resolveArtifact: options.resolveArtifact }
         : this.artifactProvider ? { resolveArtifact: this.artifactProvider.resolve } : {}),
       ...(this.artifacts ? { uploads: this.artifacts } : {}),
@@ -296,7 +311,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
   await runtime.start();
   const uploads = artifactProvider?.direct ? new ArtifactUploadService(artifactProvider, new PostgresArtifactUploadSessionStore(options.pool), (taskId, request) => tasks.registerTaskArtifact(taskId, request), options.metrics, async (taskId, ownerId, tenantId) => { await tasks.getTaskForOwner(taskId, ownerId, tenantId); }) : undefined;
   const retention = artifactProvider?.direct?.delete ? new ArtifactRetentionService(artifactProvider, new PostgresArtifactRetentionStore(options.pool), undefined, options.metrics) : undefined;
-  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, options.effectClient, options.workerId, resourcePool, uploads, retention, options.realtime, role);
+  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, options.effectClient, options.workerId, resourcePool, uploads, retention, options.realtime, options.resultResolver, role);
 }
 
 /**

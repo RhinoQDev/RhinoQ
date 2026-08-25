@@ -28,6 +28,8 @@ execution platforms.
 | Producer backpressure | not native | admission control with reserved critical budget implemented; `route` and `sample` overflow modes pending |
 | Job getters/counts | status filters + pagination | queue filter, state filter, counts and bounded pagination implemented |
 | User-facing Task snapshot | application-specific | Snapshot v1 across Go/HTTP/Node with lifecycle, progress, native/external Execution binding, aggregate entity version and stale-write rejection |
+| Dispatch-to-HTTP golden path | application status/polling glue | declared Task `respond()` composes owner-scoped observation into 200/202/409; explicit idempotency and application-owned result resolution remain required |
+| Framework route glue | repeated Express/Nest/Fastify response adapters | deterministic identity, `task.route()`, shared result resolution and `sendRhinoQResponse()` compose existing Task authority |
 | Task result availability | application-specific | version-fenced storage reference is read separately from polling Snapshot; payload proxy and tenant authorization pending |
 | DLQ / Needs Attention | failed-job and operational views | one bounded inbox merges execution attention and live persistent Findings; resolved/suppressed Findings are excluded |
 | Reverse reconciliation | application-specific | bounded `scan` plus durable `Changed()` signals; stable `(changed_at, subject_id, sequence)` cursor; scheduled scans remain the missed-signal fallback |

@@ -56,6 +56,59 @@ test('Task declaration defaults to no retry and refuses undeclared external effe
   }), /explicit idempotency and confirmation policy/);
 });
 
+test('golden Task path dispatches once and returns an HTTP result without polling glue', async () => {
+  const dispatched = [];
+  const identities = [];
+  const task = defineRhinoQTask({
+    async dispatch(_adapter, command) {
+      dispatched.push(command);
+      return { id: command.task.id, type: command.task.type, ownerId: command.task.ownerId,
+        tenantId: command.task.tenantId, state: 'queued', entityVersion: 1, schemaVersion: 1,
+        progress: { completed: 0 }, hasResult: false, executions: [],
+        createdAt: '2026-08-25T00:00:00Z', updatedAt: '2026-08-25T00:00:00Z' };
+    },
+  }, {
+    name: 'report.export', adapter: 'manual', runtime: 'manual', scope: 'reports', run: async () => undefined,
+  }, {
+    runClient(identity) {
+      identities.push(identity);
+      return {
+        async getTask() { return { id: 'task-42', type: 'report.export', ownerId: identity.ownerId, tenantId: identity.tenantId, state: 'succeeded', entityVersion: 2, progress: { completed: 1, total: 1 }, executions: [], updatedAt: '2026-08-25T00:00:01Z' }; },
+        async getTaskResult() { return { downloadUrl: 'https://app.example.test/download/42' }; },
+        async cancelTask() { throw new Error('not called'); },
+      };
+    },
+  });
+  const response = await task.respond({
+    id: 'task-42', ownerId: 'owner-a', tenantId: 'tenant-a', idempotencyKey: 'report:42', payload: { reportId: '42' },
+  }, { waitUpToMs: 50, origin: 'https://app.example.test' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { taskId: 'task-42', state: 'succeeded', result: { downloadUrl: 'https://app.example.test/download/42' } });
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0].idempotencyKey, 'report:42');
+  assert.deepEqual(identities, [{ ownerId: 'owner-a', tenantId: 'tenant-a' }]);
+  await assert.rejects(() => task.dispatchRun({ id: 'unsafe', ownerId: 'owner-a', payload: {}, idempotencyKey: 'unsafe' }), /tenantId/);
+  await assert.rejects(() => task.dispatchRun({ id: 'unsafe', ownerId: 'owner-a', tenantId: 'tenant-a', payload: {} }), /idempotencyKey/);
+
+  const firstIdentity = task.identity({ ownerId: 'owner-a', tenantId: 'tenant-a', key: 'report:42' });
+  const replayIdentity = task.identity({ ownerId: 'owner-a', tenantId: 'tenant-a', key: 'report:42' });
+  const otherIdentity = task.identity({ ownerId: 'owner-a', tenantId: 'tenant-a', key: 'report:43' });
+  assert.deepEqual(firstIdentity, replayIdentity);
+  assert.notEqual(firstIdentity.id, otherIdentity.id);
+  assert.equal(firstIdentity.id.includes('report:42'), false);
+
+  const sent = { headers: {}, setHeader(name, value) { this.headers[name] = value; }, end(body) { this.body = body; } };
+  const route = task.route({
+    identity: (request) => ({ ownerId: request.ownerId, tenantId: request.tenantId, key: `report:${request.reportId}` }),
+    input: (request) => ({ reportId: request.reportId }),
+    waitUpToMs: 50,
+  });
+  await route({ ownerId: 'owner-a', tenantId: 'tenant-a', reportId: '44' }, sent);
+  assert.equal(sent.statusCode, 200);
+  assert.equal(JSON.parse(sent.body).state, 'succeeded');
+  assert.throws(() => task.route({ waitUpToMs: 50 }), /identity\(request\).*input\(request\)/);
+});
+
 test('realtime mutation notification is best-effort and cannot fail dispatch', async () => {
   const task = defineRhinoQTask({
     async dispatch(_adapter, command) {

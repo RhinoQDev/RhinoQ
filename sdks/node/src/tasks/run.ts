@@ -106,7 +106,8 @@ export class TaskRunHandle {
       return jsonResponse({ taskId: this.id, state: latest?.state ?? 'pending', url: this.url(options.origin) }, 202, this.url(options.origin));
     }
     if (snapshot.state === 'succeeded') {
-      return jsonResponse({ taskId: this.id, state: snapshot.state, result: await this.result() }, 200);
+      const result = await this.result();
+      return jsonResponse({ taskId: this.id, state: snapshot.state, ...(result === undefined ? {} : { result }) }, 200);
     }
     return jsonResponse({ taskId: this.id, state: snapshot.state, url: this.url(options.origin) }, 409, this.url(options.origin));
   }

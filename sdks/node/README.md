@@ -118,6 +118,47 @@ await app.tasks.exportReport.dispatch({
 });
 ```
 
+An HTTP action can dispatch and choose the immediate/async response in one
+call:
+
+```ts
+return app.tasks.exportReport.respond({
+  id: `report-${reportId}`,
+  ownerId: user.id,
+  tenantId: user.tenantId,
+  idempotencyKey: `report:${reportId}`,
+  payload: { reportId },
+}, { waitUpToMs: 1_500, origin: 'https://app.example.com' });
+```
+
+`respond()` uses the same Task projection and SSE/polling fallback as
+`TaskRunHandle`: `200` completed, `202 + Location` still running, `409`
+terminal failure. It requires an explicit idempotency key. Add
+`resultResolver(result, context)` to `createRhinoQApp()` when the `200`
+response should contain resolved result data; RhinoQ otherwise omits the result
+instead of exposing its private reference. Use `dispatchRun()` when application
+code needs the handle for `wait()`, `subscribe()` or an owner URL.
+
+For Node frameworks, `task.route()` also converts the Web Response:
+
+```ts
+server.post('/reports/:id/export', app.tasks.exportReport.route({
+  identity: req => ({
+    ownerId: req.user.id,
+    tenantId: req.user.tenantId,
+    key: `report:${req.params.id}`,
+  }),
+  input: req => ({ reportId: req.params.id }),
+  waitUpToMs: 1_500,
+}));
+```
+
+The same handler supports Express/Nest-style responses and Fastify replies.
+Use `sendRhinoQResponse(reply, response)` directly when an existing controller
+must keep its own shape. `task.identity()` creates deterministic namespaced IDs
+from the explicit business key. `started.worker()` is the compact alias for
+the existing declared-handler and graceful-shutdown bootstrap.
+
 The declaration produces typed dispatchers, worker handlers and a static plan.
 Retry defaults remain fail-closed; external effects need explicit application
 policy.

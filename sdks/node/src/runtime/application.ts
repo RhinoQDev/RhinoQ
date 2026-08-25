@@ -136,6 +136,8 @@ export interface RhinoQStartedApplication<Definitions extends BlueprintRecord> {
   workerHandler(): RhinoQApplicationWorkerHandler;
   /** Run one runtime worker until abort/SIGINT/SIGTERM, then close it within the deadline. */
   runWorker(options: RhinoQApplicationRunWorkerOptions): Promise<void>;
+  /** Compact golden-path alias for runWorker(); it uses the same declared-handler router. */
+  worker(options: RhinoQApplicationRunWorkerOptions): Promise<void>;
   mount(options: RhinoQAppHTTPOptions): RhinoQAppHTTPMiddleware;
   close(): Promise<void>;
 }
@@ -228,6 +230,7 @@ export function defineRhinoQApplication<Definitions extends BlueprintRecord>(
           workerHandlers: () => handlers,
           workerHandler: () => routeWorker,
           runWorker: (options) => runApplicationWorker(routeWorker, options),
+          worker: (options) => runApplicationWorker(routeWorker, options),
           mount: (mountOptions) => app.http(mountOptions),
           close: () => app.close(),
         };

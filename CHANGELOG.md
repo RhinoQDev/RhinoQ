@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Compressed the remaining Node integration glue. Declared Tasks now provide
+  deterministic `identity()` and framework-neutral `route()` helpers;
+  `sendRhinoQResponse()` targets Node/Express/Nest/Fastify replies. One
+  application `resultResolver` is shared by the golden response and mounted
+  owner API. Compiled applications expose `worker()` as the short alias for the
+  existing registered-handler graceful bootstrap.
+- `rhinoq add task` now emits route and worker factories, their smoke-test
+  assertions and a non-overwriting journey manifest. `doctor --journey`
+  validates that bounded static chain and reports identity/result decisions
+  that remain application-owned; it does not claim live runtime health.
+
+- Added the additive Task golden path: declared Tasks now expose
+  `dispatchRun()` and `respond()`. One call can dispatch durable work and return
+  `200`, `202 + Location`, or `409` through the existing Task observer, while
+  requiring explicit owner, tenant and idempotency identity. Portable app
+  composition scopes every observation by owner/tenant and only includes
+  result data through an application-owned `resultResolver`; private storage
+  references and runtime cancellation are never enabled implicitly.
+
 - Added additive atomic `EnqueueBatch` support to the native Go producer, with
   ordered IDs, per-item idempotency and no unsafe client-loop fallback. Node
   runtime adapters can expose `dispatchMany`; declared Task batches use that

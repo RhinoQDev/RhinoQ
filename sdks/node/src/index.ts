@@ -62,6 +62,7 @@ export * from './adopt/product-handoff.js';
 export * from './tasks/watch.js';
 export * from './tasks/store.js';
 export * from './tasks/run.js';
+export * from './tasks/node-response.js';
 export * from './tasks/react.js';
 export * from './tasks/react-components.js';
 export * from './tasks/waitpoint-store.js';

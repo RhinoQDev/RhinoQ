@@ -695,11 +695,21 @@ async function add(args: string[]): Promise<void> {
   const key = toTaskKey(normalized);
   const content = taskSliceTemplate(normalized, key);
   const testContent = taskSliceTestTemplate(normalized, relative(dirname(testPath), outputPath), key);
+  const journeyPath = resolve('.rhinoq', 'journeys', `${key}.json`);
+  const journey = `${JSON.stringify({
+    schemaVersion: 1, taskName: normalized, taskKey: key,
+    declaration: relative(resolve('.'), outputPath).replace(/\\/g, '/'),
+    test: relative(resolve('.'), testPath).replace(/\\/g, '/'),
+    routeFactory: `create${key.charAt(0).toUpperCase()}${key.slice(1)}Route`,
+    workerBootstrap: `run${key.charAt(0).toUpperCase()}${key.slice(1)}Worker`,
+    resultResolver: 'application_required', ownerIdentity: 'application_required',
+    tenantIdentity: 'application_required', businessKey: 'application_required',
+  }, null, 2)}\n`;
   console.log('RhinoQ Task slice');
   console.log(`  task name   ${normalized}`);
   console.log(`  task key    ${key}`);
   console.log(`  output      ${outputPath}`);
-  console.log('  includes    typed declaration, real progress calls, result metadata, worker handler and a smoke test');
+  console.log('  includes    typed declaration, HTTP route factory, worker bootstrap, result metadata and a smoke test');
   console.log(`  test        ${testPath}`);
   console.log('  UI handoff  /task-center (after the application mounts its HTTP surface)');
   console.log('  runtime     manual adapter placeholder; replace with the app-owned adapter before dispatch');
@@ -713,8 +723,11 @@ async function add(args: string[]): Promise<void> {
   if (!written) return;
   await mkdir(dirname(testPath), { recursive: true });
   await writeNew(testPath, testContent);
+  await mkdir(dirname(journeyPath), { recursive: true });
+  await writeNew(journeyPath, journey);
   console.log(`PASS generated ${outputPath}`);
   console.log(`PASS generated ${testPath}`);
+  console.log(`PASS generated ${journeyPath}`);
   console.log(`NEXT import { application } from './${relative(dirname(outputPath), outputPath).replace(/\\/g, '/').replace(/^\.\//, '')}' and call application.start({ pool, ... })`);
   console.log('NEXT replace the manual adapter with BullMQ/SQS/custom dispatch before calling dispatch().');
   console.log('NEXT run npx rhinoq doctor after the app owns DATABASE_URL and the Task schema.');
@@ -764,6 +777,17 @@ export const application = defineRhinoQApplication({
 export const manifest = application.manifest();
 export const plan = application.plan();
 export const taskCenterPath = '/task-center';
+
+// Framework-neutral route factory. The application must supply authenticated
+// owner/tenant identity, a stable business key and request input.
+export function create${key.charAt(0).toUpperCase()}${key.slice(1)}Route(started, options) {
+  return started.tasks.${key}.route(options);
+}
+
+// Uses the compiled handler registry and its existing graceful shutdown path.
+export function run${key.charAt(0).toUpperCase()}${key.slice(1)}Worker(started, options) {
+  return started.worker(options);
+}
 `;
 }
 
@@ -772,7 +796,7 @@ function taskSliceTestTemplate(name: string, importPath: string, key: string): s
   const specifier = modulePath.startsWith('.') ? modulePath : `./${modulePath}`;
   return `import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { manifest, plan, taskCenterPath } from '${specifier}';
+import { manifest, plan, taskCenterPath, create${key.charAt(0).toUpperCase()}${key.slice(1)}Route, run${key.charAt(0).toUpperCase()}${key.slice(1)}Worker } from '${specifier}';
 
 test(${JSON.stringify(`${name} is registered before runtime wiring`)}, () => {
   const entry = manifest.tasks.find((task) => task.key === ${JSON.stringify(key)});
@@ -780,6 +804,8 @@ test(${JSON.stringify(`${name} is registered before runtime wiring`)}, () => {
   assert.equal(plan.status, 'ready');
   assert.equal(plan.tasks.length, 1);
   assert.equal(taskCenterPath, '/task-center');
+  assert.equal(typeof create${key.charAt(0).toUpperCase()}${key.slice(1)}Route, 'function');
+  assert.equal(typeof run${key.charAt(0).toUpperCase()}${key.slice(1)}Worker, 'function');
 });
 `;
 }
@@ -1817,6 +1843,10 @@ async function gatewayRequest(path: string, init: RequestInit, allowMissing = fa
 // name because they answer the same question for different planes, so this one
 // says out loud what it did not look at: a PASS here is not a runtime PASS.
 async function doctor(args: string[] = []): Promise<void> {
+  if (args.includes('--journey')) {
+    await doctorJourney();
+    if (args.length === 1) return;
+  }
   const planFrom = compilerPlanPath(args);
   if (planFrom) {
     const current = await readCanonicalPlan(resolve(planFrom));
@@ -1869,6 +1899,45 @@ async function doctor(args: string[] = []): Promise<void> {
   else console.log('INFO REDIS_URL is absent; this is fine unless the app uses BullMQ.');
   console.log('NEXT create the visible failure fixture: npx rhinoq fixture failure');
   console.log('NEXT before a pilot, run the runtime checks too: rhinoq doctor --ci');
+}
+
+async function doctorJourney(): Promise<void> {
+  const directory = resolve('.rhinoq', 'journeys');
+  const names = (await readdir(directory).catch(() => [] as string[])).filter((name) => name.endsWith('.json')).sort();
+  if (names.length === 0) fail('no generated Task journey was found', 'Run: npx rhinoq add task domain.action --apply');
+  console.log('INFO journey scope: generated declaration, HTTP route factory, worker bootstrap, test and explicit policy boundaries.');
+  console.log('INFO this static check does not claim that a runtime worker or PostgreSQL is currently healthy.');
+  for (const name of names) {
+    const path = resolve(directory, name);
+    let journey: Record<string, unknown>;
+    try { journey = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; }
+    catch { fail(`invalid journey manifest ${path}`, 'Regenerate it with npx rhinoq add task <name> --apply'); }
+    if (journey.schemaVersion !== 1 || typeof journey.taskName !== 'string' || typeof journey.declaration !== 'string' || typeof journey.test !== 'string') {
+      fail(`unsupported journey contract ${path}`, 'Use a schemaVersion 1 generated Task journey');
+    }
+    const declarationPath = resolve(String(journey.declaration));
+    const testPath = resolve(String(journey.test));
+    const [source, testSource] = await Promise.all([
+      readFile(declarationPath, 'utf8').catch(() => ''),
+      readFile(testPath, 'utf8').catch(() => ''),
+    ]);
+    const routeFactory = String(journey.routeFactory ?? '');
+    const workerBootstrap = String(journey.workerBootstrap ?? '');
+    if (!source || !source.includes(routeFactory) || !source.includes('.route(options)')) {
+      fail(`${journey.taskName} is missing its generated HTTP route factory`, `Restore ${declarationPath} or regenerate into a new path`);
+    }
+    if (!source.includes(workerBootstrap) || !source.includes('.worker(options)')) {
+      fail(`${journey.taskName} is missing its declared worker bootstrap`, `Restore ${declarationPath} or regenerate into a new path`);
+    }
+    if (!source.includes('result:') || !testSource.includes('taskCenterPath')) {
+      fail(`${journey.taskName} is missing result metadata or its owner Task URL assertion`, `Restore the generated result/taskCenterPath contract in ${declarationPath} and ${testPath}`);
+    }
+    if (!testSource.includes(routeFactory) || !testSource.includes(workerBootstrap)) {
+      fail(`${journey.taskName} smoke test no longer covers route and worker exports`, `Restore ${testPath} or add equivalent assertions`);
+    }
+    console.log(`PASS ${journey.taskName}: declaration → dispatch route → declared worker → result metadata → owner Task URL are connected.`);
+    console.log(`WARN ${journey.taskName}: owner, tenant, business key and result resolver remain application-required.`);
+  }
 }
 
 async function doctorFix(): Promise<void> {

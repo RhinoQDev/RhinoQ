@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { RhinoQApp, createManualRuntimeAdapter, createRhinoQApp } from '../dist/index.js';
+import { RhinoQApp, RhinoQPortableApp, createManualRuntimeAdapter, createRhinoQApp } from '../dist/index.js';
 
 function createApp(options = {}) {
   const snapshot = {
@@ -207,6 +207,40 @@ test('createRhinoQApp gives a non-BullMQ adapter the same Task Center and Workbe
   assert.equal(reports[0].name, 'manual');
   assert.equal(reports[0].scope, 'reports');
   await app.close();
+});
+
+test('portable app golden response scopes reads and resolves private results', async () => {
+  const ownerReads = [];
+  const tasks = {
+    async getTaskForOwner(id, ownerId, tenantId) {
+      ownerReads.push({ id, ownerId, tenantId });
+      return { id, type: 'report.export', ownerId, tenantId, state: 'succeeded', entityVersion: 2,
+        progress: { completed: 1, total: 1 }, executions: [], updatedAt: '2026-08-25T00:00:01Z' };
+    },
+    async getTaskSummaryForOwner(id, ownerId, tenantId) { return this.getTaskForOwner(id, ownerId, tenantId); },
+    async listTaskExecutionsForOwner() { return { items: [] }; },
+    async getTaskResultForOwner(taskId, ownerId, tenantId) {
+      return { schemaVersion: 1, entityVersion: 2, taskId, reference: 'storage://private/report-42', ownerId, tenantId, updatedAt: '2026-08-25T00:00:01Z' };
+    },
+  };
+  const runtime = {
+    async dispatch(_adapter, command) {
+      return { id: command.task.id, type: command.task.type, ownerId: command.task.ownerId, tenantId: command.task.tenantId,
+        state: 'queued', entityVersion: 1, progress: { completed: 0 }, executions: [], updatedAt: '2026-08-25T00:00:00Z' };
+    },
+    async close() {},
+  };
+  const app = new RhinoQPortableApp(
+    tasks, runtime, {}, undefined, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, undefined,
+    async (result, identity) => ({ downloadUrl: `https://app.example.test/${identity.tenantId}/${result.taskId}` }),
+  );
+  const task = app.task({ name: 'report.export', adapter: 'manual', runtime: 'manual', scope: 'reports', run: async () => undefined });
+  const response = await task.respond({ id: 'task-42', ownerId: 'owner-a', tenantId: 'tenant-a', idempotencyKey: 'report:42', payload: {} }, { waitUpToMs: 50 });
+  const body = await response.json();
+  assert.equal(body.result.downloadUrl, 'https://app.example.test/tenant-a/task-42');
+  assert.equal(JSON.stringify(body).includes('storage://private'), false);
+  assert.deepEqual(ownerReads[0], { id: 'task-42', ownerId: 'owner-a', tenantId: 'tenant-a' });
 });
 
 test('portable app forwards tenant authorization and application-owned cancellation', async () => {

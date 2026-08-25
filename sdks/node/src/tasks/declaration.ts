@@ -22,6 +22,9 @@ import {
   type RhinoQResourcePoolOptions,
 } from './resource-lease.js';
 import type { ArtifactUploadService } from './artifact-upload.js';
+import { TaskRunHandle, type TaskRunHandleOptions, type TaskRunRespondOptions } from './run.js';
+import type { TaskBrowserClient } from './store.js';
+import { sendRhinoQResponse, type RhinoQNodeResponse } from './node-response.js';
 
 export interface RhinoQTaskRunContext {
   taskId: string;
@@ -120,6 +123,8 @@ export interface RhinoQTaskServices {
     pollIntervalMs?: number;
   };
   trace?: RhinoQTraceHooks;
+  /** Builds an owner-scoped observer/result client for the golden dispatch path. */
+  runClient?(identity: { ownerId: string; tenantId: string }): TaskBrowserClient;
   /** Read-only notification hook; realtime delivery must never change Task correctness. */
   onMutation?(mutation: RhinoQTaskMutation): Promise<void> | void;
 }
@@ -212,12 +217,50 @@ export interface RhinoQTaskDispatch<Input> {
   execution?: { delayMs?: number; priority?: number };
 }
 
+/** Golden-path dispatch keeps application identity and idempotency explicit. */
+export type RhinoQTaskRunDispatch<Input> = Omit<RhinoQTaskDispatch<Input>, 'tenantId' | 'idempotencyKey'> & {
+  tenantId: string;
+  idempotencyKey: string;
+};
+
+export interface RhinoQTaskIdentityInput {
+  ownerId: string;
+  tenantId: string;
+  /** Stable application-owned business identity; RhinoQ only hashes/namespaces it. */
+  key: string;
+}
+
+export interface RhinoQTaskIdentity {
+  ownerId: string;
+  tenantId: string;
+  id: string;
+  idempotencyKey: string;
+  executionId: string;
+}
+
+export interface RhinoQTaskRouteOptions<Input, Request> extends Omit<TaskRunRespondOptions, 'origin'> {
+  identity(request: Request): Promise<RhinoQTaskIdentityInput> | RhinoQTaskIdentityInput;
+  input(request: Request): Promise<Input> | Input;
+  origin?: string | ((request: Request) => Promise<string | undefined> | string | undefined);
+  handle?: TaskRunHandleOptions;
+}
+
+export type RhinoQTaskRouteHandler<Request> = (
+  request: Request,
+  response: RhinoQNodeResponse,
+  next?: (error?: unknown) => void,
+) => Promise<void>;
+
 export interface RhinoQDeclaredTask<Input, Output> {
   readonly name: string;
   readonly version: number;
   readonly retry: RhinoQTaskRetryPolicy;
   readonly effect?: RhinoQTaskEffectPolicy;
+  identity(input: RhinoQTaskIdentityInput): RhinoQTaskIdentity;
   dispatch(request: RhinoQTaskDispatch<Input>): Promise<TaskSnapshot>;
+  dispatchRun(request: RhinoQTaskRunDispatch<Input>, options?: TaskRunHandleOptions): Promise<TaskRunHandle>;
+  respond(request: RhinoQTaskRunDispatch<Input>, options: TaskRunRespondOptions & { handle?: TaskRunHandleOptions }): Promise<Response>;
+  route<Request = unknown>(options: RhinoQTaskRouteOptions<Input, Request>): RhinoQTaskRouteHandler<Request>;
   dispatchAfter(request: RhinoQTaskDispatch<Input>, delayMs: number): Promise<TaskSnapshot>;
   dispatchAt(request: RhinoQTaskDispatch<Input>, runAt: Date | string, now?: Date): Promise<TaskSnapshot>;
   dispatchBatch(request: RhinoQTaskBatchDispatch<Input>): Promise<TaskSnapshot>;
@@ -287,6 +330,7 @@ export function defineRhinoQTask<Input, Output>(
     version,
     retry,
     ...(options.effect ? { effect: { ...options.effect } } : {}),
+    identity(input) { return buildTaskIdentity(name, input); },
     dispatch(request) {
       const id = required(request?.id, 'Task id');
       const ownerId = required(request?.ownerId, 'Task ownerId');
@@ -336,6 +380,42 @@ export function defineRhinoQTask<Input, Output>(
         })).catch(() => undefined);
         return snapshot;
       });
+    },
+    async dispatchRun(request, handleOptions = {}) {
+      const ownerId = required(request?.ownerId, 'Task ownerId');
+      const tenantId = required(request?.tenantId, 'Task tenantId');
+      const idempotencyKey = required(request?.idempotencyKey, 'Task idempotencyKey');
+      if (!services.runClient) {
+        throw new TypeError('Task dispatchRun/respond requires createRhinoQApp() or an explicit owner-scoped runClient');
+      }
+      const snapshot = await declaration.dispatch({ ...request, ownerId, tenantId, idempotencyKey });
+      return new TaskRunHandle(services.runClient({ ownerId, tenantId }), snapshot.id, handleOptions);
+    },
+    async respond(request, responseOptions) {
+      const { handle, ...respondOptions } = responseOptions ?? {};
+      const run = await declaration.dispatchRun(request, handle);
+      return run.respond(respondOptions as TaskRunRespondOptions);
+    },
+    route(routeOptions) {
+      if (typeof routeOptions?.identity !== 'function' || typeof routeOptions?.input !== 'function') {
+        throw new TypeError('Task route requires explicit identity(request) and input(request) functions');
+      }
+      return async (request, response, next) => {
+        try {
+          const identity = declaration.identity(await routeOptions.identity(request));
+          const payload = await routeOptions.input(request);
+          const origin = typeof routeOptions.origin === 'function' ? await routeOptions.origin(request) : routeOptions.origin;
+          const result = await declaration.respond({ ...identity, payload }, {
+            waitUpToMs: routeOptions.waitUpToMs,
+            ...(origin ? { origin } : {}),
+            ...(routeOptions.handle ? { handle: routeOptions.handle } : {}),
+          });
+          await sendRhinoQResponse(response, result);
+        } catch (error) {
+          if (next) next(error);
+          else throw error;
+        }
+      };
     },
     dispatchAfter(request, delayMs) {
       validateExecution({ delayMs });
@@ -488,6 +568,16 @@ export function defineRhinoQTask<Input, Output>(
     resultMetadata(output) { return options.result?.(output); },
   };
   return Object.freeze(declaration);
+}
+
+function buildTaskIdentity(taskName: string, input: RhinoQTaskIdentityInput): RhinoQTaskIdentity {
+  const ownerId = required(input?.ownerId, 'Task ownerId');
+  const tenantId = required(input?.tenantId, 'Task tenantId');
+  const key = required(input?.key, 'Task business key');
+  if (key.length > 1_024) throw new RangeError('Task business key must be at most 1024 characters');
+  const digest = createHash('sha256').update(`${taskName}\0${tenantId}\0${ownerId}\0${key}`).digest('hex');
+  const id = `rq_${digest.slice(0, 40)}`;
+  return { ownerId, tenantId, id, idempotencyKey: `rq:${digest}`, executionId: `${id}:attempt:1` };
 }
 
 function waitpointHelper(services: RhinoQTaskServices, taskId: string): Pick<RhinoQTaskRunContext, 'waitForInput' | 'waitForApproval' | 'waitForWebhook'> {

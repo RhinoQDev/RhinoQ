@@ -155,6 +155,62 @@ await app.tasks.exportReport.dispatch({
 });
 ```
 
+For an HTTP action, the golden path also removes the status/polling branch:
+
+```ts
+return app.tasks.exportReport.respond({
+  id: `report-${reportId}`,
+  ownerId: user.id,
+  tenantId: user.tenantId,
+  idempotencyKey: `report:${reportId}`,
+  payload: { reportId },
+}, {
+  waitUpToMs: 1_500,
+  origin: 'https://app.example.com',
+});
+```
+
+It returns `200` when the Task finishes inside the request budget, `202` with
+`Location` when work continues, or `409` for a terminal failure. Timeout never
+cancels or fails the Task. Configure `createRhinoQApp({ resultResolver })` to
+turn a private stored result into owner-safe response data; without it, a
+successful response contains Task status but never exposes the storage
+reference. `idempotencyKey`, owner and tenant remain explicit application
+decisions.
+
+For Express, Nest or Fastify, remove the response-conversion glue too:
+
+```ts
+server.post('/reports/:id/export', app.tasks.exportReport.route({
+  identity: request => ({
+    ownerId: request.user.id,
+    tenantId: request.user.tenantId,
+    key: `report:${request.params.id}`,
+  }),
+  input: request => ({ reportId: request.params.id }),
+  waitUpToMs: 1_500,
+  origin: 'https://app.example.com',
+}));
+```
+
+`task.identity()` hashes and namespaces the application-owned business key; it
+does not invent one. The route uses `sendRhinoQResponse()` internally for Node,
+Express, Nest and Fastify replies. One application-level `resultResolver`
+serves both `task.respond()` and the mounted owner Task API. A compiled
+application starts its declared handler router with `started.worker(options)`;
+this is the existing graceful `runWorker` path under a shorter name.
+
+Generated slices include this wiring:
+
+```bash
+npx rhinoq add task report.export --apply
+npx rhinoq doctor --journey
+```
+
+The journey check verifies generated files only. It reports owner, tenant,
+business key and result resolution as application-required and does not claim
+that PostgreSQL or a live worker is healthy.
+
 RhinoQ owns Task lifecycle projection. Your application still owns
 authentication, tenant mapping, the handler, provider credentials and the
 definition of a correct business result.

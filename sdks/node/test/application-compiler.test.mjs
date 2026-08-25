@@ -135,7 +135,8 @@ test('application compiler binds every declaration to the started application', 
   const stop = new AbortController();
   let receivedHandler;
   let closed = 0;
-  const running = started.runWorker({
+  assert.equal(typeof started.worker, 'function');
+  const running = started.worker({
     signal: stop.signal, processSignals: false,
     create(handler) { receivedHandler = handler; return { async close() { closed += 1; } }; },
   });

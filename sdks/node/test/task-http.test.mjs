@@ -272,7 +272,12 @@ test('result download is capability-gated and owner-authorized', async () => {
       },
     },
     ownerFromRequest: () => 'owner-a',
-    resolveResult: async (result) => ({ url: `/downloads/${result.taskId}` }),
+    tenantFromRequest: () => 'tenant-a',
+    resolveResult: async (result, _request, ownerId, tenantId) => {
+      assert.equal(ownerId, 'owner-a');
+      assert.equal(tenantId, 'tenant-a');
+      return { url: `/downloads/${result.taskId}` };
+    },
   });
   const capabilities = await (await handler(new Request('http://app.test/tasks/_capabilities'))).json();
   assert.equal(capabilities.result, true);

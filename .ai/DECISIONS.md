@@ -1201,3 +1201,55 @@
   polling plus the existing dashboard; stored job and Task records remain
   readable.
 - **Owner:** Go Application/runtime + Node SDK + CLI DX
+
+## ADR-0053 — The golden Task response composes existing authority
+
+- **Status:** accepted
+- **Context:** applications repeatedly wrote the same dispatch, short wait,
+  `200`/`202`, polling URL and result-resolution glue even though RhinoQ already
+  owned each underlying capability. Asking adopters to assemble those pieces
+  delayed first value and created inconsistent timeout behavior.
+- **Decision:** every declared Task exposes additive `dispatchRun()` and
+  `respond()` methods. The golden request requires owner identity and a stable
+  idempotency key. Portable application composition builds an owner/tenant-
+  scoped observation client. A short wait produces `200` on success, `202` plus
+  an owner Task location while running, and `409` for terminal failure.
+  Application-owned `resultResolver` is the only path that adds result data.
+- **Boundary:** request-budget expiry never changes Task state. Raw storage
+  references are omitted, cancellation remains disabled without explicit
+  runtime policy, and no owner, tenant, idempotency or external-effect policy
+  is inferred. Task lifecycle, retry and completion remain authoritative in
+  the existing runtime/Application/PostgreSQL path.
+- **Consequences:** an HTTP action can expose durable async work in one call
+  without a second state machine, while lower-level dispatch and TaskRunHandle
+  APIs remain compatible.
+- **Rollback:** use `dispatch()` and construct `TaskRunHandle` directly; no
+  stored schema or runtime protocol changes.
+- **Owner:** Node SDK + product DX
+
+## ADR-0054 — Integration compression standardizes wiring, not business policy
+
+- **Status:** accepted
+- **Context:** after adding the golden Task response, adopters still repeated
+  framework response conversion, identity encoding, route assembly, result
+  resolution and worker registry bootstrap. Those copies add little business
+  value and can drift across endpoints.
+- **Decision:** declared Tasks expose deterministic `identity()` from an
+  application-supplied owner, tenant and business key, plus a `route()` factory
+  over the existing `respond()` path. `sendRhinoQResponse()` adapts the bounded
+  JSON response to Node/Express/Nest/Fastify structural reply APIs. One
+  application `resultResolver` serves golden responses and the owner Task API.
+  `started.worker()` aliases the existing declared-handler graceful worker.
+  Generated Task slices include route/worker exports and a static journey
+  manifest consumed by `doctor --journey`.
+- **Boundary:** helpers never derive authentication, tenant, business key,
+  external-effect policy or runtime cancellation. Identity hashing is
+  deterministic namespacing, not authorization. Journey doctor reads generated
+  files only and explicitly does not claim database/runtime health. Worker
+  execution still uses the existing runtime and Task state machine.
+- **Consequences:** common endpoints shrink to identity/input mapping and one
+  route registration, while every safety-sensitive decision stays visible and
+  testable.
+- **Rollback:** use `dispatch()`, `TaskRunHandle`, framework response methods and
+  `runWorker()` directly; no stored schema or runtime protocol changes.
+- **Owner:** Node SDK + CLI DX
