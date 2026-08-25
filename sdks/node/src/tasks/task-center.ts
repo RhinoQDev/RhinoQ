@@ -256,6 +256,41 @@ const TASK_CENTER_CSS = `
 button:focus-visible,a:focus-visible{outline:3px solid color-mix(in srgb,var(--rq-accent) 38%,transparent);outline-offset:2px}button:disabled{opacity:.55;cursor:not-allowed}
 @media(max-width:760px){[data-rhinoq-task-center]{padding:24px 12px 52px}.rhinoq-tools{grid-template-columns:1fr 1fr}.rhinoq-tools label:first-child{grid-column:1/-1}.rhinoq-task{grid-template-columns:1fr auto}.rhinoq-task>*{grid-column:1/-1}.rhinoq-task>.rhinoq-completion{grid-column:2;grid-row:1}.rhinoq-detail-summary{grid-template-columns:1fr}.rhinoq-detail-summary p{margin:0 0 8px}.rhinoq-shell{padding:11px 14px}}
 @media(max-width:480px){.rhinoq-tools{grid-template-columns:1fr}.rhinoq-tools label:first-child{grid-column:auto}.rhinoq-shell{align-items:flex-start;flex-direction:column}.rhinoq-shell nav{padding-left:0;border-left:0;overflow-x:auto;width:100%}}
+
+/* RhinoQ Workspace 2026: one deterministic, enterprise-light product shell. */
+:root{color-scheme:light;--rq-bg:#f6f8fb;--rq-panel:#fff;--rq-raised:#f9fafb;--rq-line:#e5e7eb;--rq-line-strong:#d1d5db;--rq-ink:#1f2937;--rq-muted:#6b7280;--rq-accent:#2563eb;--rq-accent-strong:#1d4ed8;--rq-accent-soft:#eff4fe;--rq-warn:#9a6700;--rq-warn-soft:#fff7ed;--rq-bad:#dc2626;--rq-bad-soft:#fef2f2;--rq-success:#16a34a;--rq-success-soft:#ecfdf3;--rq-shadow:0 12px 32px rgba(15,23,42,.10);--rq-font:"Noto Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
+body{background:var(--rq-bg);font-size:14px;line-height:1.55;letter-spacing:0}
+.rhinoq-shell{min-height:56px;padding:0 max(24px,calc((100vw - 1180px)/2));border-bottom:1px solid var(--rq-line);background:#fff;backdrop-filter:none;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.rhinoq-brand{display:flex;align-items:center;align-self:stretch;margin-left:calc(-1 * max(24px,calc((100vw - 1180px)/2)));padding:0 22px;background:#0b2544;color:#fff;font-size:14px;letter-spacing:.11em;text-transform:uppercase}
+.rhinoq-brand:hover{color:#fff;text-decoration:none}
+.rhinoq-shell nav{margin-left:14px;border:0;background:transparent}
+.rhinoq-shell nav [aria-current="page"]{background:var(--rq-accent-soft);box-shadow:inset 0 -2px 0 var(--rq-accent);color:var(--rq-accent-strong)}
+.rhinoq-shell nav a{color:var(--rq-muted)}
+[data-rhinoq-task-center]{max-width:1180px;padding:28px 24px 64px}
+.rhinoq-intro{margin-bottom:18px;padding:0 0 20px;border:0;border-bottom:1px solid var(--rq-line);border-radius:0;background:transparent;box-shadow:none}
+.rhinoq-intro>p{margin-bottom:5px;color:var(--rq-accent);font:700 11px/1.4 var(--rq-mono);letter-spacing:.08em}
+.rhinoq-intro h1{font-size:28px;line-height:1.2;letter-spacing:-.025em}
+.rhinoq-intro>span{margin-top:7px;color:var(--rq-muted);font-size:14px}
+.rhinoq-tools{margin-bottom:14px;padding:12px;border-radius:8px;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.rhinoq-tools input,.rhinoq-tools select,.rhinoq-tools button{min-height:38px;border-radius:6px;background:#fff}
+.rhinoq-tools button{border-color:var(--rq-accent);background:var(--rq-accent);color:#fff}
+.rhinoq-tools button:hover{background:var(--rq-accent-strong)}
+.rhinoq-task-list{gap:8px}
+.rhinoq-task{padding:16px 17px 16px 20px;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.04);transition:border-color .12s ease,box-shadow .12s ease}
+.rhinoq-task:before{inset:10px auto 10px 0;width:3px;background:var(--rq-accent)}
+.rhinoq-task:hover{transform:none;border-color:#bfd0ea;box-shadow:0 4px 12px rgba(15,23,42,.08)}
+.rhinoq-task>strong{font-size:15px;letter-spacing:-.01em}
+.rhinoq-explanation{border-color:#dce7fd;border-radius:6px;background:var(--rq-accent-soft)}
+.rhinoq-completion{border-radius:999px;font-size:10px}
+.rhinoq-completion.is-finished{border-color:#bbf7d0;background:var(--rq-success-soft);color:#15803d}
+.rhinoq-completion.is-pending{border-color:#fed7aa;background:var(--rq-warn-soft)}
+.rhinoq-completion.is-ended{border-color:#fecaca;background:var(--rq-bad-soft);color:#b91c1c}
+.rhinoq-task button,.rhinoq-attempts>button{border-radius:6px;background:#fff}
+.rhinoq-open{border-radius:6px;color:var(--rq-accent-strong)}
+.rhinoq-detail-head h1{font-size:28px;letter-spacing:-.025em}
+.rhinoq-detail-summary,.rhinoq-attempts,.rhinoq-waitpoints,.rhinoq-artifacts{border-radius:8px;box-shadow:0 1px 3px rgba(15,23,42,.04)}
+.rhinoq-artifact-card{border-radius:6px;box-shadow:none}
+@media(max-width:760px){.rhinoq-brand{margin-left:-14px}.rhinoq-shell{padding:0 14px}.rhinoq-shell nav{margin-left:0}[data-rhinoq-task-center]{padding:22px 14px 48px}}
 `;
 
 function taskCenterNavigation(options: TaskCenterPageOptions, title: string): string {

@@ -160,6 +160,39 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   button:focus-visible,a:focus-visible,[data-id]:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 38%,transparent);outline-offset:2px}
   @media(max-width:980px){.buckets{grid-template-columns:repeat(4,1fr)}}
   @media(max-width:700px){body>header{padding:11px 14px}.workspace-intro{align-items:start;flex-direction:column}.buckets{display:flex;overflow-x:auto;flex-wrap:nowrap;padding-bottom:4px}.bucket{min-width:116px}main{padding:20px 12px 48px}.head{align-items:flex-start;flex-wrap:wrap}.runtime-grid{grid-template-columns:1fr}}
+  /* RhinoQ Workspace 2026 — Axis-inspired operator surface. The DOM and
+     evidence contracts stay unchanged; this layer only changes presentation. */
+  :root{color-scheme:light;--bg:#f6f8fb;--panel:#fff;--raised:#f9fafb;--line:#e5e7eb;--line-strong:#d1d5db;--ink:#1f2937;--muted:#6b7280;--accent:#2563eb;--accent-strong:#1d4ed8;--accent-soft:#eff4fe;--warn:#9a6700;--warn-soft:#fff7ed;--bad:#dc2626;--bad-soft:#fef2f2;--success:#16a34a;--success-soft:#ecfdf3;--shadow:0 12px 32px rgba(15,23,42,.10);--ui:"Noto Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
+  body{background:var(--bg);font-size:14px;line-height:1.55;letter-spacing:0}
+  body>header{min-height:56px;padding:0 max(24px,calc((100vw - 1240px)/2));border-bottom:1px solid var(--line);background:#fff;backdrop-filter:none;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  body>header h1{display:flex;align-items:center;align-self:stretch;margin-left:calc(-1 * max(24px,calc((100vw - 1240px)/2)));padding:0 22px;background:#0b2544}
+  body>header h1 a{color:#fff;font-size:14px;letter-spacing:.11em;text-transform:uppercase}
+  body>header nav{margin-left:2px;border:0;background:transparent}
+  body>header nav strong{border-radius:6px;background:var(--accent-soft);box-shadow:inset 0 -2px 0 var(--accent);color:var(--accent-strong)}
+  body>header nav a{color:var(--muted)}
+  body>header nav a:hover{background:var(--raised)}
+  main{padding:28px 24px 64px;gap:14px}
+  .workspace-intro{align-items:center;padding:0 0 20px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none}
+  .workspace-intro .eyebrow{margin-bottom:5px;color:var(--accent);letter-spacing:.08em}
+  .workspace-intro h2{font-size:28px;letter-spacing:-.025em}
+  .workspace-intro p:last-child{margin-top:7px;font-size:14px}
+  .panel{border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+  .head{min-height:46px;padding:11px 14px;border-color:var(--line);background:var(--raised)}
+  .buckets{gap:8px}
+  .bucket{padding:12px 13px;border-radius:6px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.03)}
+  .bucket:hover{transform:none;border-color:#bfd0ea;box-shadow:0 3px 8px rgba(15,23,42,.06)}
+  .bucket[aria-pressed="true"]{border-color:#b9cdf0;background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+  .bucket b{font-size:22px;color:var(--ink)}
+  .runtime-card{border-radius:6px;background:var(--raised);box-shadow:none}
+  th{background:var(--raised);color:var(--muted)}
+  th,td{padding:10px 13px;border-color:var(--line)}
+  tbody tr[data-id]:hover{background:var(--accent-soft)}
+  code{background:#f3f4f6}
+  .guidance{border-color:#dce7fd;border-radius:6px;background:var(--accent-soft)}
+  .attention{background:var(--warn-soft)}.attention.error{background:var(--bad-soft)}
+  button.act{border-radius:6px;background:#fff}
+  .live[data-state="live"] .dot{background:var(--success)}
+  @media(max-width:700px){body>header{padding:0 14px}body>header h1{margin-left:-14px}.workspace-intro{padding-bottom:16px}}
 </style>
 </head>
 <body>

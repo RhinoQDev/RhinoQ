@@ -2,12 +2,15 @@
 
 Documentation: **English** · [Tiếng Việt](./docs/vi/README.md)
 
-RhinoQ turns a background job into a durable, user-visible Task.
+**Turn background jobs into Tasks your users can follow and your team can
+operate safely.**
 
-Use RhinoQ's native PostgreSQL queue, or keep an existing BullMQ runtime. Your
-Node.js, NestJS or Go application gets durable Task state, progress, retry
-history, cancellation, results, an owner-scoped Task API, realtime SSE with a
-polling fallback, a user Task Center and an operator Workbench.
+RhinoQ adds durable status, progress, history, cancellation, results and a
+user-facing Task Center around asynchronous work. Operators get a Workbench
+that explains what ran, what failed and what still needs confirmation.
+
+Keep an existing BullMQ runtime, use RhinoQ's native PostgreSQL queue, or
+connect another runtime through the Node adapter contract.
 
 [![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
 [![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
@@ -23,56 +26,121 @@ polling fallback, a user Task Center and an operator Workbench.
 
 Latest verified public prerelease: `v0.1.0-beta.22`.
 
-## See it before installing anything
+## The problem RhinoQ solves
+
+A user starts an export, import, media conversion or provider operation. The
+HTTP request ends, but the real work continues somewhere else.
+
+Without a Task layer, the application team usually has to build and maintain:
+
+- a status table and polling endpoints;
+- progress, retry and cancellation behavior;
+- result access and authorization;
+- a user-facing history page;
+- operator tooling for failures and stuck work;
+- rules for deciding whether a timed-out external operation is safe to repeat.
+
+RhinoQ provides that product and operations layer without requiring every team
+to replace its existing worker runtime.
+
+| Before RhinoQ | With RhinoQ |
+|---|---|
+| A queue job is an internal implementation detail | A durable Task has an owner, progress, history and result metadata |
+| Users refresh, ask support or start the work again | Users follow work in the Task Center through SSE with polling fallback |
+| Support correlates logs and queue records manually | Workbench joins Task, execution stages and available evidence |
+| A request timeout is easily mistaken for a failed operation | Unknown external results become `uncertain` and are not retried blindly |
+| Adopting a product layer means replacing the queue | BullMQ can stay in place; PostgreSQL and custom runtimes are also supported |
+
+## See the product in 30 seconds
 
 ```bash
 npx rhinoq dev --demo
 ```
 
 This opens a disposable Workbench with synthetic running, completed and failed
-Tasks. It needs no database, Redis or provider credential.
+Tasks. It needs no database, Redis or provider credentials and writes no
+integration into your application.
+
+The user-facing Task Center turns background activity into a clear product
+experience: progress, results and work that still needs confirmation.
+
+![RhinoQ Task Center showing running, completed, and confirmation-needed Tasks](./marketing/rhinoq-task-center.png)
+
+Operators use the Workbench to investigate the same durable work through
+execution stages and available evidence.
 
 ![RhinoQ Workbench showing Tasks, execution stages, and evidence detail](./marketing/rhinoq-workbench-quiet-operations.png)
 
-Use `npx rhinoq up` when you want the real local PostgreSQL-backed profile.
+When you want a real PostgreSQL-backed local evaluation, preview it and start
+it with:
 
-## Choose one path
+```bash
+npx rhinoq up --dry-run
+npx rhinoq up
+```
 
-Do not combine these paths on the first run.
+Continue with the [five-minute local quickstart](./docs/quickstart.md) for
+requirements, expected checks and cleanup.
 
-| Your situation | Start here |
-|---|---|
-| I only want to see RhinoQ | `npx rhinoq dev --demo` |
-| I want a real local PostgreSQL evaluation | `npx rhinoq up --dry-run`, then `npx rhinoq up` |
-| I have an existing Node.js or NestJS app | `npx rhinoq setup` |
-| I already use BullMQ | [Keep BullMQ](#keep-an-existing-bullmq-worker) |
-| I want PostgreSQL to execute jobs | [Native PostgreSQL queue](./docs/postgres-queue.md) |
-| I use another queue | [Portable runtime adapter](./examples/manual-runtime/README.md) |
-| I only need business verification | [Integrity-only example](./examples/integrity-only/README.md) |
+## Why RhinoQ is different
 
-If you are unsure, use `setup`. It previews the integration and writes
-nothing until you add `--apply`.
+### One Task experience for users and operators
 
-## Add RhinoQ to an existing application
+The same durable Task state powers three surfaces:
 
-### 1. Install
+| Surface | Default path | Audience |
+|---|---|---|
+| Task API | `/tasks` | authenticated application users |
+| Task Center | `/task-center` | authenticated application users |
+| Workbench | `/admin` | authorized operators |
+
+Users see plain-language progress and results. Operators see execution history,
+attention states and available evidence without treating UI text or logs as the
+source of truth.
+
+Authentication remains application-owned. Never expose Workbench without an
+operator authorization boundary.
+
+### Technical completion is not business correctness
+
+A worker returning successfully does not prove that a file exists, a payment
+settled or a provider accepted the intended change. RhinoQ can keep execution,
+external-effect confirmation and business verification as separate evidence.
+
+If the external result is unknown, RhinoQ fails closed to `uncertain`. It does
+not turn a timeout into success and does not blindly repeat a possibly completed
+operation.
+
+### Keep the runtime that already works
+
+RhinoQ is a Task platform, not a demand to rewrite your queue:
+
+- keep an existing BullMQ worker and Redis deployment;
+- use PostgreSQL as RhinoQ's native queue;
+- connect another queue through the portable runtime adapter;
+- use only business verification when execution already lives elsewhere.
+
+The Go engine and PostgreSQL own authoritative queue, lease, retry, fencing and
+Effect Ledger correctness. Node.js/TypeScript provides the developer-facing
+producer, composition and worker-lifecycle SDK.
+
+## Add RhinoQ to a Node.js or NestJS application
+
+Node.js 22 and 24 and PostgreSQL 16 are tested.
+
+### 1. Install and preview
 
 ```bash
 npm install @rhinoq/node@next pg
-```
-
-Node.js 22 and 24 are tested. PostgreSQL 16 is the tested database version.
-
-### 2. Preview the integration
-
-```bash
 npx rhinoq setup
 ```
 
-The preview detects the application shape and prints what RhinoQ can connect.
-It does not overwrite application files.
+`setup` detects the application shape and prints the exact next command. The
+preview does not overwrite application files and writes nothing until you add
+`--apply`.
 
-For a safety inventory before changing runtime ownership:
+If you are adopting existing asynchronous code, create a read-only safety
+inventory first:
 
 ```bash
 npx rhinoq adopt --plan --out .rhinoq/adoption-plan.json
@@ -82,9 +150,9 @@ The plan finds handlers, producers, retry timers, cancellation boundaries and
 possible external effects. It does not invent owner identity, idempotency keys,
 provider confirmation or business rules.
 
-### 3. Apply the reviewed setup
+### 2. Apply the reviewed setup
 
-Rerun the exact `NEXT` command printed by the preview. For example:
+Run the exact `NEXT` command printed by the preview. For example:
 
 ```bash
 npx rhinoq setup --runtime bullmq --mode single --apply
@@ -92,35 +160,30 @@ npx rhinoq setup --runtime bullmq --mode single --apply
 npx rhinoq doctor
 ```
 
-RhinoQ does not choose `single` or `fanout` for BullMQ because that is Task
-business structure, not package detection.
-
 Generated files are non-overwriting. Review and commit the resulting diff.
+RhinoQ requires an explicit `single` or `fanout` mode for BullMQ because that
+choice defines Task aggregation semantics, not package configuration.
 
-### 4. Add one Task
+### 3. Add one Task
 
 ```bash
 npx rhinoq add task report.export
 npx rhinoq add task report.export --apply
 ```
 
-The first command previews. The second creates a handler shell and a smoke
-test. Replace the generated handler body with your business work.
+The first command previews the slice. The second creates a handler shell and a
+smoke test. Replace the generated handler body with your business work, then
+run:
 
-### 5. Verify the user and operator surfaces
+```bash
+npx rhinoq doctor --journey
+```
 
-The standard mount exposes:
+The journey check verifies generated files only. It reports owner, tenant,
+business key and result resolution as application-required; it does not claim
+that PostgreSQL or a live worker is healthy.
 
-| Surface | Default path | Who uses it |
-|---|---|---|
-| Task API | `/tasks` | authenticated application users |
-| Task Center | `/task-center` | authenticated application users |
-| Workbench | `/admin` | authorized operators |
-
-Authentication is application-owned. Never expose Workbench without an
-operator authorization boundary.
-
-## Minimal Node composition
+## A minimal declared Task
 
 ```ts
 import { defineRhinoQApplication } from '@rhinoq/node';
@@ -155,7 +218,18 @@ await app.tasks.exportReport.dispatch({
 });
 ```
 
-For an HTTP action, the golden path also removes the status/polling branch:
+This declaration supplies Task identity, progress, result metadata and the
+mounted user/operator surfaces. Your application still owns authentication,
+tenant mapping, payload validation, the handler, provider credentials and the
+definition of a correct business result.
+
+See the [Node SDK guide](./sdks/node/README.md) for runtime-specific composition
+and imports.
+
+## Return now or continue as a Task
+
+For an HTTP action, `respond()` removes the usual synchronous-result versus
+polling branch:
 
 ```ts
 return app.tasks.exportReport.respond({
@@ -170,15 +244,16 @@ return app.tasks.exportReport.respond({
 });
 ```
 
-It returns `200` when the Task finishes inside the request budget, `202` with
-`Location` when work continues, or `409` for a terminal failure. Timeout never
-cancels or fails the Task. Configure `createRhinoQApp({ resultResolver })` to
-turn a private stored result into owner-safe response data; without it, a
-successful response contains Task status but never exposes the storage
-reference. `idempotencyKey`, owner and tenant remain explicit application
-decisions.
+It returns `200` if the Task finishes inside the request budget, `202` with
+`Location` if work continues, or `409` for a terminal failure. Expiry never
+cancels or fails the Task.
 
-For Express, Nest or Fastify, remove the response-conversion glue too:
+Configure `createRhinoQApp({ resultResolver })` to convert a private stored
+result into owner-safe response data. Without it, a successful response exposes
+Task status but never the storage reference. Owner, tenant and idempotency keys
+remain explicit application decisions.
+
+Express, Nest and Fastify applications can use the route composition:
 
 ```ts
 server.post('/reports/:id/export', app.tasks.exportReport.route({
@@ -194,43 +269,19 @@ server.post('/reports/:id/export', app.tasks.exportReport.route({
 ```
 
 `task.identity()` hashes and namespaces the application-owned business key; it
-does not invent one. The route uses `sendRhinoQResponse()` internally for Node,
-Express, Nest and Fastify replies. One application-level `resultResolver`
-serves both `task.respond()` and the mounted owner Task API. A compiled
-application starts its declared handler router with `started.worker(options)`;
-this is the existing graceful `runWorker` path under a shorter name.
-
-Generated slices include this wiring:
-
-```bash
-npx rhinoq add task report.export --apply
-npx rhinoq doctor --journey
-```
-
-The journey check verifies generated files only. It reports owner, tenant,
-business key and result resolution as application-required and does not claim
-that PostgreSQL or a live worker is healthy.
-
-RhinoQ owns Task lifecycle projection. Your application still owns
-authentication, tenant mapping, the handler, provider credentials and the
-definition of a correct business result.
-
-See the [Node SDK guide](./sdks/node/README.md) for imports and runtime-specific
-composition.
+does not invent one. A compiled application starts its declared handler router
+with `started.worker(options)`, the shorter form of the graceful `runWorker`
+path.
 
 ## Keep an existing BullMQ worker
 
-RhinoQ does not replace Redis or your worker. Choose the Task aggregation
-semantics explicitly:
+RhinoQ does not replace Redis or your worker. Preview and apply one explicit
+aggregation mode:
 
 ```bash
 npx rhinoq connect --mode single
 npx rhinoq connect --mode single --apply
 ```
-
-`connect` is the friendly runtime-preserving preview and delegates to the same
-`adopt` implementation. The lower-level `adopt --mode ...` form is equivalent;
-use one spelling consistently.
 
 Use `single` when one BullMQ job is one Task. Use `fanout` when one Task owns
 multiple BullMQ jobs. RhinoQ refuses to guess because the wrong mode can close
@@ -245,10 +296,12 @@ const app = await rhinoq({
   pool,
   queue,
   events,
-  ownerFromRequest: (request) => authenticatedUser(request).id,
+  ownerFromRequest: request => authenticatedUser(request).id,
 });
 
-server.use(app.http({ operatorToken: process.env.RHINOQ_OPERATOR_TOKEN }));
+server.use(app.http({
+  operatorToken: process.env.RHINOQ_OPERATOR_TOKEN,
+}));
 ```
 
 Continue with the [BullMQ example](./examples/fanout-bullmq/README.md).
@@ -275,41 +328,9 @@ For the native Go queue, inspect one lane without opening a browser:
 rhinoq queue health media --json
 ```
 
-The snapshot is one bounded PostgreSQL read. Native workers also use
-post-commit queue-name notifications to wake early, while polling remains the
-correctness fallback.
+The snapshot is one bounded PostgreSQL read.
 
-## Less producer boilerplate
-
-Native Go producers can commit a group atomically. IDs preserve input order and
-idempotent replays return the original IDs:
-
-```go
-ids, err := client.EnqueueBatch(ctx, []rhinoq.JobRequest{
-    {QueueName: "media", JobName: "probe", IdempotencyKey: uploadID + ":probe", Payload: probeJSON},
-    {QueueName: "media", JobName: "thumbnail", IdempotencyKey: uploadID + ":thumb", Payload: thumbJSON},
-})
-```
-
-Node runtime adapters may expose `dispatchMany` for one provider round trip;
-`task.dispatchBatch()` uses it automatically and keeps the ordered compatibility
-path for existing adapters. Separate deployments can set
-`createRhinoQApp({ role: 'producer' | 'worker' | 'api' | 'operator' | 'all' })`;
-producer/API/operator roles do not open unsolicited runtime-event subscriptions.
-For request/response routes, `new TaskRunHandle(client, taskId).respond({
-waitUpToMs: 1500 })` returns a completed result when it is ready, or `202` plus
-an owner Task URL when it is still running; expiry never cancels the Task.
-
-## When not to use RhinoQ
-
-Do not add RhinoQ merely to run a tiny in-process callback. It is a poor fit if
-you cannot operate PostgreSQL, require a Redis-only sub-millisecond queue path,
-need a general DAG/workflow language, or do not need durable user-visible
-progress, results, recovery or business verification. Keep the simpler system
-until the cost of lost, duplicated, opaque or unverified background work is the
-larger problem.
-
-## What RhinoQ handles
+## What RhinoQ owns—and what it does not
 
 | RhinoQ handles | Your application still handles |
 |---|---|
@@ -320,8 +341,8 @@ larger problem.
 | reconciliation and attention states | idempotency and confirmation policy |
 | optional verification and guarded recovery | definition of business correctness |
 
-RhinoQ separates technical completion from business correctness. An external
-operation with an unknown result becomes `uncertain`; it is not retried blindly.
+RhinoQ does not infer business identity or correctness. Those decisions remain
+explicit at the application boundary.
 
 ## Add capabilities only when needed
 
@@ -339,9 +360,25 @@ The first integration does not require every RhinoQ feature.
 | adopt without runtime cutover | [Native adoption](./docs/native-adoption.md) |
 | terminal operations | [Terminal operations](./docs/terminal-operations.md) |
 
-## Production checklist
+Other supported starting points:
 
-Before a controlled pilot:
+- [Native PostgreSQL queue](./docs/postgres-queue.md)
+- [Portable runtime adapter](./examples/manual-runtime/README.md)
+- [Integrity-only verification](./examples/integrity-only/README.md)
+- [Realistic report-export workflow](./examples/report-export/README.md)
+
+## When not to use RhinoQ
+
+Do not add RhinoQ merely to run a tiny in-process callback. Keep the simpler
+system if you do not need durable user-visible progress, results, recovery or
+business verification.
+
+RhinoQ is also a poor fit if you cannot operate PostgreSQL, require a Redis-only
+sub-millisecond queue path, or need a general DAG/workflow language. Adopt it
+when lost, duplicated, opaque or unverified background work has become the more
+expensive problem.
+
+## Before a controlled pilot
 
 1. Pin the exact release instead of `@next`.
 2. Run `npx rhinoq doctor` against the deployment database.
@@ -351,13 +388,12 @@ Before a controlled pilot:
 6. Configure retention, health checks, metrics and notification delivery.
 7. Review [known limits](./docs/production-readiness.md).
 
-The authoritative queue, lease, retry, fencing and Effect Ledger logic remains
-in Go/Application/PostgreSQL. Node.js is the developer-facing producer,
-composition and worker-lifecycle SDK.
+RhinoQ makes no throughput, latency, reliability or production-SLA claim
+without the matching reproducible evidence.
 
 ## Documentation
 
-Start with only the page that matches your next action:
+Start with the page matching your next action:
 
 - [Five-minute real local quickstart](./docs/quickstart.md)
 - [Existing application guide](./docs/start-here.md)
@@ -372,8 +408,8 @@ Start with only the page that matches your next action:
 
 ## Contributing and support
 
-- Use [GitHub Discussions](https://github.com/madebyduy/RhinoQ/discussions)
-  for integration questions.
+- Use [GitHub Discussions](https://github.com/madebyduy/RhinoQ/discussions) for
+  integration questions.
 - Use [GitHub Issues](https://github.com/madebyduy/RhinoQ/issues) for
   reproducible bugs.
 - Read [CONTRIBUTING.md](./CONTRIBUTING.md) before sending a change.
