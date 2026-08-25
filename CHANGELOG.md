@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.1.0-beta.26
+
+- Moved the signed container publish and attestation subject to the transferred
+  organization namespace `ghcr.io/rhinoqdev/rhinoq`.
+
 ## 0.1.0-beta.25
 
 - Aligned both npm package repository, homepage and issue metadata with

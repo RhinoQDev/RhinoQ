@@ -253,12 +253,12 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/madebyduy/rhinoq:${{ github.ref_name }}
+          tags: ghcr.io/rhinoqdev/rhinoq:${{ github.ref_name }}
           build-args: VERSION=${{ github.ref_name }}
           sbom: true
           provenance: mode=max
       - uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ghcr.io/madebyduy/rhinoq
+          subject-name: ghcr.io/rhinoqdev/rhinoq
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true

@@ -24,7 +24,7 @@ connect another runtime through the Node.js and NestJS adapter contract.
 > claim a production SLA. Read [production readiness](./docs/production-readiness.md)
 > before using it for real workloads.
 
-Latest verified public prerelease: `v0.1.0-beta.25`.
+Latest verified public prerelease: `v0.1.0-beta.26`.
 
 ## The problem RhinoQ solves
 

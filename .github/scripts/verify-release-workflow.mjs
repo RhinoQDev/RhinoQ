@@ -20,6 +20,7 @@ const requireJob = (name) => {
 
 const nodePublish = requireJob('node-publish');
 const aliasPublish = requireJob('node-publish-alias');
+const containerPublish = requireJob('container');
 
 for (const [name, job] of [
   ['node-publish', nodePublish],
@@ -34,6 +35,14 @@ for (const [name, job] of [
   if (!job.includes('npm publish --access public --tag "$tag"')) {
     throw new Error(`${name} must publish through the OIDC path`);
   }
+}
+
+const expectedContainer = 'ghcr.io/rhinoqdev/rhinoq';
+if (!containerPublish.includes(`tags: ${expectedContainer}:`)) {
+  throw new Error(`container must publish to ${expectedContainer}`);
+}
+if (!containerPublish.includes(`subject-name: ${expectedContainer}`)) {
+  throw new Error(`container attestation subject must be ${expectedContainer}`);
 }
 
 console.log('PASS release workflow npm authentication contract');
