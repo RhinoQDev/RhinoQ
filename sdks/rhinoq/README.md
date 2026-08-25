@@ -4,9 +4,9 @@
 [Canonical `@rhinoq/node` package](https://www.npmjs.com/package/@rhinoq/node) ·
 [GitHub repository](https://github.com/madebyduy/RhinoQ)
 
-> Add a durable, user-facing Task experience around the workers you already run.
-> Keep BullMQ or choose PostgreSQL; get progress, results, cancellation, retry
-> history, realtime updates and safe recovery in one product surface.
+> **Turn background jobs into Tasks your users can follow and your team can
+> operate safely.** Keep BullMQ or choose PostgreSQL; get progress, results,
+> cancellation, retry history and safe recovery in one product surface.
 
 RhinoQ adds durable Task state, progress, retry history, cancellation, realtime
 SSE, an embeddable React UI, a user Task Center and safe recovery around work
@@ -17,7 +17,12 @@ commands install the same Node.js SDK and CLI. New applications can use either
 name; library authors normally prefer the scoped package. Do not install both:
 the alias already depends on and re-exports the matching canonical release.
 
-Latest verified npm prerelease: `v0.1.0-beta.22`.
+Latest verified npm prerelease: `v0.1.0-beta.23`.
+
+RhinoQ is useful when background work has become a product problem: users need
+progress and results, support needs history, and operators need to know whether
+an external action is safe to repeat. A provider result that cannot be proven
+becomes `uncertain`; RhinoQ does not turn it into success or retry it blindly.
 
 ## See the product before installing infrastructure
 

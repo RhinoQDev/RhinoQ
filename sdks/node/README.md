@@ -4,6 +4,9 @@
 [Repository](https://github.com/madebyduy/RhinoQ) ·
 [Five-minute quickstart](https://github.com/madebyduy/RhinoQ/blob/main/docs/quickstart.md)
 
+**Turn background jobs into Tasks your users can follow and your team can
+operate safely.**
+
 `@rhinoq/node` adds a durable Task product surface around background work.
 Keep BullMQ, connect another runtime, or produce work for RhinoQ's native
 PostgreSQL queue.
@@ -12,7 +15,15 @@ You get progress, attempts, cancellation, results, realtime updates, a Task
 Center for users and a Workbench for operators. Your application keeps its
 business handler, authentication and provider policy.
 
-Latest verified npm prerelease: `v0.1.0-beta.22`.
+Latest verified npm prerelease: `v0.1.0-beta.23`.
+
+| Before RhinoQ | With RhinoQ |
+|---|---|
+| Queue jobs are internal implementation details | Durable Tasks have owners, progress, history and result metadata |
+| Users refresh or ask support what happened | Task Center gives users realtime progress with polling fallback |
+| Operators correlate logs and queue records | Workbench joins Tasks, attempts and available evidence |
+| A provider timeout looks safe to retry | Unknown external results become `uncertain` and are not retried blindly |
+| Adding a product layer means replacing the queue | Keep BullMQ, use PostgreSQL or connect a custom runtime |
 
 > RhinoQ is a public beta for evaluation and controlled pilots. Pin the exact
 > version for production-shaped testing.

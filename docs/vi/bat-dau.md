@@ -18,7 +18,7 @@ Trong một thư mục trống, chạy:
 mkdir rhinoq-first-run
 cd rhinoq-first-run
 npm init -y
-npm install @rhinoq/node@0.1.0-beta.22 pg
+npm install @rhinoq/node@0.1.0-beta.23 pg
 npx rhinoq up
 ```
 
@@ -63,7 +63,7 @@ Chỉ làm bước tiếp theo khi thấy `accepting connections`.
 mkdir rhinoq-first-run
 cd rhinoq-first-run
 npm init -y
-npm install @rhinoq/node@0.1.0-beta.22 pg
+npm install @rhinoq/node@0.1.0-beta.23 pg
 $env:RHINOQ_DATABASE_URL='postgresql://rhinoq:rhinoq@127.0.0.1:55432/rhinoq'
 npx rhinoq eval
 ```

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.1.0-beta.23
+
+- Reworked the root and npm package READMEs around the product problem, the
+  user-facing Task Center, the operator Workbench and the fail-closed
+  `uncertain` distinction. Added current Task Center and Workbench screenshots.
+- Unified the embedded Go Workbench, Node Workbench and Task Center under a
+  restrained enterprise light theme with navy navigation, flat work surfaces,
+  compact typography and semantic state colors. The Go embedded-frontend size
+  budget and the existing DOM/authorization contracts remain enforced.
+
 - Compressed the remaining Node integration glue. Declared Tasks now provide
   deterministic `identity()` and framework-neutral `route()` helpers;
   `sendRhinoQResponse()` targets Node/Express/Nest/Fastify replies. One
