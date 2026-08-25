@@ -381,7 +381,7 @@ export function createTaskRequestHandler(
             message: 'Result download is not configured for this application.',
             retryable: false,
             nextAction: 'Configure app.http({ resolveResult }) with owner-aware result authorization.',
-            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#resolve-a-result',
+            docs: 'https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#resolve-a-result',
           }, 501);
         }
         const result = await options.tasks.getTaskResultForOwner(taskId, ownerId, tenantId);
@@ -400,7 +400,7 @@ export function createTaskRequestHandler(
             field: 'action',
             retryable: false,
             nextAction: 'Configure app.http({ cancelTask }) or open the runtime tool if it offers a safe cancellation workflow.',
-            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
+            docs: 'https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
           }, 409);
         }
         const body = await request.json().catch(() => ({})) as { expectedVersion?: unknown };
@@ -413,7 +413,7 @@ export function createTaskRequestHandler(
             retryable: false,
             expectedShape: { expectedVersion: 7 },
             nextAction: 'Read the latest Task entityVersion, or omit expectedVersion for an unfenced cancellation request.',
-            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
+            docs: 'https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
           }, 400);
         }
         const expectedVersion = body.expectedVersion === undefined
@@ -440,7 +440,7 @@ export function createTaskRequestHandler(
           message: 'Retry is not configured for this owner API.',
           retryable: false,
           nextAction: 'Configure app.http({ retryTask }) with a durable commandId and application-owned dispatch policy.',
-          docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
+          docs: 'https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
         }, 501);
         const body = await request.json() as { expectedVersion?: unknown; commandId?: unknown };
         if (!Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) <= 0 ||
@@ -452,7 +452,7 @@ export function createTaskRequestHandler(
             retryable: false,
             expectedShape: { expectedVersion: 7, commandId: 'task-123-retry-7' },
             nextAction: 'Read the latest Task entityVersion and create a stable commandId for this retry intent.',
-            docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
+            docs: 'https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
           }, 400);
         }
         const task = await options.tasks.getTaskForOwner(taskId, ownerId, tenantId);

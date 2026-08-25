@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0-beta.25
+
+- Aligned both npm package repository, homepage and issue metadata with
+  `RhinoQDev/RhinoQ` so npm can validate the GitHub provenance bundle.
+- Added a release-matrix assertion that prevents repository/provenance identity
+  drift from reaching `npm publish` again.
+
 ## 0.1.0-beta.24
 
 - Fixed discovery metadata validation by naming the Task API in the README entry.

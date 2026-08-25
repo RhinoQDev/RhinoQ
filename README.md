@@ -12,8 +12,8 @@ that explains what ran, what failed and what still needs confirmation.
 Keep an existing BullMQ runtime, use RhinoQ's native PostgreSQL queue, or
 connect another runtime through the Node.js and NestJS adapter contract.
 
-[![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
-[![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
+[![CI](https://github.com/RhinoQDev/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/RhinoQDev/RhinoQ/actions/workflows/ci.yml)
+[![Security](https://github.com/RhinoQDev/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/RhinoQDev/RhinoQ/actions/workflows/security.yml)
 [![npm @rhinoq/node](https://img.shields.io/npm/v/%40rhinoq%2Fnode/next?label=%40rhinoq%2Fnode)](https://www.npmjs.com/package/@rhinoq/node)
 ![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16_tested-4169E1?logo=postgresql&logoColor=white)
@@ -24,7 +24,7 @@ connect another runtime through the Node.js and NestJS adapter contract.
 > claim a production SLA. Read [production readiness](./docs/production-readiness.md)
 > before using it for real workloads.
 
-Latest verified public prerelease: `v0.1.0-beta.24`.
+Latest verified public prerelease: `v0.1.0-beta.25`.
 
 ## The problem RhinoQ solves
 
@@ -408,9 +408,9 @@ Start with the page matching your next action:
 
 ## Contributing and support
 
-- Use [GitHub Discussions](https://github.com/madebyduy/RhinoQ/discussions) for
+- Use [GitHub Discussions](https://github.com/RhinoQDev/RhinoQ/discussions) for
   integration questions.
-- Use [GitHub Issues](https://github.com/madebyduy/RhinoQ/issues) for
+- Use [GitHub Issues](https://github.com/RhinoQDev/RhinoQ/issues) for
   reproducible bugs.
 - Read [CONTRIBUTING.md](./CONTRIBUTING.md) before sending a change.
 

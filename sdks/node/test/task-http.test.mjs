@@ -313,7 +313,7 @@ test('application Task retry is owner-scoped and command-identified', async () =
     field: 'commandId', retryable: false,
     expectedShape: { expectedVersion: 7, commandId: 'task-123-retry-7' },
     nextAction: 'Read the latest Task entityVersion and create a stable commandId for this retry intent.',
-    docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
+    docs: 'https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#retry-a-task',
   });
   const conflict = await handler(new Request('http://app.test/tasks/task-9/retry', { method: 'POST', body: JSON.stringify({ expectedVersion: 8, commandId: 'retry-command-8' }) }));
   assert.equal(conflict.status, 409);
@@ -373,7 +373,7 @@ test('unsupported cancellation is advertised and refused before any Task read or
     message: 'Cancellation is not configured for this owner API; no Task state was changed.',
     field: 'action', retryable: false,
     nextAction: 'Configure app.http({ cancelTask }) or open the runtime tool if it offers a safe cancellation workflow.',
-    docs: 'https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
+    docs: 'https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#cancel-a-task',
   });
   assert.equal(touched, false);
 });

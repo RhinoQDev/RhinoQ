@@ -23,9 +23,13 @@ for (const [name, actual] of Object.entries(versions)) {
 if (!changelog.includes(`## ${version}`)) throw new Error(`CHANGELOG.md has no ## ${version} release section`);
 
 const expectedTag = version.includes('-') ? 'next' : 'latest';
+const expectedRepository = 'git+https://github.com/RhinoQDev/RhinoQ.git';
 for (const manifest of [node, alias]) {
   if (manifest.publishConfig?.tag !== expectedTag) {
     throw new Error(`${manifest.name} publishConfig.tag must be ${expectedTag}`);
+  }
+  if (manifest.repository?.url !== expectedRepository) {
+    throw new Error(`${manifest.name} repository.url must be ${expectedRepository} for npm provenance`);
   }
 }
 

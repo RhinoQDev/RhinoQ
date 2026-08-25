@@ -1,6 +1,6 @@
 {
   "name": "rhinoq",
-  "version": "0.1.0-beta.24",
+  "version": "0.1.0-beta.25",
   "description": "Add a durable, user-facing Task experience around BullMQ or PostgreSQL workers: progress, results, realtime, history and safe recovery",
   "keywords": [
     "background-jobs",
@@ -20,12 +20,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/madebyduy/RhinoQ.git",
+    "url": "git+https://github.com/RhinoQDev/RhinoQ.git",
     "directory": "sdks/rhinoq"
   },
-  "homepage": "https://github.com/madebyduy/RhinoQ/blob/main/docs/start-here.md",
+  "homepage": "https://github.com/RhinoQDev/RhinoQ/blob/main/docs/start-here.md",
   "bugs": {
-    "url": "https://github.com/madebyduy/RhinoQ/issues"
+    "url": "https://github.com/RhinoQDev/RhinoQ/issues"
   },
   "type": "module",
   "main": "./index.js",
@@ -51,7 +51,7 @@
     "README.md"
   ],
   "dependencies": {
-    "@rhinoq/node": "0.1.0-beta.24"
+    "@rhinoq/node": "0.1.0-beta.25"
   },
   "engines": {
     "node": ">=22"

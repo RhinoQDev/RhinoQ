@@ -46,7 +46,7 @@ unknown external outcomes:
   "field": "action",
   "retryable": false,
   "nextAction": "Configure app.http({ cancelTask }) or open the runtime tool if it offers a safe cancellation workflow.",
-  "docs": "https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md#cancel-a-task"
+  "docs": "https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md#cancel-a-task"
 }
 ```
 

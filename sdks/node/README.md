@@ -1,8 +1,8 @@
 # RhinoQ for Node.js
 
 [npm](https://www.npmjs.com/package/@rhinoq/node) ·
-[Repository](https://github.com/madebyduy/RhinoQ) ·
-[Five-minute quickstart](https://github.com/madebyduy/RhinoQ/blob/main/docs/quickstart.md)
+[Repository](https://github.com/RhinoQDev/RhinoQ) ·
+[Five-minute quickstart](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/quickstart.md)
 
 **Turn background jobs into Tasks your users can follow and your team can
 operate safely.**
@@ -15,7 +15,7 @@ You get progress, attempts, cancellation, results, realtime updates, a Task
 Center for users and a Workbench for operators. Your application keeps its
 business handler, authentication and provider policy.
 
-Latest verified npm prerelease: `v0.1.0-beta.24`.
+Latest verified npm prerelease: `v0.1.0-beta.25`.
 
 | Before RhinoQ | With RhinoQ |
 |---|---|
@@ -174,7 +174,7 @@ The declaration produces typed dispatchers, worker handlers and a static plan.
 Retry defaults remain fail-closed; external effects need explicit application
 policy.
 
-See [Task application compiler](https://github.com/madebyduy/RhinoQ/blob/main/docs/application-compiler.md).
+See [Task application compiler](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/application-compiler.md).
 
 For split deployments, pass a process role to `createRhinoQApp`: `producer`,
 `worker`, `api`, `operator`, or `all` (the compatible default). Only `worker`
@@ -225,7 +225,7 @@ This mounts `/tasks`, `/task-center` and `/admin`. It also starts projection,
 reconciliation and cancellation integration for the explicitly tracked jobs.
 It does not scan Redis for unrelated work.
 
-See the [complete BullMQ example](https://github.com/madebyduy/RhinoQ/tree/main/examples/fanout-bullmq).
+See the [complete BullMQ example](https://github.com/RhinoQDev/RhinoQ/tree/main/examples/fanout-bullmq).
 
 ## Connect another runtime
 
@@ -258,7 +258,7 @@ Adapters report capabilities. Unsupported cancellation fails before Task
 mutation. Unknown runtime results remain unknown or `uncertain`; RhinoQ does
 not turn them into success.
 
-See the [manual runtime example](https://github.com/madebyduy/RhinoQ/tree/main/examples/manual-runtime).
+See the [manual runtime example](https://github.com/RhinoQDev/RhinoQ/tree/main/examples/manual-runtime).
 
 ## Adopt without taking runtime control
 
@@ -283,7 +283,7 @@ npx rhinoq adopt --promote \
 ```
 
 Promotion is an evidence decision, not an automatic source rewrite. Read
-[Native adoption](https://github.com/madebyduy/RhinoQ/blob/main/docs/native-adoption.md).
+[Native adoption](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/native-adoption.md).
 
 ## Owner API and product surfaces
 
@@ -303,7 +303,7 @@ For a custom HTTP contract, use `app.tasks` or `PostgresTaskClient` and map the
 snapshot yourself. That keeps your wire format but also keeps more application
 code.
 
-See [Two integration doors](https://github.com/madebyduy/RhinoQ/blob/main/docs/two-doors.md).
+See [Two integration doors](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/two-doors.md).
 
 ## Watch one Task in application code
 
@@ -323,7 +323,7 @@ const result = await run.result();
 ```
 
 It rejects unsafe URLs and does not invent an ETA. See
-[TaskRunHandle](https://github.com/madebyduy/RhinoQ/blob/main/docs/task-run-handle.md).
+[TaskRunHandle](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-run-handle.md).
 
 ## React
 
@@ -336,7 +336,7 @@ export function ReportStatus({ taskId }) {
 ```
 
 The browser contract rejects stale entity versions and falls back to polling
-when SSE disconnects. See [React UI](https://github.com/madebyduy/RhinoQ/blob/main/docs/react-ui.md).
+when SSE disconnects. See [React UI](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/react-ui.md).
 
 ## Files and artifacts
 
@@ -364,7 +364,7 @@ npm install @aws-sdk/client-s3 @aws-sdk/lib-storage @aws-sdk/s3-request-presigne
 ```
 
 Storage credentials remain server-side. Read the
-[artifact guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/artifact-storage.md).
+[artifact guide](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/artifact-storage.md).
 
 ## External effects and retry safety
 
@@ -376,8 +376,8 @@ confirmation/readback policy. When a provider may have accepted the request
 but the response is lost, preserve `uncertain` and reconcile; do not retry
 blindly.
 
-Read [Provider operations](https://github.com/madebyduy/RhinoQ/blob/main/docs/provider-operations.md)
-and [Failure semantics](https://github.com/madebyduy/RhinoQ/blob/main/docs/failure-semantics.md).
+Read [Provider operations](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/provider-operations.md)
+and [Failure semantics](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/failure-semantics.md).
 
 ## Terminal operations
 
@@ -432,16 +432,16 @@ It is not the RhinoQ runtime or integration golden path.
 | `npx rhinoq inspect <id>` | inspect one Task |
 
 The complete command inventory is in the
-[CLI reference](https://github.com/madebyduy/RhinoQ/blob/main/docs/cli.md).
+[CLI reference](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/cli.md).
 
 ## Read next
 
 Choose only what you need:
 
-- [Five-minute quickstart](https://github.com/madebyduy/RhinoQ/blob/main/docs/quickstart.md)
-- [Node.js integration](https://github.com/madebyduy/RhinoQ/blob/main/docs/nodejs.md)
-- [Task API](https://github.com/madebyduy/RhinoQ/blob/main/docs/task-api.md)
-- [Realtime](https://github.com/madebyduy/RhinoQ/blob/main/docs/realtime.md)
-- [Native PostgreSQL queue](https://github.com/madebyduy/RhinoQ/blob/main/docs/postgres-queue.md)
-- [Production checklist](https://github.com/madebyduy/RhinoQ/blob/main/docs/production-checklist.md)
-- [Known limits](https://github.com/madebyduy/RhinoQ/blob/main/docs/production-readiness.md)
+- [Five-minute quickstart](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/quickstart.md)
+- [Node.js integration](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/nodejs.md)
+- [Task API](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/task-api.md)
+- [Realtime](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/realtime.md)
+- [Native PostgreSQL queue](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/postgres-queue.md)
+- [Production checklist](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/production-checklist.md)
+- [Known limits](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/production-readiness.md)

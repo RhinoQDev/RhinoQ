@@ -2,7 +2,7 @@
 
 [View `rhinoq` on npm](https://www.npmjs.com/package/rhinoq) ·
 [Canonical `@rhinoq/node` package](https://www.npmjs.com/package/@rhinoq/node) ·
-[GitHub repository](https://github.com/madebyduy/RhinoQ)
+[GitHub repository](https://github.com/RhinoQDev/RhinoQ)
 
 > **Turn background jobs into Tasks your users can follow and your team can
 > operate safely.** Keep BullMQ or choose PostgreSQL; get progress, results,
@@ -17,7 +17,7 @@ commands install the same Node.js SDK and CLI. New applications can use either
 name; library authors normally prefer the scoped package. Do not install both:
 the alias already depends on and re-exports the matching canonical release.
 
-Latest verified npm prerelease: `v0.1.0-beta.24`.
+Latest verified npm prerelease: `v0.1.0-beta.25`.
 
 RhinoQ is useful when background work has become a product problem: users need
 progress and results, support needs history, and operators need to know whether
@@ -73,11 +73,11 @@ RhinoQ can keep an existing BullMQ runtime, or use its native PostgreSQL queue
 with the authoritative Go worker. Your application still owns authentication,
 tenant identity, business handlers, credentials and business retry safety.
 
-Read the [five-minute quickstart](https://github.com/madebyduy/RhinoQ/blob/main/docs/quickstart.md),
-[PostgreSQL queue guide](https://github.com/madebyduy/RhinoQ/blob/main/docs/postgres-queue.md),
-or [BullMQ example](https://github.com/madebyduy/RhinoQ/tree/main/examples/fanout-bullmq).
+Read the [five-minute quickstart](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/quickstart.md),
+[PostgreSQL queue guide](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/postgres-queue.md),
+or [BullMQ example](https://github.com/RhinoQDev/RhinoQ/tree/main/examples/fanout-bullmq).
 
 > RhinoQ is a public beta for evaluation and controlled pilots. It does not
 > claim a production SLA. Review the
-> [production status](https://github.com/madebyduy/RhinoQ/blob/main/docs/production-readiness.md)
+> [production status](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/production-readiness.md)
 > before deploying real workloads.
