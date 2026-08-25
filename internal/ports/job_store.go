@@ -140,6 +140,24 @@ type QueueHealthReader interface {
 	QueueHealth(ctx context.Context, queueName string) (QueueHealth, error)
 }
 
+// BatchJobStore is an additive producer capability. Implementations must
+// preserve input order and commit every new job, or none of them. Replayed
+// idempotency keys return their existing IDs inside the same atomic operation.
+// Keeping this separate from JobStore avoids forcing remote/test adapters to
+// claim an atomic primitive they cannot provide.
+type BatchJobStore interface {
+	EnqueueBatch(ctx context.Context, inputs []EnqueueInput) ([]JobID, error)
+}
+
+const MaxEnqueueBatch = 1000
+
+// JobWakeSubscriber exposes best-effort queue-name hints. Hints may be
+// coalesced or lost; workers must always retain their authoritative polling
+// fallback and claim through JobStore.
+type JobWakeSubscriber interface {
+	SubscribeJobWake(ctx context.Context) (<-chan string, error)
+}
+
 type ListJobsInput struct {
 	// QueueName filters by execution lane and JobName by handler contract.
 	// Either may be empty, which means "any".

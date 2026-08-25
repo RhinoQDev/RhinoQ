@@ -137,12 +137,18 @@ func runAttention(args []string, getenv func(string) string, output io.Writer) i
 
 func runQueue(args []string, getenv func(string) string, output io.Writer) int {
 	if len(args) < 2 {
-		fmt.Fprintln(output, "Usage: rhinoq queue <counts|pause|resume> <name>")
+		fmt.Fprintln(output, "Usage: rhinoq queue <health|counts|pause|resume> <name> [--json]")
 		return 2
 	}
 	action, name := args[0], strings.TrimSpace(args[1])
-	if name == "" || (action != "counts" && action != "pause" && action != "resume") {
-		fmt.Fprintln(output, "Usage: rhinoq queue <counts|pause|resume> <name>")
+	if name == "" || (action != "health" && action != "counts" && action != "pause" && action != "resume") {
+		fmt.Fprintln(output, "Usage: rhinoq queue <health|counts|pause|resume> <name> [--json]")
+		return 2
+	}
+	flags := flag.NewFlagSet("queue "+action, flag.ContinueOnError)
+	flags.SetOutput(output)
+	asJSON := flags.Bool("json", false, "print JSON")
+	if err := flags.Parse(args[2:]); err != nil {
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -153,6 +159,20 @@ func runQueue(args []string, getenv func(string) string, output io.Writer) int {
 	}
 	defer closer.Close()
 	switch action {
+	case "health":
+		health, err := client.QueueHealth(ctx, name)
+		if err != nil {
+			return printOperationError(output, err)
+		}
+		if *asJSON {
+			return printJSON(output, health)
+		}
+		table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(table, "QUEUE\tPENDING\tRETRY WAIT\tLEASED\tOLDEST PENDING\tOLDEST RETRY")
+		fmt.Fprintf(table, "%s\t%d\t%d\t%d\t%s\t%s\n",
+			health.QueueName, health.Pending, health.RetryWait, health.Leased,
+			formatOptionalTime(health.OldestPendingAt), formatOptionalTime(health.OldestRetryAt))
+		_ = table.Flush()
 	case "counts":
 		counts, err := client.JobCounts(ctx, name)
 		if err != nil {
@@ -179,6 +199,13 @@ func runQueue(args []string, getenv func(string) string, output io.Writer) int {
 		fmt.Fprintf(output, "PASS queue %q is accepting claims again\n", name)
 	}
 	return 0
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 func runFindings(args []string, getenv func(string) string, output io.Writer) int {

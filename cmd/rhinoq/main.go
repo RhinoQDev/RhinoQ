@@ -610,6 +610,7 @@ results.`)
 		fmt.Fprintln(output, `rhinoq queue — inspect or control one queue
 
 Usage:
+  rhinoq queue health <name> [--json]
   rhinoq queue counts <name>
   rhinoq queue pause <name>
   rhinoq queue resume <name>

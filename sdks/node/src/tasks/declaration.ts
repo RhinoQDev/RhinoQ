@@ -355,19 +355,28 @@ export function defineRhinoQTask<Input, Output>(
       if (!Number.isInteger(maximum) || maximum < 1 || maximum > 10_000) throw new RangeError('Task batch maxItems must be 1..10000');
       if (request.items.length > maximum) throw new RangeError(`Task batch contains ${request.items.length} items; maxItems is ${maximum}`);
       const keys = new Set<string>();
-      let snapshot: TaskSnapshot | undefined;
+	  const commands: Parameters<RhinoQRuntimeIntegration['dispatchMany']>[1] = [];
       for (const item of request.items) {
         const itemKey = required(item?.itemKey, 'Task batch itemKey');
         if (keys.has(itemKey)) throw new TypeError(`duplicate Task batch itemKey ${JSON.stringify(itemKey)}`);
         keys.add(itemKey);
-        snapshot = await declaration.dispatch({
-          id, ownerId, payload: item.payload, itemKey,
-          ...(request.tenantId?.trim() ? { tenantId: request.tenantId.trim() } : {}),
-          executionId: item.executionId?.trim() || `${id}:${itemKey}:attempt:1`,
-          idempotencyKey: item.idempotencyKey?.trim() || `${id}:${itemKey}`,
-        });
+		const executionId = item.executionId?.trim() || `${id}:${itemKey}:attempt:1`;
+		commands.push({
+		  task: { id, type: name, ownerId, definitionVersion: version, ...(request.tenantId?.trim() ? { tenantId: request.tenantId.trim() } : {}) },
+		  executionId, itemKey, runtime, scope, taskId: id,
+		  idempotencyKey: item.idempotencyKey?.trim() || `${id}:${itemKey}`,
+		  retry: retry.mode === 'never' ? { maxAttempts: 1 } : { maxAttempts: retry.maxAttempts, ...(retry.backoff ? { backoff: retry.backoff } : {}) },
+		  ...(options.execution?.delayMs === undefined ? {} : { delayMs: options.execution.delayMs }),
+		  ...(options.execution?.priority === undefined ? {} : { priority: options.execution.priority }),
+		  payload: { taskName: name, taskId: id, executionId, ownerId, tenantId: request.tenantId?.trim() || 'default', definitionVersion: version, itemKey, retry, payload: item.payload, ...(options.effect ? { effect: options.effect } : {}) },
+		});
       }
-      return snapshot!;
+	  const snapshots = integration.dispatchMany
+		? await integration.dispatchMany(adapter, commands)
+		: await commands.reduce<Promise<TaskSnapshot[]>>(async (pending, command) => [...await pending, await integration.dispatch(adapter, command)], Promise.resolve([]));
+	  const snapshot = snapshots[snapshots.length - 1]!;
+	  void Promise.resolve().then(() => services.onMutation?.({ taskId: id, ownerId, ...(request.tenantId?.trim() ? { tenantId: request.tenantId.trim() } : {}), entityVersion: snapshot.entityVersion })).catch(() => undefined);
+	  return snapshot;
     },
     execute(input, context) { return Promise.resolve(options.run(input, context)); },
     workerHandler() {

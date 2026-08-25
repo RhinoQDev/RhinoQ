@@ -37,6 +37,8 @@ export interface CreateRhinoQOptions extends RuntimeTaskProjectorOptions {
   adoptionReplicaId?: string;
   /** Observe-only mapping for runtime work that was not reserved through RhinoQ. */
   resolveUnboundEvent?(event: RuntimeEvent): Promise<RuntimeTaskBinding | undefined> | RuntimeTaskBinding | undefined;
+  /** Producer/API/operator profiles disable unsolicited event subscriptions. */
+  observeEvents?: boolean;
 }
 
 export interface ShadowAdoptionReport {
@@ -74,6 +76,7 @@ export interface RhinoQRuntimeIntegration extends RuntimeEventSink {
   reserve(input: RuntimeTaskReservation): Promise<TaskSnapshot>;
   bind(executionId: string, ref: RuntimeRef): Promise<TaskSnapshot>;
   dispatch(adapterName: string, command: DispatchCommand & RuntimeTaskReservation): Promise<TaskSnapshot>;
+  dispatchMany(adapterName: string, commands: Array<DispatchCommand & RuntimeTaskReservation>): Promise<TaskSnapshot[]>;
   reconcile(adapterName: string, ref: RuntimeRef): Promise<RuntimeObservation>;
   cancel(taskId: string, adapterName: string, ref: RuntimeRef): Promise<CancelResult>;
   runtimeReports(): Promise<RuntimeAdapterReport[]>;
@@ -231,6 +234,36 @@ export function createRhinoQ(options: CreateRhinoQOptions): RhinoQRuntimeIntegra
         throw new RuntimeDispatchUncertainError(command.executionId, receipt, { cause: error });
       }
     },
+    async dispatchMany(adapterName, commands) {
+      if (!Array.isArray(commands) || commands.length === 0) throw new RangeError('runtime batch requires at least one command');
+      const adapter = adapters.get(adapterName);
+      if (!adapter) throw new TypeError(`unknown runtime adapter ${JSON.stringify(adapterName)}`);
+      if (!adapter.dispatchMany) {
+        // Compatibility path stays explicit and ordered; adapters that need a
+        // network fast path advertise dispatchMany instead of changing the
+        // meaning of dispatch().
+        const snapshots: TaskSnapshot[] = [];
+        for (const command of commands) snapshots.push(await integration.dispatch(adapterName, command));
+        return snapshots;
+      }
+      for (const command of commands) await reserve(options.client, command);
+      const receipts = await adapter.dispatchMany({ items: commands });
+      if (!Array.isArray(receipts) || receipts.length !== commands.length) {
+        throw new TypeError('runtime batch receipt count must match command count');
+      }
+      const snapshots: TaskSnapshot[] = [];
+      for (let index = 0; index < commands.length; index++) {
+        const receipt = receipts[index]!;
+        const command = commands[index]!;
+        validateRuntimeRef(receipt.ref);
+        if (receipt.ref.runtime !== command.runtime || receipt.ref.scope !== command.scope) {
+          throw new TypeError('runtime batch receipt does not match its reserved runtime and scope');
+        }
+        try { snapshots.push(await bind(options.client, command.executionId, receipt.ref)); }
+        catch (error) { throw new RuntimeDispatchUncertainError(command.executionId, receipt, { cause: error }); }
+      }
+      return snapshots;
+    },
     async reconcile(adapterName, ref) {
       validateRuntimeRef(ref);
       const adapter = requireAdapter(adapters, adapterName);
@@ -334,6 +367,7 @@ export function createRhinoQ(options: CreateRhinoQOptions): RhinoQRuntimeIntegra
       started = true;
       try {
         for (const adapter of adapters.values()) {
+          if (options.observeEvents === false) continue;
           if (adapter.capabilities.events === 'push') {
             if (!adapter.subscribe) throw new TypeError(`runtime adapter ${JSON.stringify(adapter.name)} advertises push events without subscribe()`);
             subscriptions.push(await adapter.subscribe(integration));

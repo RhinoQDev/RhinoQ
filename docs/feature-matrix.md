@@ -13,6 +13,7 @@ execution platforms.
 |---|---|---|
 | Queue persistence | Redis | PostgreSQL adapter plus checksum-tracked embedded migrations covered by a real-database contract/integrity suite |
 | Batch claim | Redis atomic operations | PostgreSQL `SKIP LOCKED`, one bulk lease statement plus one rate reservation per queue |
+| Batch enqueue | bulk producer calls | native Go atomic batch with ordered idempotent IDs; Node adapters may provide one-round-trip `dispatchMany` |
 | Lease/heartbeat | stalled job recovery | implemented, fenced by owner and epoch on all seven write paths |
 | Concurrency | worker concurrency | implemented; batch claim follows free slots and a prefetch factor |
 | Delayed jobs | delayed/repeatable jobs | `not_before` claim boundary implemented |
@@ -40,8 +41,10 @@ execution platforms.
 | Integrity Rules | application-specific | integrity-only facade, versioned job/table SQL contract, tri-state read-only evaluator, Explain gate, bounded CLI scan and fenced periodic scheduler implemented |
 | Metrics export | Prometheus exporters | `/metrics` text format implemented, no client library dependency |
 | Health probes | not applicable | `/health/live` and `/health/ready` implemented separately |
+| Queue wake and terminal health | pub/sub plus dashboard | post-commit PostgreSQL queue-name hints with polling fallback; bounded `rhinoq queue health` human/JSON snapshot |
 | Embedded operation | application-specific | Go library and direct PostgreSQL CLI are the default; no RhinoQ server, AI agent or LLM is required |
 | Node.js producer | Node ecosystem | `PostgresProducer` preview uses the application's pool/transaction and the guarded SQL enqueue function; CI covers commit and rollback through real `pg` |
+| Runtime roles | separate worker/server processes | explicit producer/worker/api/operator/all profiles; non-worker profiles skip runtime event subscriptions |
 | Polyglot workers | Node only | Node worker preview adds protocol negotiation, handler-filtered claim, heartbeat, cancellation and graceful shutdown through the optional HTTP gateway |
 | Transactional enqueue from any language | not applicable | `rhinoq.enqueue()` SQL function with job allowlist implemented and executed by the PostgreSQL suite |
 | Migration/diagnostics CLI | application-specific | read-only plan/status/SQL, explicit checksum-locked apply and database-aware doctor implemented |

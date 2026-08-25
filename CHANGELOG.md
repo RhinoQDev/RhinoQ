@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added additive atomic `EnqueueBatch` support to the native Go producer, with
+  ordered IDs, per-item idempotency and no unsafe client-loop fallback. Node
+  runtime adapters can expose `dispatchMany`; declared Task batches use that
+  one-round-trip path when available.
+- Added PostgreSQL post-commit queue-name wake hints for native workers while
+  retaining authoritative polling, plus `rhinoq queue health <name> [--json]`
+  over the existing bounded health projection.
+- Added explicit Node application roles (`producer`, `worker`, `api`,
+  `operator`, `all`) so non-worker processes avoid unsolicited runtime event
+  subscriptions. `TaskRunHandle.respond()` now turns a short wait budget into
+  a completed HTTP result or safe `202 + Location` without treating timeout as
+  Task failure. Documented cases where RhinoQ is deliberately the wrong fit.
+
 - Reworked the root, Node SDK and existing-application documentation around one
   default `setup` path, a short runtime decision table and progressive
   disclosure. Advanced capability, architecture and project-planning material

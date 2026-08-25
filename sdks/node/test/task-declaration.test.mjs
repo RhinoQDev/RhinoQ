@@ -186,11 +186,15 @@ test('optional trace hooks propagate a bounded carrier from dispatch to handler'
 
 test('Task declaration dispatches a bounded fan-out with stable item identity', async () => {
   const calls = [];
+  let batchRoundTrips = 0;
   const integration = { async dispatch(adapter, command) {
     calls.push({ adapter, command });
     return { id: command.task.id, type: command.task.type, ownerId: command.task.ownerId,
       state: 'queued', entityVersion: calls.length, schemaVersion: 1, progress: { completed: 0 },
       hasResult: false, executions: [], createdAt: '2026-08-12T00:00:00Z', updatedAt: '2026-08-12T00:00:00Z' };
+  }, async dispatchMany(adapter, commands) {
+    batchRoundTrips++;
+    return Promise.all(commands.map((command) => this.dispatch(adapter, command)));
   } };
   const task = defineRhinoQTask(integration, {
     name: 'image.resize', adapter: 'manual', runtime: 'manual', scope: 'images', batch: { maxItems: 2 },
@@ -201,6 +205,7 @@ test('Task declaration dispatches a bounded fan-out with stable item identity', 
     { itemKey: 'small', payload: { size: 320 } }, { itemKey: 'large', payload: { size: 1280 } },
   ] });
   assert.equal(result.entityVersion, 2);
+  assert.equal(batchRoundTrips, 1);
   assert.deepEqual(calls.map(({ command }) => ({ executionId: command.executionId, itemKey: command.itemKey, idempotencyKey: command.idempotencyKey })), [
     { executionId: 'batch-1:small:attempt:1', itemKey: 'small', idempotencyKey: 'batch-1:small' },
     { executionId: 'batch-1:large:attempt:1', itemKey: 'large', idempotencyKey: 'batch-1:large' },

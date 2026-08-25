@@ -14,6 +14,19 @@ export interface TaskRunHandleOptions extends TaskStoreOptions {
   taskCenterPath?: string;
 }
 
+export interface TaskRunRespondOptions {
+  /** Small request budget; expiry returns 202 and never cancels/fails the Task. */
+  waitUpToMs: number;
+  origin?: string;
+}
+
+export class TaskWaitTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Task wait timed out after ${timeoutMs}ms`);
+    this.name = 'TaskWaitTimeoutError';
+  }
+}
+
 /**
  * Small owner-facing facade for the common dispatch → observe → act flow.
  *
@@ -63,7 +76,7 @@ export class TaskRunHandle {
       });
       const onAbort = () => finishReject(options.signal?.reason ?? new Error('Task wait aborted'));
       options.signal?.addEventListener('abort', onAbort, { once: true });
-      if (timeoutMs !== undefined) timer = setTimeout(() => finishReject(new Error(`Task wait timed out after ${timeoutMs}ms`)), timeoutMs);
+      if (timeoutMs !== undefined) timer = setTimeout(() => finishReject(new TaskWaitTimeoutError(timeoutMs)), timeoutMs);
       this.store.start();
 
       function cleanup(): void {
@@ -76,11 +89,39 @@ export class TaskRunHandle {
     });
   }
 
+  /**
+   * Turns a dispatch into an HTTP-friendly result without making callers
+   * hand-roll polling: 200 for a completed result, 409 for a terminal failure,
+   * or 202 + Location when the short request budget expires.
+   */
+  async respond(options: TaskRunRespondOptions): Promise<Response> {
+    const waitUpToMs = positive(options?.waitUpToMs, 'waitUpToMs');
+    let snapshot: TaskRunSnapshot;
+    try {
+      snapshot = await this.wait({ timeoutMs: waitUpToMs });
+    } catch (error) {
+      if (!(error instanceof TaskWaitTimeoutError)) throw error;
+      const latest = this.snapshot;
+      this.stop();
+      return jsonResponse({ taskId: this.id, state: latest?.state ?? 'pending', url: this.url(options.origin) }, 202, this.url(options.origin));
+    }
+    if (snapshot.state === 'succeeded') {
+      return jsonResponse({ taskId: this.id, state: snapshot.state, result: await this.result() }, 200);
+    }
+    return jsonResponse({ taskId: this.id, state: snapshot.state, url: this.url(options.origin) }, 409, this.url(options.origin));
+  }
+
   /** Builds a shareable owner-facing route without adding auth/query secrets. */
   url(origin?: string): string {
     const path = `${this.taskCenterPath}/${encodeURIComponent(this.id)}`;
     return origin ? new URL(path, origin).toString() : path;
   }
+}
+
+function jsonResponse(body: unknown, status: number, location?: string): Response {
+  const headers = new Headers({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  if (location) headers.set('location', location);
+  return new Response(JSON.stringify(body), { status, headers });
 }
 
 function isTerminal(state: string | undefined): boolean {

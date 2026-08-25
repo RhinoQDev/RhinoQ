@@ -1174,3 +1174,30 @@
 - **Rollback:** omit the additive registry fields and use `notify send <name>`;
   schema version 1 remains readable.
 - **Owner:** Go Application + CLI + Node configuration DX
+
+## ADR-0052 — Producer ergonomics accelerate authority; they do not replace it
+
+- **Status:** accepted
+- **Context:** Producers paid one application/runtime round trip per item,
+  every deployment process opened push subscriptions, and operators often
+  opened a browser to answer a bounded queue-health question. Faster enqueue
+  and wake-up are useful only if they do not weaken admission, idempotency,
+  transactionality, lease fencing or database-time scheduling.
+- **Decision:** the native Go store exposes additive atomic batch enqueue with
+  ordered per-item idempotent results and no sequential fallback for stores
+  that cannot promise atomicity. Node adapters may expose `dispatchMany`; the
+  ordered single-dispatch path remains compatible. PostgreSQL emits only a
+  queue-name wake hint after commit and workers always retain polling. Runtime
+  roles control process-local event subscriptions only. Queue health is a
+  bounded authoritative snapshot available as human or JSON terminal output.
+- **Boundary:** notifications contain no job, payload, owner or tenant data and
+  never authorize a claim. A producer/API/operator role does not change Task
+  state or database authority. No throughput or latency claim is made without
+  a current benchmark/fault run.
+- **Consequences:** common producer and operator paths require less glue and
+  fewer idle actions, while disconnects, old adapters and custom stores fail
+  safely or use their documented compatibility path.
+- **Rollback:** use single enqueue, omit `dispatchMany` and role, and rely on
+  polling plus the existing dashboard; stored job and Task records remain
+  readable.
+- **Owner:** Go Application/runtime + Node SDK + CLI DX

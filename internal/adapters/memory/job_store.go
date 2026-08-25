@@ -18,6 +18,7 @@ import (
 // JobStore implements the full job port; the assertion keeps a missing method
 // a compile error rather than a runtime surprise.
 var _ ports.JobStore = (*JobStore)(nil)
+var _ ports.BatchJobStore = (*JobStore)(nil)
 
 type JobStore struct {
 	mu         sync.RWMutex
@@ -63,6 +64,45 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.enqueueLocked(input)
+}
+
+func (s *JobStore) EnqueueBatch(ctx context.Context, inputs []ports.EnqueueInput) ([]ports.JobID, error) {
+	if len(inputs) == 0 {
+		return nil, errors.New("enqueue batch must contain at least one job")
+	}
+	if len(inputs) > ports.MaxEnqueueBatch {
+		return nil, errors.New("enqueue batch exceeds 1000 jobs")
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// The memory adapter is used as an executable contract. Snapshot its small
+	// mutable producer state so any validation/admission failure rolls back the
+	// whole batch exactly like PostgreSQL.
+	jobs := cloneJobs(s.jobs)
+	byIdem := make(map[string]job.ID, len(s.byIdem))
+	for key, id := range s.byIdem {
+		byIdem[key] = id
+	}
+	nextID := s.nextID
+	ids := make([]ports.JobID, 0, len(inputs))
+	for _, input := range inputs {
+		id, err := s.enqueueLocked(input)
+		if err != nil {
+			s.jobs, s.byIdem, s.nextID = jobs, byIdem, nextID
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (s *JobStore) enqueueLocked(input ports.EnqueueInput) (ports.JobID, error) {
 
 	if input.IdempotencyKey != "" {
 		if id, exists := s.byIdem[idempotencyScope(input)]; exists {
@@ -111,6 +151,14 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 		s.byIdem[idempotencyScope(input)] = id
 	}
 	return id, nil
+}
+
+func cloneJobs(source map[job.ID]job.Record) map[job.ID]job.Record {
+	result := make(map[job.ID]job.Record, len(source))
+	for id, record := range source {
+		result[id] = cloneRecord(record)
+	}
+	return result
 }
 
 func (s *JobStore) Get(_ context.Context, id ports.JobID) (job.Record, bool, error) {

@@ -35,6 +35,23 @@ test('manual adapter drives a Task lifecycle without importing BullMQ', async ()
   await rhino.close();
 });
 
+test('producer profile can start without opening a push-event subscription', async () => {
+  let subscriptions = 0;
+  const adapter = {
+    name: 'push', scope: 'reports',
+    capabilities: { events: 'push', dispatch: false, inspect: false, cancel: 'unsupported', progress: false, stableAttempts: true },
+    async subscribe() { subscriptions++; return { dispose() {} }; },
+  };
+  const producer = createRhinoQ({ client: new MemoryTaskClient(), terminalProjection: 'single-execution', adapters: [adapter], observeEvents: false });
+  await producer.start();
+  assert.equal(subscriptions, 0);
+  await producer.close();
+  const worker = createRhinoQ({ client: new MemoryTaskClient(), terminalProjection: 'single-execution', adapters: [adapter] });
+  await worker.start();
+  assert.equal(subscriptions, 1);
+  await worker.close();
+});
+
 test('single-execution success synchronizes default progress before the Task becomes terminal', async () => {
   const client = new MemoryTaskClient();
   const rhino = createRhinoQ({ client, terminalProjection: 'single-execution' });

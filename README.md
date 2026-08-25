@@ -213,6 +213,46 @@ Database notifications are wake-up hints only; polling remains the disconnect
 fallback. For unattended production alerts, configure durable
 [notification routes](./docs/notifications.md).
 
+For the native Go queue, inspect one lane without opening a browser:
+
+```bash
+rhinoq queue health media --json
+```
+
+The snapshot is one bounded PostgreSQL read. Native workers also use
+post-commit queue-name notifications to wake early, while polling remains the
+correctness fallback.
+
+## Less producer boilerplate
+
+Native Go producers can commit a group atomically. IDs preserve input order and
+idempotent replays return the original IDs:
+
+```go
+ids, err := client.EnqueueBatch(ctx, []rhinoq.JobRequest{
+    {QueueName: "media", JobName: "probe", IdempotencyKey: uploadID + ":probe", Payload: probeJSON},
+    {QueueName: "media", JobName: "thumbnail", IdempotencyKey: uploadID + ":thumb", Payload: thumbJSON},
+})
+```
+
+Node runtime adapters may expose `dispatchMany` for one provider round trip;
+`task.dispatchBatch()` uses it automatically and keeps the ordered compatibility
+path for existing adapters. Separate deployments can set
+`createRhinoQApp({ role: 'producer' | 'worker' | 'api' | 'operator' | 'all' })`;
+producer/API/operator roles do not open unsolicited runtime-event subscriptions.
+For request/response routes, `new TaskRunHandle(client, taskId).respond({
+waitUpToMs: 1500 })` returns a completed result when it is ready, or `202` plus
+an owner Task URL when it is still running; expiry never cancels the Task.
+
+## When not to use RhinoQ
+
+Do not add RhinoQ merely to run a tiny in-process callback. It is a poor fit if
+you cannot operate PostgreSQL, require a Redis-only sub-millisecond queue path,
+need a general DAG/workflow language, or do not need durable user-visible
+progress, results, recovery or business verification. Keep the simpler system
+until the cost of lost, duplicated, opaque or unverified background work is the
+larger problem.
+
 ## What RhinoQ handles
 
 | RhinoQ handles | Your application still handles |

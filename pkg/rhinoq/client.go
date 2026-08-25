@@ -11,6 +11,7 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
 	"github.com/madebyduy/RhinoQ/internal/adapters/postgres"
 	attentionapp "github.com/madebyduy/RhinoQ/internal/application/attention"
+	enqueueapp "github.com/madebyduy/RhinoQ/internal/application/enqueue"
 	"github.com/madebyduy/RhinoQ/internal/application/operations"
 	taskapp "github.com/madebyduy/RhinoQ/internal/application/tasks"
 	"github.com/madebyduy/RhinoQ/internal/domain/admission"
@@ -644,6 +645,33 @@ func (c *Client) Enqueue(ctx context.Context, request JobRequest) (string, error
 	}
 	id, err := c.store.Enqueue(ctx, input)
 	return string(id), err
+}
+
+// EnqueueBatch atomically admits up to 1000 jobs. Returned IDs preserve input
+// order; idempotent replays return the already stored IDs. No client-side
+// fallback is attempted when a custom store lacks atomic batch support.
+func (c *Client) EnqueueBatch(ctx context.Context, requests []JobRequest) ([]string, error) {
+	if c == nil || c.store == nil {
+		return nil, errors.New("rhinoq store is required")
+	}
+	inputs := make([]ports.EnqueueInput, 0, len(requests))
+	for _, request := range requests {
+		inputs = append(inputs, ports.EnqueueInput{
+			Identity: job.Identity{QueueName: request.QueueName, JobName: request.JobName, GroupKey: request.GroupKey, ResourceClass: job.Class(request.ResourceClass)},
+			Payload:  request.Payload, IdempotencyKey: request.IdempotencyKey,
+			CorrelationID: request.CorrelationID, Priority: request.Priority, RunAfter: request.RunAfter,
+		})
+	}
+	service := enqueueapp.NewService(c.store)
+	ids, err := service.ExecuteBatch(ctx, inputs)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, len(ids))
+	for index, id := range ids {
+		result[index] = string(id)
+	}
+	return result, nil
 }
 
 func (c *Client) Cancel(ctx context.Context, id string) error {

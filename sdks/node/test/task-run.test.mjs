@@ -38,3 +38,25 @@ test('TaskRunHandle rejects unsafe owner paths', () => {
   assert.throws(() => new TaskRunHandle(client, 'task-1', { taskCenterPath: 'task-center' }), /relative path/);
   assert.throws(() => new TaskRunHandle(client, 'task-1', { taskCenterPath: '/task-center?token=secret' }), /query/);
 });
+
+test('TaskRunHandle respond returns a result or safe 202 without cancelling work', async () => {
+  const completed = new TaskRunHandle({
+    async getTask() { return snapshot('succeeded', 2); },
+    async getTaskResult() { return { reportId: '42' }; },
+    async cancelTask() { throw new Error('not called'); },
+  }, 'task-report-42');
+  const ok = await completed.respond({ waitUpToMs: 50 });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), { taskId: 'task-report-42', state: 'succeeded', result: { reportId: '42' } });
+
+  let cancellations = 0;
+  const running = new TaskRunHandle({
+    async getTask() { return snapshot('running', 1); },
+    async getTaskResult() { throw new Error('not ready'); },
+    async cancelTask() { cancellations++; return snapshot('cancelled', 2); },
+  }, 'task-report-42', { pollIntervalMs: 50 });
+  const accepted = await running.respond({ waitUpToMs: 5, origin: 'https://app.example.test' });
+  assert.equal(accepted.status, 202);
+  assert.equal(accepted.headers.get('location'), 'https://app.example.test/task-center/task-report-42');
+  assert.equal(cancellations, 0);
+});

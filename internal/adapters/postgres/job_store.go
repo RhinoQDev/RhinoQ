@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/madebyduy/RhinoQ/internal/domain/admission"
 	"github.com/madebyduy/RhinoQ/internal/domain/attempt"
 	"github.com/madebyduy/RhinoQ/internal/domain/job"
@@ -64,6 +66,8 @@ const claimSelectColumns = `id, queue_name, job_name, group_key, payload, state,
 const maxClaimCandidates = 1000
 
 var _ ports.JobStore = (*JobStore)(nil)
+var _ ports.BatchJobStore = (*JobStore)(nil)
+var _ ports.JobWakeSubscriber = (*JobStore)(nil)
 
 type JobStore struct {
 	db *sql.DB
@@ -76,46 +80,107 @@ func NewJobStore(db *sql.DB) (*JobStore, error) {
 	return &JobStore{db: db}, nil
 }
 
+// SubscribeJobWake holds one dedicated LISTEN connection. PostgreSQL delivers
+// notifications only after commit; payloads contain a queue name and no job or
+// tenant data. Closing/cancelling the context releases the connection, while
+// the worker independently keeps its polling fallback.
+func (s *JobStore) SubscribeJobWake(ctx context.Context) (<-chan string, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = conn.ExecContext(ctx, `LISTEN rhinoq_job_ready`); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	hints := make(chan string, 1)
+	go func() {
+		defer close(hints)
+		defer conn.Close()
+		for ctx.Err() == nil {
+			var queue string
+			err := conn.Raw(func(driverConn any) error {
+				pgxConn, ok := driverConn.(*stdlib.Conn)
+				if !ok {
+					return errors.New("rhinoq PostgreSQL wake hints require the pgx stdlib driver")
+				}
+				notification, err := pgxConn.Conn().WaitForNotification(ctx)
+				if err == nil {
+					queue = notification.Payload
+				}
+				return err
+			})
+			if err != nil {
+				return
+			}
+			select {
+			case hints <- queue:
+			default:
+			}
+		}
+	}()
+	return hints, nil
+}
+
 func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports.JobID, error) {
-	identity, err := input.Identity.Normalize()
+	ids, err := s.EnqueueBatch(ctx, []ports.EnqueueInput{input})
 	if err != nil {
 		return "", err
 	}
-	if err := job.ValidatePayload(input.Payload, job.DefaultMaxPayloadBytes); err != nil {
-		return "", err
+	return ids[0], nil
+}
+
+func (s *JobStore) EnqueueBatch(ctx context.Context, inputs []ports.EnqueueInput) ([]ports.JobID, error) {
+	if len(inputs) == 0 {
+		return nil, errors.New("enqueue batch must contain at least one job")
 	}
-	if input.Priority < job.MinPriority || input.Priority > job.MaxPriority {
-		return "", job.ErrInvalidPriority
+	if len(inputs) > ports.MaxEnqueueBatch {
+		return nil, errors.New("enqueue batch exceeds 1000 jobs")
 	}
-	if input.RunAfter < 0 {
-		return "", errors.New("run-after delay must not be negative")
+	type prepared struct {
+		input    ports.EnqueueInput
+		identity job.Identity
+		id       string
 	}
-	id, err := newID("job")
-	if err != nil {
-		return "", err
+	items := make([]prepared, 0, len(inputs))
+	for _, input := range inputs {
+		identity, err := input.Identity.Normalize()
+		if err != nil {
+			return nil, err
+		}
+		if err := job.ValidatePayload(input.Payload, job.DefaultMaxPayloadBytes); err != nil {
+			return nil, err
+		}
+		if input.Priority < job.MinPriority || input.Priority > job.MaxPriority {
+			return nil, job.ErrInvalidPriority
+		}
+		if input.RunAfter < 0 {
+			return nil, errors.New("run-after delay must not be negative")
+		}
+		id, err := newID("job")
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, prepared{input: input, identity: identity, id: id})
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer tx.Rollback()
-
-	// Admission is a property of the execution lane, not of the handler
-	// contract, so it is keyed on the queue name.
-	deferBy, err := s.admitTx(ctx, tx, identity.QueueName, identity.ResourceClass.IsCritical())
-	if err != nil {
-		return "", err
-	}
-
-	var idempotency any
-	if input.IdempotencyKey != "" {
-		idempotency = input.IdempotencyKey
-	}
-	// The database clock is the authority for scheduling (specification 50.3):
-	// not_before is derived in SQL, never from a worker's wall clock.
-	var storedID string
-	err = tx.QueryRowContext(ctx, `
+	ids := make([]ports.JobID, 0, len(items))
+	for _, item := range items {
+		deferBy, err := s.admitTx(ctx, tx, item.identity.QueueName, item.identity.ResourceClass.IsCritical())
+		if err != nil {
+			return nil, err
+		}
+		var idempotency any
+		if item.input.IdempotencyKey != "" {
+			idempotency = item.input.IdempotencyKey
+		}
+		var storedID string
+		err = tx.QueryRowContext(ctx, `
 		INSERT INTO rhinoq_jobs
 			(id, queue_name, job_name, group_key, payload, state, resource_class,
 			 priority, idempotency_key, correlation_id, not_before)
@@ -124,18 +189,20 @@ func (s *JobStore) Enqueue(ctx context.Context, input ports.EnqueueInput) (ports
 		ON CONFLICT (queue_name, idempotency_key)
 		DO UPDATE SET job_name = EXCLUDED.job_name
 		RETURNING id`,
-		id, identity.QueueName, identity.JobName, nullableString(identity.GroupKey),
-		input.Payload, string(identity.ResourceClass), input.Priority,
-		idempotency, nullableString(input.CorrelationID),
-		input.RunAfter.Milliseconds(), deferBy.Milliseconds(),
-	).Scan(&storedID)
-	if err != nil {
-		return "", err
+			item.id, item.identity.QueueName, item.identity.JobName, nullableString(item.identity.GroupKey),
+			item.input.Payload, string(item.identity.ResourceClass), item.input.Priority,
+			idempotency, nullableString(item.input.CorrelationID),
+			item.input.RunAfter.Milliseconds(), deferBy.Milliseconds(),
+		).Scan(&storedID)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, ports.JobID(storedID))
 	}
 	if err := tx.Commit(); err != nil {
-		return "", err
+		return nil, err
 	}
-	return ports.JobID(storedID), nil
+	return ids, nil
 }
 
 // admitTx applies producer backpressure. The pending count is bounded by the

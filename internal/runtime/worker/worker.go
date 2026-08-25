@@ -253,6 +253,14 @@ func (w *Worker) Run(ctx context.Context) error {
 		return errors.New("worker context is required")
 	}
 	backoff := w.pollInterval
+	var wake <-chan string
+	if subscriber, ok := w.store.(ports.JobWakeSubscriber); ok {
+		var err error
+		wake, err = subscriber.SubscribeJobWake(ctx)
+		if err != nil {
+			w.report(fmt.Errorf("subscribe job wake hints: %w", err))
+		}
+	}
 	for {
 		if ctx.Err() != nil {
 			break
@@ -273,7 +281,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			// Backing off keeps the worker alive to pick the queue back up
 			// (specification 50.2) instead of dying on every blip.
 			w.report(err)
-			if !w.sleep(ctx, backoff) {
+			if !w.sleepWithWake(ctx, backoff, wake) {
 				break
 			}
 			backoff = w.nextBackoff(backoff)
@@ -286,13 +294,46 @@ func (w *Worker) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		if !w.sleep(ctx, w.idleWait(ctx, backoff)) {
+		if !w.sleepWithWake(ctx, w.idleWait(ctx, backoff), wake) {
 			break
 		}
 		backoff = w.nextBackoff(backoff)
 	}
 	w.Shutdown(context.WithoutCancel(ctx))
 	return ctx.Err()
+}
+
+func (w *Worker) sleepWithWake(ctx context.Context, duration time.Duration, wake <-chan string) bool {
+	if wake == nil {
+		return w.sleep(ctx, duration)
+	}
+	if duration <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	queues := make(map[string]struct{}, len(w.handlers.QueueNames()))
+	for _, name := range w.handlers.QueueNames() {
+		queues[name] = struct{}{}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-w.finished:
+			return true
+		case <-timer.C:
+			return true
+		case name, open := <-wake:
+			if !open {
+				wake = nil
+				continue
+			}
+			if _, interested := queues[name]; interested {
+				return true
+			}
+		}
+	}
 }
 
 func (w *Worker) claim(ctx context.Context, available int) ([]job.Record, error) {

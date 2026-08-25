@@ -111,6 +111,9 @@ export interface DispatchCommand {
 }
 
 export interface DispatchReceipt { ref: RuntimeRef }
+export interface BatchDispatchCommand {
+  items: DispatchCommand[];
+}
 
 export type CancelResult =
   | { status: 'acknowledged' }
@@ -130,6 +133,8 @@ export interface RuntimeAdapter {
   readonly module?: RhinoQLifecycleModule;
   subscribe?(sink: RuntimeEventSink): Promise<Disposable>;
   dispatch?(command: DispatchCommand): Promise<DispatchReceipt>;
+  /** Optional one-round-trip producer fast path. Receipt order must match input order. */
+  dispatchMany?(command: BatchDispatchCommand): Promise<DispatchReceipt[]>;
   inspect?(ref: RuntimeRef): Promise<RuntimeObservation>;
   cancel?(ref: RuntimeRef): Promise<CancelResult>;
   health?(): Promise<RuntimeHealth>;

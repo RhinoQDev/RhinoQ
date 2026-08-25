@@ -27,6 +27,8 @@ import { validateRhinoQResourcePool, type RhinoQResourcePoolOptions } from '../t
 export interface CreateRhinoQAppOptions {
   pool: SqlPool;
   adapters: RuntimeAdapter[];
+  /** Starts only the process-local capabilities this deployment needs. */
+  role?: 'producer' | 'worker' | 'api' | 'operator' | 'all';
   ownerFromRequest?: NodeTaskMiddlewareOptions['ownerFromRequest'];
   ownerFromNodeRequest?: NodeTaskMiddlewareOptions['ownerFromNodeRequest'];
   tenantFromRequest?: NodeTaskMiddlewareOptions['tenantFromRequest'];
@@ -115,6 +117,7 @@ export class RhinoQPortableApp {
     readonly artifacts?: ArtifactUploadService,
     readonly artifactRetention?: ArtifactRetentionService,
     private readonly realtime?: CreateRhinoQAppOptions['realtime'],
+    readonly role: NonNullable<CreateRhinoQAppOptions['role']> = 'all',
   ) {}
 
   task<Input, Output>(options: RhinoQTaskOptions<Input, Output>): RhinoQDeclaredTask<Input, Output> {
@@ -273,6 +276,8 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
     throw new TypeError('createRhinoQApp requires a PostgreSQL pool');
   }
   if (!Array.isArray(options.adapters)) throw new TypeError('createRhinoQApp requires adapters');
+  const role = options.role ?? 'all';
+  if (!['producer', 'worker', 'api', 'operator', 'all'].includes(role)) throw new TypeError('RhinoQ role must be producer, worker, api, operator or all');
   const artifactChoices = [options.artifactStorage, options.artifactProvider, options.artifacts].filter(Boolean).length;
   if (artifactChoices > 1) throw new TypeError('configure only one of artifacts, artifactProvider or artifactStorage');
   const artifactProvider = options.artifactProvider ?? (await resolveArtifactsOption(options.artifacts));
@@ -281,6 +286,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
   const runtime = createRhinoQ({
     client: tasks,
     adapters: options.adapters,
+    observeEvents: role === 'worker' || role === 'all',
     terminalProjection: options.terminalProjection ?? 'single-execution',
     ...(options.resolveUnboundEvent ? { resolveUnboundEvent: options.resolveUnboundEvent } : {}),
     ...(options.adoptionStore ? { adoptionStore: options.adoptionStore } : {}),
@@ -290,7 +296,7 @@ export async function createRhinoQApp(options: CreateRhinoQAppOptions): Promise<
   await runtime.start();
   const uploads = artifactProvider?.direct ? new ArtifactUploadService(artifactProvider, new PostgresArtifactUploadSessionStore(options.pool), (taskId, request) => tasks.registerTaskArtifact(taskId, request), options.metrics, async (taskId, ownerId, tenantId) => { await tasks.getTaskForOwner(taskId, ownerId, tenantId); }) : undefined;
   const retention = artifactProvider?.direct?.delete ? new ArtifactRetentionService(artifactProvider, new PostgresArtifactRetentionStore(options.pool), undefined, options.metrics) : undefined;
-  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, options.effectClient, options.workerId, resourcePool, uploads, retention, options.realtime);
+  return new RhinoQPortableApp(tasks, runtime, options, options.artifactStorage, artifactProvider, options.trace, options.effectClient, options.workerId, resourcePool, uploads, retention, options.realtime, role);
 }
 
 /**

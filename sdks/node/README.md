@@ -124,6 +124,16 @@ policy.
 
 See [Task application compiler](https://github.com/madebyduy/RhinoQ/blob/main/docs/application-compiler.md).
 
+For split deployments, pass a process role to `createRhinoQApp`: `producer`,
+`worker`, `api`, `operator`, or `all` (the compatible default). Only `worker`
+and `all` subscribe to unsolicited runtime events, so an HTTP or producer
+replica does not keep an unnecessary event connection open. This changes
+process-local lifecycle only; PostgreSQL and the runtime remain authoritative.
+
+Declared batches call an adapter's optional `dispatchMany()` fast path when it
+exists. Existing adapters keep working through ordered `dispatch()` calls. A
+batch item still needs a stable `itemKey` and idempotency key.
+
 ## Keep an existing BullMQ worker
 
 Preview the integration first:
