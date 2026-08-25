@@ -5,12 +5,12 @@ Documentation: **English** · [Tiếng Việt](./docs/vi/README.md)
 **Turn background jobs into Tasks your users can follow and your team can
 operate safely.**
 
-RhinoQ adds durable status, progress, history, cancellation, results and a
-user-facing Task Center around asynchronous work. Operators get a Workbench
+RhinoQ adds a Task API for durable status, progress, history, cancellation,
+results and a user-facing Task Center around asynchronous work. Operators get a Workbench
 that explains what ran, what failed and what still needs confirmation.
 
 Keep an existing BullMQ runtime, use RhinoQ's native PostgreSQL queue, or
-connect another runtime through the Node adapter contract.
+connect another runtime through the Node.js and NestJS adapter contract.
 
 [![CI](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/ci.yml)
 [![Security](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml/badge.svg)](https://github.com/madebyduy/RhinoQ/actions/workflows/security.yml)
@@ -24,7 +24,7 @@ connect another runtime through the Node adapter contract.
 > claim a production SLA. Read [production readiness](./docs/production-readiness.md)
 > before using it for real workloads.
 
-Latest verified public prerelease: `v0.1.0-beta.23`.
+Latest verified public prerelease: `v0.1.0-beta.24`.
 
 ## The problem RhinoQ solves
 

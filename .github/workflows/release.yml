@@ -18,7 +18,6 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          package-manager-cache: false
       - name: Use the same npm CLI as publishing
         run: npm install --global npm@12
       - run: npm ci
@@ -55,7 +54,6 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          package-manager-cache: false
       - name: Use an npm CLI with trusted-publishing support
         run: npm install --global npm@12
       - run: npm ci
@@ -85,7 +83,6 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          package-manager-cache: false
       - name: Use an npm CLI with trusted-publishing support
         run: npm install --global npm@12
       - name: Publish rhinoq alias
@@ -231,7 +228,7 @@ jobs:
           cosign verify-blob dist/checksums.txt
           --bundle dist/checksums.txt.sigstore.json
           --certificate-identity
-          "https://github.com/madebyduy/RhinoQ/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}"
+          "https://github.com/RhinoQDev/RhinoQ/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}"
           --certificate-oidc-issuer "https://token.actions.githubusercontent.com"
 
   container:

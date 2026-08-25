@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0-beta.24
+
+- Fixed discovery metadata validation by naming the Task API in the README entry.
+- Updated npm Trusted Publishing and release provenance identity for the
+  transferred `RhinoQDev/RhinoQ` repository.
+- Removed the unsupported `package-manager-cache` input from release jobs.
+
 ## 0.1.0-beta.23
 
 - Reworked the root and npm package READMEs around the product problem, the
