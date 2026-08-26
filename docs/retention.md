@@ -73,6 +73,28 @@ Kubernetes CronJob, your own scheduler — on one node. Two concurrent prunes ar
 safe (each batch is its own transaction and deletes disjoint rows or none), but
 they gain nothing.
 
+## Task files and Task records
+
+Task artifacts use their own expiry and cleanup lease. Applications with a
+deletable artifact provider can schedule the already-wired
+`app.artifactRetention` service:
+
+```ts
+const expired = await app.artifactRetention.preview(25);
+// Log/review the bounded preview under the application's retention policy.
+const result = await app.artifactRetention.sweep({ delete: true, limit: 25 });
+```
+
+The sweep claims expired rows with a lease, deletes provider content before
+metadata, advances the Task version after metadata removal and records failed
+cleanup for inspection. Storage references remain server-side throughout.
+
+RhinoQ intentionally does not auto-delete terminal Task, execution, effect,
+verification or checkpoint records. Those records can be required to decide
+whether an external action happened, and the repository has no evidence from
+which to guess an adopter's legal/dispute window. Export required evidence and
+define that wider policy before adding application-specific Task deletion.
+
 ## Choosing the window
 
 RhinoQ does not choose a legal retention period for the adopter. The window has

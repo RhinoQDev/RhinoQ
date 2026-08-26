@@ -1,0 +1,22 @@
+{
+  "name": "rhinoq-react-vite-task-center",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader runner --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build --configLoader runner",
+    "preview": "vite preview --configLoader runner --host 127.0.0.1 --port 4173"
+  },
+  "dependencies": {
+    "@rhinoq/node": "file:../../sdks/node",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0"
+  }
+}

@@ -2775,15 +2775,16 @@ async function demoDev(args: string[]): Promise<void> {
     // Demo data is intentionally cross-owner but disposable. Production
     // applications must put the same middleware behind operator auth.
     requireOperator: () => true,
-    navigation: { overviewPath: '/task-center', tasksPath: '/task-center' },
+    navigation: { tasksPath: '/task-center' },
   });
   const taskCenter = createNodeTaskCenterMiddleware({
     path: '/task-center', apiPath: '/tasks', title: 'My activity',
-    navigation: { overviewPath: '/task-center', workbenchPath: '/rhinoq' },
+    navigation: { workbenchPath: '/rhinoq' },
   });
   const ownerAPI = createNodeTaskMiddleware({
     tasks: source, basePath: '/tasks', ownerFromRequest: () => 'demo-user',
     resolveResult: (result) => ({ url: `/demo-results/${encodeURIComponent(result.taskId)}.csv` }),
+    resolveArtifact: (artifact) => ({ url: artifact.name.endsWith('.svg') ? '/demo-artifacts/report-preview.svg' : '/demo-artifacts/report-archive.csv' }),
     retryTask: ({ task }) => source.retryTask(task.id),
   });
   const server = createServer((request, response) => {
@@ -2795,6 +2796,16 @@ async function demoDev(args: string[]): Promise<void> {
     if (request.method === 'GET' && request.url?.startsWith('/demo-results/')) {
       response.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="rhinoq-demo-result.csv"', 'cache-control': 'no-store' });
       response.end('status,source\ncompleted,rhinoq-demo\n');
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/demo-artifacts/report-preview.svg') {
+      response.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'private, max-age=60' });
+      response.end('<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540"><rect width="960" height="540" fill="#eef4ff"/><rect x="72" y="66" width="816" height="408" rx="22" fill="white" stroke="#c8d7f2"/><circle cx="128" cy="122" r="18" fill="#2563eb"/><text x="164" y="132" font-family="system-ui,sans-serif" font-size="30" font-weight="700" fill="#10233f">Report archive ready</text><text x="110" y="208" font-family="system-ui,sans-serif" font-size="21" fill="#5f6f86">100 records processed · verified output · secure delivery</text><rect x="110" y="262" width="620" height="18" rx="9" fill="#dce7f8"/><rect x="110" y="262" width="620" height="18" rx="9" fill="#2563eb"/><text x="110" y="352" font-family="system-ui,sans-serif" font-size="18" fill="#159a65">✓ Business verification passed</text><text x="110" y="396" font-family="system-ui,sans-serif" font-size="18" fill="#68768b">RhinoQ Task Center artifact preview</text></svg>');
+      return;
+    }
+    if (request.method === 'GET' && request.url === '/demo-artifacts/report-archive.csv') {
+      response.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="report-archive.csv"', 'cache-control': 'private, no-store' });
+      response.end('record,status\n100,completed\n');
       return;
     }
     taskCenter(request, response, () => ownerAPI(request, response, () => workbench(request, response)));

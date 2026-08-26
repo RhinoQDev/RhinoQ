@@ -5,6 +5,7 @@ import type {
   TaskResult,
   TaskSnapshot,
 	TaskSummary,
+	TaskArtifact,
 	TaskArtifactRecord,
 	TaskWaitpoint,
 	TaskWaitpointCreateRequest,
@@ -354,14 +355,15 @@ export function createTaskRequestHandler(
       if (request.method === 'GET' && relative.length === 2 && relative[1] === 'artifacts') {
         const limit = integerQuery(url, 'limit', 100);
         if (limit < 1 || limit > 100) return json({ code: 'RHINOQ_INVALID_REQUEST', message: 'artifact limit must be 1..100' }, 400);
-        return json({ artifacts: await options.tasks.listTaskArtifactsForOwner(taskId, ownerId, limit, tenantId) });
+        const artifacts = await options.tasks.listTaskArtifactsForOwner(taskId, ownerId, limit, tenantId);
+        return json({ artifacts: artifacts.map(browserSafeArtifact) });
       }
       if (request.method === 'POST' && relative.length === 4 && relative[1] === 'artifacts' && relative[3] === 'refresh') {
         const artifact = await options.tasks.getTaskArtifactForOwner(relative[2]!, ownerId, tenantId);
         if (artifact.taskId !== taskId) return json({ code: 'RHINOQ_ARTIFACT_NOT_FOUND' }, 404);
         const body = await request.json().catch(() => undefined);
         const refreshed = await options.tasks.refreshTaskArtifact(relative[2]!, body);
-        return json(refreshed);
+        return json(browserSafeArtifact(refreshed));
       }
       if (request.method === 'GET' && relative.length === 4 && relative[1] === 'artifacts' && relative[3] === 'download') {
         if (!options.resolveArtifact) return json({ code: 'RHINOQ_ARTIFACT_DOWNLOAD_NOT_CONFIGURED' }, 501);
@@ -501,10 +503,14 @@ export class ApplicationTaskClient {
     if (!this.url) {
       throw new TypeError('application Task URL is required');
     }
-    this.doFetch = options.fetch ?? globalThis.fetch;
-    if (typeof this.doFetch !== 'function') {
+    const fetchImplementation = options.fetch ?? globalThis.fetch;
+    if (typeof fetchImplementation !== 'function') {
       throw new TypeError('fetch is required');
     }
+    // Browser-native fetch implementations may validate their receiver. Keep
+    // the Window/global receiver instead of later invoking fetch as a method
+    // of ApplicationTaskClient (`this.doFetch(...)`).
+    this.doFetch = fetchImplementation.bind(globalThis);
     this.getHeaders = options.headers;
   }
 
@@ -734,6 +740,19 @@ async function cancelWithoutFence(
 
 function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
+}
+
+/** Enforce the browser boundary even when a custom/demo store returns a record with private storage fields. */
+function browserSafeArtifact(artifact: TaskArtifactRecord | TaskArtifact): TaskArtifact {
+  const {
+    schemaVersion, entityVersion, id, taskId, executionId, name, contentType,
+    sizeBytes, checksumSha256, expiresAt, lineage, createdAt, updatedAt,
+  } = artifact;
+  return {
+    schemaVersion, entityVersion, id, taskId,
+    ...(executionId ? { executionId } : {}),
+    name, contentType, sizeBytes, checksumSha256, expiresAt, lineage, createdAt, updatedAt,
+  };
 }
 
 function normalizeBasePath(value: string): string {

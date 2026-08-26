@@ -16,6 +16,7 @@
     { "id": "operator-secret-html-redaction", "file": "test/quickstart-http.test.mjs", "marker": "never embed operator tokens or private result references" },
     { "id": "owner-tenant-isolation-postgres", "file": "test/postgres.integration.test.mjs", "marker": "tenant-b-task" },
     { "id": "postgres-lost-ack-retry-outbox", "file": "test/real-retry-fault.test.mjs", "marker": "survives lost HTTP acknowledgement" },
-    { "id": "projector-session-loss", "file": "test/projector-lease.test.mjs", "marker": "broken connection is not returned to the pool" }
+    { "id": "projector-session-loss", "file": "test/projector-lease.test.mjs", "marker": "broken connection is not returned to the pool" },
+    { "id": "worker-death-checkpoint-resume", "file": "test/task-checkpoint.test.mjs", "marker": "recreated worker resumes after simulated process death" }
   ]
 }

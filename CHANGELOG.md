@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+## 0.1.0-beta.27
+
+- Added bounded numbered pagination to the standalone Task Center and operator
+  Workbench Task lists, including visible ranges, URL-backed view/page state,
+  browser-history restoration and responsive controls. Unified the active
+  My activity/Workbench navigation treatment across both surfaces.
+- Added high-volume React Task Center controls: comfortable/compact/minimal
+  density, independently scrolling lists, progressive `pageSize` batching,
+  optional header/metrics/toolbar/icon/state/progress fields, application-owned
+  Task labels/descriptions, drawer opt-out and a complete `renderTask` escape
+  hatch. The React/Vite reference app now demonstrates a compact video queue.
+- Expanded `RhinoQTaskCenter` with owner-scoped approval waitpoints, secure
+  Result & Artifact Center metadata/preview/download, business alias search,
+  saved filters, router-controlled deep links, keyboard focus containment and
+  focus restoration. Provider confirmation waitpoints stay read-only and
+  private artifact references are defensively removed at the HTTP boundary.
+- Added a production-built React/Vite reference application and Playwright CI
+  coverage for realtime DOM stability, business search, saved-view URLs,
+  desktop/mobile layout, keyboard drawer behavior, approval safety and artifact
+  preview.
+- Added operator-only checkpoint reads and Flight Recorder handler/verifier
+  version evidence. Checkpoint state remains outside the owner browser API.
+- Added `TaskNotificationWorker` plus provider-neutral email and signed webhook
+  deliveries over the durable Task notification outbox. Application policy
+  still selects severity, recipients, templates and provider credentials.
+- Expanded the executable fault inventory to 16 scenarios with deterministic
+  worker-death/checkpoint-resume evidence, and recorded the current Node/visual
+  and Go package campaigns. A new single-host Docker campaign exercises real
+  PostgreSQL integration, primary SIGKILL/manual replica promotion, Redis
+  process restart and lost Agent acknowledgement, with PostgreSQL fan-out
+  benchmarks kept explicitly separate from multi-host/adopter claims.
+- Added the high-level React `RhinoQTaskCenter` component for React, Vite, SPA
+  and Next.js applications. It composes live metrics, search/filter/sort,
+  keyed Task rows, a responsive detail drawer, action busy states and
+  accessible motion-aware toasts over an application-owned owner API. It may
+  construct the browser client from `apiUrl`, while display-only user data is
+  explicitly separated from server-derived owner and tenant authorization.
+- Fixed browser-native `fetch` losing its required global receiver inside
+  `ApplicationTaskClient`, which previously made an otherwise healthy
+  same-origin owner API fail with `Illegal invocation` in Chromium.
+- Fixed owner inbox SSE point updates evicting unrelated Tasks from the current
+  page. Authoritative page events may still remove displaced rows, while an
+  individual newer snapshot now updates only its own Task identity.
 - Rebuilt the owner-facing Task Center around a compact professional workspace
   with live overview metrics, restrained typography/radius/shadow, state-aware
   Task rows, clearer progress and detail hierarchy, subtle entry feedback and
@@ -11,6 +54,24 @@
 - Made `rhinoq dev --demo` open the owner-facing Task Center first, serve its
   owner API and result download, link it to Workbench, and show running,
   completed, failed and confirmation-needed states without infrastructure.
+- Slowed the synthetic running Task so evaluators have enough time to inspect
+  live progress and exercise cancellation before it reaches completion.
+- Unified the demo Task Center and Node Workbench under one product header,
+  removed redundant navigation and capability text, and moved Workbench Task
+  evidence into a keyboard-accessible right-side drawer that preserves list
+  context and closes by button, backdrop, `Escape` or browser history.
+- Replaced browser-default Task Center actions and raw request banners with
+  branded primary/destructive controls, stable inline busy indicators and
+  dismissible success/error toasts that explain the outcome and safe next step.
+  The transitions remain self-contained and honor reduced-motion preferences.
+- Fixed Workbench Task drawer sections being stretched into equal-height rows
+  and clipping their contents. Evidence sections now size to content, share one
+  contained vertical scroll, wrap long diagnostic text and keep wide attempt
+  tables inside a bounded horizontal viewport on desktop and mobile.
+- Replaced Task Center's full-list rebuild on every SSE progress tick with a
+  keyed Task-card reconciler. Progress updates now retain card/action DOM
+  identity, keyboard focus and scroll position, patch only changed values and
+  animate the progress fill without replaying card-entry motion.
 - Added a real Next.js embedded Task-list example plus desktop/mobile
   Playwright layout contracts and screenshot artifacts in CI.
 

@@ -81,7 +81,8 @@ test('app.http exposes the complete default user and operator journey from one m
   const center = await invoke(middleware, '/task-center');
   assert.equal(center.status, 200);
   assert.match(center.body, /\/tasks/);
-  assert.match(center.body, /href="\/"/);
+  assert.match(center.body, /href="\/task-center"/);
+  assert.match(center.body, />Overview<\/a>/);
   assert.match(center.body, /href="\/admin"/);
 
   const detailPage = await invoke(middleware, '/task-center/task-cancel');
@@ -105,6 +106,7 @@ test('app.http exposes the complete default user and operator journey from one m
   assert.equal(workbench.status, 200);
   assert.match(workbench.body, /RhinoQ Workbench/);
   assert.match(workbench.body, /href="\/task-center"/);
+  assert.match(workbench.body, /id="detailDrawer"/);
 
   const cancelled = await invoke(
     middleware,

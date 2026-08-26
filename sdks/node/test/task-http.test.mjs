@@ -7,6 +7,19 @@ import {
   createTaskRequestHandler,
 } from '../dist/index.js';
 
+test('ApplicationTaskClient preserves the browser fetch receiver', async () => {
+  let receiver;
+  const client = new ApplicationTaskClient({
+    url: 'http://app.test/tasks',
+    fetch: function () {
+      receiver = this;
+      return Promise.resolve(Response.json({ tasks: [] }));
+    },
+  });
+  assert.deepEqual(await client.listTasks(), []);
+  assert.equal(receiver, globalThis);
+});
+
 test('application Task handler reuses host auth without a RhinoQ token', async () => {
   const snapshot = {
     schemaVersion: 1,

@@ -24,7 +24,7 @@ connect another runtime through the Node.js and NestJS adapter contract.
 > claim a production SLA. Read [production readiness](./docs/production-readiness.md)
 > before using it for real workloads.
 
-Latest verified public prerelease: `v0.1.0-beta.26`.
+Latest verified public prerelease: `v0.1.0-beta.27`.
 
 ## The problem RhinoQ solves
 
@@ -64,12 +64,28 @@ It needs no database, Redis or provider credentials and writes no integration
 into your application.
 
 The user-facing Task Center turns background activity into a clear product
-experience: progress, results and work that still needs confirmation.
+experience: progress, results and work that still needs confirmation. Task
+actions use the same branded control system as the surrounding workspace;
+successes and failures appear as dismissible motion-aware toasts with a clear
+headline, explanation and safe next step instead of raw request text.
+Live progress updates are keyed by Task identity: a new percentage patches the
+existing card and preserves scroll, focus and action state instead of rebuilding
+the Task list. The standalone activity feed shows four Tasks per numbered page;
+search, filter, sort and page are reflected in the URL so a long history stays
+bounded and browser back/forward restores the same view. Its live window is
+explicitly bounded to the latest 200 Tasks (50 four-card pages).
 
 ![RhinoQ Task Center showing running, completed, and confirmation-needed Tasks](./marketing/rhinoq-task-center.png)
 
 Operators use the Workbench to investigate the same durable work through
-execution stages and available evidence.
+execution stages and available evidence. Task Center and Workbench share one
+product header, so switching audience does not reset the visual context. In
+Workbench, selecting a Task opens its guidance, attempts, incident explanation,
+flight recorder and evidence in a dismissible right-side drawer while the
+attention list remains visible behind it. Its Task buckets use ten-row numbered
+pages and preserve the active bucket/page while a drawer is opened. Long identifiers and evidence wrap
+inside their own columns, while one contained drawer scroll keeps every section
+readable without clipping or widening the page.
 
 ![RhinoQ Workbench showing Tasks, execution stages, and evidence detail](./marketing/rhinoq-workbench-quiet-operations.png)
 
@@ -100,13 +116,27 @@ Users see plain-language progress and results. Operators see execution history,
 attention states and available evidence without treating UI text or logs as the
 source of truth.
 
-The embedded React/Next.js Task UI ships with responsive, themeable list,
-detail and progress components. Its state-aware motion, loading skeletons and
-live-status treatment are scoped to the component and respect reduced-motion
-preferences; applications can also opt out of all default styles.
+The embedded React UI now ships a complete `RhinoQTaskCenter` for React, Vite,
+SPAs and Next.js: overview metrics, business-alias search, saved/deep-linked
+views, keyed live Task rows, a keyboard-contained responsive detail drawer,
+safe cancel/retry/approval actions, secure result and multi-artifact preview,
+and clear motion-aware notifications. Lower-level list, detail and progress
+components remain available. Theme tokens and styles are scoped to the
+component, respect reduced-motion preferences and can be disabled when the
+host design system owns every rule. High-volume queues can switch to compact or
+minimal density, independently scroll a bounded list, reveal Tasks in batches,
+rename rows with application-owned job titles, hide any default surface, or
+replace the whole Task row through a render callback. Applications that need
+only a job name and progress can use the headless React hooks instead.
 
-Authentication remains application-owned. Never expose Workbench without an
-operator authorization boundary.
+Authentication remains application-owned. The React `currentUser` prop is
+display-only; the owner API must derive owner and tenant from the authenticated
+session. Never expose Workbench without an operator authorization boundary.
+Private artifact references never enter browser metadata; the application
+resolves owner-authorized, short-lived download URLs only when the user acts.
+For unattended verification mismatches, the Node Task notification worker can
+deliver through a signed webhook or an application-owned email provider while
+PostgreSQL remains authoritative for claim leases and retry scheduling.
 
 ### Technical completion is not business correctness
 

@@ -50,6 +50,33 @@ test('checkpoint helper exposes bounded resume state without becoming Task state
   assert.equal(await client.deleteTaskCheckpoints('execution-1'), 1);
 });
 
+test('a recreated worker resumes after simulated process death from the fenced checkpoint', async () => {
+  const rows = new Map();
+  const client = {
+    async saveTaskCheckpoint(executionId, key, request) {
+      const saved = { schemaVersion: 1, id: `cp-${key}`, taskId: request.taskId, executionId, key, handlerVersion: request.handlerVersion, inputChecksum: request.inputChecksum, state: request.state, completed: request.completed === true, version: 1, createdAt: '2026-08-14T00:00:00.000Z', updatedAt: '2026-08-14T00:00:01.000Z' };
+      rows.set(`${executionId}:${key}`, saved); return saved;
+    },
+    async getTaskCheckpoint(executionId, key) { return rows.get(`${executionId}:${key}`); },
+    async deleteTaskCheckpoints() { return 0; },
+  };
+  let firstProcess = true;
+  const buildWorker = () => defineRhinoQTask({ async dispatch() {} }, {
+    name: 'media.worker-death', adapter: 'manual', runtime: 'manual', scope: 'media', version: 5,
+    run: async (_input, context) => {
+      const saved = await context.checkpoint.load('segments');
+      if (!saved) {
+        await context.checkpoint.save('segments', { nextSegment: 4 }, { inputChecksum: checksum });
+        if (firstProcess) { firstProcess = false; throw new Error('SIMULATED_WORKER_DEATH'); }
+      }
+      return (await context.checkpoint.load('segments')).state;
+    },
+  }, { checkpoints: client });
+  const job = { data: { taskName: 'media.worker-death', definitionVersion: 5, taskId: 'task-death', executionId: 'execution-death', payload: {} } };
+  await assert.rejects(() => buildWorker().workerHandler()(job), /SIMULATED_WORKER_DEATH/);
+  assert.deepEqual(await buildWorker().workerHandler()(job), { nextSegment: 4 });
+});
+
 test('checkpoint input checksum is deterministic for explicit JSON input', async () => {
   assert.equal(
     await sha256RhinoQCheckpointInput('{"file":"input.bin"}'),

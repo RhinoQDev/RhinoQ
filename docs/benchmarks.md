@@ -51,6 +51,19 @@ currently measures only in-process SDK overhead:
 The first checked-in local baseline is
 [`evidence/benchmark-node-2026-08-01.json`](./evidence/benchmark-node-2026-08-01.json).
 It is comparison evidence for that recorded machine/runtime only.
+The Task Center product campaign also recorded a current Node 24/Windows
+baseline in
+[`evidence/benchmark-node-2026-08-26.json`](./evidence/benchmark-node-2026-08-26.json);
+it remains in-process overhead evidence, not an end-to-end capacity claim.
+The same machine's current PostgreSQL 16.15 concurrency/fan-out matrix is in
+[`evidence/benchmark-postgres-2026-08-26.json`](./evidence/benchmark-postgres-2026-08-26.json).
+At concurrency 16 it recorded 2,165 creates/s with p95 7.321 ms; at 32,
+throughput fell to 2,062 creates/s and p99 rose to 63.951 ms. At 1,000
+Executions, the full Snapshot was 214,121 bytes with p95 read latency 80.43 ms,
+while the 601-byte Summary recorded p95 11.764 ms. These are local comparison
+numbers, not deployment defaults or product throughput claims.
+The matching Go adopter-shaped 100/1,000/5,000 fan-out probe is recorded in
+[`evidence/benchmark-go-adopter-2026-08-26.md`](./evidence/benchmark-go-adopter-2026-08-26.md).
 
 Real local baselines are also checked in for
 [PostgreSQL 16](./evidence/benchmark-postgres-2026-08-01.json) and

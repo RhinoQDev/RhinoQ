@@ -192,5 +192,6 @@ export interface TaskClient {
 	 */
 	saveTaskCheckpoint?(executionId: string, key: string, request: TaskCheckpointSaveRequest): Promise<TaskCheckpoint>;
 	getTaskCheckpoint?(executionId: string, key: string): Promise<TaskCheckpoint | undefined>;
+	listTaskCheckpoints?(taskId: string, limit?: number): Promise<TaskCheckpoint[]>;
 	deleteTaskCheckpoints?(executionId: string): Promise<number>;
 }

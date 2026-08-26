@@ -93,3 +93,21 @@ test('Postgres transitionTask shortcuts pending to running through queued', asyn
     ['task-shortcut', 2, 'running'],
   ]);
 });
+
+test('operator checkpoint evidence exposes handler version without widening the owner API', async () => {
+  const client = new PostgresTaskClient({
+    async query(text, values) {
+      assert.match(text, /FROM rhinoq_task\.checkpoints WHERE task_id=\$1/);
+      assert.deepEqual(values, ['task-checkpoint', 25]);
+      return { rows: [{
+        id: 'checkpoint-1', task_id: 'task-checkpoint', execution_id: 'execution-1', checkpoint_key: 'page',
+        handler_version: 4, input_checksum: 'a'.repeat(64), state: { offset: 20 }, completed: false, version: 2,
+        created_at: '2026-08-20T00:00:00.000Z', updated_at: '2026-08-20T00:01:00.000Z',
+      }] };
+    },
+  });
+  const checkpoints = await client.listTaskCheckpoints('task-checkpoint', 25);
+  assert.equal(checkpoints[0].handlerVersion, 4);
+  assert.equal(checkpoints[0].key, 'page');
+  await assert.rejects(() => client.listTaskCheckpoints('task-checkpoint', 501), /limit must be 1\.\.500/);
+});

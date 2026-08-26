@@ -4,6 +4,7 @@ import type {
   TaskWaitpoint,
   TaskVerificationRecord,
   TaskArtifact,
+  TaskCheckpoint,
   ProviderOperationRecord,
 } from '../gateway/types.js';
 import type { DurableStepRecord } from './durable.js';
@@ -18,7 +19,8 @@ export type TaskFlightRecorderEventKind =
   | 'waitpoint.state'
   | 'verification.outcome'
   | 'provider.operation'
-  | 'artifact.recorded';
+  | 'artifact.recorded'
+  | 'checkpoint.state';
 
 export type TaskFlightAttentionKind =
   | 'uncertain'
@@ -47,6 +49,9 @@ export interface TaskFlightRecorderEvent {
   hasResult?: boolean;
   provider?: string;
   artifactId?: string;
+  handlerVersion?: number;
+  verifier?: string;
+  invariantVersion?: number;
 }
 
 export interface TaskFlightRecorderAttention {
@@ -97,6 +102,7 @@ export interface TaskFlightRecorderInput {
   verifications?: TaskVerificationRecord[];
   providerOperations?: ProviderOperationRecord[];
   artifacts?: TaskArtifact[];
+  checkpoints?: TaskCheckpoint[];
   traceId?: string;
   waterfall?: TaskFlightSpan[];
   now?: () => Date;
@@ -110,7 +116,7 @@ export interface TaskFlightRecorderInput {
  * richer attempt/effect audit records when those records are available.
  */
 export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRecorder {
-  const { task, executionResults = [], steps = [], waitpoints = [], verifications = [], providerOperations = [], artifacts = [], waterfall = [] } = input;
+  const { task, executionResults = [], steps = [], waitpoints = [], verifications = [], providerOperations = [], artifacts = [], checkpoints = [], waterfall = [] } = input;
   const now = (input.now ?? (() => new Date()))();
   const generatedAt = now.toISOString();
   const resultByExecution = new Map(executionResults.map((result) => [result.executionId, result]));
@@ -174,6 +180,16 @@ export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRe
       hasResult: step.state === 'completed' &&
         (Object.prototype.hasOwnProperty.call(step, 'result') || Boolean(step.resultRef)),
     })),
+    ...checkpoints.map((checkpoint) => ({
+      id: `${checkpoint.id}:version:${checkpoint.version}`,
+      observedAt: checkpoint.updatedAt,
+      kind: 'checkpoint.state' as const,
+      label: `Checkpoint ${checkpoint.key} · handler v${checkpoint.handlerVersion}`,
+      state: checkpoint.completed ? 'completed' : 'saved',
+      executionId: checkpoint.executionId,
+      handlerVersion: checkpoint.handlerVersion,
+      message: `Input SHA-256 ${checkpoint.inputChecksum.slice(0, 12)}…`,
+    })),
     ...waitpoints.flatMap((waitpoint) => [
       {
         id: `${waitpoint.id}:created`,
@@ -195,8 +211,9 @@ export function taskFlightRecorder(input: TaskFlightRecorderInput): TaskFlightRe
     ]),
     ...verifications.map((verification) => ({
       id: verification.id, observedAt: verification.verifiedAt, kind: 'verification.outcome' as const,
-      label: verification.status === 'verified' ? 'Business outcome verified' : verification.status === 'mismatch' ? 'Business outcome mismatch' : 'Verification inconclusive',
-      state: verification.status, message: verification.summary,
+      label: `${verification.status === 'verified' ? 'Business outcome verified' : verification.status === 'mismatch' ? 'Business outcome mismatch' : 'Verification inconclusive'} · ${verification.verifier}${verification.finding ? ` v${verification.finding.invariantVersion}` : ''}`,
+      state: verification.status, message: verification.summary, verifier: verification.verifier,
+      ...(verification.finding ? { invariantVersion: verification.finding.invariantVersion } : {}),
     })),
     ...providerOperations.map((operation) => ({
       id: operation.id, observedAt: operation.updatedAt, kind: 'provider.operation' as const,

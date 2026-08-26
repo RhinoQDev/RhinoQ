@@ -87,7 +87,7 @@ export class TaskListStore {
             continue;
           }
           if (event.type !== 'task.snapshot' || 'executions' in event.task === false) continue;
-          const tasks = mergeNewestPage(this.state.tasks, [event.task as TaskSnapshot]);
+          const tasks = mergeNewestSnapshots(this.state.tasks, [event.task as TaskSnapshot]);
           const filtered = tasks.filter((task) =>
             (!this.query.states?.length || this.query.states.includes(task.state)) &&
             (!this.query.types?.length || this.query.types.includes(task.type)));
@@ -115,6 +115,16 @@ function mergeNewestPage(current: TaskSnapshot[], incoming: TaskSnapshot[]): Tas
     const old = previous.get(task.id);
     if (!old || task.entityVersion >= old.entityVersion) byId.set(task.id, task);
     else byId.set(task.id, old);
+  }
+  return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** A point update must not evict unrelated Tasks from the authoritative page. */
+function mergeNewestSnapshots(current: TaskSnapshot[], incoming: TaskSnapshot[]): TaskSnapshot[] {
+  const byId = new Map(current.map((task) => [task.id, task]));
+  for (const task of incoming) {
+    const old = byId.get(task.id);
+    if (!old || task.entityVersion >= old.entityVersion) byId.set(task.id, task);
   }
   return [...byId.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

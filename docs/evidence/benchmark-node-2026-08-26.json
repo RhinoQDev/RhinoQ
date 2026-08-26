@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T05:18:53.427Z",
+  "runtime": { "node": "v24.19.0", "platform": "win32", "arch": "x64" },
+  "configuration": { "iterations": 100000, "samples": 7 },
+  "checksum": 3749111832,
+  "results": [
+    { "name": "task-store-newer-snapshot", "iterations": 100000, "samples": 7, "medianMs": 39.116, "p95Ms": 44.035, "medianOpsPerSecond": 2556486, "p95NanosecondsPerOperation": 440 },
+    { "name": "task-store-stale-rejection", "iterations": 100000, "samples": 7, "medianMs": 39.241, "p95Ms": 41.019, "medianOpsPerSecond": 2548375, "p95NanosecondsPerOperation": 410 },
+    { "name": "bullmq-count-progress-map", "iterations": 1000000, "samples": 7, "medianMs": 26.364, "p95Ms": 37.302, "medianOpsPerSecond": 37930511, "p95NanosecondsPerOperation": 37 },
+    { "name": "bullmq-percentage-progress-map", "iterations": 1000000, "samples": 7, "medianMs": 35.943, "p95Ms": 42.686, "medianOpsPerSecond": 27822061, "p95NanosecondsPerOperation": 43 }
+  ],
+  "limitations": [
+    "in-process SDK paths only",
+    "no HTTP, PostgreSQL, Redis, worker, provider or browser latency",
+    "single Windows host; not production throughput evidence"
+  ]
+}

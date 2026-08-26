@@ -15,7 +15,7 @@ You get progress, attempts, cancellation, results, realtime updates, a Task
 Center for users and a Workbench for operators. Your application keeps its
 business handler, authentication and provider policy.
 
-Latest verified npm prerelease: `v0.1.0-beta.26`.
+Latest verified npm prerelease: `v0.1.0-beta.27`.
 
 | Before RhinoQ | With RhinoQ |
 |---|---|
@@ -295,6 +295,25 @@ The standard composition exposes:
 | `/task-center` | end-user Task history and progress | same owner session |
 | `/admin` | operator Workbench | explicit operator authorization |
 
+Task Center and Workbench use the same compact product navigation. The
+Workbench keeps the attention list in place and opens Task evidence in a
+right-side drawer; close it with the close button, backdrop or `Escape`.
+The standalone Task Center pages four cards at a time; Workbench pages ten rows
+at a time. Both surfaces show the visible range and retain page/view state in
+the URL, and their active navigation tabs use the same visual treatment. The
+owner surface keeps an explicit 200-Task realtime window; Workbench uses its
+operator-configured bounded `limit` (100 by default, at most 500).
+The drawer grows each evidence section to its full content height, wraps long
+diagnostic text and contains wide attempt tables in an internal horizontal
+viewport rather than clipping text or overflowing the page.
+Task Center actions expose busy state without shifting button width, and their
+success/error toasts include a plain-language outcome and next action. Motion
+is dependency-free, scoped to the embedded surface and disabled when the user
+prefers reduced motion.
+SSE and polling snapshots reconcile cards by Task ID. Progress-only updates
+reuse the existing DOM and controls, preserving keyboard focus and scroll
+position while changing only the affected values.
+
 Do not send storage references, runtime job IDs or operator credentials to the
 owner API. Use `resolveResult`, `resolveArtifact`, `authorize` and tenant hooks
 at the server boundary.
@@ -331,24 +350,40 @@ It rejects unsafe URLs and does not invent an ETA. See
 import * as React from 'react';
 import { createRhinoQComponents } from '@rhinoq/node/react';
 
-const { RhinoQTaskList, RhinoQTaskDetail } = createRhinoQComponents(React);
+const { RhinoQTaskCenter } = createRhinoQComponents(React);
 
-export function Activity({ taskId }) {
-  return taskId
-    ? <RhinoQTaskDetail taskId={taskId} client={ownerClient} />
-    : <RhinoQTaskList client={ownerClient} />;
+export function Activity({ user }) {
+  return <RhinoQTaskCenter
+    apiUrl="/api/rhinoq/tasks"
+    currentUser={{ name: user.name }}
+    retryCommandId={() => crypto.randomUUID()}
+  />;
 }
 ```
 
 The browser contract rejects stale entity versions and falls back to polling
-when SSE disconnects. The components include scoped responsive styles, subtle
-state/progress motion, reduced-motion handling and brand theme tokens; pass
-`unstyled` when the application owns every visual rule. See
+when SSE disconnects. The complete Task Center adds business-alias search,
+saved/deep-linked views, metrics, a keyboard-contained detail drawer, explicit
+approvals, secure result/artifact preview and action toasts while preserving
+keyed Task rows during progress updates. High-volume screens can select compact
+or minimal density, bounded scrolling, progressive batches, application-owned
+labels and `renderTask`; hide every optional surface or use the headless hooks
+when only a name and progress belong in the host UI. The components include scoped responsive styles,
+subtle state/progress motion, reduced-motion handling and brand theme tokens;
+pass `unstyled` when the application owns every visual rule. `currentUser` is
+display-only: the backend route must derive owner and tenant from its
+authenticated session. See
 [React UI](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/react-ui.md).
 
 Run `npm run test:visual` after installing Playwright Chromium to capture and
 check the standalone Task Center at desktop and mobile viewports. CI attaches
 both full-page PNGs for review.
+
+Task verification notifications can be drained from the durable PostgreSQL
+outbox with `TaskNotificationWorker`. `createTaskWebhookDelivery` reuses the
+signed webhook contract; `createTaskEmailDelivery` keeps recipients, templates
+and provider credentials application-owned. Claim leases, persisted retry
+scheduling and dedup remain in the Task store.
 
 ## Files and artifacts
 

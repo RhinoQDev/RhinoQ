@@ -43,3 +43,61 @@ test('embeddable list and detail render explicit loading states', () => {
   assert.equal(detail.children[0].type, 'style');
   assert.equal(detail.children[1].props.role, 'status');
 });
+
+test('RhinoQTaskCenter provides a complete owner-facing workspace from an API URL', () => {
+  const { RhinoQTaskCenter } = createRhinoQComponents(react);
+  const tree = RhinoQTaskCenter({
+    apiUrl: '/api/rhinoq/tasks',
+    currentUser: { name: 'Mai Nguyen' },
+    title: 'Background work',
+    retryCommandId: (task) => `${task.id}-retry-${task.entityVersion}`,
+    savedFilters: [{ id: 'attention', label: 'Needs review', filter: 'attention' }],
+  });
+  assert.equal(tree.type, 'section');
+  assert.match(tree.props.className, /rhinoq-center/);
+  assert.match(tree.children[0].children[0], /rhinoq-drawer/);
+  assert.match(tree.children[0].children[0], /rhinoq-toast/);
+  assert.equal(findText(tree, 'Background work'), true);
+  assert.equal(findText(tree, 'Mai Nguyen'), true);
+  assert.equal(findByProp(tree, 'aria-label', 'Search tasks')?.type, 'input');
+  assert.equal(findByProp(tree, 'aria-label', 'Saved task view')?.type, 'select');
+  assert.match(tree.children[0].children[0], /has-saved-filters/);
+  assert.equal(findByProp(tree, 'aria-label', 'Task overview')?.children.length, 4);
+  assert.equal(findByProp(tree, 'aria-label', 'Task notifications')?.props['aria-live'], 'polite');
+});
+
+test('RhinoQTaskCenter refuses to imply browser identity without an owner API', () => {
+  const { RhinoQTaskCenter } = createRhinoQComponents(react);
+  assert.throws(() => RhinoQTaskCenter({ currentUser: { name: 'Display only' } }), /requires client or apiUrl/);
+});
+
+test('RhinoQTaskCenter validates and exposes compact large-list controls', () => {
+  const { RhinoQTaskCenter } = createRhinoQComponents(react);
+  const tree = RhinoQTaskCenter({
+    apiUrl: '/api/rhinoq/tasks',
+    display: { density: 'compact', pageSize: 10, maxListHeight: 420, showMetrics: false },
+    taskLabel: (task) => `Video ${task.id}`,
+  });
+  assert.equal(tree.props['data-density'], 'compact');
+  assert.equal(findByProp(tree, 'aria-label', 'Task overview'), undefined);
+  assert.match(tree.children[0].children[0], /rhinoq-center-list-scroll/);
+  assert.match(tree.children[0].children[0], /data-density="compact"/);
+  assert.throws(() => RhinoQTaskCenter({ apiUrl: '/api/rhinoq/tasks', display: { pageSize: 0 } }), /pageSize must be 1\.\.100/);
+  assert.throws(() => RhinoQTaskCenter({ apiUrl: '/api/rhinoq/tasks', display: { maxListHeight: '' } }), /maxListHeight must not be empty/);
+});
+
+function findText(value, expected) {
+  if (value === expected) return true;
+  if (!value || typeof value !== 'object') return false;
+  return (value.children ?? []).some((child) => findText(child, expected));
+}
+
+function findByProp(value, name, expected) {
+  if (!value || typeof value !== 'object') return undefined;
+  if (value.props?.[name] === expected) return value;
+  for (const child of value.children ?? []) {
+    const found = findByProp(child, name, expected);
+    if (found) return found;
+  }
+  return undefined;
+}

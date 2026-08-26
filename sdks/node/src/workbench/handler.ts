@@ -8,6 +8,7 @@ import type {
   TaskWaitpoint,
   TaskVerificationRecord,
   TaskArtifact,
+  TaskCheckpoint,
   ProviderOperationRecord,
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
@@ -33,6 +34,7 @@ export interface WorkbenchTaskSource {
   listTaskWaitpoints?(taskId: string): Promise<TaskWaitpoint[]>;
   listTaskVerifications?(taskId: string): Promise<TaskVerificationRecord[]>;
   listTaskArtifacts?(taskId: string): Promise<TaskArtifact[]>;
+  listTaskCheckpoints?(taskId: string, limit?: number): Promise<TaskCheckpoint[]>;
   listDurableSteps?(taskId: string, itemKey?: string): Promise<DurableStepRecord[]>;
   /** Join the Go-owned provider ledger by its explicit taskId correlation. */
   listProviderOperationsByTask?(taskId: string): Promise<ProviderOperationRecord[]>;

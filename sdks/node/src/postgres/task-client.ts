@@ -460,6 +460,18 @@ export class PostgresTaskClient implements TaskClient, DurableStepClient, RhinoQ
     return row ? mapCheckpoint(row) : undefined;
   }
 
+  /** Operator-only checkpoint evidence; owner HTTP routes deliberately do not expose checkpoint state. */
+  async listTaskCheckpoints(taskId: string, limit = 100): Promise<TaskCheckpoint[]> {
+    if (!taskId?.trim()) throw new TypeError('checkpoint task id is required');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new RangeError('checkpoint limit must be 1..500');
+    const result = await this.execute<CheckpointRow>(
+      `SELECT id,task_id,execution_id,checkpoint_key,handler_version,input_checksum,state,completed,version,created_at,updated_at
+       FROM rhinoq_task.checkpoints WHERE task_id=$1 ORDER BY updated_at,id LIMIT $2`,
+      [taskId, limit],
+    );
+    return result.rows.map(mapCheckpoint);
+  }
+
   async deleteTaskCheckpoints(executionId: string): Promise<number> {
     if (!executionId?.trim()) throw new TypeError('checkpoint executionId is required');
     const result = await this.execute<{ count: number | string }>(

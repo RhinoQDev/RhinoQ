@@ -2,9 +2,12 @@ import type {
   TaskExecutionResult,
   TaskExecutionRuntimeRefs,
   TaskExecutionSummary,
+  TaskArtifactRecord,
+  TaskCheckpoint,
   TaskSnapshot,
   TaskSummary,
   TaskVerificationRecord,
+  TaskWaitpoint,
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
 import type { OwnerFacingTaskStore } from '../tasks/http.js';
@@ -57,6 +60,11 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
       executions: [execution('demo-confirmation:attempt:1', 'succeeded', 1, 'provider-publish', false)],
       createdAt: iso(created - 210_000), updatedAt: iso(created - 48_000),
     })],
+    ['demo-approval', createTask({
+      id: 'demo-approval', type: 'budget.approval', ownerId: 'demo-user', state: 'pending',
+      progress: { completed: 0, total: 1, message: 'Waiting for your approval' },
+      executions: [], createdAt: iso(created - 150_000), updatedAt: iso(created - 36_000),
+    })],
   ]);
   const results = new Map<string, TaskExecutionResult[]>([
     ['demo-export', []],
@@ -65,12 +73,37 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
       result('demo-failed:attempt:1', 1, 'failed', undefined, created - 120_000, 'Provider returned a bounded demo 502'),
       result('demo-failed:attempt:2', 2, 'failed', undefined, created - 72_000, 'Retry is available only after review'),
     ]],
+    ['demo-approval', []],
   ]);
   const verifications = new Map<string, TaskVerificationRecord[]>([
     ['demo-complete', [{
       schemaVersion: 1, id: 'demo-complete:verification:1', taskId: 'demo-complete', verifier: 'demo.archive.exists',
-      status: 'verified', summary: 'The demo result is present and readable.', verifiedAt: iso(created - 17_000), createdAt: iso(created - 17_000),
+      status: 'verified', summary: 'The demo result is present and readable.',
+      finding: { ruleId: 'demo.archive.exists', subjectType: 'report', subjectId: 'demo-complete', invariantVersion: 3, deepLink: '/rhinoq?task=demo-complete' },
+      verifiedAt: iso(created - 17_000), createdAt: iso(created - 17_000),
     }]],
+  ]);
+  const waitpoints = new Map<string, TaskWaitpoint[]>([
+    ['demo-approval', [{
+      schemaVersion: 1, entityVersion: 1, id: 'demo-approval:waitpoint:review', taskId: 'demo-approval',
+      key: 'review-marketing-budget', kind: 'approval', state: 'waiting', payloadVersion: 1,
+      deadline: iso(created + 86_400_000), createdAt: iso(created - 36_000), updatedAt: iso(created - 36_000),
+    }]],
+    ['demo-confirmation', [{
+      schemaVersion: 1, entityVersion: 1, id: 'demo-confirmation:waitpoint:provider', taskId: 'demo-confirmation',
+      key: 'provider-readback', kind: 'webhook', state: 'waiting', payloadVersion: 1,
+      createdAt: iso(created - 48_000), updatedAt: iso(created - 48_000),
+    }]],
+  ]);
+  const artifacts = new Map<string, TaskArtifactRecord[]>([
+    ['demo-complete', [
+      { schemaVersion: 1, entityVersion: 1, id: 'demo-complete:artifact:csv', taskId: 'demo-complete', executionId: 'demo-complete:attempt:1', name: 'report-archive.csv', contentType: 'text/csv', sizeBytes: 1842, checksumSha256: 'b9f0d8a44f4497b8e3c82dbe37d4139e82bf4273e778b512bbf1944f051c25c1', expiresAt: iso(created + 3_600_000), lineage: [], reference: 'demo://artifact/report-archive.csv', createdAt: iso(created - 18_000), updatedAt: iso(created - 18_000) },
+      { schemaVersion: 1, entityVersion: 1, id: 'demo-complete:artifact:preview', taskId: 'demo-complete', executionId: 'demo-complete:attempt:1', name: 'report-preview.svg', contentType: 'image/svg+xml', sizeBytes: 1260, checksumSha256: '28ac5e4728b16a43b6601d37d78619579c5a8264e173f24cee3396c1c57e7a4b', expiresAt: iso(created + 3_600_000), lineage: ['demo-complete:artifact:csv'], reference: 'demo://artifact/report-preview.svg', createdAt: iso(created - 17_000), updatedAt: iso(created - 17_000) },
+    ]],
+  ]);
+  const checkpoints = new Map<string, TaskCheckpoint[]>([
+    ['demo-export', [{ schemaVersion: 1, id: 'demo-export:checkpoint:records', taskId: 'demo-export', executionId: 'demo-export:attempt:1', key: 'records-page', handlerVersion: 4, inputChecksum: '9adf5f3d24d854819afcc8b17be6d16ca4e075972659fec64ce2a4a99db46cd8', state: { offset: 28 }, completed: false, version: 3, createdAt: iso(created - 10_000), updatedAt: iso(created - 2_000) }]],
+    ['demo-complete', [{ schemaVersion: 1, id: 'demo-complete:checkpoint:archive', taskId: 'demo-complete', executionId: 'demo-complete:attempt:1', key: 'archive-written', handlerVersion: 2, inputChecksum: '2a7b9eb72f6fd44d2b7d9f80b8f76f28fb86140676f47d4c77690e0f9a91335b', state: { artifactId: 'demo-complete:artifact:csv' }, completed: true, version: 1, createdAt: iso(created - 19_000), updatedAt: iso(created - 18_000) }]],
   ]);
   let timer: ReturnType<typeof setInterval> | undefined;
   const ownedTask = (taskId: string, ownerId: string): DemoTask => {
@@ -82,7 +115,7 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
   const source: DemoTaskSource = {
     start() {
       if (timer) return;
-      timer = setInterval(() => advanceDemo(tasks), 1_200);
+      timer = setInterval(() => advanceDemo(tasks), 2_000);
       timer.unref?.();
     },
     stop() {
@@ -142,21 +175,41 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
         })),
       };
     },
-    async listTaskWaitpoints() { return []; },
-    async listTaskWaitpointsForOwner(taskId, ownerId) { ownedTask(taskId, ownerId); return []; },
-    async listWaitingTaskWaitpointsForOwner() { return []; },
+    async listTaskWaitpoints(taskId) { return clone(waitpoints.get(taskId) ?? []); },
+    async listTaskWaitpointsForOwner(taskId, ownerId, limit = 100) { ownedTask(taskId, ownerId); return clone(waitpoints.get(taskId) ?? []).slice(0, limit); },
+    async listWaitingTaskWaitpointsForOwner(ownerId, limit = 50) {
+      return [...waitpoints.entries()].filter(([taskId]) => ownedTask(taskId, ownerId)).flatMap(([, records]) => clone(records)).filter((item) => item.state === 'waiting').slice(0, limit);
+    },
     async createTaskWaitpoint() { throw new Error('demo waitpoint creation is unavailable'); },
-    async getTaskWaitpoint() { throw new Error('demo waitpoint was not found'); },
-    async resolveTaskWaitpoint() { throw new Error('demo waitpoint resolution is unavailable'); },
+    async getTaskWaitpoint(id, ownerId) {
+      const record = [...waitpoints.values()].flat().find((item) => item.id === id);
+      if (!record || !ownerId) throw new Error('demo waitpoint was not found');
+      ownedTask(record.taskId, ownerId); return clone(record);
+    },
+    async resolveTaskWaitpoint(id, ownerId, request) {
+      const record = await source.getTaskWaitpoint(id, ownerId);
+      if (record.entityVersion !== request.expectedVersion || record.state !== 'waiting') throw new Error('demo waitpoint version conflict');
+      const changed: TaskWaitpoint = { ...record, entityVersion: record.entityVersion + 1, state: 'resolved', resolution: request.resolution, resolvedBy: ownerId, resolvedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      waitpoints.set(record.taskId, (waitpoints.get(record.taskId) ?? []).map((item) => item.id === id ? changed : item));
+      const task = ownedTask(record.taskId, ownerId);
+      const approved = request.resolution === true;
+      tasks.set(task.id, { ...task, entityVersion: task.entityVersion + 1, state: approved ? 'queued' : 'cancelled', progress: approved ? { completed: 0, total: 1, message: 'Approved and ready to start' } : { completed: 0, total: 1, message: 'Declined by the requester' }, cancellation: approved ? task.cancellation : { status: 'cancelled', reason: 'The approval was declined.' }, updatedAt: changed.updatedAt });
+      return clone(changed);
+    },
     async listTaskVerifications(taskId: string) { return [...(verifications.get(taskId) ?? [])]; },
     async listTaskVerificationsForOwner(taskId, ownerId, limit = 50) { ownedTask(taskId, ownerId); return clone(verifications.get(taskId) ?? []).slice(0, limit); },
     async listRecentlyVerifiedForOwner(ownerId, limit = 20) {
       return [...tasks.values()].filter((task) => task.ownerId === ownerId)
         .flatMap((task) => clone(verifications.get(task.id) ?? [])).slice(0, limit);
     },
-    async listTaskArtifacts() { return []; },
-    async listTaskArtifactsForOwner(taskId, ownerId) { ownedTask(taskId, ownerId); return []; },
-    async getTaskArtifactForOwner() { throw new Error('demo artifact was not found'); },
+    async listTaskArtifacts(taskId) { return clone(artifacts.get(taskId) ?? []); },
+    async listTaskCheckpoints(taskId, limit = 100) { return clone(checkpoints.get(taskId) ?? []).slice(0, limit); },
+    async listTaskArtifactsForOwner(taskId, ownerId, limit = 100) { ownedTask(taskId, ownerId); return clone(artifacts.get(taskId) ?? []).slice(0, limit); },
+    async getTaskArtifactForOwner(id, ownerId) {
+      const artifact = [...artifacts.values()].flat().find((item) => item.id === id);
+      if (!artifact) throw new Error('demo artifact was not found');
+      ownedTask(artifact.taskId, ownerId); return clone(artifact);
+    },
     async refreshTaskArtifact() { throw new Error('demo artifact refresh is unavailable'); },
     async listProviderOperationsByTask() { return []; },
     async requestTaskCancellation(taskId: string, expectedVersion: number): Promise<TaskSnapshot> {
@@ -223,7 +276,28 @@ function result(executionId: string, attempt: number, state: string, reference: 
 function toSummary(task: DemoTask): TaskSummary {
   const { executions, resultReference: _resultReference, ...rest } = clone(task);
   const counts = countExecutions(executions);
-  return { ...rest, executionCounts: counts, itemCounts: { ...counts, retries: Math.max(0, executions.length - counts.total) } };
+  return { ...rest, executionCounts: counts, itemCounts: countItems(executions) };
+}
+
+function countItems(executions: DemoTask['executions']) {
+  const latest = new Map<string, DemoTask['executions'][number]>();
+  for (const execution of executions) {
+    const key = execution.itemKey ?? execution.id;
+    const current = latest.get(key);
+    if (!current || execution.attempt > current.attempt) latest.set(key, execution);
+  }
+  const items = [...latest.values()];
+  return {
+    total: items.length,
+    pendingDispatch: items.filter((item) => item.state === 'pending_dispatch').length,
+    dispatched: items.filter((item) => item.state === 'dispatched').length,
+    running: items.filter((item) => item.state === 'running').length,
+    succeeded: items.filter((item) => item.state === 'succeeded').length,
+    failed: items.filter((item) => item.state === 'failed').length,
+    stalled: items.filter((item) => item.state === 'stalled').length,
+    cancelled: items.filter((item) => item.state === 'cancelled').length,
+    retries: Math.max(0, executions.length - items.length),
+  };
 }
 
 function countExecutions(executions: DemoTask['executions']) {
@@ -238,7 +312,7 @@ function countExecutions(executions: DemoTask['executions']) {
 function advanceDemo(tasks: Map<string, DemoTask>): void {
   const task = tasks.get('demo-export');
   if (!task || task.state !== 'running') return;
-  const completed = Math.min(task.progress.total ?? 100, task.progress.completed + 7);
+  const completed = Math.min(task.progress.total ?? 100, task.progress.completed + 1);
   const updated = clone(task);
   updated.entityVersion += 1;
   updated.progress = { completed, total: 100, message: completed >= 100 ? 'Đã hoàn tất và ghi nhận kết quả' : `Đang xử lý bản ghi ${completed}` };

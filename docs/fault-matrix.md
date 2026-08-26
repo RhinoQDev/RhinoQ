@@ -1,7 +1,7 @@
 # Fault evidence matrix
 
 `sdks/node/contracts/fault-matrix.json` is the machine-readable inventory of
-15 fault scenarios and their executable evidence markers. Run:
+16 fault scenarios and their executable evidence markers. Run:
 
 ```bash
 npm --prefix sdks/node run fault:check
@@ -12,6 +12,17 @@ The matrix covers SSE loss, polling fallback, stale/duplicate delivery,
 capacity release, authorization, provider timeout, lost repair response,
 dispatch/bind uncertainty, unsupported cancellation, secret redaction, tenant
 isolation and PostgreSQL/projector interruptions.
+The sixteenth scenario recreates a worker after a deterministic simulated
+process death and proves it resumes from a checksum/handler-version-fenced
+checkpoint instead of replaying completed segments.
+
+The 2026-08-26 product-surface campaign, including complete Go package evidence
+and new local PostgreSQL/Redis container evidence, is recorded in
+[`evidence/task-center-product-campaign-2026-08-26.md`](./evidence/task-center-product-campaign-2026-08-26.md).
+The current destructive local drills are recorded in
+[`evidence/postgres-failover-2026-08-26.md`](./evidence/postgres-failover-2026-08-26.md)
+and
+[`evidence/redis-bullmq-chaos-2026-08-26.md`](./evidence/redis-bullmq-chaos-2026-08-26.md).
 
 The current remediation run and its negative evidence are recorded in
 [`evidence/remediation-campaign-2026-08-12.md`](./evidence/remediation-campaign-2026-08-12.md).

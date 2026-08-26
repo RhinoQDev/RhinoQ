@@ -1,6 +1,7 @@
 import type {
   ProviderOperationRecord,
   TaskArtifact,
+  TaskCheckpoint,
   TaskExecutionResults,
   TaskSnapshot,
   TaskVerificationRecord,
@@ -18,6 +19,7 @@ export interface RhinoQOperatorInspectionSource {
   listTaskWaitpoints?(taskId: string): Promise<TaskWaitpoint[]>;
   listTaskVerifications?(taskId: string): Promise<TaskVerificationRecord[]>;
   listTaskArtifacts?(taskId: string): Promise<TaskArtifact[]>;
+  listTaskCheckpoints?(taskId: string, limit?: number): Promise<TaskCheckpoint[]>;
   listDurableSteps?(taskId: string, itemKey?: string): Promise<DurableStepRecord[]>;
   listProviderOperationsByTask?(taskId: string): Promise<ProviderOperationRecord[]>;
 }
@@ -30,6 +32,7 @@ export interface RhinoQTaskInspection {
   waitpoints: readonly TaskWaitpoint[];
   verifications: readonly TaskVerificationRecord[];
   artifacts: readonly TaskArtifact[];
+  checkpoints: readonly TaskCheckpoint[];
   providerOperations: readonly ProviderOperationRecord[];
   flightRecorder: TaskFlightRecorder;
   incidentExplanation: IncidentExplanation;
@@ -55,7 +58,7 @@ export async function inspectRhinoQTask(
   if (!taskId?.trim()) throw new TypeError('task id is required');
   const task = await source.getTask(taskId.trim());
   const missingEvidence: string[] = [];
-  const [executionResults, steps, waitpoints, verifications, artifacts, providerOperations, runtimeReports] = await Promise.all([
+  const [executionResults, steps, waitpoints, verifications, artifacts, checkpoints, providerOperations, runtimeReports] = await Promise.all([
     optionalRead(
       'execution_results',
       source.getTaskExecutionResults.bind(source),
@@ -67,10 +70,11 @@ export async function inspectRhinoQTask(
     optionalRead('waitpoints', source.listTaskWaitpoints?.bind(source), [task.id], missingEvidence, []),
     optionalRead('verifications', source.listTaskVerifications?.bind(source), [task.id], missingEvidence, []),
     optionalRead('artifacts', source.listTaskArtifacts?.bind(source), [task.id], missingEvidence, []),
+    optionalRead('checkpoints', source.listTaskCheckpoints?.bind(source), [task.id, 100], missingEvidence, []),
     optionalRead('provider_operations', options.providerOperationsByTask ?? source.listProviderOperationsByTask?.bind(source), [task.id], missingEvidence, []),
     optionalRead('runtime_reports', options.runtimeReports, [], missingEvidence, []),
   ]);
-  const flightRecorder = taskFlightRecorder({ task, executionResults: executionResults.executions, steps, waitpoints, verifications, artifacts, providerOperations });
+  const flightRecorder = taskFlightRecorder({ task, executionResults: executionResults.executions, steps, waitpoints, verifications, artifacts, checkpoints, providerOperations });
   const incidentExplanation = explainTaskIncident({ task, steps, verifications, providerOperations, runtimeReports });
   const evidencePassport = taskEvidencePassport({ task, executionResults: executionResults.executions, waitpoints, verifications, artifacts, providerOperations });
   return Object.freeze({
@@ -81,6 +85,7 @@ export async function inspectRhinoQTask(
     waitpoints: Object.freeze(waitpoints),
     verifications: Object.freeze(verifications),
     artifacts: Object.freeze(artifacts),
+    checkpoints: Object.freeze(checkpoints),
     providerOperations: Object.freeze(providerOperations),
     flightRecorder,
     incidentExplanation,

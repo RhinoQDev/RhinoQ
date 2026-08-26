@@ -70,6 +70,7 @@ export * from './tasks/waitpoint-token.js';
 export * from './tasks/waitpoint.js';
 export * from './tasks/waitpoint-http.js';
 export * from './tasks/checkpoint.js';
+export * from './tasks/notification-worker.js';
 export * from './tasks/durable.js';
 export * from './tasks/resource-lease.js';
 export * from './tasks/waitpoint-scheduler.js';

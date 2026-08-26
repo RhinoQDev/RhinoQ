@@ -130,6 +130,22 @@ test('TaskListStore consumes owner inbox SSE without interval polling', async ()
   store.stop();
 });
 
+test('Task inbox point updates preserve unrelated tasks from the current page', async () => {
+  const client = {
+    async listTasks() { return []; },
+    async *streamTasks() {
+      yield { type: 'task.page', tasks: [snapshot(1, 'running', 'one'), snapshot(1, 'running', 'two')] };
+      yield { type: 'task.snapshot', version: 2, task: snapshot(2, 'succeeded', 'one') };
+      await new Promise(() => {});
+    },
+  };
+  const store = new TaskListStore(client, {}, 250); store.start();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(store.getSnapshot().tasks.map((task) => task.id).sort(), ['one', 'two']);
+  assert.equal(store.getSnapshot().tasks.find((task) => task.id === 'one').entityVersion, 2);
+  store.stop();
+});
+
 test('Task inbox page events remove tasks displaced from the bounded page', async () => {
   const client = {
     async listTasks() { return []; },

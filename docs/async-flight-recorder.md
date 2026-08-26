@@ -22,13 +22,18 @@ GET /rhinoq/api/tasks/{taskId}/flight-recorder
 
 The projection is versioned (`schemaVersion: 2`) and contains:
 
-- `events`: task, execution and waitpoint observations;
+- `events`: task, execution, waitpoint, checkpoint and verification observations;
 - `attention`: uncertain, partial-failure, failed, waiting and expired states;
 - `explanation`: the first deterministic reason an operator should act;
 - `safeToRetry`: only where the available state makes that decision safe.
 - `attemptDiffs`: a bounded comparison of consecutive attempts for each item;
 - `waterfall`: optional application/provider spans with source-authored times;
 - `traceId`: optional correlation identity, never fabricated evidence.
+
+Checkpoint events include the recorded `handlerVersion` and input-checksum
+prefix. Verification events include the verifier identity and, when a Finding
+exists, its `invariantVersion`. These are operator-only reads: checkpoint state
+and runtime/storage identity remain absent from the owner browser API.
 
 The projection never copies storage references or runtime job IDs into the
 flight events. Runtime identity remains available only in the operator-gated

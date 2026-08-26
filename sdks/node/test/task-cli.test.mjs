@@ -107,14 +107,41 @@ test('dev demo serves the end-user Task Center and operator Workbench without Po
     const inbox = await fetch(`${origin}/tasks`);
     assert.equal(inbox.status, 200);
     const inboxPayload = await inbox.json();
-    assert.equal(inboxPayload.tasks.length, 4);
+    assert.equal(inboxPayload.tasks.length, 5);
     assert.ok(inboxPayload.tasks.some((task) => task.state === 'uncertain'));
+    assert.ok(inboxPayload.tasks.some((task) => task.id === 'demo-approval' && task.state === 'pending'));
     const capabilities = await fetch(`${origin}/tasks/_capabilities`);
     assert.equal(capabilities.status, 200);
     assert.equal((await capabilities.json()).retry, true);
     const result = await fetch(`${origin}/tasks/demo-complete/result`);
     assert.equal(result.status, 200);
     assert.match((await result.json()).url, /demo-results\/demo-complete\.csv/);
+    const artifacts = await fetch(`${origin}/tasks/demo-complete/artifacts?limit=100`);
+    assert.equal(artifacts.status, 200);
+    const artifactPayload = await artifacts.json();
+    assert.equal(artifactPayload.artifacts.length, 2);
+    assert.equal(artifactPayload.artifacts.some((artifact) => artifact.reference), false);
+    const previewArtifact = artifactPayload.artifacts.find((artifact) => artifact.contentType === 'image/svg+xml');
+    assert.ok(previewArtifact);
+    const artifactDownload = await fetch(`${origin}/tasks/demo-complete/artifacts/${encodeURIComponent(previewArtifact.id)}/download`);
+    assert.equal(artifactDownload.status, 200);
+    assert.match((await artifactDownload.json()).url, /demo-artifacts\/report-preview\.svg/);
+    const approvalWaitpoints = await fetch(`${origin}/tasks/demo-approval/waitpoints?limit=100`);
+    assert.equal(approvalWaitpoints.status, 200);
+    const approvalPayload = await approvalWaitpoints.json();
+    assert.equal(approvalPayload.waitpoints.length, 1);
+    assert.equal(approvalPayload.waitpoints[0].kind, 'approval');
+    const resolvedApproval = await fetch(`${origin}/tasks/demo-approval/waitpoints/${encodeURIComponent(approvalPayload.waitpoints[0].id)}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1, resolutionId: 'demo-approval-test', resolution: true }),
+    });
+    assert.equal(resolvedApproval.status, 200);
+    assert.equal((await resolvedApproval.json()).state, 'resolved');
+    const approvedTask = await fetch(`${origin}/tasks/demo-approval`);
+    assert.equal((await approvedTask.json()).state, 'queued');
+    const uncertainWaitpoints = await fetch(`${origin}/tasks/demo-confirmation/waitpoints?limit=100`);
+    const uncertainPayload = await uncertainWaitpoints.json();
+    assert.equal(uncertainPayload.waitpoints[0].kind, 'webhook');
     const overview = await fetch(`${urls.workbench}/api/overview`);
     assert.equal(overview.status, 200);
     const payload = await overview.json();
@@ -123,6 +150,11 @@ test('dev demo serves the end-user Task Center and operator Workbench without Po
     const failed = await fetch(`${urls.workbench}/api/tasks/demo-failed/flight-recorder`);
     assert.equal(failed.status, 200);
     assert.match(await failed.text(), /demo-failed/);
+    const versionEvidence = await fetch(`${urls.workbench}/api/tasks/demo-complete/flight-recorder`);
+    assert.equal(versionEvidence.status, 200);
+    const versionPayload = await versionEvidence.json();
+    assert.ok(versionPayload.events.some((event) => event.kind === 'checkpoint.state' && event.handlerVersion === 2));
+    assert.ok(versionPayload.events.some((event) => event.kind === 'verification.outcome' && event.verifier === 'demo.archive.exists' && event.invariantVersion === 3));
     const retried = await fetch(`${origin}/tasks/demo-failed/retry`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ expectedVersion: 1, commandId: 'demo-failed-retry-1' }),

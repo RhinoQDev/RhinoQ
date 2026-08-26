@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T06:53:23.505Z",
+  "runtime": { "node": "v24.19.0", "postgres": "16.15" },
+  "configuration": {
+    "iterations": 1000,
+    "concurrencies": [1, 8, 16, 32],
+    "fanoutSizes": [10, 100, 500, 1000],
+    "fanoutConcurrencies": [8],
+    "fanoutReads": 100
+  },
+  "results": [
+    { "name": "postgres-task-create-with-snapshot", "concurrency": 1, "operations": 1000, "durationMs": 2621.607, "operationsPerSecond": 381, "latencyMs": { "p50": 2.174, "p95": 5.143, "p99": 6.532 } },
+    { "name": "postgres-task-read-snapshot", "concurrency": 1, "operations": 1000, "durationMs": 1400.68, "operationsPerSecond": 714, "latencyMs": { "p50": 1.22, "p95": 2.426, "p99": 3.614 } },
+    { "name": "postgres-task-create-with-snapshot", "concurrency": 8, "operations": 1000, "durationMs": 709.835, "operationsPerSecond": 1409, "latencyMs": { "p50": 4.606, "p95": 6.847, "p99": 8.407 } },
+    { "name": "postgres-task-read-snapshot", "concurrency": 8, "operations": 1000, "durationMs": 326.524, "operationsPerSecond": 3063, "latencyMs": { "p50": 2.156, "p95": 2.83, "p99": 3.235 } },
+    { "name": "postgres-task-create-with-snapshot", "concurrency": 16, "operations": 1000, "durationMs": 461.82, "operationsPerSecond": 2165, "latencyMs": { "p50": 5.499, "p95": 7.321, "p99": 9.297 } },
+    { "name": "postgres-task-read-snapshot", "concurrency": 16, "operations": 1000, "durationMs": 282.076, "operationsPerSecond": 3545, "latencyMs": { "p50": 3.321, "p95": 5.198, "p99": 5.783 } },
+    { "name": "postgres-task-create-with-snapshot", "concurrency": 32, "operations": 1000, "durationMs": 484.857, "operationsPerSecond": 2062, "latencyMs": { "p50": 10.494, "p95": 16.505, "p99": 63.951 } },
+    { "name": "postgres-task-read-snapshot", "concurrency": 32, "operations": 1000, "durationMs": 209.46, "operationsPerSecond": 4774, "latencyMs": { "p50": 4.924, "p95": 7.082, "p99": 7.836 } }
+  ],
+  "fanout": [
+    {
+      "executions": 10, "concurrency": 8, "snapshotBytes": 2417, "summaryBytes": 589,
+      "executionPages": { "pageSize": 100, "pages": 1, "executions": 10, "durationMs": 4.742 },
+      "reserve": { "name": "postgres-fanout-reserve-with-growing-snapshot", "concurrency": 8, "operations": 10, "durationMs": 25.215, "operationsPerSecond": 397, "latencyMs": { "p50": 13.611, "p95": 20.199, "p99": 20.199 } },
+      "read": { "name": "postgres-fanout-read-snapshot", "concurrency": 16, "operations": 100, "durationMs": 30.822, "operationsPerSecond": 3244, "latencyMs": { "p50": 3.902, "p95": 5.347, "p99": 5.661 } },
+      "summaryRead": { "name": "postgres-fanout-read-summary", "concurrency": 16, "operations": 100, "durationMs": 30.759, "operationsPerSecond": 3251, "latencyMs": { "p50": 3.413, "p95": 5.324, "p99": 5.872 } }
+    },
+    {
+      "executions": 100, "concurrency": 8, "snapshotBytes": 21419, "summaryBytes": 595,
+      "executionPages": { "pageSize": 100, "pages": 1, "executions": 100, "durationMs": 4.304 },
+      "reserve": { "name": "postgres-fanout-reserve-with-growing-snapshot", "concurrency": 8, "operations": 100, "durationMs": 128.727, "operationsPerSecond": 777, "latencyMs": { "p50": 7.684, "p95": 10.494, "p99": 10.761 } },
+      "read": { "name": "postgres-fanout-read-snapshot", "concurrency": 16, "operations": 100, "durationMs": 64.876, "operationsPerSecond": 1541, "latencyMs": { "p50": 7.858, "p95": 10.383, "p99": 10.947 } },
+      "summaryRead": { "name": "postgres-fanout-read-summary", "concurrency": 16, "operations": 100, "durationMs": 31.548, "operationsPerSecond": 3170, "latencyMs": { "p50": 3.906, "p95": 5.033, "p99": 5.431 } }
+    },
+    {
+      "executions": 500, "concurrency": 8, "snapshotBytes": 106619, "summaryBytes": 595,
+      "executionPages": { "pageSize": 100, "pages": 5, "executions": 500, "durationMs": 37.518 },
+      "reserve": { "name": "postgres-fanout-reserve-with-growing-snapshot", "concurrency": 8, "operations": 500, "durationMs": 1062.916, "operationsPerSecond": 470, "latencyMs": { "p50": 13.512, "p95": 20.972, "p99": 24.02 } },
+      "read": { "name": "postgres-fanout-read-snapshot", "concurrency": 16, "operations": 100, "durationMs": 270.349, "operationsPerSecond": 370, "latencyMs": { "p50": 30.095, "p95": 44.438, "p99": 48.46 } },
+      "summaryRead": { "name": "postgres-fanout-read-summary", "concurrency": 16, "operations": 100, "durationMs": 50.369, "operationsPerSecond": 1985, "latencyMs": { "p50": 5.984, "p95": 7.596, "p99": 9.045 } }
+    },
+    {
+      "executions": 1000, "concurrency": 8, "snapshotBytes": 214121, "summaryBytes": 601,
+      "executionPages": { "pageSize": 100, "pages": 10, "executions": 1000, "durationMs": 81.118 },
+      "reserve": { "name": "postgres-fanout-reserve-with-growing-snapshot", "concurrency": 8, "operations": 1000, "durationMs": 3298.882, "operationsPerSecond": 303, "latencyMs": { "p50": 18.745, "p95": 33.115, "p99": 37.627 } },
+      "read": { "name": "postgres-fanout-read-snapshot", "concurrency": 16, "operations": 100, "durationMs": 469.961, "operationsPerSecond": 213, "latencyMs": { "p50": 51.195, "p95": 80.43, "p99": 86.097 } },
+      "summaryRead": { "name": "postgres-fanout-read-summary", "concurrency": 16, "operations": 100, "durationMs": 80.145, "operationsPerSecond": 1248, "latencyMs": { "p50": 7.107, "p95": 11.764, "p99": 15.787 } }
+    }
+  ]
+}

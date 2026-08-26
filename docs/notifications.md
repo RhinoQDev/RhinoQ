@@ -85,3 +85,43 @@ and 5xx responses are retried; authentication and other 4xx failures stop.
 This is not a durable scheduler. The Go delivery ledger remains authoritative
 for persisted delivery state, retry scheduling and cross-process
 deduplication. A Node process crash can still lose an in-process retry.
+
+## Task verification email and webhook delivery
+
+The PostgreSQL Task profile has a separate durable `notification_outbox` for
+business-verification mismatches. Node applications can drain it without
+reimplementing lease or retry correctness:
+
+```ts
+const delivery = createTaskWebhookDelivery({
+  destination: resolvedDestination,
+  severity: (record) => severityPolicy(record.finding),
+});
+
+await new TaskNotificationWorker({
+  queue: app.tasks,
+  delivery,
+  owner: `notify-${process.env.HOSTNAME}`,
+}).run(shutdownSignal);
+```
+
+`createTaskEmailDelivery` is provider-neutral. The application supplies
+`recipients`, `render` and `send`; the adapter passes the durable notification
+ID as `idempotencyKey`. This keeps tenant routing, addresses, templates and
+mail-provider credentials out of RhinoQ:
+
+```ts
+const email = createTaskEmailDelivery({
+  recipients: (record) => supportRecipients(record.finding),
+  render: (record) => ({
+    subject: `Task ${record.taskId} needs review`,
+    text: record.verification.summary ?? 'Open the Task link to review evidence.',
+  }),
+  send: (message) => mailProvider.send(message),
+});
+```
+
+The worker claims one row at a time. Success completes the leased row; failure
+records a bounded error and schedules the next claim through the store. It does
+not guess severity or recipients, send inline with Task correctness, or expose
+notification state to the owner browser API.

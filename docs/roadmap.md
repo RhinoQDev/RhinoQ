@@ -20,6 +20,12 @@ without migrating their queue.
 - [ ] browser acceptance in a real adopter application
 - [ ] run a deployment-shaped fault campaign and end-to-end benchmark
 
+The 2026-08-26 single-host Docker campaign now covers PostgreSQL integration,
+primary SIGKILL/manual standby promotion, Redis process restart, lost Agent
+acknowledgement and local PostgreSQL/adopter-shaped benchmarks. This gate stays
+open for a real adopter, multi-host partition/fencing and provider-shaped
+end-to-end latency; local containers are not relabeled as production evidence.
+
 The current competitive review is in
 [`docs/competitive-landscape.md`](./competitive-landscape.md). These gates take
 priority over a DAG engine, another runtime adapter or generic streaming.
@@ -154,11 +160,11 @@ requiring the application's current queue to be replaced.
 - [x] finding suppression, deduplication and regression lifecycle
 - [x] composite change cursor and bounded drain batches
 - [ ] adaptive reconciliation budgets and producer backpressure
-- [ ] handler and verifier version evidence
+- [x] handler and verifier version evidence in operator Flight Recorder events
 
 ## Verified Tasks safe recovery
 
-- [ ] resumable execution checkpoints
+- [x] checksum/handler-version-fenced resumable execution checkpoints
 - [x] repair preview and precondition checks
 - [x] approval policy and separation of duties
 - [x] apply idempotency token and post-repair verification

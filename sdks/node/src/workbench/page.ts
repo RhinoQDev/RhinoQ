@@ -71,6 +71,10 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   .s-succeeded { color: var(--accent); }
   .s-cancel_requested, .s-uncertain { color: var(--warn); }
   .empty { padding: 28px; text-align: center; color: var(--muted); }
+  .pager { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 13px;border-top:1px solid var(--line);background:var(--raised); }
+  .pager[hidden] { display:none; }.pager>span { color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums; }
+  .pager-actions { display:flex;gap:7px; }.pager button { min-height:32px;padding:5px 10px;border:1px solid var(--line-strong);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:12px;font-weight:650;cursor:pointer; }
+  .pager button:not(:disabled):hover { border-color:var(--accent);background:var(--accent-soft);color:var(--accent-strong); }.pager button:disabled { opacity:.45;cursor:not-allowed; }
 
   /* Loading is a state, not an absence: an operator must be able to tell
      "nothing yet" from "nothing there". */
@@ -164,10 +168,11 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
      evidence contracts stay unchanged; this layer only changes presentation. */
   :root{color-scheme:light;--bg:#f6f8fb;--panel:#fff;--raised:#f9fafb;--line:#e5e7eb;--line-strong:#d1d5db;--ink:#1f2937;--muted:#6b7280;--accent:#2563eb;--accent-strong:#1d4ed8;--accent-soft:#eff4fe;--warn:#9a6700;--warn-soft:#fff7ed;--bad:#dc2626;--bad-soft:#fef2f2;--success:#16a34a;--success-soft:#ecfdf3;--shadow:0 12px 32px rgba(15,23,42,.10);--ui:"Noto Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
   body{background:var(--bg);font-size:14px;line-height:1.55;letter-spacing:0}
-  body>header{min-height:56px;padding:0 max(24px,calc((100vw - 1240px)/2));border-bottom:1px solid var(--line);background:#fff;backdrop-filter:none;box-shadow:0 1px 2px rgba(15,23,42,.04)}
-  body>header h1{display:flex;align-items:center;align-self:stretch;margin-left:calc(-1 * max(24px,calc((100vw - 1240px)/2)));padding:0 22px;background:#0b2544}
-  body>header h1 a{color:#fff;font-size:14px;letter-spacing:.11em;text-transform:uppercase}
-  body>header nav{margin-left:2px;border:0;background:transparent}
+  body>header{min-height:58px;padding:0 max(20px,calc((100vw - 1240px)/2));gap:16px;border-bottom:1px solid var(--line);background:#fff;backdrop-filter:none;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+  body>header h1{display:flex;align-items:center;margin:0;padding:0;background:transparent}
+  body>header h1 a{display:flex;align-items:center;color:#101828;font-size:16px;font-weight:800;letter-spacing:-.02em;text-transform:none}
+  body>header h1 a:before{content:"";width:9px;height:9px;margin-right:8px;border-radius:3px;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+  body>header nav{margin-left:auto;border:0;background:transparent}
   body>header nav strong{border-radius:6px;background:var(--accent-soft);box-shadow:inset 0 -2px 0 var(--accent);color:var(--accent-strong)}
   body>header nav a{color:var(--muted)}
   body>header nav a:hover{background:var(--raised)}
@@ -192,15 +197,28 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   .attention{background:var(--warn-soft)}.attention.error{background:var(--bad-soft)}
   button.act{border-radius:6px;background:#fff}
   .live[data-state="live"] .dot{background:var(--success)}
-  @media(max-width:700px){body>header{padding:0 14px}body>header h1{margin-left:-14px}.workspace-intro{padding-bottom:16px}}
+  .detail-backdrop{position:fixed;inset:58px 0 0;z-index:39;background:rgba(15,23,42,.28);backdrop-filter:blur(2px)}
+  .detail-drawer{position:fixed;top:58px;right:0;bottom:0;z-index:40;display:flex;width:min(760px,94vw);flex-direction:column;border-left:1px solid var(--line);background:var(--bg);box-shadow:-18px 0 48px rgba(15,23,42,.16);animation:drawer-in .18s ease-out}
+  .detail-backdrop[hidden],.detail-drawer[hidden]{display:none}
+  .drawer-toolbar{display:flex;min-height:66px;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);background:#fff}
+  .drawer-title{display:grid;min-width:0;gap:2px}.drawer-title strong,.drawer-title span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .drawer-actions{display:flex;align-items:center;gap:8px;margin-left:auto}.drawer-close{width:36px;height:36px;padding:0;font-size:22px;line-height:1}
+  .drawer-scroll{display:grid;grid-auto-rows:max-content;align-content:start;gap:12px;min-width:0;overflow-x:hidden;overflow-y:auto;padding:12px 14px 32px;overscroll-behavior:contain;scrollbar-gutter:stable}
+  .drawer-section{align-self:start;width:100%;min-width:0;height:max-content;min-height:min-content;margin:0;border-radius:8px}.drawer-section .head{align-items:flex-start;background:#fff}.drawer-section .head strong{flex:0 0 auto}.drawer-section .head .muted{min-width:0;white-space:normal;overflow-wrap:anywhere}
+  .drawer-section>.scroll{width:100%;max-width:100%;min-width:0;overflow-x:auto;overscroll-behavior-inline:contain}.drawer-section table{min-width:640px;table-layout:fixed}.drawer-section th,.drawer-section td{vertical-align:top;white-space:normal;overflow-wrap:anywhere;word-break:normal}.drawer-section #detail th:nth-child(1),.drawer-section #detail td:nth-child(1){width:18%}.drawer-section #detail th:nth-child(2),.drawer-section #detail td:nth-child(2){width:10%}.drawer-section #detail th:nth-child(3),.drawer-section #detail td:nth-child(3){width:14%}.drawer-section #detail th:nth-child(4),.drawer-section #detail td:nth-child(4){width:31%}.drawer-section #detail th:nth-child(5),.drawer-section #detail td:nth-child(5){width:27%}
+  .drawer-section .guidance,.drawer-section .attention{overflow-wrap:anywhere}.drawer-section .guidance code{display:block;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}.drawer-section .timeline{min-width:0}.drawer-section .timeline li{min-width:0}.drawer-section .timeline strong,.drawer-section .timeline span{min-width:0;overflow-wrap:anywhere}
+  body.drawer-open{overflow:hidden}
+  @keyframes drawer-in{from{transform:translateX(28px);opacity:.45}to{transform:translateX(0);opacity:1}}
+  @media(prefers-reduced-motion:reduce){.detail-drawer{animation:none}}
+  @media(max-width:700px){body>header{padding:0 14px;gap:8px}body>header nav a,body>header nav strong{padding:6px 8px}.live{font-size:0}.workspace-intro{padding-bottom:16px}.detail-drawer{width:100vw}.drawer-scroll{padding:10px 10px 28px;scrollbar-gutter:auto}.drawer-section .head{display:grid;gap:3px}.drawer-section .timeline li{grid-template-columns:1fr}.drawer-section .timeline .event-message{grid-column:auto}}
+  @media(max-width:520px){.pager{align-items:stretch;flex-direction:column}.pager-actions{display:grid;grid-template-columns:1fr 1fr}.pager button{width:100%}}
 </style>
 </head>
 <body>
 <header>
   <h1><a href="__RHINOQ_HOME__">RhinoQ</a></h1>
   <nav aria-label="Product">__RHINOQ_NAV__<strong aria-current="page">Workbench</strong></nav>
-  <span class="muted" id="mode"></span>
-  <span class="live muted" id="live" data-state="connecting" style="margin-left:auto">
+  <span class="live muted" id="live" data-state="connecting">
     <span class="dot"></span><span id="liveText">connecting…</span>
   </span>
 </header>
@@ -233,13 +251,18 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
   <div class="panel">
     <div class="head"><strong id="listTitle">Tasks</strong><span class="muted" id="listNote"></span></div>
     <div class="scroll"><table id="list"><tbody></tbody></table></div>
+    <nav class="pager" id="listPager" aria-label="Workbench task pages"><span id="listPageSummary">—</span><div class="pager-actions"><button id="previousListPage" type="button" aria-label="Previous Workbench task page">← Previous</button><button id="nextListPage" type="button" aria-label="Next Workbench task page">Next →</button></div></nav>
   </div>
-  <div class="panel" id="detailPanel" hidden>
-    <div class="head">
-      <strong id="detailTitle"></strong>
-      <span class="muted" id="detailMeta"></span>
-      <button class="act" id="cancelBtn" style="margin-left:auto" hidden>Request cancellation</button>
-    </div>
+
+</main>
+<div class="detail-backdrop" id="detailBackdrop" hidden></div>
+<aside class="detail-drawer" id="detailDrawer" aria-label="Task details" aria-hidden="true" hidden>
+  <div class="drawer-toolbar">
+    <div class="drawer-title"><strong id="detailTitle">Task details</strong><span class="muted" id="detailMeta"></span></div>
+    <div class="drawer-actions"><button class="act" id="cancelBtn" hidden>Request cancellation</button><button class="act drawer-close" id="closeDetail" aria-label="Close task details">&times;</button></div>
+  </div>
+  <div class="drawer-scroll">
+  <section class="panel drawer-section" id="detailPanel">
     <div class="guidance" id="guidance">
       <strong id="guidanceHeadline">What this means</strong>
       <p id="guidanceExplanation"></p>
@@ -248,13 +271,13 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
       <p class="muted"><code id="terminalInspect"></code></p>
     </div>
     <div class="scroll"><table id="detail"><tbody></tbody></table></div>
-  </div>
-  <div class="panel" id="flightPanel" hidden>
+  </section>
+  <section class="panel drawer-section" id="flightPanel" hidden>
     <div class="head"><strong>Async Flight Recorder</strong><span class="muted" id="flightExplanation"></span></div>
     <div id="attention" aria-live="polite"></div>
     <ol class="timeline" id="timeline"></ol>
-  </div>
-  <div class="panel" id="incidentPanel" hidden>
+  </section>
+  <section class="panel drawer-section" id="incidentPanel" hidden>
     <div class="head"><strong>Incident Explainer</strong><span class="muted" id="incidentOutcome"></span></div>
     <div class="guidance">
       <strong id="incidentSummary"></strong>
@@ -263,17 +286,21 @@ export const WORKBENCH_PAGE = String.raw`<!doctype html>
       <div id="incidentEvidence"></div>
       <p class="next" id="incidentActions"></p>
     </div>
-  </div>
-  <div class="panel" id="proofPanel" hidden>
+  </section>
+  <section class="panel drawer-section" id="proofPanel" hidden>
     <div class="head"><strong>Evidence Passport</strong><span class="muted">causal proof view derived from the joined Task records</span></div>
     <div class="guidance"><strong id="proofTechnical"></strong><p id="proofExternal"></p><p id="proofBusiness"></p><p class="muted" id="proofRecovery"></p></div>
+  </section>
   </div>
-</main>
+</aside>
 <script>
 const base = location.pathname.replace(/\/+$/, '');
 let snap = null;          // last payload the server sent
-let active = 'attention';
-let currentId = new URLSearchParams(location.search).get('task');
+const initialParams = new URLSearchParams(location.search);
+let active = initialParams.get('view') || 'attention';
+let listPage = Math.max(1, Number.parseInt(initialParams.get('page') || '1', 10) || 1);
+const listPageSize = 10;
+let currentId = initialParams.get('task');
 let source = null;
 let pollTimer = null;
 let failures = 0;
@@ -314,12 +341,14 @@ function renderAutopilot(report) {
   const panel = $('autopilotPanel');
   if (!report) { panel.hidden = true; return; }
   panel.hidden = false;
+  const recommendations = report.recommendations || [];
   $('autopilotStatus').textContent = report.phase === 'recommend' ? report.recommendations.length + ' recommendation(s) need review' : 'Observing project evidence';
   $('autopilotNote').textContent = report.note + (report.missingMetrics?.length ? ' Missing: ' + report.missingMetrics.join(', ') + '.' : '');
-  $('autopilotTable').innerHTML = report.recommendations?.length
-    ? '<thead><tr><th>Signal</th><th>Evidence</th><th>Expected effect</th><th>Guardrail / rollback</th></tr></thead><tbody>' + report.recommendations.map((item) =>
+  $('autopilotTable').closest('.scroll').hidden = recommendations.length === 0;
+  $('autopilotTable').innerHTML = recommendations.length
+    ? '<thead><tr><th>Signal</th><th>Evidence</th><th>Expected effect</th><th>Guardrail / rollback</th></tr></thead><tbody>' + recommendations.map((item) =>
       '<tr><td><strong>' + esc(item.id) + '</strong><br><span class="muted">' + esc(item.metric) + ' ' + esc(item.value) + ' / ' + esc(item.threshold) + ' ' + esc(item.unit) + '</span></td><td>' + esc(item.evidence) + '</td><td>' + esc(item.expectedEffect) + '</td><td>' + esc(item.guardrail) + '<br><span class="muted">' + esc(item.rollback) + '</span></td></tr>').join('') + '</tbody>'
-    : '<tbody><tr><td class="empty">No bounded recommendation is active.</td></tr></tbody>';
+    : '';
 }
 
 function renderAdoption(plan) {
@@ -351,13 +380,12 @@ function skeleton() {
 }
 
 function renderBuckets() {
-  $('mode').textContent = snap.actions ? 'actions enabled' : 'read-only';
   $('buckets').innerHTML = snap.states.map((state) =>
     '<button class="bucket" data-state="' + state + '" aria-pressed="' + (state === active) +
     '"><b class="s-' + state + '">' + (snap.counts[state] ?? 0) + '</b><span class="muted">' +
     state + '</span></button>').join('');
   for (const button of document.querySelectorAll('.bucket[data-state]')) {
-    button.onclick = () => { active = button.dataset.state; renderBuckets(); renderList(); };
+    button.onclick = () => { active = button.dataset.state; listPage = 1; updateListURL(false); renderBuckets(); renderList(); };
   }
 }
 
@@ -373,9 +401,18 @@ function renderRuntimeHealth() {
 }
 
 function renderList() {
-  const tasks = (snap.lists && snap.lists[active]) || [];
+  if (!snap.states.includes(active)) active = 'attention';
+  const allTasks = (snap.lists && snap.lists[active]) || [];
+  const pageCount = Math.max(1, Math.ceil(allTasks.length / listPageSize));
+  listPage = Math.min(listPage, pageCount);
+  const start = (listPage - 1) * listPageSize;
+  const tasks = allTasks.slice(start, start + listPageSize);
   $('listTitle').textContent = 'Tasks · ' + active;
-  $('listNote').textContent = tasks.length ? tasks.length + ' shown' : '';
+  $('listNote').textContent = allTasks.length ? (start + 1) + '–' + (start + tasks.length) + ' of ' + allTasks.length : '';
+  $('listPager').hidden = allTasks.length === 0;
+  $('listPageSummary').textContent = allTasks.length ? 'Page ' + listPage + ' of ' + pageCount + ' · ' + allTasks.length + ' task(s)' : 'No tasks';
+  $('previousListPage').disabled = listPage <= 1;
+  $('nextListPage').disabled = listPage >= pageCount;
   const body = $('list').querySelector('tbody');
   if (!tasks.length) {
     previousRows = new Map();
@@ -394,7 +431,7 @@ function renderList() {
       const signature = task.entityVersion + ':' + task.state + ':' + done;
       const changed = previousRows.has(task.id) && previousRows.get(task.id) !== signature;
       next.set(task.id, signature);
-      return '<tr data-id="' + esc(task.id) + '"' + (changed ? ' class="changed"' : '') +
+      return '<tr data-id="' + esc(task.id) + '" tabindex="0" aria-label="Open details for ' + esc(task.id) + '"' + (changed ? ' class="changed"' : '') +
         '><td><code>' + esc(task.id) + '</code></td><td>' + esc(task.type) + '</td><td class="meaning"><strong>' +
         esc(explanation.headline || task.state) + '</strong><br><span class="muted">' +
         esc(explanation.explanation || '') + '</span></td><td class="next-action">' +
@@ -405,7 +442,48 @@ function renderList() {
   previousRows = next;
   for (const row of body.querySelectorAll('tr[data-id]')) {
     row.onclick = () => select(row.dataset.id);
+    row.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(row.dataset.id); } };
   }
+}
+
+function updateListURL(push) {
+  const params = new URLSearchParams(location.search);
+  active === 'attention' ? params.delete('view') : params.set('view', active);
+  listPage > 1 ? params.set('page', String(listPage)) : params.delete('page');
+  const url = base + (params.size ? '?' + params : '');
+  history[push ? 'pushState' : 'replaceState']({}, '', url);
+}
+
+function moveListPage(delta) {
+  listPage = Math.max(1, listPage + delta);
+  updateListURL(true);
+  renderList();
+  $('list').scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+
+function openDrawer() {
+  $('detailDrawer').hidden = false;
+  $('detailDrawer').setAttribute('aria-hidden', 'false');
+  $('detailBackdrop').hidden = false;
+  document.body.classList.add('drawer-open');
+}
+
+function closeDrawer(updateHistory) {
+  currentId = null;
+  previousItems = new Map();
+  $('detailDrawer').hidden = true;
+  $('detailDrawer').setAttribute('aria-hidden', 'true');
+  $('detailBackdrop').hidden = true;
+  document.body.classList.remove('drawer-open');
+  $('flightPanel').hidden = true;
+  $('incidentPanel').hidden = true;
+  $('proofPanel').hidden = true;
+  if (updateHistory) {
+    const params = new URLSearchParams(location.search);
+    params.delete('task');
+    history.pushState({}, '', base + (params.size ? '?' + params : ''));
+  }
+  connect();
 }
 
 function renderDetail() {
@@ -413,7 +491,7 @@ function renderDetail() {
   if (!currentId || !detail || detail.task.id !== currentId) {
     return;
   }
-  $('detailPanel').hidden = false;
+  openDrawer();
   $('detailTitle').textContent = detail.task.id;
   $('detailMeta').textContent = detail.task.state + ' · v' + detail.task.entityVersion +
     ' · cancellation ' + (detail.task.cancellation?.status ?? 'none');
@@ -503,11 +581,13 @@ function render() {
 }
 
 function select(taskId) {
-  if (currentId === taskId) return;
+  if (currentId === taskId && !$('detailDrawer').hidden) return;
   currentId = taskId;
-  history.pushState({ taskId }, '', base + '?task=' + encodeURIComponent(taskId));
+  const params = new URLSearchParams(location.search);
+  params.set('task', taskId);
+  history.pushState({ taskId }, '', base + '?' + params);
   previousItems = new Map();
-  $('detailPanel').hidden = false;
+  openDrawer();
   $('flightPanel').hidden = true;
   $('incidentPanel').hidden = true;
   $('proofPanel').hidden = true;
@@ -518,16 +598,26 @@ function select(taskId) {
 }
 
 addEventListener('popstate', () => {
-  currentId = new URLSearchParams(location.search).get('task');
+  const params = new URLSearchParams(location.search);
+  currentId = params.get('task');
+  active = params.get('view') || 'attention';
+  listPage = Math.max(1, Number.parseInt(params.get('page') || '1', 10) || 1);
   previousItems = new Map();
+  if (snap) { renderBuckets(); renderList(); }
   if (!currentId) {
-    $('detailPanel').hidden = true;
-    $('flightPanel').hidden = true;
-    $('incidentPanel').hidden = true;
-    connect();
+    closeDrawer(false);
     return;
   }
+  openDrawer();
   connect();
+});
+
+$('closeDetail').onclick = () => closeDrawer(true);
+$('detailBackdrop').onclick = () => closeDrawer(true);
+$('previousListPage').onclick = () => moveListPage(-1);
+$('nextListPage').onclick = () => moveListPage(1);
+addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('detailDrawer').hidden) closeDrawer(true);
 });
 
 // Server-sent events. The server watches the store and writes only when
@@ -659,11 +749,15 @@ void loadAdoption();
 export function workbenchPage(
   navigation: { overviewPath?: string; tasksPath?: string } = {},
 ): string {
-  const home = escapeAttribute(navigation.overviewPath ?? navigation.tasksPath ?? '#');
-  const links = [
-    navigation.overviewPath ? `<a href="${escapeAttribute(navigation.overviewPath)}">Overview</a>` : '',
-    navigation.tasksPath ? `<a href="${escapeAttribute(navigation.tasksPath)}">Tasks</a>` : '',
-  ].join('');
+  const activityPath = navigation.tasksPath ?? navigation.overviewPath;
+  const home = escapeAttribute(activityPath ?? '#');
+  const overview = navigation.overviewPath && navigation.overviewPath !== navigation.tasksPath
+    ? `<a href="${escapeAttribute(navigation.overviewPath)}">Overview</a>`
+    : '';
+  const activity = navigation.tasksPath
+    ? `<a href="${escapeAttribute(navigation.tasksPath)}">My activity</a>`
+    : '';
+  const links = overview + activity;
   return WORKBENCH_PAGE
     .replace('__RHINOQ_HOME__', home)
     .replace('__RHINOQ_NAV__', links);
