@@ -142,7 +142,11 @@ async function openWorkbenchDrawer(page) {
 test('Workbench preserves list context and opens Task evidence on the right', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1024 });
   await openWorkbenchDrawer(page);
-  const layout = await page.locator('#detailDrawer').evaluate((drawer) => {
+  const drawer = page.locator('#detailDrawer');
+  // Visibility is reported at the first animation frame. Wait for the drawer's
+  // 28px entrance transform to settle before asserting its final edge.
+  await expect(drawer).toHaveCSS('transform', 'none');
+  const layout = await drawer.evaluate((drawer) => {
     const bounds = drawer.getBoundingClientRect();
     const sections = [...drawer.querySelectorAll('.drawer-section')];
     const scroll = drawer.querySelector('.drawer-scroll');
@@ -178,7 +182,9 @@ test('Workbench preserves list context and opens Task evidence on the right', as
 test('Workbench Task drawer becomes a full-width mobile surface', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openWorkbenchDrawer(page);
-  const layout = await page.locator('#detailDrawer').evaluate((drawer) => {
+  const drawer = page.locator('#detailDrawer');
+  await expect(drawer).toHaveCSS('transform', 'none');
+  const layout = await drawer.evaluate((drawer) => {
     const bounds = drawer.getBoundingClientRect();
     const sections = [...drawer.querySelectorAll('.drawer-section')];
     return {
