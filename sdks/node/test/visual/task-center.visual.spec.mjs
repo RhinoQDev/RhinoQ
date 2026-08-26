@@ -19,20 +19,27 @@ test('desktop Task Center keeps the compact workspace contract', async ({ page }
       cardRadius: card ? getComputedStyle(card).borderRadius : '',
     };
   });
-  expect(layout).toEqual({ overflow: false, titleSize: '26px', cardRadius: '8px' });
   await testInfo.attach('task-center-desktop', {
     body: await page.screenshot({ fullPage: true, animations: 'disabled' }),
     contentType: 'image/png',
   });
+  expect(layout).toEqual({ overflow: false, titleSize: '26px', cardRadius: '8px' });
 });
 
 test('mobile Task Center remains readable without horizontal overflow', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openStableTaskCenter(page);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-  await expect(page.locator('.rhinoq-tools')).toHaveCSS('grid-template-columns', /390px|350px|1fr/);
+  const layout = await page.locator('.rhinoq-tools').evaluate((tools) => ({
+    columns: getComputedStyle(tools).gridTemplateColumns.trim().split(/\s+/).length,
+    overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    right: Math.ceil(tools.getBoundingClientRect().right),
+    viewport: document.documentElement.clientWidth,
+  }));
   await testInfo.attach('task-center-mobile', {
     body: await page.screenshot({ fullPage: true, animations: 'disabled' }),
     contentType: 'image/png',
   });
+  expect(layout.columns).toBe(1);
+  expect(layout.overflow).toBe(false);
+  expect(layout.right).toBeLessThanOrEqual(layout.viewport);
 });
