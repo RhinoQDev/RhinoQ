@@ -1,6 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { ApplicationTaskClient } from '@rhinoq/node/browser';
+import { RhinoQTaskList } from './rhinoq-task-components';
+
+const taskClient = new ApplicationTaskClient({ url: '/api/tasks' });
 
 type DemoState = Record<string, unknown> & { orderId?: string; task?: { state?: string }; job?: string; provider?: { state?: string }; finding?: { status?: string }; repair?: { state?: string } };
 
@@ -42,6 +46,14 @@ export default function Dashboard() {
     </div>
     {busy && <p className="note">Running {busy}…</p>}
     {error && <p className="error">{error}</p>}
+    <div className="embedded-task-center">
+      <div className="embedded-task-copy">
+        <p className="eyebrow">EMBEDDED TASK CENTER</p>
+        <h2>Background work, inside the product</h2>
+        <p>This list reads the application-owned Task endpoint. No operator token reaches the browser.</p>
+      </div>
+      <RhinoQTaskList client={taskClient} pollIntervalMs={1000} />
+    </div>
     <details><summary>Evidence snapshot</summary><pre>{JSON.stringify(state, null, 2)}</pre></details>
   </section>;
 }

@@ -73,7 +73,7 @@ test('developer CLI help and Rule generator work without hidden services or over
   } finally { rmSync(cwd, { recursive:true, force:true }); }
 });
 
-test('dev demo serves the browser-first Workbench without PostgreSQL', async () => {
+test('dev demo serves the end-user Task Center and operator Workbench without PostgreSQL', async () => {
   const child = spawn(process.execPath, [developerCLI, 'dev', '--demo', '--port=0'], {
     cwd: mkdtempSync(join(tmpdir(), 'rhinoq-demo-')),
     encoding: 'utf8',
@@ -85,28 +85,52 @@ test('dev demo serves the browser-first Workbench without PostgreSQL', async () 
   child.stdout.on('data', (chunk) => { stdout += chunk; });
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   try {
-    const url = await new Promise((resolve, reject) => {
+    const urls = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`demo did not start: ${stdout}\n${stderr}`)), 10_000);
       const check = () => {
-        const match = stdout.match(/URL RhinoQ Workbench: (http:\/\/127\.0\.0\.1:\d+\/rhinoq)/);
-        if (!match) return;
+        const tasks = stdout.match(/URL RhinoQ Task Center: (http:\/\/127\.0\.0\.1:\d+\/task-center)/);
+        const workbench = stdout.match(/URL RhinoQ Workbench: (http:\/\/127\.0\.0\.1:\d+\/rhinoq)/);
+        if (!tasks || !workbench) return;
         clearTimeout(timer);
-        resolve(match[1]);
+        resolve({ tasks: tasks[1], workbench: workbench[1] });
       };
       child.stdout.on('data', check);
       check();
     });
-    const page = await fetch(url);
+    const page = await fetch(urls.workbench);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /RhinoQ Workbench/);
-    const overview = await fetch(`${url}/api/overview`);
+    const taskCenter = await fetch(urls.tasks);
+    assert.equal(taskCenter.status, 200);
+    assert.match(await taskCenter.text(), /data-rhinoq-task-center/);
+    const origin = new URL(urls.tasks).origin;
+    const inbox = await fetch(`${origin}/tasks`);
+    assert.equal(inbox.status, 200);
+    const inboxPayload = await inbox.json();
+    assert.equal(inboxPayload.tasks.length, 4);
+    assert.ok(inboxPayload.tasks.some((task) => task.state === 'uncertain'));
+    const capabilities = await fetch(`${origin}/tasks/_capabilities`);
+    assert.equal(capabilities.status, 200);
+    assert.equal((await capabilities.json()).retry, true);
+    const result = await fetch(`${origin}/tasks/demo-complete/result`);
+    assert.equal(result.status, 200);
+    assert.match((await result.json()).url, /demo-results\/demo-complete\.csv/);
+    const overview = await fetch(`${urls.workbench}/api/overview`);
     assert.equal(overview.status, 200);
     const payload = await overview.json();
     assert.equal(payload.actions, true);
     assert.equal(payload.counts.failed, 1);
-    const failed = await fetch(`${url}/api/tasks/demo-failed/flight-recorder`);
+    const failed = await fetch(`${urls.workbench}/api/tasks/demo-failed/flight-recorder`);
     assert.equal(failed.status, 200);
     assert.match(await failed.text(), /demo-failed/);
+    const retried = await fetch(`${origin}/tasks/demo-failed/retry`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1, commandId: 'demo-failed-retry-1' }),
+    });
+    assert.equal(retried.status, 200);
+    const retriedTask = await retried.json();
+    assert.equal(retriedTask.state, 'running');
+    assert.equal(retriedTask.executions.length, 3);
   } finally {
     child.kill();
     await once(child, 'close').catch(() => undefined);

@@ -57,9 +57,11 @@ to replace its existing worker runtime.
 npx rhinoq dev --demo
 ```
 
-This opens a disposable Workbench with synthetic running, completed and failed
-Tasks. It needs no database, Redis or provider credentials and writes no
-integration into your application.
+This opens the user-facing Task Center first, with direct navigation to the
+operator Workbench. Its synthetic Tasks cover running progress, a downloadable
+result, a failed attempt and an external result that still needs confirmation.
+It needs no database, Redis or provider credentials and writes no integration
+into your application.
 
 The user-facing Task Center turns background activity into a clear product
 experience: progress, results and work that still needs confirmation.
@@ -97,6 +99,11 @@ The same durable Task state powers three surfaces:
 Users see plain-language progress and results. Operators see execution history,
 attention states and available evidence without treating UI text or logs as the
 source of truth.
+
+The embedded React/Next.js Task UI ships with responsive, themeable list,
+detail and progress components. Its state-aware motion, loading skeletons and
+live-status treatment are scoped to the component and respect reduced-motion
+preferences; applications can also opt out of all default styles.
 
 Authentication remains application-owned. Never expose Workbench without an
 operator authorization boundary.

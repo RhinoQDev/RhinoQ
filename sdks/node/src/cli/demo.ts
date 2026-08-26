@@ -7,13 +7,15 @@ import type {
   TaskVerificationRecord,
 } from '../gateway/types.js';
 import type { TaskStateQuery } from '../postgres/task-client.js';
+import type { OwnerFacingTaskStore } from '../tasks/http.js';
 import type { WorkbenchTaskSource } from '../workbench/handler.js';
 
 type DemoTask = TaskSnapshot & { resultReference?: string };
 
-export interface DemoTaskSource extends WorkbenchTaskSource {
+export interface DemoTaskSource extends WorkbenchTaskSource, OwnerFacingTaskStore {
   start(): void;
   stop(): void;
+  retryTask(taskId: string): Promise<TaskSnapshot>;
 }
 
 /**
@@ -49,6 +51,12 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
       ],
       createdAt: iso(created - 180_000), updatedAt: iso(created - 72_000),
     })],
+    ['demo-confirmation', createTask({
+      id: 'demo-confirmation', type: 'provider.publish', ownerId: 'demo-user', state: 'uncertain',
+      progress: { completed: 1, total: 1, message: 'The provider accepted the request; final confirmation is still pending' },
+      executions: [execution('demo-confirmation:attempt:1', 'succeeded', 1, 'provider-publish', false)],
+      createdAt: iso(created - 210_000), updatedAt: iso(created - 48_000),
+    })],
   ]);
   const results = new Map<string, TaskExecutionResult[]>([
     ['demo-export', []],
@@ -65,6 +73,11 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
     }]],
   ]);
   let timer: ReturnType<typeof setInterval> | undefined;
+  const ownedTask = (taskId: string, ownerId: string): DemoTask => {
+    const task = tasks.get(taskId);
+    if (!task || task.ownerId !== ownerId) throw new Error('demo task was not found');
+    return task;
+  };
 
   const source: DemoTaskSource = {
     start() {
@@ -85,13 +98,38 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
         .slice(0, query.limit ?? 100)
         .map(toSummary);
     },
+    async listTasks(ownerId, limit = 50, offset = 0) {
+      return [...tasks.values()]
+        .filter((task) => task.ownerId === ownerId)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .slice(offset, offset + limit)
+        .map(clone);
+    },
+    async listTasksPage(ownerId, options = {}) {
+      const page = [...tasks.values()]
+        .filter((task) => task.ownerId === ownerId)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .slice(0, options.limit ?? 50)
+        .map(clone);
+      return { schemaVersion: 1, tasks: page };
+    },
     async getTask(taskId: string): Promise<TaskSnapshot> {
       const task = tasks.get(taskId);
       if (!task) throw new Error(`demo task ${taskId} was not found`);
       return clone(task);
     },
+    async getTaskForOwner(taskId, ownerId) { return clone(ownedTask(taskId, ownerId)); },
+    async getTaskSummaryForOwner(taskId, ownerId) { return toSummary(ownedTask(taskId, ownerId)); },
+    async listTaskExecutionsForOwner(taskId, ownerId) {
+      const task = ownedTask(taskId, ownerId);
+      return { schemaVersion: 1, entityVersion: task.entityVersion, taskId, executions: clone(task.executions) };
+    },
     async getTaskExecutionResults(taskId: string) {
       return { schemaVersion: 1 as const, entityVersion: tasks.get(taskId)?.entityVersion ?? 1, taskId, executions: [...(results.get(taskId) ?? [])] };
+    },
+    async getTaskExecutionResultsForOwner(taskId, ownerId) {
+      const task = ownedTask(taskId, ownerId);
+      return { schemaVersion: 1, entityVersion: task.entityVersion, taskId, executions: clone(results.get(taskId) ?? []) };
     },
     async listTaskExecutionRuntimeRefs(taskId: string): Promise<TaskExecutionRuntimeRefs> {
       const task = tasks.get(taskId);
@@ -105,8 +143,21 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
       };
     },
     async listTaskWaitpoints() { return []; },
+    async listTaskWaitpointsForOwner(taskId, ownerId) { ownedTask(taskId, ownerId); return []; },
+    async listWaitingTaskWaitpointsForOwner() { return []; },
+    async createTaskWaitpoint() { throw new Error('demo waitpoint creation is unavailable'); },
+    async getTaskWaitpoint() { throw new Error('demo waitpoint was not found'); },
+    async resolveTaskWaitpoint() { throw new Error('demo waitpoint resolution is unavailable'); },
     async listTaskVerifications(taskId: string) { return [...(verifications.get(taskId) ?? [])]; },
+    async listTaskVerificationsForOwner(taskId, ownerId, limit = 50) { ownedTask(taskId, ownerId); return clone(verifications.get(taskId) ?? []).slice(0, limit); },
+    async listRecentlyVerifiedForOwner(ownerId, limit = 20) {
+      return [...tasks.values()].filter((task) => task.ownerId === ownerId)
+        .flatMap((task) => clone(verifications.get(task.id) ?? [])).slice(0, limit);
+    },
     async listTaskArtifacts() { return []; },
+    async listTaskArtifactsForOwner(taskId, ownerId) { ownedTask(taskId, ownerId); return []; },
+    async getTaskArtifactForOwner() { throw new Error('demo artifact was not found'); },
+    async refreshTaskArtifact() { throw new Error('demo artifact refresh is unavailable'); },
     async listProviderOperationsByTask() { return []; },
     async requestTaskCancellation(taskId: string, expectedVersion: number): Promise<TaskSnapshot> {
       const task = tasks.get(taskId);
@@ -120,6 +171,29 @@ export function createDemoTaskSource(now = new Date()): DemoTaskSource {
       updated.cancellation = { status: 'cancelled', reason: 'Cancelled from the disposable demo.' };
       tasks.set(taskId, updated);
       return clone(updated);
+    },
+    async requestTaskCancellationForOwner(taskId, ownerId, expectedVersion) {
+      ownedTask(taskId, ownerId);
+      return source.requestTaskCancellation!(taskId, expectedVersion);
+    },
+    async retryTask(taskId) {
+      const task = tasks.get(taskId);
+      if (!task || task.state !== 'failed') throw new Error('only the failed demo Task can be retried');
+      const updated: DemoTask = {
+        ...task,
+        state: 'running',
+        entityVersion: task.entityVersion + 1,
+        progress: { completed: 0, total: 1, message: 'Retry started with a new recorded attempt' },
+        executions: [...task.executions, execution(`${task.id}:attempt:3`, 'running', 3, 'invoice-sync', false)],
+        updatedAt: new Date().toISOString(),
+      };
+      tasks.set(taskId, updated);
+      return clone(updated);
+    },
+    async getTaskResultForOwner(taskId, ownerId) {
+      const task = ownedTask(taskId, ownerId);
+      if (!task.resultReference) throw new Error('demo Task result was not found');
+      return { schemaVersion: 1, entityVersion: task.entityVersion, taskId, reference: task.resultReference, updatedAt: task.updatedAt };
     },
   };
   return source;

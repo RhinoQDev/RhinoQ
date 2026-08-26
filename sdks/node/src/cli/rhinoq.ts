@@ -2775,15 +2775,29 @@ async function demoDev(args: string[]): Promise<void> {
     // Demo data is intentionally cross-owner but disposable. Production
     // applications must put the same middleware behind operator auth.
     requireOperator: () => true,
-    navigation: { overviewPath: '/rhinoq', tasksPath: '/rhinoq' },
+    navigation: { overviewPath: '/task-center', tasksPath: '/task-center' },
+  });
+  const taskCenter = createNodeTaskCenterMiddleware({
+    path: '/task-center', apiPath: '/tasks', title: 'My activity',
+    navigation: { overviewPath: '/task-center', workbenchPath: '/rhinoq' },
+  });
+  const ownerAPI = createNodeTaskMiddleware({
+    tasks: source, basePath: '/tasks', ownerFromRequest: () => 'demo-user',
+    resolveResult: (result) => ({ url: `/demo-results/${encodeURIComponent(result.taskId)}.csv` }),
+    retryTask: ({ task }) => source.retryTask(task.id),
   });
   const server = createServer((request, response) => {
     if (request.url === '/') {
-      response.writeHead(302, { location: '/rhinoq', 'cache-control': 'no-store' });
+      response.writeHead(302, { location: '/task-center', 'cache-control': 'no-store' });
       response.end();
       return;
     }
-    workbench(request, response);
+    if (request.method === 'GET' && request.url?.startsWith('/demo-results/')) {
+      response.writeHead(200, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="rhinoq-demo-result.csv"', 'cache-control': 'no-store' });
+      response.end('status,source\ncompleted,rhinoq-demo\n');
+      return;
+    }
+    taskCenter(request, response, () => ownerAPI(request, response, () => workbench(request, response)));
   });
   const close = () => {
     source.stop(); terminalController.abort();
@@ -2800,8 +2814,9 @@ async function demoDev(args: string[]): Promise<void> {
   const address = server.address();
   const port = address && typeof address !== 'string' ? address.port : portValue;
   console.log('PASS RhinoQ disposable demo is running (no PostgreSQL, Redis or provider).');
+  console.log(`URL RhinoQ Task Center: http://127.0.0.1:${port}/task-center`);
   console.log(`URL RhinoQ Workbench: http://127.0.0.1:${port}/rhinoq`);
-  console.log('INFO demo Tasks: one running with live progress, one completed result, one failed attempt.');
+  console.log('INFO demo Tasks: running progress, completed result, failed attempts and uncertain provider confirmation.');
   console.log('WARN demo data is local and synthetic; it is not production evidence.');
   console.log('NEXT press Ctrl+C to stop.');
 }

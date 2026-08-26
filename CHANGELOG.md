@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Rebuilt the owner-facing Task Center around a compact professional workspace
+  with live overview metrics, restrained typography/radius/shadow, state-aware
+  Task rows, clearer progress and detail hierarchy, subtle entry feedback and
+  reduced-motion support. The optional React/Next.js components now ship the
+  same zero-config scoped design, richer brand tokens, an explicit
+  `RhinoQStyles` component and an `unstyled` escape hatch for host systems.
+- Made `rhinoq dev --demo` open the owner-facing Task Center first, serve its
+  owner API and result download, link it to Workbench, and show running,
+  completed, failed and confirmation-needed states without infrastructure.
+- Added a real Next.js embedded Task-list example plus desktop/mobile
+  Playwright layout contracts and screenshot artifacts in CI.
+
 ## 0.1.0-beta.26
 
 - Moved the signed container publish and attestation subject to the transferred

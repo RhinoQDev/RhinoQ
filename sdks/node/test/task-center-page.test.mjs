@@ -25,8 +25,16 @@ test('Task Center page is self-contained and points at the owner API', () => {
   assert.match(page, /--rq-accent/);
   assert.match(page, /--rq-line-strong/);
   assert.match(page, /--rq-mono/);
-  assert.match(page, /#4f8cff/);
+  assert.match(page, /--rq-accent:#2563eb/);
   assert.match(page, /rhinoq-intro/);
+  assert.match(page, /rhinoq-orbit/);
+  assert.match(page, /data-metric="attention"/);
+  assert.match(page, /function relativeTime/);
+  assert.match(page, /dataset\.state/);
+  assert.match(page, /prefers-reduced-motion/);
+  assert.match(page, /Professional workspace density/);
+  assert.match(page, /font-size:26px/);
+  assert.match(page, /grid-template-columns:minmax\(235px,.72fr\)/);
   assert.match(page, /focus-visible/);
   assert.match(page, /Needs attention/);
   assert.match(page, /Recently updated/);
@@ -51,7 +59,6 @@ test('Task Center page is self-contained and points at the owner API', () => {
   assert.ok(script);
   assert.doesNotThrow(() => new Function(script));
 });
-
 test('Task Center middleware serves its list and one owner-facing detail route', () => {
   const middleware = createNodeTaskCenterMiddleware({ path: '/my/tasks', apiPath: '/tasks', navigation: { overviewPath: '/', workbenchPath: '/admin' } });
   const response = { headers: {}, setHeader(name, value) { this.headers[name] = value; }, end(body) { this.body = body; } };

@@ -328,15 +328,27 @@ It rejects unsafe URLs and does not invent an ETA. See
 ## React
 
 ```tsx
-import { RhinoQTaskView } from '@rhinoq/node/react';
+import * as React from 'react';
+import { createRhinoQComponents } from '@rhinoq/node/react';
 
-export function ReportStatus({ taskId }) {
-  return <RhinoQTaskView taskId={taskId} client={ownerClient} />;
+const { RhinoQTaskList, RhinoQTaskDetail } = createRhinoQComponents(React);
+
+export function Activity({ taskId }) {
+  return taskId
+    ? <RhinoQTaskDetail taskId={taskId} client={ownerClient} />
+    : <RhinoQTaskList client={ownerClient} />;
 }
 ```
 
 The browser contract rejects stale entity versions and falls back to polling
-when SSE disconnects. See [React UI](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/react-ui.md).
+when SSE disconnects. The components include scoped responsive styles, subtle
+state/progress motion, reduced-motion handling and brand theme tokens; pass
+`unstyled` when the application owns every visual rule. See
+[React UI](https://github.com/RhinoQDev/RhinoQ/blob/main/docs/react-ui.md).
+
+Run `npm run test:visual` after installing Playwright Chromium to capture and
+check the standalone Task Center at desktop and mobile viewports. CI attaches
+both full-page PNGs for review.
 
 ## Files and artifacts
 

@@ -135,6 +135,33 @@ jobs:
       - run: npm test
         working-directory: sdks/nest
 
+  task-center-visual:
+    name: Task Center desktop/mobile visual contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: sdks/node
+      - run: npm run build
+        working-directory: sdks/node
+      - run: npx playwright install --with-deps chromium
+        working-directory: sdks/node
+      - run: npm run test:visual
+        working-directory: sdks/node
+      - name: Upload desktop/mobile review evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-center-visual-${{ github.sha }}
+          path: |
+            sdks/node/test-results/
+            sdks/node/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
+
   fanout-smoke:
     name: Fan-out settles (gating)
     runs-on: ubuntu-latest

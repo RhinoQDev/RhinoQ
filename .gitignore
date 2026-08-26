@@ -2,6 +2,8 @@
 node_modules/
 dist/
 .next/
+playwright-report/
+test-results/
 # Go build output at the repository root only. An unanchored `bin/` also
 # swallowed sdks/rhinoq/bin, whose three CLI shims are hand-written source:
 # they existed on one machine and in no clone, so publishing the `rhinoq`
