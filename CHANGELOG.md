@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- Added W3C Trace Context correlation on Executions. The Agent reads
+  `traceparent`/`tracestate` from an incoming request, stores them per attempt,
+  publishes the trace id as `traceId` on Snapshot and Execution-page contracts,
+  and echoes the recorded `traceparent` on the response so propagation can be
+  confirmed from outside the process. A request body may set `traceparent`
+  explicitly and wins over the transport header, which is what lets a batch
+  producer attribute each attempt to the upstream work rather than to the one
+  call that submitted them. A malformed header is dropped, never rejected: a
+  proxy that corrupts a diagnostic field must not be able to fail real work.
+  An attempt created without an inbound trace stores none rather than
+  inventing an id that correlates with nothing.
+  Migration action: run migration `034_execution_trace_context.sql`. It adds
+  four nullable columns and a partial index to `rhinoq_task_executions` and
+  backfills nothing.
+- Added latency distributions to `/metrics`: `rhinoq_claim_wait_seconds`
+  (eligible-to-claimed, by queue, excluding intended scheduling and retry
+  backoff), `rhinoq_execution_duration_seconds` (measured around the handler
+  call only) and `rhinoq_agent_request_duration_seconds` (by matched route,
+  including rejected requests). Percentiles are what a latency budget or an
+  end-to-end benchmark can be stated in; the previous counters and gauges
+  could not express one. Series are bounded per family and
+  `rhinoq_metric_series_truncated` reports when a bound was reached, so a
+  dashboard can tell "no traffic" from "not measured".
+  Migration action: none. Scrapes gain metric families and lose none.
+- Owner-scoped Task routes now resolve through the same `authz.Authorize`
+  decision as operator routes, replacing a per-handler owner comparison that
+  each new route had to remember to repeat. Cross-scope access stays concealed
+  as `404`, matching the answer for an id that was never issued.
+  Migration action: **behaviour change.** Owner routes now apply the role gate
+  they previously skipped, so requesting cancellation needs `task:write`. An
+  Agent started with `RHINOQ_AGENT_ROLE=viewer` or `developer` can no longer
+  cancel a Task through an owner route and receives `403` naming the missing
+  permission. End-user Task credentials are unaffected: they carry
+  `task_owner`, which grants `task:read` and `task:write` within their own
+  owner scope. Deployments that relied on a read-only Agent role while still
+  cancelling must raise that role to `operator` or above.
+
 ## 0.1.0-beta.27
 
 - Added bounded numbered pagination to the standalone Task Center and operator

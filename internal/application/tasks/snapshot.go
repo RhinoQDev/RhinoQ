@@ -47,6 +47,7 @@ func newSnapshot(record task.Record, attempts []execution.Record) (taskcontract.
 			Version:       attempt.Version,
 			HasResult:     attempt.ResultRef != "",
 			FailureReason: attempt.FailureReason,
+			TraceID:       attempt.Trace.TraceID,
 		})
 	}
 	sort.Slice(executions, func(i, j int) bool {
@@ -108,6 +109,7 @@ func executionContract(record execution.Record) (taskcontract.Execution, error) 
 		ID: record.ID.String(), Attempt: record.Attempt, Runtime: record.Runtime,
 		State: record.State.String(), Version: record.Version,
 		HasResult: record.ResultRef != "", FailureReason: record.FailureReason,
+		TraceID: record.Trace.TraceID,
 	}, nil
 }
 

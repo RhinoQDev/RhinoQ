@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/domain/waitpoint"
@@ -207,11 +208,12 @@ func (s *TaskStore) RetryTask(ctx context.Context, input ports.TaskRetryInput) (
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(attempt),0)+1 FROM rhinoq_task_executions WHERE task_id=$1`, input.TaskID).Scan(&attempt); err != nil {
 		return ports.TaskRetryResult{}, err
 	}
-	executionRecord, err := execution.NewRecord(execution.Spec{ID: input.ExecutionID, TaskID: input.TaskID.String(), Attempt: attempt, Runtime: strings.TrimSpace(input.Runtime), Now: input.Now})
+	executionRecord, err := execution.NewRecord(execution.Spec{ID: input.ExecutionID, TaskID: input.TaskID.String(), Attempt: attempt, Runtime: strings.TrimSpace(input.Runtime), Trace: input.Trace, Now: input.Now})
 	if err != nil {
 		return ports.TaskRetryResult{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO rhinoq_task_executions (id,task_id,attempt,runtime,job_id,external_id,state,version,created_at,updated_at) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$6,$7,$8)`, executionRecord.ID, executionRecord.TaskID, executionRecord.Attempt, executionRecord.Runtime, executionRecord.State, executionRecord.Version, executionRecord.CreatedAt, executionRecord.UpdatedAt); err != nil {
+	retryTraceID, retrySpanID, retryFlags, retryState := traceColumns(executionRecord.Trace)
+	if _, err = tx.ExecContext(ctx, `INSERT INTO rhinoq_task_executions (id,task_id,attempt,runtime,job_id,external_id,state,trace_id,trace_span_id,trace_flags,trace_state,version,created_at,updated_at) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$6,$7,$8,$9,$10,$11,$12)`, executionRecord.ID, executionRecord.TaskID, executionRecord.Attempt, executionRecord.Runtime, executionRecord.State, retryTraceID, retrySpanID, retryFlags, retryState, executionRecord.Version, executionRecord.CreatedAt, executionRecord.UpdatedAt); err != nil {
 		return ports.TaskRetryResult{}, mapAlreadyExists(err)
 	}
 	next.ExecutionCounts.Total++
@@ -332,13 +334,16 @@ func (s *TaskStore) CreateNextExecution(ctx context.Context, input ports.Executi
 	if err != nil {
 		return execution.Record{}, 0, err
 	}
+	traceID, traceSpanID, traceFlags, traceState := traceColumns(record.Trace)
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO rhinoq_task_executions (
 			id, task_id, attempt, runtime, job_id, external_id,
-			state, version, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$6,$7,$8)`,
+			state, trace_id, trace_span_id, trace_flags, trace_state,
+			version, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		record.ID, record.TaskID, record.Attempt, record.Runtime,
-		record.State, record.Version, record.CreatedAt, record.UpdatedAt); err != nil {
+		record.State, traceID, traceSpanID, traceFlags, traceState,
+		record.Version, record.CreatedAt, record.UpdatedAt); err != nil {
 		return execution.Record{}, 0, mapAlreadyExists(err)
 	}
 	var taskVersion int64
@@ -548,7 +553,9 @@ func scanTask(row rowScanner) (task.Record, error) {
 
 const executionSelect = `SELECT id, task_id, attempt, runtime,
 	COALESCE(job_id,''), COALESCE(external_id,''), state,
-	COALESCE(result_ref,''), COALESCE(failure_reason,''), version,
+	COALESCE(result_ref,''), COALESCE(failure_reason,''),
+	COALESCE(trace_id,''), COALESCE(trace_span_id,''),
+	COALESCE(trace_flags,''), COALESCE(trace_state,''), version,
 	created_at, updated_at FROM rhinoq_task_executions`
 
 func scanExecution(row rowScanner) (execution.Record, error) {
@@ -556,12 +563,29 @@ func scanExecution(row rowScanner) (execution.Record, error) {
 	err := row.Scan(&record.ID, &record.TaskID, &record.Attempt, &record.Runtime,
 		&record.Reference.JobID, &record.Reference.ExternalID, &record.State,
 		&record.ResultRef, &record.FailureReason,
+		&record.Trace.TraceID, &record.Trace.SpanID,
+		&record.Trace.Flags, &record.Trace.TraceState,
 		&record.Version, &record.CreatedAt, &record.UpdatedAt)
 	if err != nil {
 		return execution.Record{}, err
 	}
 	record.Reference.Runtime = record.Runtime
 	return record, nil
+}
+
+// traceColumns renders the four trace values as insert arguments. NULL rather
+// than empty string is what the schema's shape constraint is written against,
+// and it is also the honest encoding: an execution with no inbound request has
+// no trace, as opposed to one whose trace is the empty string.
+func traceColumns(trace correlation.TraceContext) (any, any, any, any) {
+	if trace.Zero() {
+		return nil, nil, nil, nil
+	}
+	flags := trace.Flags
+	if flags == "" {
+		flags = "00"
+	}
+	return trace.TraceID, trace.SpanID, flags, nullableString(trace.TraceState)
 }
 
 const waitpointSelect = `SELECT id,task_id,key,kind,schema_version,state,deadline,

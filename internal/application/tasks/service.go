@@ -6,6 +6,7 @@ import (
 	"time"
 
 	taskcontract "github.com/madebyduy/RhinoQ/internal/contracts/task"
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/ports"
@@ -59,6 +60,12 @@ type CreateExecutionInput struct {
 	ID      execution.ID
 	TaskID  task.ID
 	Runtime string
+	// Trace is the caller's W3C trace context. It is threaded explicitly rather
+	// than carried in the request context because it is persisted: a field on
+	// the input can be asserted in a store test without constructing a request,
+	// and the domain layer stays free of context, which is a rule this codebase
+	// keeps deliberately.
+	Trace correlation.TraceContext
 }
 
 type RetryInput struct {
@@ -70,6 +77,7 @@ type RetryInput struct {
 	Queue           string
 	JobName         string
 	Payload         []byte
+	Trace           correlation.TraceContext
 }
 
 // Retry crosses a transactional store boundary so a crash can never leave a
@@ -84,7 +92,7 @@ func (s *Service) Retry(ctx context.Context, input RetryInput) (taskcontract.Sna
 		CommandID: input.CommandID, TaskID: input.TaskID,
 		ExpectedVersion: input.ExpectedVersion, ExecutionID: input.ExecutionID,
 		Runtime: input.Runtime, Queue: input.Queue, JobName: input.JobName,
-		Payload: input.Payload, Now: s.now(),
+		Payload: input.Payload, Trace: input.Trace, Now: s.now(),
 	})
 	if err != nil {
 		return taskcontract.Snapshot{}, err
@@ -99,7 +107,8 @@ func (s *Service) CreateExecution(ctx context.Context, input CreateExecutionInpu
 		return execution.Record{}, ports.ErrTaskNotFound
 	}
 	record, _, err := s.executions.CreateNextExecution(ctx, ports.ExecutionCreateInput{
-		ID: input.ID, TaskID: input.TaskID.String(), Runtime: input.Runtime, Now: s.now(),
+		ID: input.ID, TaskID: input.TaskID.String(), Runtime: input.Runtime,
+		Trace: input.Trace, Now: s.now(),
 	})
 	return record, err
 }

@@ -148,6 +148,11 @@ type Config struct {
 	// failed terminal writes. A worker without one stays silent.
 	OnError func(error)
 
+	// Metrics receives handler duration observations. It is optional: a worker
+	// built without one measures nothing. It is a port, not a concrete holder,
+	// because the layer rules keep the runtime free of infrastructure.
+	Metrics ports.ExecutionObserver
+
 	// ClaimLimit is deprecated: batch size now follows free slots. When set, it
 	// is used as MaxClaimBatch.
 	ClaimLimit int
@@ -171,6 +176,7 @@ type Worker struct {
 	completeWindow  time.Duration
 	now             func() time.Time
 	onError         func(error)
+	metrics         ports.ExecutionObserver
 
 	slots    chan struct{}
 	finished chan struct{}
@@ -236,7 +242,7 @@ func New(config Config) (*Worker, error) {
 		heartbeatEvery: config.HeartbeatEvery, pollInterval: config.PollInterval,
 		maxPollInterval: config.MaxPollInterval, shutdownGrace: config.ShutdownGrace,
 		cancelGrace: config.CancelGrace, completeWindow: config.CompleteWindow,
-		now: config.Now, onError: config.OnError,
+		now: config.Now, onError: config.OnError, metrics: config.Metrics,
 		slots:    make(chan struct{}, config.Concurrency),
 		finished: make(chan struct{}, 1),
 		running:  make(map[job.ID]context.CancelFunc),
@@ -467,7 +473,17 @@ func (w *Worker) runOne(record job.Record) {
 		w.heartbeat(ctx, cancel, lease, beat)
 	}()
 
+	// The two instants bracket the handler call and nothing else. Including the
+	// heartbeat join or the terminal write would report RhinoQ's own overhead as
+	// the application's execution time.
+	startedAt := w.now()
 	handlerErr := handler(ctx, record)
+	// The nil check is on the interface, not the implementation: an unset port is
+	// a nil interface, and calling a method on one panics rather than doing
+	// nothing the way a nil pointer receiver would.
+	if w.metrics != nil {
+		w.metrics.ObserveExecution(record.QueueName, w.now().Sub(startedAt))
+	}
 	cancel()
 	<-heartbeatDone
 

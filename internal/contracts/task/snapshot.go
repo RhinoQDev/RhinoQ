@@ -36,6 +36,17 @@ type Execution struct {
 	Version       int64  `json:"version"`
 	HasResult     bool   `json:"hasResult"`
 	FailureReason string `json:"failureReason,omitempty"`
+	// TraceID is the join key into whatever tracing system the adopter already
+	// runs. Only the trace id is published, not the whole traceparent: the id is
+	// what an operator pastes into a query, while the span id would only invite
+	// a caller to forge a parent relationship from data it read back out of a
+	// poll.
+	//
+	// Unlike a result reference, this is safe to ship on every poll. It is not a
+	// location and grants no access; for an owner-scoped poll it is usually the
+	// id the caller's own request created, so the response is telling them
+	// something they already sent.
+	TraceID string `json:"traceId,omitempty"`
 }
 
 type Cancellation struct {

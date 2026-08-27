@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/domain/authz"
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/telemetry"
 	"github.com/madebyduy/RhinoQ/pkg/rhinoq"
 )
 
@@ -102,6 +104,12 @@ type Server struct {
 	handled  atomic.Int64
 	failed   atomic.Int64
 	mux      *http.ServeMux
+
+	// requestLatency is labelled by the matched route pattern rather than the
+	// request path. A path carries ids, so labelling by it would create one time
+	// series per Task and take the scrape down; the pattern set is fixed by
+	// routes() and therefore bounded by construction.
+	requestLatency *telemetry.HistogramVec
 }
 
 func New(config Config) (*Server, error) {
@@ -194,9 +202,10 @@ func New(config Config) (*Server, error) {
 			config.RequestsPerSecond, config.RequestBurst,
 			config.PerCallerRequestsPerSecond, config.PerCallerRequestBurst,
 		),
-		repairs:  config.RepairRegistry,
-		tenantID: tenantID,
-		role:     role,
+		repairs:        config.RepairRegistry,
+		tenantID:       tenantID,
+		role:           role,
+		requestLatency: telemetry.NewHistogramVec(telemetry.RequestLatencyBuckets),
 	}
 	server.routes()
 	return server, nil
@@ -403,8 +412,31 @@ func (s *Server) handleRetryProviderOperation(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, record)
 }
 
+// observeRequest measures one served request against its route.
+//
+// It is deferred from inside the guards rather than wrapped around the mux
+// because the route pattern is only known after the mux matches, and the guards
+// are the first code that runs with that knowledge. Measuring here also includes
+// the requests the guards reject: a flood of 401s or 429s is exactly the
+// traffic an operator needs to see in a latency panel, and excluding it would
+// make an endpoint under attack look idle.
+func (s *Server) observeRequest(r *http.Request, started time.Time) {
+	s.requestLatency.With(routeLabel(r)).ObserveDuration(time.Since(started))
+}
+
+// routeLabel is the matched pattern, which is one of a fixed set. An unmatched
+// request has no pattern and is grouped rather than dropped, so a spike of
+// traffic to routes that do not exist is still visible.
+func routeLabel(r *http.Request) string {
+	if pattern := strings.TrimSpace(r.Pattern); pattern != "" {
+		return pattern
+	}
+	return "unmatched"
+}
+
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		defer s.observeRequest(r, time.Now())
 		if !s.authorized(r) {
 			status, body := unauthorized()
 			writeJSON(w, status, errorResponse{Error: body})
@@ -496,6 +528,7 @@ func agentPermission(r *http.Request) (authz.Permission, bool) {
 
 func (s *Server) taskGuard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		defer s.observeRequest(r, time.Now())
 		principal, ok := s.taskPrincipal(r)
 		if !ok {
 			status, body := unauthorizedTask()
@@ -597,8 +630,73 @@ func taskPrincipalFrom(ctx context.Context) taskPrincipal {
 	return principal
 }
 
-func taskVisibleTo(principal taskPrincipal, ownerID string) bool {
-	return principal.operator || (principal.ownerID != "" && principal.ownerID == ownerID)
+// allowTask is the single authorization decision for an owner-scoped Task route.
+//
+// It replaces a per-handler owner comparison. The authz package was written to
+// end exactly that pattern — its own doc names "calling taskVisibleTo at each
+// handler that happened to remember" as the reason it exists — but only the
+// operator routes had been moved onto it. Owner routes kept the scattered check,
+// which left Subject.OwnerScope and the scope gate built and unused, and left
+// every new owner route one forgotten line away from serving another customer's
+// Task.
+//
+// Routing the decision through Authorize also adds the role gate these routes
+// never had: a credential now has to hold task:write to cancel, where before any
+// authenticated owner credential could.
+//
+// It returns false having already written the response.
+//
+// Tenant scope: the target names the principal's tenant rather than the row's,
+// because a Snapshot does not publish one. That is not the tenant gate being
+// skipped — an Agent binds every credential to one tenant at startup and refuses
+// a credential from another, and PostgreSQL row-level security scopes the
+// session underneath (migration 027). It does mean the per-row comparison is
+// enforced one layer down rather than here; carrying the row's tenant into the
+// contract is what would let this call state it directly.
+func (s *Server) allowTask(
+	w http.ResponseWriter, r *http.Request, action authz.Action, ownerID string,
+) bool {
+	principal := taskPrincipalFrom(r.Context())
+	permission := authz.Permission{Resource: authz.ResourceTask, Action: action}
+
+	subject := authz.Subject{
+		PrincipalID:  authz.PrincipalID("task-credential:" + principal.ownerID),
+		Kind:         authz.PrincipalUser,
+		TenantID:     authz.TenantID(principal.tenantID),
+		Role:         authz.RoleTaskOwner,
+		OwnerScope:   principal.ownerID,
+		TenantStatus: authz.TenantActive,
+	}
+	// The operator credential is tenant-wide and carries the Agent's configured
+	// role, so an Agent started as a viewer cannot cancel a Task through an owner
+	// route either. Leaving OwnerScope empty is what makes it tenant-wide; it is
+	// not a bypass, because the role gate still runs.
+	if principal.operator {
+		subject.PrincipalID = "agent-token"
+		subject.Kind = authz.PrincipalService
+		subject.Role = s.role
+		subject.OwnerScope = ""
+	}
+
+	decision := authz.Authorize(subject, permission, authz.Target{
+		TenantID: authz.TenantID(principal.tenantID),
+		OwnerID:  ownerID,
+	})
+	if decision.Allowed {
+		return true
+	}
+	// Concealment is the isolation boundary, not politeness: answering 403 for a
+	// Task in another scope and 404 for an id that was never issued turns the
+	// route into an oracle for "does this id exist", one bit per request.
+	if decision.Conceal() {
+		s.fail(w, rhinoq.ErrTaskNotFound)
+		return false
+	}
+	writeJSON(w, http.StatusForbidden, errorResponse{Error: ErrorBody{
+		Code:    "RHINOQ_AUTHORIZATION_DENIED",
+		Message: "This credential does not grant " + permission.String() + ".",
+	}})
+	return false
 }
 
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
@@ -666,8 +764,7 @@ func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
-		s.fail(w, rhinoq.ErrTaskNotFound)
+	if !s.allowTask(w, r, authz.ActionRead, snapshot.OwnerID) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
@@ -679,8 +776,7 @@ func (s *Server) handleGetTaskSummary(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if !taskVisibleTo(taskPrincipalFrom(r.Context()), summary.OwnerID) {
-		s.fail(w, rhinoq.ErrTaskNotFound)
+	if !s.allowTask(w, r, authz.ActionRead, summary.OwnerID) {
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
@@ -692,8 +788,7 @@ func (s *Server) handleListTaskExecutions(w http.ResponseWriter, r *http.Request
 		s.fail(w, err)
 		return
 	}
-	if !taskVisibleTo(taskPrincipalFrom(r.Context()), summary.OwnerID) {
-		s.fail(w, rhinoq.ErrTaskNotFound)
+	if !s.allowTask(w, r, authz.ActionRead, summary.OwnerID) {
 		return
 	}
 	limit := 100
@@ -721,8 +816,7 @@ func (s *Server) handleGetTaskResult(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
-		s.fail(w, rhinoq.ErrTaskNotFound)
+	if !s.allowTask(w, r, authz.ActionRead, snapshot.OwnerID) {
 		return
 	}
 	result, err := s.client.GetTaskResult(r.Context(), r.PathValue("id"))
@@ -747,8 +841,9 @@ func (s *Server) handleRequestTaskCancellation(w http.ResponseWriter, r *http.Re
 		s.fail(w, err)
 		return
 	}
-	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
-		s.fail(w, rhinoq.ErrTaskNotFound)
+	// Cancelling is a mutation, so it needs task:write. A read-only credential
+	// that can see a Task must not be able to stop it.
+	if !s.allowTask(w, r, authz.ActionWrite, snapshot.OwnerID) {
 		return
 	}
 	// The repeat-safety of this command lives in the Task domain, not here: a
@@ -793,6 +888,15 @@ func (s *Server) handleCreateTaskExecution(w http.ResponseWriter, r *http.Reques
 	if !decode(w, r, &request) {
 		return
 	}
+	// The header is the default and the body wins. A body value is an explicit
+	// statement by a caller that knows which trace this attempt belongs to,
+	// which is not always the request that carried it: a batch endpoint creating
+	// twenty attempts may want each one attributed to the upstream job that
+	// produced it rather than to the one HTTP call that submitted them all.
+	if request.TraceParent == "" {
+		request.TraceParent = r.Header.Get(correlation.TraceParentHeader)
+		request.TraceState = r.Header.Get(correlation.TraceStateHeader)
+	}
 	snapshot, err := s.client.CreateTaskExecution(
 		r.Context(),
 		r.PathValue("id"),
@@ -802,7 +906,26 @@ func (s *Server) handleCreateTaskExecution(w http.ResponseWriter, r *http.Reques
 		s.fail(w, err)
 		return
 	}
+	echoTraceParent(w, request.TraceParent)
 	writeJSON(w, http.StatusCreated, snapshot)
+}
+
+// echoTraceParent returns the trace context RhinoQ actually recorded.
+//
+// It exists so propagation is verifiable from outside. Trace plumbing fails
+// silently by nature: a header dropped by a proxy, lowercased by a gateway or
+// never sent by an SDK all look identical from the caller's side, and the
+// symptom appears weeks later as an investigation that cannot be joined. Echoing
+// the parsed value turns that into something a single curl can confirm.
+//
+// A header that failed to parse is echoed as nothing rather than as itself, so
+// the response distinguishes "recorded" from "received and discarded".
+func echoTraceParent(w http.ResponseWriter, presented string) {
+	trace, err := correlation.ParseTraceParent(presented)
+	if err != nil {
+		return
+	}
+	w.Header().Set(correlation.TraceParentHeader, trace.TraceParent())
 }
 
 func (s *Server) handleBindTaskExecution(w http.ResponseWriter, r *http.Request) {
@@ -905,8 +1028,7 @@ func (s *Server) handleGetTaskExecutionResults(w http.ResponseWriter, r *http.Re
 		s.fail(w, err)
 		return
 	}
-	if !taskVisibleTo(taskPrincipalFrom(r.Context()), snapshot.OwnerID) {
-		s.fail(w, rhinoq.ErrTaskNotFound)
+	if !s.allowTask(w, r, authz.ActionRead, snapshot.OwnerID) {
 		return
 	}
 	results, err := s.client.GetTaskExecutionResults(r.Context(), snapshot.ID)
