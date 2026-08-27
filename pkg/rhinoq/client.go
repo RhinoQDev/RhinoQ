@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/madebyduy/RhinoQ/internal/adapters/memory"
@@ -21,6 +22,7 @@ import (
 	"github.com/madebyduy/RhinoQ/internal/domain/recovery"
 	"github.com/madebyduy/RhinoQ/internal/domain/retry"
 	domaintask "github.com/madebyduy/RhinoQ/internal/domain/task"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/telemetry"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 	"github.com/madebyduy/RhinoQ/internal/runtime/lease"
 	"github.com/madebyduy/RhinoQ/internal/runtime/queuewatch"
@@ -372,6 +374,23 @@ type Client struct {
 	// worker API, where no in-process worker owns a policy.
 	retry         retry.Policy
 	taskSchedules ports.TaskScheduleStore
+	// metrics is created on first use rather than in each constructor. There are
+	// three ways to build a Client and an embedder may hold one built a fourth
+	// way in a test; a lazily created holder cannot be the field somebody forgot,
+	// which is the failure mode that leaves a metric silently at zero.
+	metricsOnce sync.Once
+	metrics     *telemetry.EngineMetrics
+}
+
+// Metrics returns this Client's measurement holder, creating it on first use.
+// It is exported so the Agent can render what the engine measured without the
+// engine knowing about an HTTP endpoint.
+func (c *Client) Metrics() *telemetry.EngineMetrics {
+	if c == nil {
+		return nil
+	}
+	c.metricsOnce.Do(func() { c.metrics = telemetry.NewEngineMetrics() })
+	return c.metrics
 }
 
 // SetRetryPolicy configures how failures reported by remote workers are
@@ -1021,6 +1040,7 @@ func (c *Client) RunWorker(ctx context.Context, config WorkerConfig) error {
 		HeartbeatEvery: settings.Heartbeat, PollInterval: settings.PollInterval,
 		MaxPollInterval: settings.MaxPollInterval, ShutdownGrace: settings.ShutdownGrace,
 		CancelGrace: settings.CancelGrace, OnError: settings.OnError,
+		Metrics: c.Metrics(),
 	})
 	if err != nil {
 		return err

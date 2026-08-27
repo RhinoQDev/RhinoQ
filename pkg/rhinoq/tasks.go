@@ -8,6 +8,7 @@ import (
 
 	taskapp "github.com/madebyduy/RhinoQ/internal/application/tasks"
 	taskcontract "github.com/madebyduy/RhinoQ/internal/contracts/task"
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	domaintask "github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/domain/waitpoint"
@@ -137,6 +138,9 @@ type TaskExecutionSummary struct {
 	Version       int64  `json:"version"`
 	HasResult     bool   `json:"hasResult"`
 	FailureReason string `json:"failureReason,omitempty"`
+	// TraceID is the join key into the adopter's tracing system, empty when the
+	// attempt was created without an inbound trace.
+	TraceID string `json:"traceId,omitempty"`
 }
 
 // TaskExecutionResult is one item's outcome in a fan-out. The reference is
@@ -177,6 +181,18 @@ type TaskExecution struct {
 type TaskExecutionCreateRequest struct {
 	ID      string `json:"id"`
 	Runtime string `json:"runtime"`
+	// TraceParent and TraceState carry W3C trace context for this attempt.
+	//
+	// They are fields on the request rather than headers-only because an
+	// embedder that calls this Client in-process has no HTTP request to put a
+	// header on, and the correlation is worth the same to them. The Agent's HTTP
+	// boundary fills them from the incoming headers when the body leaves them
+	// empty, so an ordinary HTTP caller propagates a trace without changing its
+	// payload.
+	//
+	// A value that is not a valid traceparent is dropped, not rejected.
+	TraceParent string `json:"traceparent,omitempty"`
+	TraceState  string `json:"tracestate,omitempty"`
 }
 
 // TaskExecutionBinding carries the durable runtime identity on write. Snapshot
@@ -304,8 +320,31 @@ func (c *Client) CreateTaskExecution(
 		ID:      execution.ID(request.ID),
 		TaskID:  domaintask.ID(taskID),
 		Runtime: request.Runtime,
+		Trace:   traceContextFrom(request.TraceParent, request.TraceState),
 	})
 	return publicTaskSnapshot(snapshot), err
+}
+
+// traceContextFrom parses a caller-supplied trace context and discards anything
+// malformed.
+//
+// Dropping rather than reporting is deliberate at this boundary. The header is
+// produced by whatever sits in front of the adopter's application, and a proxy
+// that mangles it must not be able to stop Tasks from being created. The cost
+// of the lenient choice is a missing join key on one attempt; the cost of the
+// strict one is refusing real work over a diagnostic field.
+func traceContextFrom(traceParent, traceState string) correlation.TraceContext {
+	trace, err := correlation.ParseTraceParent(traceParent)
+	if err != nil {
+		return correlation.TraceContext{}
+	}
+	withState, err := trace.WithTraceState(traceState)
+	if err != nil {
+		// An oversized vendor list is dropped on its own. The traceparent is
+		// what an investigation joins on, and it is still good.
+		return trace
+	}
+	return withState
 }
 
 func (c *Client) BindTaskExecution(
@@ -560,6 +599,7 @@ func publicTaskSnapshot(snapshot taskcontract.Snapshot) TaskSnapshot {
 			Version:       attempt.Version,
 			HasResult:     attempt.HasResult,
 			FailureReason: attempt.FailureReason,
+			TraceID:       attempt.TraceID,
 		}
 	}
 	return TaskSnapshot{
@@ -613,6 +653,7 @@ func publicTaskExecutionPage(page taskcontract.ExecutionPage) TaskExecutionPage 
 			ID: attempt.ID, Attempt: attempt.Attempt, Runtime: attempt.Runtime,
 			State: attempt.State, Version: attempt.Version, HasResult: attempt.HasResult,
 			FailureReason: attempt.FailureReason,
+			TraceID:       attempt.TraceID,
 		}
 	}
 	return TaskExecutionPage{

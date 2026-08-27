@@ -182,7 +182,7 @@ func (s *TaskStore) RetryTask(_ context.Context, input ports.TaskRetryInput) (po
 			attempt = number + 1
 		}
 	}
-	executionRecord, err := execution.NewRecord(execution.Spec{ID: input.ExecutionID, TaskID: input.TaskID.String(), Attempt: attempt, Runtime: input.Runtime, Now: input.Now})
+	executionRecord, err := execution.NewRecord(execution.Spec{ID: input.ExecutionID, TaskID: input.TaskID.String(), Attempt: attempt, Runtime: input.Runtime, Trace: input.Trace, Now: input.Now})
 	if err != nil {
 		return ports.TaskRetryResult{}, err
 	}
@@ -255,7 +255,7 @@ func (s *TaskStore) CreateNextExecution(_ context.Context, input ports.Execution
 	}
 	record, err := execution.NewRecord(execution.Spec{
 		ID: input.ID, TaskID: input.TaskID, Attempt: attempt,
-		Runtime: input.Runtime, Now: input.Now,
+		Runtime: input.Runtime, Trace: input.Trace, Now: input.Now,
 	})
 	if err != nil {
 		return execution.Record{}, 0, err

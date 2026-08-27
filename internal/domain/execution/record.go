@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 )
 
 const RuntimeNative = "native"
@@ -65,10 +67,20 @@ type Record struct {
 	// place for a stack trace or a payload: it is polled with the snapshot.
 	FailureReason string
 	Reference     RuntimeReference
-	State         State
-	Version       int64
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// Trace is the W3C trace context of the caller that caused this attempt.
+	//
+	// It belongs on the Execution rather than the Task because a Task is
+	// retried: attempt 1 may come from a user request and attempt 3 from a
+	// scheduler, and collapsing them onto the Task would attribute the retry to
+	// whoever happened to be first. Per-attempt is also the granularity an
+	// investigation needs, since it is one attempt that failed.
+	//
+	// Zero is normal and means the caller presented no trace.
+	Trace     correlation.TraceContext
+	State     State
+	Version   int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Spec struct {
@@ -76,6 +88,7 @@ type Spec struct {
 	TaskID  string
 	Attempt int
 	Runtime string
+	Trace   correlation.TraceContext
 	Now     time.Time
 }
 
@@ -85,11 +98,21 @@ func NewRecord(spec Spec) (Record, error) {
 		spec.Attempt <= 0 || runtime == "" || spec.Now.IsZero() {
 		return Record{}, ErrInvalidRecord
 	}
+	// A trace that does not normalize is dropped rather than rejected. The
+	// header it came from is a diagnostic the caller does not control end to
+	// end: a proxy can corrupt it, and failing the Task then converts somebody
+	// else's misconfiguration into lost work. Absent evidence is honest;
+	// refusing to run is not proportionate.
+	trace, err := spec.Trace.Normalize()
+	if err != nil {
+		trace = correlation.TraceContext{}
+	}
 	return Record{
 		ID:        spec.ID,
 		TaskID:    strings.TrimSpace(spec.TaskID),
 		Attempt:   spec.Attempt,
 		Runtime:   runtime,
+		Trace:     trace,
 		State:     PendingDispatch,
 		Version:   1,
 		CreatedAt: spec.Now,
@@ -186,6 +209,15 @@ func (r Record) valid(now time.Time) error {
 	}
 	if !r.Reference.Empty() && (r.Reference.Runtime != r.Runtime || !r.Reference.Valid()) {
 		return fmt.Errorf("%w: malformed runtime reference", ErrInvalidRecord)
+	}
+	// NewRecord drops a trace it cannot normalize, so a malformed one reaching
+	// here did not come through the boundary parser: it was constructed in code
+	// or read back from a corrupted row. Both are bugs worth surfacing, and
+	// neither is the upstream proxy that NewRecord is lenient about.
+	if !r.Trace.Zero() {
+		if _, err := r.Trace.Normalize(); err != nil {
+			return fmt.Errorf("%w: malformed trace context: %w", ErrInvalidRecord, err)
+		}
 	}
 	return nil
 }

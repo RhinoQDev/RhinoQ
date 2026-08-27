@@ -12,6 +12,7 @@ import (
 
 	"github.com/madebyduy/RhinoQ/internal/domain/job"
 	"github.com/madebyduy/RhinoQ/internal/domain/retry"
+	"github.com/madebyduy/RhinoQ/internal/infrastructure/telemetry"
 	"github.com/madebyduy/RhinoQ/internal/ports"
 )
 
@@ -180,16 +181,26 @@ func (c *Client) ClaimJobs(ctx context.Context, request ClaimRequest) ([]LeasedJ
 	if err := ports.ValidateClaimQueues(request.QueueNames); err != nil {
 		return nil, err
 	}
+	// claimedAt is reused for the measurement below rather than read again. The
+	// wait must be computed against the instant the claim was asked for, not a
+	// later one, or a slow store would be charged to queue latency twice.
+	claimedAt := time.Now().UTC()
 	records, err := c.store.Claim(ctx, ports.ClaimInput{
-		Owner: request.Worker, Now: time.Now().UTC(),
+		Owner: request.Worker, Now: claimedAt,
 		Limit: request.Limit, LeaseDuration: request.LeaseFor,
 		QueueNames: request.QueueNames,
 	})
 	if err != nil {
 		return nil, err
 	}
+	metrics := c.Metrics()
 	leased := make([]LeasedJob, 0, len(records))
 	for _, record := range records {
+		metrics.ObserveClaimWait(
+			record.QueueName,
+			telemetry.ReadyAt(record.CreatedAt, record.NotBefore),
+			claimedAt,
+		)
 		token := ports.LeaseFor(record)
 		leased = append(leased, LeasedJob{
 			Job:       summarizeJob(record),

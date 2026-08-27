@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/madebyduy/RhinoQ/internal/domain/correlation"
 	"github.com/madebyduy/RhinoQ/internal/domain/execution"
 	"github.com/madebyduy/RhinoQ/internal/domain/task"
 	"github.com/madebyduy/RhinoQ/internal/domain/waitpoint"
@@ -44,7 +45,14 @@ type TaskRetryInput struct {
 	Queue           string
 	JobName         string
 	Payload         []byte
-	Now             time.Time
+	// Trace is the trace context of whoever asked for the retry. An
+	// operator-initiated retry is the case correlation matters most in, so the
+	// new attempt carries the caller's own trace rather than inheriting the
+	// trace of the attempt that failed: the two are different requests, often
+	// days apart. A retry raised by an automatic sweep has no caller and leaves
+	// this zero.
+	Trace correlation.TraceContext
+	Now   time.Time
 }
 
 type TaskRetryResult struct {
@@ -79,7 +87,9 @@ type ExecutionCreateInput struct {
 	ID      execution.ID
 	TaskID  string
 	Runtime string
-	Now     time.Time
+	// Trace is the caller's W3C trace context, zero when none was presented.
+	Trace correlation.TraceContext
+	Now   time.Time
 }
 
 // ExecutionPageQuery is a stable keyset page. CreatedAt and ID form a total
