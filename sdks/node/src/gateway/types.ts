@@ -84,6 +84,16 @@ export interface TaskExecutionSummary {
   hasResult?: boolean;
   /** User-facing prose for one failed item; bounded by the Gateway. */
   failureReason?: string;
+  /**
+   * The trace this attempt belongs to, for looking the request up in whatever
+   * tracing system the application already runs. Absent when the attempt was
+   * created without an inbound trace, which is normal for scheduled work.
+   *
+   * Only the trace id is published, never the span id: the id is what an
+   * operator queries, while a span id read back out of a poll would only invite
+   * a caller to forge a parent relationship.
+   */
+  traceId?: string;
 }
 
 /** One item's outcome in a fan-out, read separately from the snapshot. */
@@ -141,6 +151,20 @@ export interface TaskExecutionCreateRequest {
   runtimeScope?: string;
   /** Reserve a deterministic runtime identity before dispatch. */
   externalId?: string;
+  /**
+   * W3C trace context for this attempt, overriding the ambient one.
+   *
+   * Most applications should not set this: installing `traceContextMiddleware`
+   * attaches the inbound trace to every call automatically. It exists for the
+   * case the ambient value is wrong -- a batch producer creating many attempts
+   * inside one request wants each one attributed to the upstream work that
+   * produced it, not to the single call that submitted them all.
+   *
+   * A value the Agent cannot parse is dropped, never rejected: a corrupted
+   * diagnostic field must not fail real work.
+   */
+  traceparent?: string;
+  tracestate?: string;
 }
 
 export type TaskCancellationStatus =
