@@ -1,5 +1,6 @@
 export * from './gateway/types.js';
 export * from './gateway/client.js';
+export * from './gateway/trace.js';
 export * from './postgres/producer.js';
 export * from './postgres/task-client.js';
 export * from './postgres/tenant.js';

@@ -45,6 +45,7 @@ import {
   type RepairRecord,
 } from './types.js';
 import { TaskHandle } from '../tasks/handle.js';
+import { ambientTraceParent } from './ambient-trace.js';
 
 export class RhinoQError extends Error {
   readonly code: string;
@@ -87,6 +88,26 @@ export interface ClientOptions {
   timeoutMs?: number;
   /** Receives capability warnings. Defaults to `console.warn`. */
   onWarning?: (warning: string) => void;
+  /**
+   * Extra headers, evaluated once per request.
+   *
+   * It is a function rather than an object because the headers worth attaching
+   * here are per-request, not per-client: a W3C `traceparent` identifies one
+   * inbound request, so a value captured when the client was constructed would
+   * label every later call with the first caller's trace.
+   *
+   * Overriding `fetch` can do the same job, but it forces the application to
+   * carry the request context to wherever the client was built. This hook is
+   * called at send time, where the ambient context still exists.
+   *
+   * Defaults to attaching the ambient `traceparent` from {@link withTrace}, so
+   * an application that installs the middleware needs no configuration here.
+   * Pass `() => undefined` to send nothing.
+   *
+   * These headers cannot override `authorization`, `accept` or `content-type`;
+   * see the note in `send`.
+   */
+  headers?: () => Record<string, string> | undefined;
 }
 
 export class RhinoQClient {
@@ -95,6 +116,7 @@ export class RhinoQClient {
   private readonly doFetch: typeof globalThis.fetch;
   private readonly timeoutMs: number;
   private readonly warn: (warning: string) => void;
+  private readonly extraHeaders: () => Record<string, string>;
   private warnedAboutItemKey = false;
   private connection?: Promise<HandshakeResult>;
 
@@ -114,6 +136,23 @@ export class RhinoQClient {
     this.doFetch = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.warn = options.onWarning ?? ((warning: string) => console.warn(warning));
+    // The default reads the ambient trace, so correlation works for an
+    // application that installs the middleware and configures nothing. A
+    // provider that throws must not fail the request it was decorating: a
+    // diagnostic header is never worth losing real work over, which is the same
+    // rule the Agent applies when it drops a malformed traceparent.
+    const provided = options.headers;
+    this.extraHeaders = () => {
+      try {
+        if (provided) {
+          return provided() ?? {};
+        }
+        const traceparent = ambientTraceParent();
+        return traceparent ? { traceparent } : {};
+      } catch {
+        return {};
+      }
+    };
   }
 
   /** Negotiate and cache the wire contract before starting a worker. */
@@ -839,7 +878,14 @@ export class RhinoQClient {
     try {
       const response = await this.doFetch(`${this.url}${path}`, {
         method,
+        // Caller headers are spread FIRST so the fixed ones always win. The
+        // order is a security property, not a style choice: spread last, a
+        // provider that returns an `authorization` key -- by a bug, or because
+        // an object was passed through from somewhere untrusted -- would
+        // silently replace this client's credential with one of its own
+        // choosing, and every subsequent request would carry it.
         headers: {
+          ...this.extraHeaders(),
           accept: 'application/json',
           'content-type': 'application/json',
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),

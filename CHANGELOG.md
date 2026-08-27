@@ -16,6 +16,20 @@
   Migration action: run migration `034_execution_trace_context.sql`. It adds
   four nullable columns and a partial index to `rhinoq_task_executions` and
   backfills nothing.
+- The Node SDK now propagates trace context. `withTrace(traceparent, fn)` makes
+  a trace ambient for every Gateway call inside it, including calls made after
+  an `await`, and `traceContextMiddleware()` installs it from an inbound request
+  in one line. `RhinoQClient` attaches the ambient `traceparent` by default, so
+  an application that adds the middleware gets correlation without configuring
+  anything. `TaskExecutionSummary.traceId` and the `traceparent`/`tracestate`
+  fields on `TaskExecutionCreateRequest` are now typed.
+  A new `headers` client option supplies arbitrary per-request headers. It is
+  evaluated per call rather than per client because the values worth attaching
+  are per-request; a provider that throws is ignored rather than failing the
+  request, and provided headers can never override `authorization`, `accept` or
+  `content-type`.
+  Migration action: none. Applications that already propagated a trace by
+  wrapping `fetch` keep working; passing `headers` opts out of the default.
 - Added latency distributions to `/metrics`: `rhinoq_claim_wait_seconds`
   (eligible-to-claimed, by queue, excluding intended scheduling and retry
   backoff), `rhinoq_execution_duration_seconds` (measured around the handler
