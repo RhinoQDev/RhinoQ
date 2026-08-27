@@ -17,7 +17,7 @@ commands install the same Node.js SDK and CLI. New applications can use either
 name; library authors normally prefer the scoped package. Do not install both:
 the alias already depends on and re-exports the matching canonical release.
 
-Latest verified npm prerelease: `v0.1.0-beta.27`.
+Latest verified npm prerelease: `v0.1.0-beta.28`.
 
 RhinoQ is useful when background work has become a product problem: users need
 progress and results, support needs history, and operators need to know whether

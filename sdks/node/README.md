@@ -15,7 +15,7 @@ You get progress, attempts, cancellation, results, realtime updates, a Task
 Center for users and a Workbench for operators. Your application keeps its
 business handler, authentication and provider policy.
 
-Latest verified npm prerelease: `v0.1.0-beta.27`.
+Latest verified npm prerelease: `v0.1.0-beta.28`.
 
 | Before RhinoQ | With RhinoQ |
 |---|---|

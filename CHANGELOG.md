@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-beta.28
+
 - Added W3C Trace Context correlation on Executions. The Agent reads
   `traceparent`/`tracestate` from an incoming request, stores them per attempt,
   publishes the trace id as `traceId` on Snapshot and Execution-page contracts,

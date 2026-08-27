@@ -1,5 +1,5 @@
 export const PROTOCOL_VERSION = "1.0";
-export const SDK_VERSION = '0.1.0-beta.27';
+export const SDK_VERSION = '0.1.0-beta.28';
 export const MAX_CLAIM_BATCH = 1000;
 
 export const CLIENT_CAPABILITIES = [

@@ -10,7 +10,7 @@ RhinoQ is a public beta for evaluation and controlled pilots. This guide pins
 the verified release:
 
 ```bash
-npm install @rhinoq/node@0.1.0-beta.27 pg
+npm install @rhinoq/node@0.1.0-beta.28 pg
 ```
 
 ## The result you are building
@@ -260,7 +260,7 @@ These are explicit boundaries, not missing configuration defaults.
 
 ## Before a controlled pilot
 
-- pin `@rhinoq/node@0.1.0-beta.27`;
+- pin `@rhinoq/node@0.1.0-beta.28`;
 - use production PostgreSQL credentials and TLS policy;
 - prove owner/tenant isolation;
 - rehearse worker restart, cancellation and lost events;

@@ -1,6 +1,6 @@
 {
   "name": "rhinoq",
-  "version": "0.1.0-beta.27",
+  "version": "0.1.0-beta.28",
   "description": "Add a durable, user-facing Task experience around BullMQ or PostgreSQL workers: progress, results, realtime, history and safe recovery",
   "keywords": [
     "background-jobs",
@@ -51,7 +51,7 @@
     "README.md"
   ],
   "dependencies": {
-    "@rhinoq/node": "0.1.0-beta.27"
+    "@rhinoq/node": "0.1.0-beta.28"
   },
   "engines": {
     "node": ">=22"
